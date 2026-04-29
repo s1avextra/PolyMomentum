@@ -1,6 +1,8 @@
 //! Polymarket binary fee formula.
 //!
-//!     fee = shares × fee_rate × p × (1 − p)
+//! ```text
+//! fee = shares * fee_rate * p * (1 - p)
+//! ```
 //!
 //! Maximum at p = 0.5, symmetric around 0.5. Verified against the
 //! NautilusTrader Polymarket adapter.
