@@ -64,6 +64,10 @@ POLY_API_PASSPHRASE=...
 POLYGON_RPC_URL=https://polygon-rpc.com
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ALERT_REQUIRED=1
+VENUE=paper_only
+OPERATOR_COUNTRY=
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
+POLYMARKET_US_API_ENABLED=0
 ```
 
 Verify the bot can read your wallet and the on-chain view of an old market:
@@ -75,12 +79,20 @@ Verify the bot can read your wallet and the on-chain view of an old market:
 
 ## Step 6 — First live trade
 
-When you're ready (paper validated, $1-sized stake), flip the systemd unit:
+When you're ready (paper validated, venue/account compliance cleared, $1-sized
+stake), do not edit the unit with `sed`. Configure the venue env first:
 
 ```bash
-ssh vps 'sudo sed -i "s/--mode paper/--mode live --i-understand-live/" \
-            /etc/systemd/system/polymomentum-engine.service && \
-         sudo systemctl daemon-reload && sudo systemctl restart polymomentum-engine'
+VENUE=polymarket_us
+OPERATOR_COUNTRY=US
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=1
+POLYMARKET_US_API_ENABLED=1
+```
+
+Then deploy through the guarded path:
+
+```bash
+bash deploy/deploy.sh vps --enable-service --mode live --i-understand-live
 ```
 
 Watch the next trade tape:
@@ -89,4 +101,8 @@ Watch the next trade tape:
 ssh vps 'journalctl -u polymomentum-engine -f -n 0 | grep candle.trade.live'
 ```
 
-Roll back to paper by reversing the `sed` and restarting.
+Roll back by setting `VENUE=paper_only` and redeploying paper mode:
+
+```bash
+bash deploy/deploy.sh vps --enable-service --mode paper
+```

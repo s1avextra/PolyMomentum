@@ -48,7 +48,9 @@ PolyMomentum/
 
 ```bash
 polymomentum-engine live --mode paper           # main runtime (default)
-polymomentum-engine live --mode live --i-understand-live   # real money
+polymomentum-engine preflight --mode paper      # startup/deploy checks
+polymomentum-engine release-manifest --mode paper
+polymomentum-engine live --mode live --i-understand-live   # real money; also requires VENUE/compliance env
 polymomentum-engine scan                        # Gamma + scanner smoke test
 polymomentum-engine wallet                      # USDC.e + POL balances
 polymomentum-engine ctf <condition_id>          # on-chain CTF resolution read
@@ -78,10 +80,9 @@ ssh vps 'rm /tmp/polymomentum/KILL && \
 # Deploy (build, ship, restart) — paper mode default
 bash deploy/deploy.sh vps --enable-service --mode paper
 
-# Switch to live (real money) without redeploying
-ssh vps 'sudo sed -i "s/--mode paper/--mode live --i-understand-live/" \
-            /etc/systemd/system/polymomentum-engine.service && \
-         sudo systemctl daemon-reload && sudo systemctl restart polymomentum-engine'
+# Live deployment is intentionally fail-closed. Do not sed the unit by hand:
+# configure VENUE/OPERATOR_COUNTRY/compliance env first, then redeploy.
+bash deploy/deploy.sh vps --enable-service --mode live --i-understand-live
 ```
 
 ## Replay-grade data collection
@@ -110,7 +111,7 @@ cargo build --release     # ./target/release/polymomentum-engine
 
 ## Multibot etiquette
 
-PolyMomentum shares the VPS (`193.24.234.202`, alias `vps`) with **adgts** (XRP/USDT futures grid, port 9092) and **polyarbitrage** (port 127.0.0.1:9090). Don't touch their `/opt/<name>`, `/etc/<name>`, or systemd units. Coexistence caps applied via `polymomentum-engine.service`: `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`. Use `nice -n 10 cargo build --release` for builds on the VPS. See [docs/cross_bot_note_mexc_hardening.md](docs/cross_bot_note_mexc_hardening.md) for the cross-Claude coordination protocol.
+PolyMomentum shares the VPS (`193.24.234.202`, alias `vps`) with **adgts** (XRP/USDT futures grid, port 9092) and **polyarbitrage** (port 127.0.0.1:9090). Don't touch their `/opt/<name>`, `/etc/<name>`, or systemd units. Coexistence caps applied via `polymomentum-engine.service`: `Nice=5`, `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`, and read-only `/opt/shared` access for the live service. `deploy/deploy.sh --enable-service` checks peer service state before restarting PolyMomentum and refuses to restart while a peer unit is deactivating. Use `nice -n 10 cargo build --release` for builds on the VPS. See [docs/cross_bot_note_mexc_hardening.md](docs/cross_bot_note_mexc_hardening.md) for the cross-Claude coordination protocol.
 
 ## Strategy reality check
 

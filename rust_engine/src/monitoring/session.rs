@@ -94,6 +94,14 @@ impl SessionMonitor {
 
     // ── Order lifecycle ────────────────────────────────────────────
 
+    pub fn record_release_manifest(&self, manifest: &crate::release::ReleaseManifest) {
+        self.write_event(
+            "system",
+            "release_manifest",
+            serde_json::to_value(manifest).unwrap_or(Value::Null),
+        );
+    }
+
     pub fn record_order_placed(&self, evt: &OrderPlaced) {
         self.counters.lock().unwrap().order_count += 1;
         self.write_event("order", "placed", serde_json::to_value(evt).unwrap_or(Value::Null));

@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
 use crate::clob::{create_shared_client, SharedClobClient};
-use crate::config::Settings;
+use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
@@ -37,6 +37,7 @@ use crate::polymarket_ws::{
     new_shared_book, new_subscription_notify, polymarket_book_feed, SharedBookState,
 };
 use crate::price_state::PriceState;
+use crate::release::ReleaseManifest;
 use crate::risk::manager::{RiskConfig, RiskManager, TradeRecord};
 use crate::strategy::decision::{
     decide_candle_trade, DecisionResult, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE,
@@ -57,8 +58,21 @@ impl Mode {
             Mode::Live => "live",
         }
     }
-}
 
+    pub fn from_runtime_mode(mode: RuntimeMode) -> Self {
+        match mode {
+            RuntimeMode::Paper => Self::Paper,
+            RuntimeMode::Live => Self::Live,
+        }
+    }
+
+    pub fn runtime_mode(&self) -> RuntimeMode {
+        match self {
+            Self::Paper => RuntimeMode::Paper,
+            Self::Live => RuntimeMode::Live,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct PaperPosition {
@@ -141,6 +155,7 @@ impl OraclePending {
 pub struct Pipeline {
     settings: Settings,
     mode: Mode,
+    release_manifest: ReleaseManifest,
     risk: RiskManager,
     clob: Option<SharedClobClient>,
     monitor: Arc<SessionMonitor>,
@@ -167,6 +182,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub async fn new(settings: Settings, mode: Mode) -> Result<Arc<Self>> {
+        let release_manifest = ReleaseManifest::capture(&settings, mode.runtime_mode());
         let bankroll = if settings.bankroll_usd > 0.0 {
             settings.bankroll_usd
         } else {
@@ -245,6 +261,7 @@ impl Pipeline {
             kill_switch_path: PathBuf::from(&settings.kill_switch_path),
             settings,
             mode,
+            release_manifest,
             risk,
             clob,
             monitor,
@@ -277,7 +294,14 @@ impl Pipeline {
     }
 
     pub async fn run(self: &Arc<Self>) -> Result<()> {
-        tracing::info!(mode = self.mode.as_str(), "candle.start");
+        self.monitor.record_release_manifest(&self.release_manifest);
+        tracing::info!(
+            mode = self.mode.as_str(),
+            venue = self.release_manifest.venue.as_str(),
+            git_sha = self.release_manifest.git_sha,
+            config_hash = self.release_manifest.config_hash,
+            "candle.start"
+        );
         if self.alerter.enabled() {
             let _ = self
                 .alerter

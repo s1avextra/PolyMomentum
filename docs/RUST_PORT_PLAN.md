@@ -15,7 +15,9 @@ A single Rust binary, **`polymomentum-engine`**, with these subcommands:
 
 | Subcommand | What it does |
 |---|---|
-| `live --mode paper\|live` | The 10 Hz cycle loop. Paper by default; `live` requires `--i-understand-live` AND a populated `PRIVATE_KEY` + `POLY_API_KEY`. |
+| `live --mode paper\|live` | The 10 Hz cycle loop. Paper by default; `live` requires `--i-understand-live`, a passing preflight, explicit `VENUE`, alerting, and populated CLOB credentials. |
+| `preflight --mode paper\|live` | Startup/deploy checks for runtime paths, peer-private path isolation, venue/compliance gates, alerts, and credentials. |
+| `release-manifest --mode paper\|live` | Print the release identity and redacted config hash used in preflight and session logs. |
 | `scan` | Smoke test: pull markets from Gamma, scan for candles, print summary. |
 | `wallet` | Print USDC.e / native USDC / POL balances for the configured private key. |
 | `ctf <condition_id>` | Read the on-chain CTF resolution (eth_call) for a market. |
@@ -47,7 +49,7 @@ Phase rollups (reference for what was actually delivered):
 - **Phase 2 — Strategy core** ✔ MomentumDetector with EWMA fast/slow vol + z-score, `decide_candle_trade` with 4-zone gates / dead-zone filter / EV buffer / `edge_cap`. Tests cover skip + trade paths.
 - **Phase 3 — Risk + monitoring** ✔ `RiskManager` over rusqlite, schema-compatible with the Python `state.db` so cutover preserves history. `SessionMonitor` writes JSONL with the schema the validator expects. Slack alerter, drawdown + win-rate breaker (eager + post-resolution).
 - **Phase 4 — Live runtime** ✔ Cycle loop + paper resolution + CTF oracle verification + monitoring + contract refresh. Verified end-to-end: 60 s soak, 378 events, 186 evaluations replay clean (0 mismatches), 0.4-0.9 ms per cycle. State persists across kill+restart (paper positions, total_pnl, breaker meta).
-- **Phase 5 — Live execution** ✔ Wired through `clob.rs` (EIP-712-signed maker → taker fallback). Gated behind `--i-understand-live` AND a populated `PRIVATE_KEY` + `POLY_API_KEY` — no live trade has been executed yet.
+- **Phase 5 — Live execution** ✔ Wired through `clob.rs` (EIP-712-signed maker → taker fallback). Gated behind `preflight`, `--i-understand-live`, explicit venue/compliance env, alerting, and populated CLOB credentials — no live trade has been executed yet.
 
 Phases 6 and 7 of the original plan were superseded:
 
@@ -109,7 +111,7 @@ ssh vps 'rm -f /tmp/polymomentum/KILL && \
 
 | Risk | Status |
 |---|---|
-| Live execution untested | Code-complete; needs operator-driven $1 trade with `--i-understand-live` once paper is validated. |
+| Live execution untested | Code-complete but fail-closed; needs venue/account compliance, order reconciliation hardening, paper validation, and then an operator-driven $1 trade. |
 | No backtest harness in Rust | Strategy tuning blocked on Phase 6 follow-up OR live paper iteration only. |
 | Cooldown enforcement | Not wired in the Rust pipeline (Python had per-event_id cooldowns). Add when needed. |
 | Paper fill is top-of-book + flat slippage | Not full BookWalk against captured L2. Known gap, low priority for the strategy bias we have. |

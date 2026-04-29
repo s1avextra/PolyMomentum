@@ -24,6 +24,7 @@ pub mod live;
 pub mod monitoring;
 pub mod polymarket_ws;
 pub mod price_state;
+pub mod release;
 pub mod risk;
 pub mod signing;
 pub mod strategy;

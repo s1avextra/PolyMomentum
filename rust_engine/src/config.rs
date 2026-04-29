@@ -4,6 +4,71 @@
 //! existing `.env` files on the VPS work unchanged.
 
 use std::env;
+use std::fmt;
+
+use clap::ValueEnum;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    Paper,
+    Live,
+}
+
+impl RuntimeMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RuntimeMode::Paper => "paper",
+            RuntimeMode::Live => "live",
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        matches!(self, RuntimeMode::Live)
+    }
+}
+
+impl fmt::Display for RuntimeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueMode {
+    PaperOnly,
+    PolymarketUs,
+    PolymarketInternational,
+}
+
+impl VenueMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "paper_only" | "paper-only" | "paper" => Some(Self::PaperOnly),
+            "polymarket_us" | "polymarket-us" | "us" => Some(Self::PolymarketUs),
+            "polymarket_international" | "polymarket-international" | "international" => {
+                Some(Self::PolymarketInternational)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PaperOnly => "paper_only",
+            Self::PolymarketUs => "polymarket_us",
+            Self::PolymarketInternational => "polymarket_international",
+        }
+    }
+}
+
+impl fmt::Display for VenueMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Clone)]
 // Some fields are read by future-phase code paths or surfaced as public
@@ -16,6 +81,13 @@ pub struct Settings {
     pub poly_api_passphrase: String,
     pub poly_base_url: String,
     pub poly_gamma_url: String,
+
+    pub venue: VenueMode,
+    pub venue_raw: String,
+    pub venue_parse_error: Option<String>,
+    pub operator_country: String,
+    pub venue_compliance_ok: bool,
+    pub polymarket_us_api_enabled: bool,
 
     pub private_key: String,
     pub polygon_rpc_url: String,
@@ -97,6 +169,16 @@ impl Settings {
 
         let data_dir = env_str("POLYMOMENTUM_DATA_DIR", "/opt/polymomentum/data");
         let logs_dir = env_str("POLYMOMENTUM_LOGS_DIR", "/opt/polymomentum/logs");
+        let venue_raw = env_str("VENUE", "paper_only");
+        let (venue, venue_parse_error) = match VenueMode::parse(&venue_raw) {
+            Some(v) => (v, None),
+            None => (
+                VenueMode::PaperOnly,
+                Some(format!(
+                    "invalid VENUE={venue_raw}; expected paper_only, polymarket_us, or polymarket_international"
+                )),
+            ),
+        };
 
         Self {
             poly_api_key: env_str("POLY_API_KEY", ""),
@@ -104,6 +186,13 @@ impl Settings {
             poly_api_passphrase: env_str("POLY_API_PASSPHRASE", ""),
             poly_base_url: env_str("POLY_BASE_URL", "https://clob.polymarket.com"),
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
+
+            venue,
+            venue_raw,
+            venue_parse_error,
+            operator_country: env_str("OPERATOR_COUNTRY", ""),
+            venue_compliance_ok: env_bool("POLYMOMENTUM_VENUE_COMPLIANCE_OK", false),
+            polymarket_us_api_enabled: env_bool("POLYMARKET_US_API_ENABLED", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
             polygon_rpc_url: env_str("POLYGON_RPC_URL", "https://polygon-rpc.com"),
@@ -197,5 +286,16 @@ mod tests {
         assert!(s.candle_dead_zone_lo < s.candle_dead_zone_hi);
         assert!(s.kelly_fraction > 0.0 && s.kelly_fraction <= 1.0);
         assert!(s.max_position_per_market_usd > 0.0);
+    }
+
+    #[test]
+    fn parses_supported_venues() {
+        assert_eq!(VenueMode::parse("paper_only"), Some(VenueMode::PaperOnly));
+        assert_eq!(VenueMode::parse("polymarket-us"), Some(VenueMode::PolymarketUs));
+        assert_eq!(
+            VenueMode::parse("international"),
+            Some(VenueMode::PolymarketInternational)
+        );
+        assert_eq!(VenueMode::parse("binance"), None);
     }
 }

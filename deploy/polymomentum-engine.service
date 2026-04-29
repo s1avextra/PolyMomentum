@@ -14,6 +14,7 @@ Environment=POLYMOMENTUM_LOGS_DIR=/opt/polymomentum/logs
 Environment=STATE_DB_PATH=/opt/polymomentum/logs/candle/state.db
 Environment=SESSION_LOG_DIR=/opt/polymomentum/logs/sessions
 Environment=KILL_SWITCH_PATH=/tmp/polymomentum/KILL
+ExecStartPre=/opt/polymomentum/polymomentum-engine preflight --mode paper
 ExecStart=/opt/polymomentum/polymomentum-engine live --mode paper
 ExecStop=/bin/kill -SIGTERM $MAINPID
 KillMode=mixed
@@ -23,6 +24,12 @@ Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+Nice=5
+CPUQuota=80%
+MemoryMax=512M
+TasksMax=256
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
 
 # Hardening
 NoNewPrivileges=true
@@ -30,6 +37,7 @@ PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/polymomentum /tmp/polymomentum
+ReadOnlyPaths=-/opt/shared
 
 [Install]
 WantedBy=multi-user.target

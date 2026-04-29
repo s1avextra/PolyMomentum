@@ -21,12 +21,14 @@ mod live;
 mod monitoring;
 mod polymarket_ws;
 mod price_state;
+mod release;
 mod risk;
 mod signing;
 mod strategy;
 mod sweep;
 
 use clap::{Parser, Subcommand};
+use config::RuntimeMode;
 
 #[derive(Parser, Debug)]
 #[command(name = "polymomentum-engine", version, about = "PolyMomentum Rust trading engine")]
@@ -44,11 +46,26 @@ enum Command {
     /// Run the candle trading runtime
     Live {
         /// Paper or live mode (live requires explicit confirmation flag)
-        #[arg(long, default_value = "paper")]
-        mode: String,
+        #[arg(long, value_enum, default_value_t = RuntimeMode::Paper)]
+        mode: RuntimeMode,
         /// Allow live mode (default: paper-only safeguard).
         #[arg(long)]
         i_understand_live: bool,
+    },
+    /// Run startup checks without opening market-data or order connections.
+    Preflight {
+        /// Paper or live mode to validate.
+        #[arg(long, value_enum, default_value_t = RuntimeMode::Paper)]
+        mode: RuntimeMode,
+        /// Required when validating the live startup path.
+        #[arg(long)]
+        i_understand_live: bool,
+    },
+    /// Print the release manifest used in preflight and session logs.
+    ReleaseManifest {
+        /// Paper or live mode to include in the manifest.
+        #[arg(long, value_enum, default_value_t = RuntimeMode::Paper)]
+        mode: RuntimeMode,
     },
     /// Smoke-test scanner: fetch candle markets, print summary.
     Scan {
@@ -211,18 +228,12 @@ async fn main() {
 
     match cli.command {
         Command::Live { mode, i_understand_live } => {
-            if mode == "live" && !i_understand_live {
-                eprintln!("Refusing to run live mode without --i-understand-live (safety guard).");
+            let preflight = release::run_preflight(&settings, mode, i_understand_live);
+            if !preflight.ok {
+                eprintln!("preflight failed: {}", preflight.failure_summary());
                 std::process::exit(2);
             }
-            let m = match mode.as_str() {
-                "paper" => live::pipeline::Mode::Paper,
-                "live" => live::pipeline::Mode::Live,
-                other => {
-                    eprintln!("unknown mode: {other}");
-                    std::process::exit(2);
-                }
-            };
+            let m = live::pipeline::Mode::from_runtime_mode(mode);
             let pipeline = live::pipeline::Pipeline::new(settings.clone(), m).await;
             match pipeline {
                 Ok(p) => {
@@ -237,6 +248,23 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+        Command::Preflight { mode, i_understand_live } => {
+            let report = release::run_preflight(&settings, mode, i_understand_live);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize preflight report")
+            );
+            if !report.ok {
+                std::process::exit(2);
+            }
+        }
+        Command::ReleaseManifest { mode } => {
+            let manifest = release::ReleaseManifest::capture(&settings, mode);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&manifest).expect("serialize release manifest")
+            );
         }
         Command::Scan { max_hours, min_liquidity } => {
             cmd_scan(&settings, max_hours, min_liquidity).await;

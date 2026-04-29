@@ -45,6 +45,13 @@ POLYGON_RPC_URL=https://polygon-rpc.com
 SLACK_WEBHOOK_URL=
 ALERT_REQUIRED=1
 
+# Venue safety gate. paper_only is the only default that can start without
+# legal/account-specific sign-off.
+VENUE=paper_only
+OPERATOR_COUNTRY=
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
+POLYMARKET_US_API_ENABLED=0
+
 # Logging
 RUST_LOG=info
 

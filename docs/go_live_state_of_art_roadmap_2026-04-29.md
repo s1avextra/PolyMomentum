@@ -115,7 +115,7 @@ Implementation tasks:
 1. Add `ReleaseManifest` logged at startup: git SHA, build timestamp, binary
    path, mode, venue, config hash.
 2. Add `VenueMode` config and fail-closed live validation.
-3. Add `--print-release-manifest` CLI for deploy checks.
+3. Add `release-manifest --mode ...` CLI for deploy checks.
 4. Add a preflight command:
 
    ```bash
@@ -604,4 +604,3 @@ Ramp rules:
 9. Add calibration/holdout reports.
 10. Run out-of-sample harness.
 11. Only then consider a one-window live trial.
-
