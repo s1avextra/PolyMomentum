@@ -482,8 +482,12 @@ async fn cmd_validate_replay(path: &str) {
             f64opt(&v, "cross_boost").unwrap_or(0.0),
         );
         let traded = matches!(res, strategy::decision::DecisionResult::Trade(_));
-        let logged_traded = v.get("traded").and_then(|x| x.as_bool()).unwrap_or(false);
-        if traded != logged_traded {
+        let logged_decision_trade = v
+            .get("decision_trade")
+            .and_then(|x| x.as_bool())
+            .or_else(|| v.get("traded").and_then(|x| x.as_bool()))
+            .unwrap_or(false);
+        if traded != logged_decision_trade {
             mismatches += 1;
         }
     }

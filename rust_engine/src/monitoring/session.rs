@@ -438,6 +438,8 @@ pub struct SignalEvaluation {
     pub zone: String,
     pub fair: f64,
     pub edge: f64,
+    pub decision_trade: bool,
+    pub execution_attempted: bool,
     pub traded: bool,
     pub skip_reason: Option<String>,
     pub skip_detail: Option<String>,

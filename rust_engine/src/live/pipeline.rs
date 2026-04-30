@@ -27,7 +27,6 @@ use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
-use crate::execution::fees::polymarket_fee;
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
@@ -327,12 +326,29 @@ impl Pipeline {
             tracing::warn!(error = %e, "initial contract refresh failed");
         }
 
-        // Wait for first BTC price
+        // Wait for first BTC price. This must remain cancellable; diagnostics
+        // runs often expose feed/network problems before the first tick.
+        let wait_started = Instant::now();
         loop {
             if self.price_state.read().await.mid_price > 0.0 {
                 break;
             }
-            sleep(Duration::from_millis(100)).await;
+            if wait_started.elapsed() > Duration::from_secs(30) {
+                let msg = "no BTC price within 30s startup timeout";
+                self.monitor.record_error("startup_price_wait", msg, false);
+                anyhow::bail!(msg);
+            }
+            let stop = self.stop.clone();
+            tokio::select! {
+                _ = stop.notified() => {
+                    tracing::info!("startup price wait interrupted");
+                    if let Err(e) = self.monitor.save_summary() {
+                        tracing::warn!(error = %e, "save summary failed");
+                    }
+                    return Ok(());
+                }
+                _ = sleep(Duration::from_millis(100)) => {}
+            }
         }
 
         let scan = {
@@ -656,6 +672,8 @@ impl Pipeline {
                             zone: skip.zone.clone(),
                             fair: 0.0,
                             edge: 0.0,
+                            decision_trade: false,
+                            execution_attempted: false,
                             traded: false,
                             skip_reason: Some(skip.reason),
                             skip_detail: Some(skip.detail),
@@ -686,7 +704,9 @@ impl Pipeline {
                             zone: decision.zone.clone(),
                             fair: decision.fair_value,
                             edge: decision.edge,
-                            traded: true,
+                            decision_trade: true,
+                            execution_attempted: true,
+                            traded: false,
                             skip_reason: None,
                             skip_detail: None,
                         });
@@ -769,6 +789,16 @@ impl Pipeline {
                     return Ok(());
                 };
                 let expected_profit = fill.shares * (decision.fair_value - fill.fill_price) - fill.fee;
+                let now_ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let order_id = format!(
+                    "paper-{}-{}",
+                    short_cid(&contract.market.condition_id),
+                    (now_ts * 1000.0) as u64
+                );
+                let order_value = fill.fill_price * fill.shares;
                 tracing::info!(
                     direction = %signal.direction,
                     cost = position,
@@ -778,11 +808,37 @@ impl Pipeline {
                     minutes_left = signal.minutes_remaining,
                     "candle.trade.paper"
                 );
+                self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
+                    token_id: short_cid(token_id),
+                    side: "BUY".into(),
+                    price: fill.fill_price,
+                    live_price: market_price,
+                    size: fill.shares,
+                    order_value,
+                    order_id: short_cid(&order_id),
+                    book_best_ask: market_price,
+                    book_ask_depth: 0.0,
+                    book_bid_depth: 0.0,
+                    balance_usd: bankroll,
+                });
+                self.monitor.record_order_filled(&crate::monitoring::session::OrderFilled {
+                    order_id: short_cid(&order_id),
+                    filled: fill.shares,
+                    requested: fill.shares,
+                    fill_pct: 1.0,
+                    fill_price: fill.fill_price,
+                    limit_price: market_price,
+                    slippage: fill.fill_price - market_price,
+                    slippage_bps: if market_price > 0.0 {
+                        (fill.fill_price - market_price) / market_price * 10_000.0
+                    } else {
+                        0.0
+                    },
+                    fill_time_s: 0.0,
+                    fee: fill.fee,
+                    n_trades: 1,
+                });
                 self.traded.lock().await.insert(contract.market.condition_id.clone());
-                let now_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
                 self.risk
                     .record_trade(TradeRecord {
                         timestamp: now_ts,
@@ -853,7 +909,7 @@ impl Pipeline {
                         .place_taker_order(token_id, limit_price, shares, "BUY", false)
                         .await
                 };
-                let fill_time_s = SystemTime::now()
+                let submit_latency_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0)
@@ -862,7 +918,6 @@ impl Pipeline {
                 match result {
                     Ok(order_id) => {
                         let order_value = limit_price * shares;
-                        let approx_fee = polymarket_fee(shares, limit_price, 0.072);
                         self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
                             token_id: short_cid(token_id),
                             side: "BUY".into(),
@@ -876,59 +931,11 @@ impl Pipeline {
                             book_bid_depth: 0.0,
                             balance_usd: self.risk.effective_bankroll().await,
                         });
-                        self.monitor.record_order_filled(&crate::monitoring::session::OrderFilled {
-                            order_id: short_cid(&order_id),
-                            filled: shares,
-                            requested: shares,
-                            fill_pct: 1.0,
-                            fill_price: limit_price,
-                            limit_price,
-                            slippage: 0.0,
-                            slippage_bps: 0.0,
-                            fill_time_s,
-                            fee: approx_fee,
-                            n_trades: 1,
-                        });
-                        self.traded.lock().await.insert(contract.market.condition_id.clone());
-                        let now_ts = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs_f64())
-                            .unwrap_or(0.0);
-                        self.risk
-                            .record_trade(TradeRecord {
-                                timestamp: now_ts,
-                                market_condition_id: contract.market.condition_id.clone(),
-                                outcome_idx: 0,
-                                side: "buy".into(),
-                                size: shares,
-                                price: limit_price,
-                                cost: order_value,
-                                event_id: contract.market.event_id.clone(),
-                                pnl: 0.0,
-                                paper: false,
-                            })
-                            .await?;
-                        let end_ts = parse_end(&contract.end_date)?.timestamp() as f64;
-                        let pp = PaperPosition {
-                            direction: signal.direction.clone(),
-                            entry_price: limit_price,
-                            fee: approx_fee,
-                            size: shares,
-                            open_btc: signal.open_price,
-                            end_time: end_ts,
-                            asset: contract.asset.clone(),
-                            contract_id: contract.market.condition_id.clone(),
-                        };
-                        self.paper_positions
-                            .lock()
-                            .await
-                            .insert(contract.market.condition_id.clone(), pp);
-                        self.persist_paper_positions().await;
                         tracing::info!(
                             order_id = short_cid(&order_id),
                             cost = order_value,
-                            fill_time_s,
-                            "candle.trade.live.filled"
+                            submit_latency_s,
+                            "candle.trade.live.accepted_unconfirmed"
                         );
                     }
                     Err(e) => {
