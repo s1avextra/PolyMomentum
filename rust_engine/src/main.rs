@@ -310,6 +310,15 @@ enum DiagnosticsCommand {
         /// Path to a session JSONL file.
         path: String,
     },
+    /// Compare two session JSONLs for promotion identity and schema health.
+    Compare {
+        /// First session JSONL, typically paper.
+        #[arg(long)]
+        left: String,
+        /// Second session JSONL, typically live or a later paper run.
+        #[arg(long)]
+        right: String,
+    },
 }
 
 #[tokio::main]
@@ -612,6 +621,22 @@ fn cmd_diagnostics(command: DiagnosticsCommand) {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("serialize diagnostics report")
+            );
+            if !report.ok {
+                std::process::exit(2);
+            }
+        }
+        DiagnosticsCommand::Compare { left, right } => {
+            let report = match monitoring::diagnostics::compare_sessions(&left, &right) {
+                Ok(report) => report,
+                Err(e) => {
+                    eprintln!("diagnostics compare failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize diagnostics comparison")
             );
             if !report.ok {
                 std::process::exit(2);

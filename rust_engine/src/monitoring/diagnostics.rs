@@ -15,6 +15,9 @@ pub struct SessionDiagnostics {
     pub ok: bool,
     pub mode: Option<String>,
     pub promotion_status: Option<String>,
+    pub promotion_strategy_hash: Option<String>,
+    pub promotion_source_report_hash: Option<String>,
+    pub promotion_data_manifest_hash: Option<String>,
     pub release_manifest_seen: bool,
     pub total_events: u64,
     pub malformed_lines: u64,
@@ -23,6 +26,22 @@ pub struct SessionDiagnostics {
     pub orders: OrderDiagnostics,
     pub system: SystemDiagnostics,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionComparison {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub left_path: String,
+    pub right_path: String,
+    pub left_mode: Option<String>,
+    pub right_mode: Option<String>,
+    pub left_promotion_strategy_hash: Option<String>,
+    pub right_promotion_strategy_hash: Option<String>,
+    pub event_count_delta: BTreeMap<String, i64>,
+    pub mismatches: Vec<String>,
+    pub left: SessionDiagnostics,
+    pub right: SessionDiagnostics,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -63,6 +82,9 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
         ok: false,
         mode: None,
         promotion_status: None,
+        promotion_strategy_hash: None,
+        promotion_source_report_hash: None,
+        promotion_data_manifest_hash: None,
         release_manifest_seen: false,
         total_events: 0,
         malformed_lines: 0,
@@ -103,6 +125,62 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
     Ok(out)
 }
 
+pub fn compare_sessions(
+    left_path: impl AsRef<Path>,
+    right_path: impl AsRef<Path>,
+) -> Result<SessionComparison> {
+    let left = analyze_session(left_path)?;
+    let right = analyze_session(right_path)?;
+    let mut mismatches = Vec::new();
+    if !left.ok {
+        mismatches.push("left session diagnostics are not ok".to_string());
+    }
+    if !right.ok {
+        mismatches.push("right session diagnostics are not ok".to_string());
+    }
+    if left.promotion_strategy_hash != right.promotion_strategy_hash {
+        mismatches.push("promotion strategy hash differs".to_string());
+    }
+    if left.promotion_source_report_hash != right.promotion_source_report_hash {
+        mismatches.push("promotion source report hash differs".to_string());
+    }
+    if left.promotion_data_manifest_hash != right.promotion_data_manifest_hash {
+        mismatches.push("promotion data manifest hash differs".to_string());
+    }
+
+    let mut keys: Vec<String> = left
+        .event_counts
+        .keys()
+        .chain(right.event_counts.keys())
+        .cloned()
+        .collect();
+    keys.sort();
+    keys.dedup();
+    let event_count_delta = keys
+        .into_iter()
+        .map(|key| {
+            let l = *left.event_counts.get(&key).unwrap_or(&0) as i64;
+            let r = *right.event_counts.get(&key).unwrap_or(&0) as i64;
+            (key, r - l)
+        })
+        .collect();
+
+    Ok(SessionComparison {
+        schema_version: 1,
+        ok: mismatches.is_empty(),
+        left_path: left.path.clone(),
+        right_path: right.path.clone(),
+        left_mode: left.mode.clone(),
+        right_mode: right.mode.clone(),
+        left_promotion_strategy_hash: left.promotion_strategy_hash.clone(),
+        right_promotion_strategy_hash: right.promotion_strategy_hash.clone(),
+        event_count_delta,
+        mismatches,
+        left,
+        right,
+    })
+}
+
 fn record_release_manifest(out: &mut SessionDiagnostics, v: &Value) {
     out.release_manifest_seen = true;
     out.mode = v
@@ -112,6 +190,22 @@ fn record_release_manifest(out: &mut SessionDiagnostics, v: &Value) {
     out.promotion_status = v
         .get("promotion")
         .and_then(|p| p.get("status"))
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.promotion_strategy_hash = v
+        .get("promotion")
+        .and_then(|p| p.get("strategy"))
+        .and_then(|s| s.get("params_hash"))
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.promotion_source_report_hash = v
+        .get("promotion")
+        .and_then(|p| p.get("source_report_hash"))
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.promotion_data_manifest_hash = v
+        .get("promotion")
+        .and_then(|p| p.get("data_manifest_hash"))
         .and_then(|x| x.as_str())
         .map(ToString::to_string);
 }
@@ -233,7 +327,12 @@ mod tests {
                 "cat": "system",
                 "type": "release_manifest",
                 "mode": "paper",
-                "promotion": {"status": "ok"}
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
             }),
             serde_json::json!({
                 "cat": "signal",
@@ -265,6 +364,7 @@ mod tests {
 
         assert!(diag.ok, "{:?}", diag.warnings);
         assert_eq!(diag.mode.as_deref(), Some("paper"));
+        assert_eq!(diag.promotion_strategy_hash.as_deref(), Some("strategy"));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);
     }
@@ -292,5 +392,48 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("missing system.release_manifest")));
+    }
+
+    #[test]
+    fn compare_sessions_requires_same_promotion_identity() {
+        let tmp = TempDir::new().unwrap();
+        let left = tmp.path().join("left.jsonl");
+        let right = tmp.path().join("right.jsonl");
+        let session = |hash: &str| {
+            [
+                serde_json::json!({
+                    "cat": "system",
+                    "type": "release_manifest",
+                    "mode": "paper",
+                    "promotion": {
+                        "status": "ok",
+                        "source_report_hash": "report",
+                        "data_manifest_hash": "data",
+                        "strategy": {"params_hash": hash}
+                    }
+                }),
+                serde_json::json!({
+                    "cat": "signal",
+                    "type": "evaluation",
+                    "decision_trade": false,
+                    "execution_attempted": false,
+                    "traded": false
+                }),
+            ]
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        std::fs::write(&left, session("a")).unwrap();
+        std::fs::write(&right, session("b")).unwrap();
+
+        let comparison = compare_sessions(&left, &right).unwrap();
+
+        assert!(!comparison.ok);
+        assert!(comparison
+            .mismatches
+            .iter()
+            .any(|m| m.contains("promotion strategy hash differs")));
     }
 }
