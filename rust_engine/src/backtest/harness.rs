@@ -30,6 +30,7 @@ use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
 use crate::strategy::decision::{decide_candle_trade, CandleDecision, DecisionResult};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
+use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
 
 #[derive(Debug, Clone)]
 pub struct CandleUniverse {
@@ -95,6 +96,7 @@ impl CandleUniverse {
 /// Strategy adapter: glues the live decision logic onto the L2 backtest engine.
 pub struct CandleBacktestStrategy {
     variant: StrategyVariant,
+    strategy_spec: StrategySpec,
     universe_by_token: BTreeMap<String, CandleContract>,
     momentum: MomentumDetector,
     bankroll_usd: f64,
@@ -129,8 +131,15 @@ impl CandleBacktestStrategy {
             noise_z_threshold: 0.3,
             ..Default::default()
         };
+        let strategy_spec = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            &variant,
+            format!("position_pct={:.4};max_per_market_usd={:.2}", variant.position_pct, variant.max_per_market_usd),
+        );
         Self {
             variant,
+            strategy_spec,
             universe_by_token: universe.by_token_id(),
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
@@ -283,8 +292,31 @@ impl Strategy for CandleBacktestStrategy {
             return Vec::new();
         }
         let size = (position / market_price).round().max(1.0);
+        let signal_contract = Signal::from_candle_decision(
+            cid.clone(),
+            traded_token.clone(),
+            &decision,
+            serde_json::json!({
+                "zone": decision.zone,
+                "z_score": decision.z_score,
+                "minutes_remaining": decision.minutes_remaining,
+                "market_price": decision.market_price,
+                "timestamp_s": timestamp_s,
+            }),
+        );
+        let intent = OrderIntent::deterministic(
+            self.strategy_spec.clone(),
+            &signal_contract,
+            "buy",
+            "market",
+            None,
+            size,
+            "candle_momentum_decision",
+            format!("{cid}:{timestamp_s:.6}:{traded_token}"),
+        );
 
         vec![BacktestOrder {
+            intent_id: intent.intent_id,
             timestamp_s,
             condition_id: cid,
             token_id: traded_token,

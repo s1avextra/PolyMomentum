@@ -121,6 +121,7 @@ impl TokenBook {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BacktestOrder {
+    pub intent_id: String,
     pub timestamp_s: f64,
     pub condition_id: String, // for resolver linkage
     pub token_id: String,
@@ -499,6 +500,7 @@ mod tests {
             }
             self.fired = true;
             vec![BacktestOrder {
+                intent_id: "test-intent".into(),
                 timestamp_s: ts,
                 condition_id: "c".into(),
                 token_id: tok.into(),

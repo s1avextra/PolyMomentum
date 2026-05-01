@@ -170,6 +170,9 @@ enum Command {
         /// silently mixing two runs' results.
         #[arg(long, default_value_t = false)]
         resume: bool,
+        /// Write a reproducible JSON experiment report to this path.
+        #[arg(long)]
+        report_json: Option<String>,
     },
     /// Run the full L2-backtest harness over PMXT v2 archives. Loads candle
     /// markets from Gamma, downloads/streams the requested UTC hours,
@@ -198,6 +201,9 @@ enum Command {
         /// Variant-fan-out thread count (see harness-sweep --threads).
         #[arg(long, default_value_t = 0)]
         threads: usize,
+        /// Write a reproducible JSON experiment report to this path.
+        #[arg(long)]
+        report_json: Option<String>,
     },
     /// Replay one or more captured session JSONLs through a grid of strategy
     /// variants and report synthetic P&L per variant.
@@ -300,6 +306,7 @@ async fn main() {
             threads,
             checkpoint,
             resume,
+            report_json,
         } => {
             let conf = parse_csv_floats(&conf);
             let zs = parse_csv_floats(&z);
@@ -322,6 +329,7 @@ async fn main() {
                 threads,
                 checkpoint.as_deref(),
                 resume,
+                report_json.as_deref(),
             ).await;
         }
         Command::Harness {
@@ -332,8 +340,9 @@ async fn main() {
             btc_csv,
             latency_ms,
             threads,
+            report_json,
         } => {
-            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads).await;
+            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, report_json.as_deref()).await;
         }
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
@@ -704,6 +713,7 @@ async fn cmd_harness_sweep(
     threads: usize,
     checkpoint: Option<&str>,
     resume: bool,
+    report_json: Option<&str>,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -923,6 +933,18 @@ async fn cmd_harness_sweep(
     }
     match backtest::harness::run_harness(&cfg, &variants).await {
         Ok(runs) => {
+            if let Some(path) = report_json {
+                let report = backtest::experiment::ExperimentReport::from_harness(
+                    "harness_sweep",
+                    &cfg,
+                    &runs,
+                );
+                if let Err(e) = backtest::experiment::write_report_atomic(path, &report) {
+                    eprintln!("write report {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("Experiment report: {path}");
+            }
             // Sort by PnL descending; trim to top N.
             let mut sorted = runs;
             sorted.sort_by(|a, b| {
@@ -960,6 +982,7 @@ async fn cmd_harness(
     btc_csv: Option<&str>,
     latency_ms: u64,
     threads: usize,
+    report_json: Option<&str>,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -1158,6 +1181,18 @@ async fn cmd_harness(
     let variants = backtest::strategies::default_variants();
     match backtest::harness::run_harness(&cfg, &variants).await {
         Ok(runs) => {
+            if let Some(path) = report_json {
+                let report = backtest::experiment::ExperimentReport::from_harness(
+                    "harness",
+                    &cfg,
+                    &runs,
+                );
+                if let Err(e) = backtest::experiment::write_report_atomic(path, &report) {
+                    eprintln!("write report {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("Experiment report: {path}");
+            }
             println!(
                 "\nHarness — {start}{} → {end} bankroll=${bankroll:.0} latency={latency_ms}ms variants={}\n",
                 if end.is_some() { "" } else { "" },

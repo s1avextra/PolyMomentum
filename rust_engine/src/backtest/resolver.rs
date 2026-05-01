@@ -229,6 +229,7 @@ mod tests {
     fn mk_fill(cid: &str, fill_price: f64, size: f64, fee: f64) -> BacktestFill {
         BacktestFill {
             order: BacktestOrder {
+                intent_id: "test-intent".to_string(),
                 timestamp_s: 1_700_000_000.0,
                 condition_id: cid.to_string(),
                 token_id: "tok".to_string(),
