@@ -15,6 +15,7 @@
 use k256::ecdsa::SigningKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -152,6 +153,68 @@ impl ClobClient {
             ("POLY-API-KEY".into(), self.api_key.clone()),
             ("POLY-PASSPHRASE".into(), self.api_passphrase.clone()),
         ]
+    }
+
+    async fn get_public_json(&self, path: &str, params: &[(&str, &str)]) -> Result<Value, String> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .get(&url)
+            .query(params)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+        }
+        serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
+    }
+
+    /// Public CLOB health check. Does not require wallet/API credentials.
+    pub async fn get_ok(&self) -> Result<Value, String> {
+        self.get_public_json("/ok", &[]).await
+    }
+
+    /// Public CLOB server time. Does not require wallet/API credentials.
+    pub async fn get_server_time(&self) -> Result<Value, String> {
+        self.get_public_json("/time", &[]).await
+    }
+
+    /// Public order book by outcome token ID.
+    pub async fn get_book(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/book", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_price(&self, token_id: &str, side: &str) -> Result<Value, String> {
+        self.get_public_json("/price", &[("token_id", token_id), ("side", side)])
+            .await
+    }
+
+    pub async fn get_midpoint(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/midpoint", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_spread(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/spread", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_tick_size(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/tick-size", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_fee_rate_bps(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/fee-rate", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_neg_risk(&self, token_id: &str) -> Result<Value, String> {
+        self.get_public_json("/neg-risk", &[("token_id", token_id)]).await
+    }
+
+    pub async fn get_market(&self, condition_id: &str) -> Result<Value, String> {
+        self.get_public_json("/market", &[("condition_id", condition_id)])
+            .await
     }
 
     /// Place a GTC maker limit order (0% fee) with EIP-712 signing.

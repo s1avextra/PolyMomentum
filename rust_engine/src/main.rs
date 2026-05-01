@@ -76,6 +76,11 @@ enum Command {
     },
     /// Print wallet balances (USDC.e, native USDC, POL).
     Wallet,
+    /// Read-only CLOB diagnostics. These do not place orders.
+    Clob {
+        #[command(subcommand)]
+        command: ClobCommand,
+    },
     /// Read CTF resolution for a condition_id.
     Ctf { condition_id: String },
     /// Validate a paper session JSONL replays clean against the decision function.
@@ -226,6 +231,34 @@ enum Command {
     SelfTest,
 }
 
+#[derive(Subcommand, Debug)]
+enum ClobCommand {
+    /// CLOB health check.
+    Ok,
+    /// CLOB server time.
+    Time,
+    /// Fetch an order book by outcome token ID.
+    Book { token_id: String },
+    /// Fetch the current buy/sell price for an outcome token.
+    Price {
+        token_id: String,
+        #[arg(long, default_value = "BUY")]
+        side: String,
+    },
+    /// Fetch midpoint for an outcome token.
+    Midpoint { token_id: String },
+    /// Fetch spread for an outcome token.
+    Spread { token_id: String },
+    /// Fetch minimum tick size for an outcome token.
+    TickSize { token_id: String },
+    /// Fetch fee rate in basis points for an outcome token.
+    FeeRate { token_id: String },
+    /// Check whether the token's market is negative-risk.
+    NegRisk { token_id: String },
+    /// Fetch CLOB market metadata by condition ID.
+    Market { condition_id: String },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -276,6 +309,7 @@ async fn main() {
             cmd_scan(&settings, max_hours, min_liquidity).await;
         }
         Command::Wallet => cmd_wallet(&settings).await,
+        Command::Clob { command } => cmd_clob(&settings, command).await,
         Command::Ctf { condition_id } => cmd_ctf(&settings, &condition_id).await,
         Command::ValidateReplay { path } => cmd_validate_replay(&path).await,
         Command::Sweep { session, bankroll, min_trades, zones } => {
@@ -417,6 +451,31 @@ async fn cmd_wallet(s: &config::Settings) {
         },
         Err(e) => {
             eprintln!("wallet init failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
+    let client = clob::ClobClient::new(&s.poly_base_url, "", "", "");
+    let result = match command {
+        ClobCommand::Ok => client.get_ok().await,
+        ClobCommand::Time => client.get_server_time().await,
+        ClobCommand::Book { token_id } => client.get_book(&token_id).await,
+        ClobCommand::Price { token_id, side } => {
+            client.get_price(&token_id, &side.to_ascii_uppercase()).await
+        }
+        ClobCommand::Midpoint { token_id } => client.get_midpoint(&token_id).await,
+        ClobCommand::Spread { token_id } => client.get_spread(&token_id).await,
+        ClobCommand::TickSize { token_id } => client.get_tick_size(&token_id).await,
+        ClobCommand::FeeRate { token_id } => client.get_fee_rate_bps(&token_id).await,
+        ClobCommand::NegRisk { token_id } => client.get_neg_risk(&token_id).await,
+        ClobCommand::Market { condition_id } => client.get_market(&condition_id).await,
+    };
+    match result {
+        Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+        Err(e) => {
+            eprintln!("clob diagnostic failed: {e}");
             std::process::exit(1);
         }
     }
