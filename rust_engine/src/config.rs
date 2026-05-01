@@ -136,6 +136,8 @@ pub struct Settings {
 
     pub kill_switch_path: String,
     pub alert_required: bool,
+    pub promotion_artifact_path: String,
+    pub promotion_required: bool,
 
     pub data_dir: String,
     pub logs_dir: String,
@@ -241,6 +243,8 @@ impl Settings {
 
             kill_switch_path: env_str("KILL_SWITCH_PATH", "/tmp/polymomentum/KILL"),
             alert_required: env_bool("ALERT_REQUIRED", false),
+            promotion_artifact_path: env_str("POLYMOMENTUM_PROMOTION_ARTIFACT", ""),
+            promotion_required: env_bool("POLYMOMENTUM_REQUIRE_PROMOTION", false),
 
             state_db_path: env_str(
                 "STATE_DB_PATH",

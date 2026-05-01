@@ -30,6 +30,8 @@ pub struct ExperimentReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantReport {
     pub strategy: StrategySpec,
+    #[serde(default)]
+    pub strategy_params: serde_json::Value,
     pub trades: usize,
     pub wins: usize,
     pub losses: usize,
@@ -78,6 +80,8 @@ pub struct PromotionArtifact {
     pub source_label: String,
     pub source_window: String,
     pub selected_strategy: StrategySpec,
+    #[serde(default)]
+    pub strategy_params: serde_json::Value,
     pub data_manifest_hash: String,
     pub market_count: usize,
     pub trades: usize,
@@ -158,6 +162,7 @@ impl VariantReport {
             .collect();
         Self {
             strategy,
+            strategy_params: serde_json::to_value(&run.variant).unwrap_or(serde_json::Value::Null),
             trades: run.results.n_trades(),
             wins: run.results.n_wins(),
             losses: run.results.n_losses(),
@@ -186,6 +191,11 @@ impl PromotionArtifact {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .context("promotion rejected: report has no variants")?;
+        if selected.strategy_params.is_null() {
+            bail!(
+                "promotion rejected: selected variant lacks strategy_params; regenerate the report"
+            );
+        }
         if selected.trades < gate.min_trades {
             bail!(
                 "promotion rejected: trades {} below minimum {}",
@@ -224,6 +234,7 @@ impl PromotionArtifact {
             source_label: report.label.clone(),
             source_window: format!("{}..{}", report.start, report.end),
             selected_strategy: selected.strategy.clone(),
+            strategy_params: selected.strategy_params.clone(),
             data_manifest_hash: report.data_manifest.manifest_hash.clone(),
             market_count: report.market_catalog.market_count(),
             trades: selected.trades,
@@ -286,6 +297,14 @@ pub fn read_report(path: impl AsRef<Path>) -> Result<ExperimentReport> {
         std::fs::read(path).with_context(|| format!("read experiment report {}", path.display()))?;
     serde_json::from_slice(&payload)
         .with_context(|| format!("parse experiment report {}", path.display()))
+}
+
+pub fn read_promotion(path: impl AsRef<Path>) -> Result<PromotionArtifact> {
+    let path = path.as_ref();
+    let payload = std::fs::read(path)
+        .with_context(|| format!("read promotion artifact {}", path.display()))?;
+    serde_json::from_slice(&payload)
+        .with_context(|| format!("parse promotion artifact {}", path.display()))
 }
 
 pub fn write_report_atomic(path: impl AsRef<Path>, report: &ExperimentReport) -> Result<()> {
@@ -452,6 +471,7 @@ mod tests {
         report.data_manifest.complete = false;
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
             trades: 30,
             wins: 20,
             losses: 10,
@@ -475,6 +495,7 @@ mod tests {
         let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
             trades: 5,
             wins: 3,
             losses: 2,

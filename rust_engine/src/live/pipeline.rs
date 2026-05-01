@@ -16,12 +16,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
+use crate::backtest::strategies::StrategyVariant;
 use crate::clob::{create_shared_client, SharedClobClient};
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
@@ -44,7 +45,7 @@ use crate::strategy::decision::{
     ZoneConfig,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
-use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
+use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -153,10 +154,98 @@ impl OraclePending {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeStrategy {
+    strategy_spec: StrategySpec,
+    zone_config: ZoneConfig,
+    skip_dead_zone: bool,
+    min_confidence: f64,
+    min_edge: f64,
+    position_pct: f64,
+    max_per_market_usd: f64,
+    prefer_maker: bool,
+    default_fee_rate: f64,
+    source: String,
+}
+
+impl RuntimeStrategy {
+    fn load(settings: &Settings) -> Result<Self> {
+        let path = settings.promotion_artifact_path.trim();
+        if path.is_empty() {
+            return Ok(Self::from_settings(settings));
+        }
+        let artifact = crate::backtest::experiment::read_promotion(path)
+            .with_context(|| format!("load promotion artifact {path}"))?;
+        if artifact.selected_strategy.name != "candle_momentum" {
+            bail!(
+                "unsupported promoted strategy {}",
+                artifact.selected_strategy.name
+            );
+        }
+        let variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
+            .context("parse promoted strategy_params as StrategyVariant")?;
+        let params_hash = stable_json_hash(&variant);
+        if params_hash != artifact.selected_strategy.params_hash {
+            bail!(
+                "promotion artifact hash mismatch: strategy_params hash {} != selected_strategy hash {}",
+                params_hash,
+                artifact.selected_strategy.params_hash
+            );
+        }
+        Ok(Self {
+            strategy_spec: artifact.selected_strategy,
+            zone_config: variant.zone_config,
+            skip_dead_zone: variant.skip_dead_zone,
+            min_confidence: variant.min_confidence,
+            min_edge: variant.min_edge,
+            position_pct: variant.position_pct,
+            max_per_market_usd: variant.max_per_market_usd,
+            prefer_maker: variant.prefer_maker,
+            default_fee_rate: variant.default_fee_rate,
+            source: format!("promotion:{path}"),
+        })
+    }
+
+    fn from_settings(settings: &Settings) -> Self {
+        let zone_config = ZoneConfig::from_settings(settings);
+        let params = json!({
+            "zone_config": zone_config,
+            "skip_dead_zone": settings.candle_skip_dead_zone,
+            "min_confidence": DEFAULT_MIN_CONFIDENCE,
+            "min_edge": DEFAULT_MIN_EDGE,
+            "position_pct": settings.candle_position_pct,
+            "max_per_market_usd": settings.max_position_per_market_usd,
+            "prefer_maker": settings.candle_prefer_maker,
+            "default_fee_rate": 0.072,
+        });
+        Self {
+            strategy_spec: StrategySpec::from_serializable_params(
+                "candle_momentum",
+                "1",
+                &params,
+                format!(
+                    "position_pct={:.4};max_per_market_usd={:.2}",
+                    settings.candle_position_pct, settings.max_position_per_market_usd
+                ),
+            ),
+            zone_config,
+            skip_dead_zone: settings.candle_skip_dead_zone,
+            min_confidence: DEFAULT_MIN_CONFIDENCE,
+            min_edge: DEFAULT_MIN_EDGE,
+            position_pct: settings.candle_position_pct,
+            max_per_market_usd: settings.max_position_per_market_usd,
+            prefer_maker: settings.candle_prefer_maker,
+            default_fee_rate: 0.072,
+            source: "settings".to_string(),
+        }
+    }
+}
+
 pub struct Pipeline {
     settings: Settings,
     mode: Mode,
     release_manifest: ReleaseManifest,
+    runtime_strategy: RuntimeStrategy,
     risk: RiskManager,
     order_manager: Mutex<OrderManager>,
     clob: Option<SharedClobClient>,
@@ -164,7 +253,6 @@ pub struct Pipeline {
     alerter: Alerter,
     gamma: GammaClient,
     ctf: CtfReader,
-    zone_config: ZoneConfig,
     breaker_cfg: BreakerConfig,
     momentum: Mutex<HashMap<String, MomentumDetector>>,
     contracts: RwLock<Vec<CandleContract>>,
@@ -185,6 +273,7 @@ pub struct Pipeline {
 impl Pipeline {
     pub async fn new(settings: Settings, mode: Mode) -> Result<Arc<Self>> {
         let release_manifest = ReleaseManifest::capture(&settings, mode.runtime_mode());
+        let runtime_strategy = RuntimeStrategy::load(&settings)?;
         let bankroll = if settings.bankroll_usd > 0.0 {
             settings.bankroll_usd
         } else {
@@ -193,7 +282,7 @@ impl Pipeline {
         };
         let risk_cfg = RiskConfig {
             initial_bankroll: bankroll,
-            max_per_market_override: settings.max_position_per_market_usd,
+            max_per_market_override: runtime_strategy.max_per_market_usd,
             ..Default::default()
         };
         let risk = RiskManager::open(&settings.state_db_path, risk_cfg).await?;
@@ -202,7 +291,6 @@ impl Pipeline {
         let alerter = Alerter::new(std::env::var("SLACK_WEBHOOK_URL").ok());
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
-        let zone_config = ZoneConfig::from_settings(&settings);
         let breaker_cfg = BreakerConfig {
             min_trades: settings.candle_breaker_min_trades.max(1) as u32,
             min_win_rate: settings.candle_breaker_min_win_rate,
@@ -264,6 +352,7 @@ impl Pipeline {
             settings,
             mode,
             release_manifest,
+            runtime_strategy,
             risk,
             order_manager: Mutex::new(OrderManager::new()),
             clob,
@@ -271,7 +360,6 @@ impl Pipeline {
             alerter,
             gamma,
             ctf,
-            zone_config,
             breaker_cfg,
             momentum: Mutex::new(momentum_map),
             contracts: RwLock::new(Vec::new()),
@@ -303,6 +391,8 @@ impl Pipeline {
             venue = self.release_manifest.venue.as_str(),
             git_sha = self.release_manifest.git_sha,
             config_hash = self.release_manifest.config_hash,
+            strategy_source = %self.runtime_strategy.source,
+            strategy_hash = %self.runtime_strategy.strategy_spec.params_hash,
             "candle.start"
         );
         if self.alerter.enabled() {
@@ -631,10 +721,10 @@ impl Pipeline {
                     asset_price,
                     signal.open_price,
                     ps.implied_vol,
-                    DEFAULT_MIN_CONFIDENCE,
-                    DEFAULT_MIN_EDGE,
-                    self.settings.candle_skip_dead_zone,
-                    &self.zone_config,
+                    self.runtime_strategy.min_confidence,
+                    self.runtime_strategy.min_edge,
+                    self.runtime_strategy.skip_dead_zone,
+                    &self.runtime_strategy.zone_config,
                     0.0, // cross-asset boost not yet wired
                 );
 
@@ -752,7 +842,7 @@ impl Pipeline {
         ps: &PriceState,
     ) -> Result<()> {
         let bankroll = self.risk.effective_bankroll().await;
-        let mut position = bankroll * self.settings.candle_position_pct;
+        let mut position = bankroll * self.runtime_strategy.position_pct;
 
         // Volatility regime sizing
         let vol_ratio = if ps.implied_vol > 0.0 {
@@ -786,7 +876,8 @@ impl Pipeline {
         match self.mode {
             Mode::Paper => {
                 let cfg = PaperFillCfg {
-                    prefer_maker: self.settings.candle_prefer_maker,
+                    prefer_maker: self.runtime_strategy.prefer_maker,
+                    default_taker_rate: self.runtime_strategy.default_fee_rate,
                     ..Default::default()
                 };
                 let Some(fill) = simulate_paper_fill(market_price, position, &cfg) else {
@@ -802,15 +893,6 @@ impl Pipeline {
                     short_cid(&contract.market.condition_id),
                     (now_ts * 1000.0) as u64
                 );
-                let strategy_spec = StrategySpec::from_serializable_params(
-                    "candle_momentum",
-                    "1",
-                    &self.zone_config,
-                    format!(
-                        "position_pct={:.4};max_per_market_usd={:.2}",
-                        self.settings.candle_position_pct, self.settings.max_position_per_market_usd
-                    ),
-                );
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
                     token_id.clone(),
@@ -822,7 +904,7 @@ impl Pipeline {
                     }),
                 );
                 let intent = OrderIntent::deterministic(
-                    strategy_spec,
+                    self.runtime_strategy.strategy_spec.clone(),
                     &order_signal,
                     "buy",
                     "market",
@@ -938,16 +1020,7 @@ impl Pipeline {
                 let limit_price = ((market_price / tick).round() * tick).clamp(0.01, 0.99);
                 let shares = (position / limit_price).round().max(1.0);
                 let zone = decision.zone.as_str();
-                let prefer_maker = self.settings.candle_prefer_maker && zone != "terminal";
-                let strategy_spec = StrategySpec::from_serializable_params(
-                    "candle_momentum",
-                    "1",
-                    &self.zone_config,
-                    format!(
-                        "position_pct={:.4};max_per_market_usd={:.2}",
-                        self.settings.candle_position_pct, self.settings.max_position_per_market_usd
-                    ),
-                );
+                let prefer_maker = self.runtime_strategy.prefer_maker && zone != "terminal";
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
                     token_id.clone(),
@@ -959,7 +1032,7 @@ impl Pipeline {
                     }),
                 );
                 let intent = OrderIntent::deterministic(
-                    strategy_spec,
+                    self.runtime_strategy.strategy_spec.clone(),
                     &order_signal,
                     "buy",
                     if prefer_maker { "limit" } else { "market" },
@@ -1462,5 +1535,74 @@ fn spawn_exchange_feeds(state: Arc<RwLock<PriceState>>) {
                 sleep(Duration::from_secs(60)).await;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backtest::experiment::{PromotionArtifact, PromotionGate};
+    use tempfile::TempDir;
+
+    fn promotion_for_variant(variant: &StrategyVariant) -> PromotionArtifact {
+        let spec = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            variant,
+            "test-risk",
+        );
+        PromotionArtifact {
+            schema_version: 1,
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            source_report_hash: "report-hash".to_string(),
+            source_label: "unit".to_string(),
+            source_window: "a..b".to_string(),
+            selected_strategy: spec,
+            strategy_params: serde_json::to_value(variant).unwrap(),
+            data_manifest_hash: "manifest-hash".to_string(),
+            market_count: 1,
+            trades: 30,
+            win_rate: 0.6,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.1,
+            risk_notes: Vec::new(),
+            promotion_gate: PromotionGate::default(),
+        }
+    }
+
+    #[test]
+    fn runtime_strategy_uses_promoted_variant() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("promotion.json");
+        let variant = StrategyVariant::loose_maker();
+        let artifact = promotion_for_variant(&variant);
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+
+        let runtime = RuntimeStrategy::load(&settings).unwrap();
+
+        assert_eq!(runtime.strategy_spec, artifact.selected_strategy);
+        assert!(runtime.prefer_maker);
+        assert_eq!(runtime.min_confidence, variant.min_confidence);
+        assert_eq!(runtime.min_edge, variant.min_edge);
+        assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
+    }
+
+    #[test]
+    fn runtime_strategy_rejects_tampered_params() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("promotion.json");
+        let variant = StrategyVariant::loose_maker();
+        let mut artifact = promotion_for_variant(&variant);
+        artifact.strategy_params["min_edge"] = serde_json::json!(0.99);
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+
+        let err = RuntimeStrategy::load(&settings).unwrap_err();
+
+        assert!(err.to_string().contains("hash mismatch"));
     }
 }

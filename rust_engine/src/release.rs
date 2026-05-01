@@ -6,7 +6,10 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::backtest::experiment::PromotionArtifact;
+use crate::backtest::strategies::StrategyVariant;
 use crate::config::{RuntimeMode, Settings, VenueMode};
+use crate::strategy::spec::{stable_json_hash, StrategySpec};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseManifest {
@@ -19,6 +22,20 @@ pub struct ReleaseManifest {
     pub mode: RuntimeMode,
     pub venue: VenueMode,
     pub config_hash: String,
+    pub promotion: PromotionReleaseManifest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromotionReleaseManifest {
+    pub status: &'static str,
+    pub path: Option<String>,
+    pub detail: String,
+    pub source_report_hash: Option<String>,
+    pub data_manifest_hash: Option<String>,
+    pub strategy: Option<StrategySpec>,
+    pub trades: Option<usize>,
+    pub win_rate: Option<f64>,
+    pub total_pnl: Option<f64>,
 }
 
 impl ReleaseManifest {
@@ -40,6 +57,7 @@ impl ReleaseManifest {
             mode,
             venue: settings.venue,
             config_hash: redacted_config_hash(settings),
+            promotion: capture_promotion_manifest(settings),
         }
     }
 }
@@ -112,6 +130,7 @@ pub fn run_preflight(
     check_peer_private_paths(settings, &mut checks);
     check_runtime_paths(settings, mode, &mut checks);
     check_kill_switch(settings, &mut checks);
+    check_promotion_artifact(settings, &mut checks);
 
     if mode.is_live() {
         check_live_confirmation(i_understand_live, &mut checks);
@@ -156,6 +175,8 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "candle_prefer_maker": settings.candle_prefer_maker,
         "candle_cross_asset_enabled": settings.candle_cross_asset_enabled,
         "alert_required": settings.alert_required,
+        "promotion_artifact_present": !settings.promotion_artifact_path.trim().is_empty(),
+        "promotion_required": settings.promotion_required,
         "data_dir": settings.data_dir,
         "logs_dir": settings.logs_dir,
         "state_db_path": settings.state_db_path,
@@ -165,6 +186,104 @@ fn redacted_config_hash(settings: &Settings) -> String {
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
     let digest = Sha256::digest(bytes);
     format!("{digest:x}")
+}
+
+fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        return PromotionReleaseManifest {
+            status: "absent",
+            path: None,
+            detail: "no promotion artifact configured".to_string(),
+            source_report_hash: None,
+            data_manifest_hash: None,
+            strategy: None,
+            trades: None,
+            win_rate: None,
+            total_pnl: None,
+        };
+    }
+
+    match crate::backtest::experiment::read_promotion(path) {
+        Ok(artifact) => {
+            if let Some(detail) = promotion_validation_error(&artifact) {
+                PromotionReleaseManifest {
+                    status: "invalid",
+                    path: Some(path.to_string()),
+                    detail,
+                    source_report_hash: Some(artifact.source_report_hash),
+                    data_manifest_hash: Some(artifact.data_manifest_hash),
+                    strategy: Some(artifact.selected_strategy),
+                    trades: Some(artifact.trades),
+                    win_rate: Some(artifact.win_rate),
+                    total_pnl: Some(artifact.total_pnl),
+                }
+            } else {
+                promotion_manifest_from_artifact(path, &artifact)
+            }
+        }
+        Err(e) => PromotionReleaseManifest {
+            status: "invalid",
+            path: Some(path.to_string()),
+            detail: e.to_string(),
+            source_report_hash: None,
+            data_manifest_hash: None,
+            strategy: None,
+            trades: None,
+            win_rate: None,
+            total_pnl: None,
+        },
+    }
+}
+
+fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
+    if artifact.schema_version != 1 {
+        return Some(format!(
+            "unsupported promotion schema {}",
+            artifact.schema_version
+        ));
+    }
+    if artifact.selected_strategy.name != "candle_momentum" {
+        return Some(format!(
+            "unsupported promoted strategy {}",
+            artifact.selected_strategy.name
+        ));
+    }
+    if artifact.strategy_params.is_null() {
+        return Some("promotion artifact has no strategy_params".to_string());
+    }
+    let variant: StrategyVariant = match serde_json::from_value(artifact.strategy_params.clone()) {
+        Ok(variant) => variant,
+        Err(e) => return Some(format!("strategy_params do not parse as StrategyVariant: {e}")),
+    };
+    let params_hash = stable_json_hash(&variant);
+    if params_hash != artifact.selected_strategy.params_hash {
+        return Some(format!(
+            "strategy_params hash {} does not match selected_strategy hash {}",
+            params_hash, artifact.selected_strategy.params_hash
+        ));
+    }
+    None
+}
+
+fn promotion_manifest_from_artifact(
+    path: &str,
+    artifact: &PromotionArtifact,
+) -> PromotionReleaseManifest {
+    PromotionReleaseManifest {
+        status: "ok",
+        path: Some(path.to_string()),
+        detail: format!(
+            "promoted {} trades from {}",
+            artifact.trades, artifact.source_label
+        ),
+        source_report_hash: Some(artifact.source_report_hash.clone()),
+        data_manifest_hash: Some(artifact.data_manifest_hash.clone()),
+        strategy: Some(artifact.selected_strategy.clone()),
+        trades: Some(artifact.trades),
+        win_rate: Some(artifact.win_rate),
+        total_pnl: Some(artifact.total_pnl),
+    }
 }
 
 fn check_live_confirmation(i_understand_live: bool, checks: &mut Vec<PreflightCheck>) {
@@ -361,14 +480,67 @@ fn check_kill_switch(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
     }
 }
 
+fn check_promotion_artifact(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        let status = if settings.promotion_required {
+            CheckStatus::Fail
+        } else {
+            CheckStatus::Warn
+        };
+        push(
+            checks,
+            "promotion_artifact",
+            status,
+            "no POLYMOMENTUM_PROMOTION_ARTIFACT configured".to_string(),
+        );
+        return;
+    }
+
+    match crate::backtest::experiment::read_promotion(path) {
+        Ok(artifact) => {
+            if let Some(detail) = promotion_validation_error(&artifact) {
+                push(
+                    checks,
+                    "promotion_artifact",
+                    CheckStatus::Fail,
+                    detail,
+                );
+            } else {
+                push(
+                    checks,
+                    "promotion_artifact",
+                    CheckStatus::Ok,
+                    format!(
+                        "loaded promoted strategy hash={} trades={}",
+                        artifact.selected_strategy.params_hash, artifact.trades
+                    ),
+                );
+            }
+        }
+        Err(e) => push(
+            checks,
+            "promotion_artifact",
+            CheckStatus::Fail,
+            format!("failed to load promotion artifact {path}: {e}"),
+        ),
+    }
+}
+
 fn check_peer_private_paths(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
-    let paths = [
+    let mut paths = vec![
         ("data_dir", settings.data_dir.as_str()),
         ("logs_dir", settings.logs_dir.as_str()),
         ("state_db_path", settings.state_db_path.as_str()),
         ("session_log_dir", settings.session_log_dir.as_str()),
         ("kill_switch_path", settings.kill_switch_path.as_str()),
     ];
+    if !settings.promotion_artifact_path.trim().is_empty() {
+        paths.push((
+            "promotion_artifact_path",
+            settings.promotion_artifact_path.as_str(),
+        ));
+    }
     let bad: Vec<String> = paths
         .iter()
         .filter_map(|(name, path)| {
@@ -434,6 +606,8 @@ mod tests {
         s.venue_raw = "paper_only".to_string();
         s.venue_parse_error = None;
         s.alert_required = false;
+        s.promotion_artifact_path.clear();
+        s.promotion_required = false;
         s.private_key.clear();
         s.poly_api_key.clear();
         s.poly_api_secret.clear();
@@ -468,5 +642,29 @@ mod tests {
         let report = run_preflight(&s, RuntimeMode::Paper, false);
         assert!(!report.ok);
         assert!(report.failure_summary().contains("peer private"));
+    }
+
+    #[test]
+    fn preflight_can_require_promotion_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.promotion_required = true;
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("POLYMOMENTUM_PROMOTION_ARTIFACT"));
+    }
+
+    #[test]
+    fn preflight_rejects_invalid_promotion_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = tmp.path().join("promotion.json");
+        std::fs::write(&artifact, "{bad json").unwrap();
+        s.promotion_artifact_path = artifact.display().to_string();
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("failed to load promotion"));
     }
 }

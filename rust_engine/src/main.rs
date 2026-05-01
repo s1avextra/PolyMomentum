@@ -51,6 +51,9 @@ enum Command {
         /// Allow live mode (default: paper-only safeguard).
         #[arg(long)]
         i_understand_live: bool,
+        /// Promotion artifact JSON to bind this runtime to a backtested variant.
+        #[arg(long)]
+        promotion_artifact: Option<String>,
     },
     /// Run startup checks without opening market-data or order connections.
     Preflight {
@@ -60,12 +63,18 @@ enum Command {
         /// Required when validating the live startup path.
         #[arg(long)]
         i_understand_live: bool,
+        /// Promotion artifact JSON to validate.
+        #[arg(long)]
+        promotion_artifact: Option<String>,
     },
     /// Print the release manifest used in preflight and session logs.
     ReleaseManifest {
         /// Paper or live mode to include in the manifest.
         #[arg(long, value_enum, default_value_t = RuntimeMode::Paper)]
         mode: RuntimeMode,
+        /// Promotion artifact JSON to include in the manifest.
+        #[arg(long)]
+        promotion_artifact: Option<String>,
     },
     /// Smoke-test scanner: fetch candle markets, print summary.
     Scan {
@@ -296,7 +305,9 @@ async fn main() {
     let settings = config::Settings::from_env();
 
     match cli.command {
-        Command::Live { mode, i_understand_live } => {
+        Command::Live { mode, i_understand_live, promotion_artifact } => {
+            let mut settings = settings.clone();
+            apply_promotion_override(&mut settings, promotion_artifact);
             let preflight = release::run_preflight(&settings, mode, i_understand_live);
             if !preflight.ok {
                 eprintln!("preflight failed: {}", preflight.failure_summary());
@@ -318,7 +329,9 @@ async fn main() {
                 }
             }
         }
-        Command::Preflight { mode, i_understand_live } => {
+        Command::Preflight { mode, i_understand_live, promotion_artifact } => {
+            let mut settings = settings.clone();
+            apply_promotion_override(&mut settings, promotion_artifact);
             let report = release::run_preflight(&settings, mode, i_understand_live);
             println!(
                 "{}",
@@ -328,7 +341,9 @@ async fn main() {
                 std::process::exit(2);
             }
         }
-        Command::ReleaseManifest { mode } => {
+        Command::ReleaseManifest { mode, promotion_artifact } => {
+            let mut settings = settings.clone();
+            apply_promotion_override(&mut settings, promotion_artifact);
             let manifest = release::ReleaseManifest::capture(&settings, mode);
             println!(
                 "{}",
@@ -412,6 +427,12 @@ async fn main() {
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
         }
+    }
+}
+
+fn apply_promotion_override(settings: &mut config::Settings, path: Option<String>) {
+    if let Some(path) = path {
+        settings.promotion_artifact_path = path;
     }
 }
 
