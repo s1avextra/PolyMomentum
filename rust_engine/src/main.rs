@@ -95,6 +95,11 @@ enum Command {
         #[command(subcommand)]
         command: ExperimentCommand,
     },
+    /// Analyze runtime diagnostics from session JSONL logs.
+    Diagnostics {
+        #[command(subcommand)]
+        command: DiagnosticsCommand,
+    },
     /// Read CTF resolution for a condition_id.
     Ctf { condition_id: String },
     /// Validate a paper session JSONL replays clean against the decision function.
@@ -298,6 +303,15 @@ enum ExperimentCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum DiagnosticsCommand {
+    /// Analyze one session_*.jsonl file and print a machine-readable report.
+    Session {
+        /// Path to a session JSONL file.
+        path: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -356,6 +370,7 @@ async fn main() {
         Command::Wallet => cmd_wallet(&settings).await,
         Command::Clob { command } => cmd_clob(&settings, command).await,
         Command::Experiment { command } => cmd_experiment(command),
+        Command::Diagnostics { command } => cmd_diagnostics(command),
         Command::Ctf { condition_id } => cmd_ctf(&settings, &condition_id).await,
         Command::ValidateReplay { path } => cmd_validate_replay(&path).await,
         Command::Sweep { session, bankroll, min_trades, zones } => {
@@ -580,6 +595,27 @@ fn cmd_experiment(command: ExperimentCommand) {
                 }))
                 .expect("serialize promotion summary")
             );
+        }
+    }
+}
+
+fn cmd_diagnostics(command: DiagnosticsCommand) {
+    match command {
+        DiagnosticsCommand::Session { path } => {
+            let report = match monitoring::diagnostics::analyze_session(&path) {
+                Ok(report) => report,
+                Err(e) => {
+                    eprintln!("diagnostics failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize diagnostics report")
+            );
+            if !report.ok {
+                std::process::exit(2);
+            }
         }
     }
 }
