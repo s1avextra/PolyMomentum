@@ -44,6 +44,9 @@ use crate::strategy::decision::{
     decide_candle_trade, DecisionResult, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE,
     ZoneConfig,
 };
+use crate::strategy::microstructure::{
+    BookLevelView, BookMicrostructure, MicrostructureConfig,
+};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
@@ -165,6 +168,7 @@ struct RuntimeStrategy {
     max_per_market_usd: f64,
     prefer_maker: bool,
     default_fee_rate: f64,
+    microstructure: MicrostructureConfig,
     source: String,
 }
 
@@ -202,6 +206,7 @@ impl RuntimeStrategy {
             max_per_market_usd: variant.max_per_market_usd,
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
+            microstructure: variant.microstructure,
             source: format!("promotion:{path}"),
         })
     }
@@ -217,6 +222,7 @@ impl RuntimeStrategy {
             "max_per_market_usd": settings.max_position_per_market_usd,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": 0.072,
+            "microstructure": MicrostructureConfig::disabled(),
         });
         Self {
             strategy_spec: StrategySpec::from_serializable_params(
@@ -236,6 +242,7 @@ impl RuntimeStrategy {
             max_per_market_usd: settings.max_position_per_market_usd,
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: 0.072,
+            microstructure: MicrostructureConfig::disabled(),
             source: "settings".to_string(),
         }
     }
@@ -763,6 +770,10 @@ impl Pipeline {
                             cross_boost: 0.0,
                             up_price,
                             down_price,
+                            book_spread: 0.0,
+                            book_pressure: 0.0,
+                            book_bid_depth: 0.0,
+                            book_ask_depth: 0.0,
                             zone: skip.zone.clone(),
                             fair: 0.0,
                             edge: 0.0,
@@ -774,6 +785,53 @@ impl Pipeline {
                         });
                     }
                     DecisionResult::Trade(decision) => {
+                        let traded_token_id = if decision.direction == "up" {
+                            &c.up_token_id
+                        } else {
+                            &c.down_token_id
+                        };
+                        let micro =
+                            live_microstructure(traded_token_id, &books, now_ts);
+                        if let Err(skip) =
+                            micro.check_long_entry(&self.runtime_strategy.microstructure)
+                        {
+                            let aggregate = format!("{}_{}", skip.reason, decision.zone);
+                            self.monitor.record_signal_skip(&cid, &aggregate);
+                            self.monitor.record_signal_evaluation(&SignalEvaluation {
+                                ts_ms: eval_ts_ms,
+                                cid: short_cid(&cid),
+                                asset: c.asset.clone(),
+                                open: signal.open_price,
+                                px: signal.current_price,
+                                chg: signal.price_change,
+                                chg_pct: signal.price_change_pct,
+                                cons: signal.consistency,
+                                z: signal.z_score,
+                                conf: signal.confidence,
+                                elapsed_min: signal.minutes_elapsed,
+                                remaining_min: signal.minutes_remaining,
+                                dir: signal.direction.clone(),
+                                vol_fast,
+                                vol_slow,
+                                implied_vol: ps.implied_vol,
+                                cross_boost: 0.0,
+                                up_price,
+                                down_price,
+                                book_spread: micro.spread,
+                                book_pressure: micro.pressure,
+                                book_bid_depth: micro.bid_depth,
+                                book_ask_depth: micro.ask_depth,
+                                zone: decision.zone.clone(),
+                                fair: decision.fair_value,
+                                edge: decision.edge,
+                                decision_trade: true,
+                                execution_attempted: false,
+                                traded: false,
+                                skip_reason: Some(skip.reason),
+                                skip_detail: Some(skip.detail),
+                            });
+                            continue;
+                        }
                         traded_windows.insert(c.end_date.clone());
                         self.monitor.record_signal_evaluation(&SignalEvaluation {
                             ts_ms: eval_ts_ms,
@@ -795,6 +853,10 @@ impl Pipeline {
                             cross_boost: 0.0,
                             up_price,
                             down_price,
+                            book_spread: micro.spread,
+                            book_pressure: micro.pressure,
+                            book_bid_depth: micro.bid_depth,
+                            book_ask_depth: micro.ask_depth,
                             zone: decision.zone.clone(),
                             fair: decision.fair_value,
                             edge: decision.edge,
@@ -1441,6 +1503,37 @@ fn pick_book_prices(
         })
         .unwrap_or(contract.down_price);
     (up, down)
+}
+
+fn live_microstructure(
+    token_id: &str,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    now_ts: f64,
+) -> BookMicrostructure {
+    let Some(book) = books.get(token_id) else {
+        return BookMicrostructure::default();
+    };
+    let age = now_ts - book.last_update_us as f64 / 1_000_000.0;
+    if age >= 30.0 {
+        return BookMicrostructure::default();
+    }
+    let bids: Vec<BookLevelView> = book
+        .bids
+        .iter()
+        .map(|l| BookLevelView {
+            price: l.price,
+            size: l.size,
+        })
+        .collect();
+    let asks: Vec<BookLevelView> = book
+        .asks
+        .iter()
+        .map(|l| BookLevelView {
+            price: l.price,
+            size: l.size,
+        })
+        .collect();
+    BookMicrostructure::from_levels(&bids, &asks, 3)
 }
 
 fn parse_end(s: &str) -> Result<DateTime<Utc>> {

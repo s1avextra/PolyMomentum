@@ -5,6 +5,7 @@
 //! v2 + BTC tape so per-strategy P&L is comparable.
 
 use crate::strategy::decision::ZoneConfig;
+use crate::strategy::microstructure::MicrostructureConfig;
 
 /// Tunable knobs the harness varies. The variant name is what shows up in
 /// the report.
@@ -35,6 +36,9 @@ pub struct StrategyVariant {
     /// Maker fee rate. Polymarket pays a rebate (default 0%) but explicit
     /// for clarity.
     pub maker_fee_rate: f64,
+    /// Optional order-book confirmation gate for long entries.
+    #[serde(default)]
+    pub microstructure: MicrostructureConfig,
 }
 
 impl StrategyVariant {
@@ -53,6 +57,7 @@ impl StrategyVariant {
             use_perfect_fill: false,
             default_fee_rate: 0.072,
             maker_fee_rate: 0.0,
+            microstructure: MicrostructureConfig::disabled(),
         }
     }
 
@@ -144,6 +149,7 @@ impl StrategyVariant {
             use_perfect_fill: false,
             default_fee_rate: 0.072,
             maker_fee_rate: 0.0,
+            microstructure: MicrostructureConfig::disabled(),
         }
     }
 
@@ -158,6 +164,30 @@ impl StrategyVariant {
             ..Self::loose_smoke()
         }
     }
+
+    pub fn microstructure_confirmed() -> Self {
+        Self {
+            name: "microstructure_confirmed".into(),
+            microstructure: MicrostructureConfig {
+                max_spread: 0.08,
+                min_book_depth: 20.0,
+                min_book_pressure: 0.10,
+            },
+            ..Self::baseline()
+        }
+    }
+
+    pub fn terminal_microstructure() -> Self {
+        Self {
+            name: "terminal_microstructure".into(),
+            microstructure: MicrostructureConfig {
+                max_spread: 0.08,
+                min_book_depth: 20.0,
+                min_book_pressure: 0.10,
+            },
+            ..Self::terminal_only()
+        }
+    }
 }
 
 /// Default sweep set for the harness.
@@ -170,5 +200,7 @@ pub fn default_variants() -> Vec<StrategyVariant> {
         StrategyVariant::aggressive_terminal(),
         StrategyVariant::conservative_terminal(),
         StrategyVariant::maker_first(),
+        StrategyVariant::microstructure_confirmed(),
+        StrategyVariant::terminal_microstructure(),
     ]
 }

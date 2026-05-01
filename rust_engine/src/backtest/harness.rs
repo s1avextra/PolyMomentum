@@ -29,6 +29,7 @@ use crate::backtest::resolver::{resolve_fills, BacktestResults, CandleWindow};
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
 use crate::strategy::decision::{decide_candle_trade, CandleDecision, DecisionResult};
+use crate::strategy::microstructure::{BookLevelView, BookMicrostructure};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
 
@@ -283,6 +284,13 @@ impl Strategy for CandleBacktestStrategy {
             self.skipped_wrong_side += 1;
             return Vec::new();
         }
+        let micro = backtest_microstructure(book);
+        if let Err(skip) = micro.check_long_entry(&self.variant.microstructure) {
+            self.skipped_decision += 1;
+            let key = format!("{}_{}", skip.reason, decision.zone);
+            *self.skip_reasons.entry(key).or_insert(0) += 1;
+            return Vec::new();
+        }
         self.traded.insert(cid.clone());
         self.decisions.push(decision.clone());
 
@@ -328,6 +336,20 @@ impl Strategy for CandleBacktestStrategy {
             maker_fee_rate: self.variant.maker_fee_rate,
         }]
     }
+}
+
+fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
+    let bids: Vec<BookLevelView> = book
+        .bid_levels()
+        .into_iter()
+        .map(|(price, size)| BookLevelView { price, size })
+        .collect();
+    let asks: Vec<BookLevelView> = book
+        .ask_levels()
+        .into_iter()
+        .map(|(price, size)| BookLevelView { price, size })
+        .collect();
+    BookMicrostructure::from_levels(&bids, &asks, 3)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

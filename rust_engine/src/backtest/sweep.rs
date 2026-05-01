@@ -93,6 +93,7 @@ impl SweepGrid {
                                 use_perfect_fill: false,
                                 default_fee_rate: self.base.default_fee_rate,
                                 maker_fee_rate: self.base.maker_fee_rate,
+                                microstructure: self.base.microstructure,
                             });
                         }
                     }
