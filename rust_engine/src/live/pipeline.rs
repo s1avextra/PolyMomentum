@@ -27,6 +27,7 @@ use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
+use crate::execution::order_manager::OrderManager;
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
@@ -43,6 +44,7 @@ use crate::strategy::decision::{
     ZoneConfig,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
+use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -156,6 +158,7 @@ pub struct Pipeline {
     mode: Mode,
     release_manifest: ReleaseManifest,
     risk: RiskManager,
+    order_manager: Mutex<OrderManager>,
     clob: Option<SharedClobClient>,
     monitor: Arc<SessionMonitor>,
     alerter: Alerter,
@@ -262,6 +265,7 @@ impl Pipeline {
             mode,
             release_manifest,
             risk,
+            order_manager: Mutex::new(OrderManager::new()),
             clob,
             monitor,
             alerter,
@@ -798,6 +802,55 @@ impl Pipeline {
                     short_cid(&contract.market.condition_id),
                     (now_ts * 1000.0) as u64
                 );
+                let strategy_spec = StrategySpec::from_serializable_params(
+                    "candle_momentum",
+                    "1",
+                    &self.zone_config,
+                    format!(
+                        "position_pct={:.4};max_per_market_usd={:.2}",
+                        self.settings.candle_position_pct, self.settings.max_position_per_market_usd
+                    ),
+                );
+                let order_signal = Signal::from_candle_decision(
+                    contract.market.condition_id.clone(),
+                    token_id.clone(),
+                    &decision,
+                    serde_json::json!({
+                        "mode": self.mode.as_str(),
+                        "zone": decision.zone.clone(),
+                        "market_price": market_price,
+                    }),
+                );
+                let intent = OrderIntent::deterministic(
+                    strategy_spec,
+                    &order_signal,
+                    "buy",
+                    "market",
+                    None,
+                    fill.shares,
+                    "paper_candle_momentum_decision",
+                    format!("{}:{now_ts:.6}:{}", contract.market.condition_id, token_id),
+                );
+                let ack_state = {
+                    let mut orders = self.order_manager.lock().await;
+                    orders
+                        .create_intent(intent.clone(), now_ts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    orders
+                        .risk_accept(&intent.intent_id, now_ts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    orders
+                        .submit(&intent.intent_id, Some(order_id.clone()), now_ts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    let acked = orders
+                        .ack(&intent.intent_id, Some(order_id.clone()), now_ts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    let ack_state = acked.state.as_str().to_string();
+                    orders
+                        .fill(&intent.intent_id, fill.shares, fill.fill_price, fill.fee, now_ts)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    ack_state
+                };
                 let order_value = fill.fill_price * fill.shares;
                 tracing::info!(
                     direction = %signal.direction,
@@ -809,8 +862,10 @@ impl Pipeline {
                     "candle.trade.paper"
                 );
                 self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
+                    intent_id: intent.intent_id.clone(),
                     token_id: short_cid(token_id),
                     side: "BUY".into(),
+                    state: ack_state,
                     price: fill.fill_price,
                     live_price: market_price,
                     size: fill.shares,
@@ -822,6 +877,7 @@ impl Pipeline {
                     balance_usd: bankroll,
                 });
                 self.monitor.record_order_filled(&crate::monitoring::session::OrderFilled {
+                    intent_id: intent.intent_id,
                     order_id: short_cid(&order_id),
                     filled: fill.shares,
                     requested: fill.shares,
@@ -883,11 +939,52 @@ impl Pipeline {
                 let shares = (position / limit_price).round().max(1.0);
                 let zone = decision.zone.as_str();
                 let prefer_maker = self.settings.candle_prefer_maker && zone != "terminal";
+                let strategy_spec = StrategySpec::from_serializable_params(
+                    "candle_momentum",
+                    "1",
+                    &self.zone_config,
+                    format!(
+                        "position_pct={:.4};max_per_market_usd={:.2}",
+                        self.settings.candle_position_pct, self.settings.max_position_per_market_usd
+                    ),
+                );
+                let order_signal = Signal::from_candle_decision(
+                    contract.market.condition_id.clone(),
+                    token_id.clone(),
+                    &decision,
+                    serde_json::json!({
+                        "mode": self.mode.as_str(),
+                        "zone": decision.zone.clone(),
+                        "market_price": market_price,
+                    }),
+                );
+                let intent = OrderIntent::deterministic(
+                    strategy_spec,
+                    &order_signal,
+                    "buy",
+                    if prefer_maker { "limit" } else { "market" },
+                    Some(limit_price),
+                    shares,
+                    "live_candle_momentum_decision",
+                    format!("{}:{limit_price:.4}:{shares:.4}", contract.market.condition_id),
+                );
 
                 let t_start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
+                {
+                    let mut orders = self.order_manager.lock().await;
+                    orders
+                        .create_intent(intent.clone(), t_start)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    orders
+                        .risk_accept(&intent.intent_id, t_start)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    orders
+                        .submit(&intent.intent_id, None, t_start)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                }
                 let result = if prefer_maker {
                     let maker = clob
                         .write()
@@ -917,10 +1014,21 @@ impl Pipeline {
 
                 match result {
                     Ok(order_id) => {
+                        let ack_state = {
+                            let mut orders = self.order_manager.lock().await;
+                            orders
+                                .ack(&intent.intent_id, Some(order_id.clone()), t_start + submit_latency_s)
+                                .map_err(|e| anyhow::anyhow!(e))?
+                                .state
+                                .as_str()
+                                .to_string()
+                        };
                         let order_value = limit_price * shares;
                         self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
+                            intent_id: intent.intent_id,
                             token_id: short_cid(token_id),
                             side: "BUY".into(),
+                            state: ack_state,
                             price: limit_price,
                             live_price: market_price,
                             size: shares,
@@ -940,6 +1048,10 @@ impl Pipeline {
                     }
                     Err(e) => {
                         let truncated = if e.len() > 200 { &e[..200] } else { e.as_str() };
+                        {
+                            let mut orders = self.order_manager.lock().await;
+                            let _ = orders.reject(&intent.intent_id, truncated, t_start + submit_latency_s);
+                        }
                         self.monitor
                             .record_order_rejected(token_id, truncated, limit_price, shares);
                         tracing::warn!(error = %truncated, "candle.trade.live.failed");

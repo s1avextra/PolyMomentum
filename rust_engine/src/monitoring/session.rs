@@ -384,8 +384,10 @@ impl SessionMonitor {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderPlaced {
+    pub intent_id: String,
     pub token_id: String,
     pub side: String,
+    pub state: String,
     pub price: f64,
     pub live_price: f64,
     pub size: f64,
@@ -399,6 +401,7 @@ pub struct OrderPlaced {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderFilled {
+    pub intent_id: String,
     pub order_id: String,
     pub filled: f64,
     pub requested: f64,
