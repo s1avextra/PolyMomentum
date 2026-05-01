@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,44 @@ pub struct ZoneReport {
     pub losses: u64,
     pub win_rate: f64,
     pub pnl: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionGate {
+    pub min_trades: usize,
+    pub min_win_rate: f64,
+    pub min_total_pnl: f64,
+    pub require_complete_data: bool,
+}
+
+impl Default for PromotionGate {
+    fn default() -> Self {
+        Self {
+            min_trades: 30,
+            min_win_rate: 0.0,
+            min_total_pnl: 0.0,
+            require_complete_data: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionArtifact {
+    pub schema_version: u32,
+    pub created_at: String,
+    pub source_report_hash: String,
+    pub source_label: String,
+    pub source_window: String,
+    pub selected_strategy: StrategySpec,
+    pub data_manifest_hash: String,
+    pub market_count: usize,
+    pub trades: usize,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+    pub avg_pnl: f64,
+    pub total_fees: f64,
+    pub risk_notes: Vec<String>,
+    pub promotion_gate: PromotionGate,
 }
 
 impl ExperimentReport {
@@ -134,6 +172,71 @@ impl VariantReport {
     }
 }
 
+impl PromotionArtifact {
+    pub fn from_report(report: &ExperimentReport, gate: PromotionGate) -> Result<Self> {
+        if gate.require_complete_data && !report.data_manifest.complete {
+            bail!("promotion rejected: data manifest is incomplete");
+        }
+        let selected = report
+            .variants
+            .iter()
+            .max_by(|a, b| {
+                a.total_pnl
+                    .partial_cmp(&b.total_pnl)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .context("promotion rejected: report has no variants")?;
+        if selected.trades < gate.min_trades {
+            bail!(
+                "promotion rejected: trades {} below minimum {}",
+                selected.trades,
+                gate.min_trades
+            );
+        }
+        if selected.win_rate < gate.min_win_rate {
+            bail!(
+                "promotion rejected: win_rate {:.4} below minimum {:.4}",
+                selected.win_rate,
+                gate.min_win_rate
+            );
+        }
+        if selected.total_pnl < gate.min_total_pnl {
+            bail!(
+                "promotion rejected: total_pnl {:.4} below minimum {:.4}",
+                selected.total_pnl,
+                gate.min_total_pnl
+            );
+        }
+
+        let mut risk_notes = Vec::new();
+        if selected.unresolved_fills > 0 {
+            risk_notes.push(format!(
+                "selected variant has {} unresolved fills",
+                selected.unresolved_fills
+            ));
+        }
+        risk_notes.extend(report.data_manifest.notes.iter().cloned());
+
+        Ok(Self {
+            schema_version: 1,
+            created_at: Utc::now().to_rfc3339(),
+            source_report_hash: crate::strategy::spec::stable_json_hash(report),
+            source_label: report.label.clone(),
+            source_window: format!("{}..{}", report.start, report.end),
+            selected_strategy: selected.strategy.clone(),
+            data_manifest_hash: report.data_manifest.manifest_hash.clone(),
+            market_count: report.market_catalog.market_count(),
+            trades: selected.trades,
+            win_rate: selected.win_rate,
+            total_pnl: selected.total_pnl,
+            avg_pnl: selected.avg_pnl,
+            total_fees: selected.total_fees,
+            risk_notes,
+            promotion_gate: gate,
+        })
+    }
+}
+
 fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataManifest {
     let start = cfg.hours.first().map(|h| h.to_rfc3339());
     let end = cfg.hours.last().map(|h| h.to_rfc3339());
@@ -177,6 +280,14 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
     DataManifest::new(vec![pmxt, btc], notes)
 }
 
+pub fn read_report(path: impl AsRef<Path>) -> Result<ExperimentReport> {
+    let path = path.as_ref();
+    let payload =
+        std::fs::read(path).with_context(|| format!("read experiment report {}", path.display()))?;
+    serde_json::from_slice(&payload)
+        .with_context(|| format!("parse experiment report {}", path.display()))
+}
+
 pub fn write_report_atomic(path: impl AsRef<Path>, report: &ExperimentReport) -> Result<()> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -191,6 +302,28 @@ pub fn write_report_atomic(path: impl AsRef<Path>, report: &ExperimentReport) ->
     ));
     std::fs::write(&tmp, payload)
         .with_context(|| format!("write tmp experiment report {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+pub fn write_promotion_atomic(
+    path: impl AsRef<Path>,
+    artifact: &PromotionArtifact,
+) -> Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create promotion dir {}", parent.display()))?;
+    }
+    let payload = serde_json::to_vec_pretty(artifact).context("serialize PromotionArtifact")?;
+    let tmp = path.with_extension(format!(
+        "{}.tmp.{}",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("json"),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, payload)
+        .with_context(|| format!("write tmp promotion artifact {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
@@ -285,5 +418,77 @@ mod tests {
         assert!(report.data_manifest.complete);
         assert_eq!(report.variants.len(), 1);
         assert_eq!(report.variants[0].strategy.name, "candle_momentum");
+    }
+
+    #[test]
+    fn promotion_selects_best_passing_variant() {
+        let cfg = cfg();
+        let mut worse = VariantReport::from_run(&HarnessRun {
+            variant: StrategyVariant::baseline(),
+            results: BacktestResults::default(),
+        });
+        worse.trades = 30;
+        worse.win_rate = 0.4;
+        worse.total_pnl = 1.0;
+        worse.avg_pnl = 0.03;
+        let mut better = worse.clone();
+        better.strategy.risk_profile = "better".to_string();
+        better.total_pnl = 2.0;
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants = vec![worse, better];
+
+        let artifact =
+            PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap();
+
+        assert_eq!(artifact.selected_strategy.risk_profile, "better");
+        assert_eq!(artifact.trades, 30);
+        assert_eq!(artifact.data_manifest_hash, report.data_manifest.manifest_hash);
+    }
+
+    #[test]
+    fn promotion_rejects_incomplete_data() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.data_manifest.complete = false;
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 0,
+            win_rate: 0.66,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: BTreeMap::new(),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("data manifest is incomplete"));
+    }
+
+    #[test]
+    fn promotion_rejects_gate_failures() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            trades: 5,
+            wins: 3,
+            losses: 2,
+            unresolved_fills: 0,
+            win_rate: 0.60,
+            total_pnl: 1.0,
+            avg_pnl: 0.20,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: BTreeMap::new(),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("trades 5 below minimum"));
     }
 }
