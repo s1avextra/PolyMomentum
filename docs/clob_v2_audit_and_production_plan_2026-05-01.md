@@ -36,8 +36,9 @@ Why:
   been proven with a funded canary and reconciliation evidence.
 - Wallet diagnostics are pUSD-first and check V2 allowances, but wrapping and
   a funded canary still have to be verified operationally.
-- The live pipeline now uses market neg-risk and Gamma-provided tick size, but
-  still lacks CLOB V2 market-info fee parity and user-channel reconciliation.
+- The live pipeline now uses market neg-risk and Gamma-provided tick size, and
+  sends CLOB heartbeat requests in live mode, but still lacks CLOB V2
+  market-info fee parity and user-channel reconciliation.
 
 ## What Is Correct
 
@@ -58,7 +59,8 @@ Public diagnostics/read-only CLOB calls are mostly compatible:
 - `rust_engine/src/clob.rs` supports `/ok`, `/time`, `/book`, `/price`,
   `/midpoint`, `/spread`, `/tick-size`, `/fee-rate`, `/neg-risk`, and
   `/markets/{condition_id}` style read calls.
-- Auth headers for L2 REST still use the documented `POLY_*` header model.
+- Auth headers for L2 REST now use the documented underscore `POLY_*` header
+  model.
   CLOB V2 keeps L1/L2 API auth compatible; the breaking change is order signing.
 
 ## CLOB V2 Blockers
@@ -108,6 +110,11 @@ not yet integrated into the live order manager. CLOB V2 docs expose user-channel
 `trade` and `order` events and heartbeat expectations. Live cannot be considered
 paper-identical until accepted, live, matched, confirmed, cancelled, delayed,
 and failed states are reconciled from user-channel/REST evidence.
+
+`rust_engine/src/clob.rs` now exposes read-only REST reconciliation primitives
+for open orders, single-order lookup, and trades, plus CLOB heartbeat support.
+`rust_engine/src/live/pipeline.rs` starts the heartbeat loop only when live CLOB
+is initialized. These are prerequisites, not complete reconciliation.
 
 ## Production Plan
 
@@ -223,9 +230,10 @@ Steps:
 3. Merge user-channel `order` and `trade` events into
    `SharedOrderManager`.
 4. Add REST fallback polling for open orders/trades when the user channel is
-   stale.
-5. Implement heartbeat handling according to docs. If heartbeat is active and
-   missed, mark local orders as potentially cancelled and reconcile.
+   stale. Partial: read-only CLI/client methods now exist.
+5. Implement heartbeat handling according to docs. Partial: live mode now sends
+   heartbeat requests when CLOB is initialized; missed-heartbeat reconciliation
+   still needs to mark local orders as potentially cancelled and reconcile.
 6. Add cancel-by-id and cancel-all scoped to PolyMomentum-owned order IDs only.
 
 Verification:

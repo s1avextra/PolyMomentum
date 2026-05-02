@@ -433,6 +433,17 @@ impl Pipeline {
                 polymarket_book_feed(bs, tt, nt).await;
             });
         }
+        if let Some(clob) = self.clob.clone() {
+            tokio::spawn(async move {
+                loop {
+                    sleep(Duration::from_secs(5)).await;
+                    match clob.read().await.post_heartbeat().await {
+                        Ok(_) => tracing::debug!("CLOB heartbeat acknowledged"),
+                        Err(e) => tracing::warn!(error = %e, "CLOB heartbeat failed"),
+                    }
+                }
+            });
+        }
 
         // First contract refresh
         if let Err(e) = self.refresh_contracts().await {

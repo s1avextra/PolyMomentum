@@ -276,6 +276,34 @@ enum ClobCommand {
     NegRisk { token_id: String },
     /// Fetch CLOB market metadata by condition ID.
     Market { condition_id: String },
+    /// Fetch authenticated open orders for reconciliation diagnostics.
+    Orders {
+        #[arg(long)]
+        market: Option<String>,
+        #[arg(long)]
+        asset_id: Option<String>,
+        #[arg(long)]
+        next_cursor: Option<String>,
+    },
+    /// Fetch one authenticated order by order hash.
+    Order { order_id: String },
+    /// Fetch authenticated user trades for reconciliation diagnostics.
+    Trades {
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        market: Option<String>,
+        #[arg(long)]
+        asset_id: Option<String>,
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long)]
+        before: Option<String>,
+        #[arg(long)]
+        next_cursor: Option<String>,
+    },
+    /// Send the authenticated CLOB heartbeat used by live order safety.
+    Heartbeat,
 }
 
 #[derive(Subcommand, Debug)]
@@ -526,6 +554,18 @@ async fn cmd_wallet(s: &config::Settings) {
                 );
                 println!("usdc_e_allow ${:.2} Collateral Onramp", b.usdc_e_allowance_onramp);
                 println!("pol          {:.4}", b.pol);
+                let live_ready = b.pusd >= 1.0
+                    && b.pusd_allowance_exchange >= 1.0
+                    && b.pusd_allowance_neg_risk_exchange >= 1.0
+                    && b.pol >= 0.01;
+                println!(
+                    "live_ready   {}",
+                    if live_ready {
+                        "yes"
+                    } else {
+                        "no (needs pUSD, both CTF Exchange V2 pUSD allowances, and >=0.01 POL)"
+                    }
+                );
             }
             Err(e) => {
                 eprintln!("wallet fetch failed: {e}");
@@ -540,7 +580,15 @@ async fn cmd_wallet(s: &config::Settings) {
 }
 
 async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
-    let client = clob::ClobClient::new(&s.poly_base_url, "", "", "");
+    let mut client = clob::ClobClient::new(
+        &s.poly_base_url,
+        &s.poly_api_key,
+        &s.poly_api_secret,
+        &s.poly_api_passphrase,
+    );
+    if !s.private_key.is_empty() {
+        client.set_signing_key(&s.private_key);
+    }
     let result = match command {
         ClobCommand::Ok => client.get_ok().await,
         ClobCommand::Time => client.get_server_time().await,
@@ -554,6 +602,54 @@ async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
         ClobCommand::FeeRate { token_id } => client.get_fee_rate_bps(&token_id).await,
         ClobCommand::NegRisk { token_id } => client.get_neg_risk(&token_id).await,
         ClobCommand::Market { condition_id } => client.get_market(&condition_id).await,
+        ClobCommand::Orders {
+            market,
+            asset_id,
+            next_cursor,
+        } => {
+            let mut params = Vec::new();
+            if let Some(v) = &market {
+                params.push(("market", v.as_str()));
+            }
+            if let Some(v) = &asset_id {
+                params.push(("asset_id", v.as_str()));
+            }
+            if let Some(v) = &next_cursor {
+                params.push(("next_cursor", v.as_str()));
+            }
+            client.get_user_orders(&params).await
+        }
+        ClobCommand::Order { order_id } => client.get_order(&order_id).await,
+        ClobCommand::Trades {
+            id,
+            market,
+            asset_id,
+            after,
+            before,
+            next_cursor,
+        } => {
+            let mut params = Vec::new();
+            if let Some(v) = &id {
+                params.push(("id", v.as_str()));
+            }
+            if let Some(v) = &market {
+                params.push(("market", v.as_str()));
+            }
+            if let Some(v) = &asset_id {
+                params.push(("asset_id", v.as_str()));
+            }
+            if let Some(v) = &after {
+                params.push(("after", v.as_str()));
+            }
+            if let Some(v) = &before {
+                params.push(("before", v.as_str()));
+            }
+            if let Some(v) = &next_cursor {
+                params.push(("next_cursor", v.as_str()));
+            }
+            client.get_trades(&params).await
+        }
+        ClobCommand::Heartbeat => client.post_heartbeat().await,
     };
     match result {
         Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
@@ -998,6 +1094,7 @@ async fn cmd_harness_sweep(
         });
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
     for &h in &hours {
+        eprintln!("pmxt: ensuring archive hour {h}");
         if let Err(e) = loader.download_hour(h, false).await {
             eprintln!("download {} failed: {e}", h);
             std::process::exit(1);
@@ -1005,6 +1102,7 @@ async fn cmd_harness_sweep(
     }
     let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for &h in &hours {
+        eprintln!("pmxt: scanning condition_ids for {h}");
         match loader.distinct_condition_ids(h) {
             Ok(s) => all_cids.extend(s),
             Err(e) => {
@@ -1026,6 +1124,7 @@ async fn cmd_harness_sweep(
         .cloned()
         .collect();
     if !cid_vec.is_empty() {
+        eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
         tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma fetch");
         let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
         let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
@@ -1153,6 +1252,12 @@ async fn cmd_harness_sweep(
         stop_flag: Some(stop_flag.clone()),
     };
 
+    eprintln!(
+        "harness-sweep: replaying {} contract(s), {} variant(s), {} hour(s)",
+        cfg.universe.contracts.len(),
+        variants.len(),
+        cfg.hours.len(),
+    );
     println!("\nRunning sweep over {} variants × {} hours…\n", variants.len(), cfg.hours.len());
     if let Some(d) = &checkpoint_dir {
         println!(
@@ -1260,6 +1365,7 @@ async fn cmd_harness(
         });
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
     for &h in &hours {
+        eprintln!("pmxt: ensuring archive hour {h}");
         if let Err(e) = loader.download_hour(h, false).await {
             eprintln!("download {} failed: {e}", h);
             std::process::exit(1);
@@ -1268,6 +1374,7 @@ async fn cmd_harness(
 
     let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for &h in &hours {
+        eprintln!("pmxt: scanning condition_ids for {h}");
         match loader.distinct_condition_ids(h) {
             Ok(s) => all_cids.extend(s),
             Err(e) => {
@@ -1292,6 +1399,7 @@ async fn cmd_harness(
         .cloned()
         .collect();
     if !cid_vec.is_empty() {
+        eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
         tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma cache miss; fetching");
         let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
         let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
@@ -1409,6 +1517,12 @@ async fn cmd_harness(
     };
 
     let variants = backtest::strategies::default_variants();
+    eprintln!(
+        "harness: replaying {} contract(s), {} variant(s), {} hour(s)",
+        cfg.universe.contracts.len(),
+        variants.len(),
+        cfg.hours.len(),
+    );
     match backtest::harness::run_harness(&cfg, &variants).await {
         Ok(runs) => {
             if let Some(path) = report_json {

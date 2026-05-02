@@ -148,12 +148,36 @@ impl ClobClient {
             signing::hmac_sign_request(&self.api_secret, &timestamp, method, path, body);
 
         vec![
-            ("POLY-ADDRESS".into(), self.maker_address.clone()),
-            ("POLY-SIGNATURE".into(), signature),
-            ("POLY-TIMESTAMP".into(), timestamp),
-            ("POLY-API-KEY".into(), self.api_key.clone()),
-            ("POLY-PASSPHRASE".into(), self.api_passphrase.clone()),
+            ("POLY_ADDRESS".into(), self.maker_address.clone()),
+            ("POLY_SIGNATURE".into(), signature),
+            ("POLY_TIMESTAMP".into(), timestamp),
+            ("POLY_API_KEY".into(), self.api_key.clone()),
+            ("POLY_PASSPHRASE".into(), self.api_passphrase.clone()),
         ]
+    }
+
+    fn require_l2_auth(&self) -> Result<(), String> {
+        let missing: Vec<&str> = [
+            ("POLY_ADDRESS/PRIVATE_KEY", self.maker_address.as_str()),
+            ("POLY_API_KEY", self.api_key.as_str()),
+            ("POLY_API_SECRET", self.api_secret.as_str()),
+            ("POLY_PASSPHRASE", self.api_passphrase.as_str()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            if value.trim().is_empty() {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("missing L2 auth material: {}", missing.join(", ")))
+        }
     }
 
     async fn get_public_json(&self, path: &str, params: &[(&str, &str)]) -> Result<Value, String> {
@@ -165,6 +189,44 @@ impl ClobClient {
             .send()
             .await
             .map_err(|e| format!("Request failed: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+        }
+        serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
+    }
+
+    async fn get_private_json(&self, path: &str, params: &[(&str, &str)]) -> Result<Value, String> {
+        self.require_l2_auth()?;
+        let path_with_query = path_with_query(path, params);
+        let url = format!("{}{}", self.base_url, path_with_query);
+        let headers = self.auth_headers("GET", &path_with_query, "");
+        let mut req = self.client.get(&url);
+        for (k, v) in &headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let resp = req.send().await.map_err(|e| format!("Request failed: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+        }
+        serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
+    }
+
+    async fn post_private_json(&self, path: &str, body: &str) -> Result<Value, String> {
+        self.require_l2_auth()?;
+        let url = format!("{}{}", self.base_url, path);
+        let headers = self.auth_headers("POST", path, body);
+        let mut req = self.client.post(&url);
+        for (k, v) in &headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        if !body.is_empty() {
+            req = req.header("Content-Type", "application/json").body(body.to_string());
+        }
+        let resp = req.send().await.map_err(|e| format!("Request failed: {e}"))?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -216,6 +278,26 @@ impl ClobClient {
     pub async fn get_market(&self, condition_id: &str) -> Result<Value, String> {
         self.get_public_json("/market", &[("condition_id", condition_id)])
             .await
+    }
+
+    /// Authenticated open orders for reconciliation. Does not place orders.
+    pub async fn get_user_orders(&self, params: &[(&str, &str)]) -> Result<Value, String> {
+        self.get_private_json("/data/orders", params).await
+    }
+
+    /// Authenticated single-order status for reconciliation fallback.
+    pub async fn get_order(&self, order_id: &str) -> Result<Value, String> {
+        self.get_private_json(&format!("/order/{order_id}"), &[]).await
+    }
+
+    /// Authenticated user trades for reconciliation. Does not place orders.
+    pub async fn get_trades(&self, params: &[(&str, &str)]) -> Result<Value, String> {
+        self.get_private_json("/trades", params).await
+    }
+
+    /// Authenticated heartbeat for automated order safety.
+    pub async fn post_heartbeat(&self) -> Result<Value, String> {
+        self.post_private_json("/heartbeats", "").await
     }
 
     /// Place a GTC maker limit order (0% fee) with EIP-712 signing.
@@ -347,7 +429,23 @@ impl ClobClient {
             Err(e) => Err(format!("Request failed: {}", e)),
         }
     }
+}
 
+fn path_with_query(path: &str, params: &[(&str, &str)]) -> String {
+    if params.is_empty() {
+        return path.to_string();
+    }
+    let query = params
+        .iter()
+        .filter(|(_, value)| !value.trim().is_empty())
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{query}")
+    }
 }
 
 /// Shared CLOB client wrapped for async access
@@ -365,4 +463,36 @@ pub fn create_shared_client(
         api_secret,
         api_passphrase,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_auth_uses_current_poly_header_names() {
+        let mut client = ClobClient::new("https://clob.polymarket.com", "key", "secret", "pass");
+        client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
+        let headers = client.auth_headers("GET", "/data/orders", "");
+        let names: Vec<_> = headers.into_iter().map(|(name, _)| name).collect();
+
+        assert_eq!(
+            names,
+            vec![
+                "POLY_ADDRESS",
+                "POLY_SIGNATURE",
+                "POLY_TIMESTAMP",
+                "POLY_API_KEY",
+                "POLY_PASSPHRASE",
+            ]
+        );
+    }
+
+    #[test]
+    fn path_query_omits_empty_values() {
+        assert_eq!(
+            path_with_query("/trades", &[("market", ""), ("after", "123")]),
+            "/trades?after=123"
+        );
+    }
 }
