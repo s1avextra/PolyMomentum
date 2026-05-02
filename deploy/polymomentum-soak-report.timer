@@ -1,0 +1,12 @@
+[Unit]
+Description=Run PolyMomentum soak evidence report every 6 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=polymomentum-soak-report.service
+
+[Install]
+WantedBy=timers.target

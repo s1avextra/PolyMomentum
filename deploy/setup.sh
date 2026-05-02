@@ -56,6 +56,7 @@ POLYMOMENTUM_LIVE_RECONCILIATION_READY=0
 
 # Logging
 RUST_LOG=info
+BANKROLL_USD=100
 
 # Operational kill switch (touch this file from any shell to halt trading)
 KILL_SWITCH_PATH=/tmp/polymomentum/KILL
@@ -68,14 +69,19 @@ fi
 # 5. Drop the healthcheck script alongside the binary (no /current/ release tree).
 HERE="$(cd "$(dirname "$0")" && pwd)"
 install -m 0755 "$HERE/healthcheck.sh" "$APP_DIR/healthcheck.sh"
+install -m 0755 "$HERE/soak-report.sh" "$APP_DIR/soak-report.sh"
 chown polymomentum:polymomentum "$APP_DIR/healthcheck.sh"
+chown polymomentum:polymomentum "$APP_DIR/soak-report.sh"
 
 # 6. Systemd units.
 cp "$HERE/polymomentum-engine.service" /etc/systemd/system/
 cp "$HERE/polymomentum-healthcheck.service" /etc/systemd/system/
 cp "$HERE/polymomentum-healthcheck.timer" /etc/systemd/system/
+cp "$HERE/polymomentum-soak-report.service" /etc/systemd/system/
+cp "$HERE/polymomentum-soak-report.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable polymomentum-healthcheck.timer 2>/dev/null || true
+systemctl enable polymomentum-soak-report.timer 2>/dev/null || true
 
 echo
 echo "=== Done. Next: ==="

@@ -369,3 +369,78 @@ Why still not A+:
   evidence under systemd.
 - Build/deploy needs a proper Linux artifact path instead of building on the
   VPS.
+
+## Follow-up hardening on 2026-05-02T14:53Z
+
+Cleanup completed on the Dublin VPS without touching peer private directories
+or shared PMXT parquet caches:
+
+- Killed stale PolyMomentum-only shell probe PID `375071`.
+- Removed unused PolyMomentum generated artifacts:
+  - `/opt/polymomentum/.pytest_cache`
+  - `/opt/polymomentum/a_plus_candidate_20260502T1400Z`
+  - legacy `/opt/polymomentum/.venv`
+  - legacy `/opt/polymomentum/rust_engine/target`
+  - old release `snapshots` and `snapshots2` directories.
+- Ran `journalctl --vacuum-size=800M` and `apt-get clean`.
+- Root filesystem improved from 93% used / 5.5 GB free to 86% used / 10 GB
+  free.
+- PolyMomentum footprint dropped to about 334 MB.
+- Peer services remained active: `adgts`, `polyarbitrage`, and
+  `polyarbitrage-collector`.
+
+Operational bug found and fixed:
+
+- Managed paper mode was inheriting `BANKROLL_USD=0` from
+  `/etc/polymomentum/env`, so it evaluated signals but could not exercise paper
+  fills.
+- Updated `/etc/polymomentum/env` to `BANKROLL_USD=100` and restarted only
+  `polymomentum-engine.service`.
+- Fresh process environment now has `BANKROLL_USD=100`.
+- Fresh risk state shows `bankroll=100`, `available=60`.
+
+New state-of-the-art guardrails implemented in code:
+
+- Paper preflight now fails closed when `BANKROLL_USD <= 0`.
+- Backtest promotion now selects the best variant that passes all gates rather
+  than blindly selecting the highest PnL candidate.
+- Promotion gates now reject unresolved fills by default, require non-negative
+  Sharpe-like score by default, and reject variants with more than 70% of trades
+  concentrated in one timing zone.
+- Promotion artifacts now record Sharpe-like score and dominant-zone share.
+- Deploy script now refuses local non-Linux release builds and accepts a
+  prebuilt Linux x86_64 artifact via `--binary`.
+- GitHub Actions workflow added to build/test/package the Linux x86_64 engine
+  artifact with SHA256.
+- Soak-report systemd timer added. It writes atomic JSON reports under
+  `/opt/polymomentum/logs/soak/` every 6h with preflight, diagnostics,
+  replay-validation, disk, resource, wallet, and peer-service state.
+
+Latest evidence:
+
+- Soak report:
+  `/opt/polymomentum/logs/soak/soak_20260502T145325Z.json`
+  - `ok=true`
+  - mode `paper`
+  - diagnostics `ok=true`
+  - replay validation `total=702 mismatches=0 (0.00%)`
+  - peers active: `adgts`, `polyarbitrage`, `polyarbitrage-collector`
+- Fresh managed paper session:
+  `/opt/polymomentum/logs/sessions/session_20260502_145117.jsonl`
+  - 75-second slice: 579 signal evaluations, 0 malformed lines, 0 errors.
+  - Replay validation: `total=579 mismatches=0 (0.00%)`.
+  - No trades in this short slice because every evaluation skipped; paper
+    trading is no longer bankroll-blocked.
+
+Current grade after follow-up: A for paper-mode operations.
+
+Remaining A+ blockers:
+
+- Deploy the newly committed Linux artifact from CI so the VPS binary enforces
+  the new zero-bankroll preflight gate.
+- Generate and configure a promoted strategy artifact from sufficient OOS
+  backtest evidence.
+- Run the 24-48h managed paper soak with the 6h soak timer enabled.
+- Live remains intentionally blocked until pUSD balance/allowances, live CLOB
+  V2 readiness, reconciliation readiness, venue-compliance flags, and the
+  promotion artifact are all present.

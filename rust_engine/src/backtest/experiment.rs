@@ -55,21 +55,46 @@ pub struct ZoneReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionGate {
+    #[serde(default = "default_min_trades")]
     pub min_trades: usize,
+    #[serde(default)]
     pub min_win_rate: f64,
+    #[serde(default)]
     pub min_total_pnl: f64,
+    #[serde(default)]
+    pub min_sharpe_like: f64,
+    #[serde(default)]
+    pub max_unresolved_fills: usize,
+    #[serde(default = "default_max_zone_trade_share")]
+    pub max_zone_trade_share: f64,
+    #[serde(default = "default_require_complete_data")]
     pub require_complete_data: bool,
 }
 
 impl Default for PromotionGate {
     fn default() -> Self {
         Self {
-            min_trades: 30,
+            min_trades: default_min_trades(),
             min_win_rate: 0.0,
             min_total_pnl: 0.0,
-            require_complete_data: true,
+            min_sharpe_like: 0.0,
+            max_unresolved_fills: 0,
+            max_zone_trade_share: default_max_zone_trade_share(),
+            require_complete_data: default_require_complete_data(),
         }
     }
+}
+
+fn default_min_trades() -> usize {
+    30
+}
+
+fn default_max_zone_trade_share() -> f64 {
+    0.70
+}
+
+fn default_require_complete_data() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +114,10 @@ pub struct PromotionArtifact {
     pub total_pnl: f64,
     pub avg_pnl: f64,
     pub total_fees: f64,
+    #[serde(default)]
+    pub sharpe_like: f64,
+    pub dominant_zone: Option<String>,
+    pub dominant_zone_trade_share: Option<f64>,
     pub risk_notes: Vec<String>,
     pub promotion_gate: PromotionGate,
 }
@@ -182,47 +211,49 @@ impl PromotionArtifact {
         if gate.require_complete_data && !report.data_manifest.complete {
             bail!("promotion rejected: data manifest is incomplete");
         }
+        if report.variants.is_empty() {
+            bail!("promotion rejected: report has no variants");
+        }
         let selected = report
             .variants
             .iter()
+            .filter(|variant| promotion_rejection_reasons(variant, &gate).is_empty())
             .max_by(|a, b| {
                 a.total_pnl
                     .partial_cmp(&b.total_pnl)
                     .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .context("promotion rejected: report has no variants")?;
-        if selected.strategy_params.is_null() {
-            bail!(
-                "promotion rejected: selected variant lacks strategy_params; regenerate the report"
-            );
-        }
-        if selected.trades < gate.min_trades {
-            bail!(
-                "promotion rejected: trades {} below minimum {}",
-                selected.trades,
-                gate.min_trades
-            );
-        }
-        if selected.win_rate < gate.min_win_rate {
-            bail!(
-                "promotion rejected: win_rate {:.4} below minimum {:.4}",
-                selected.win_rate,
-                gate.min_win_rate
-            );
-        }
-        if selected.total_pnl < gate.min_total_pnl {
-            bail!(
-                "promotion rejected: total_pnl {:.4} below minimum {:.4}",
-                selected.total_pnl,
-                gate.min_total_pnl
-            );
-        }
+            });
+        let selected = match selected {
+            Some(selected) => selected,
+            None => {
+                let best = report
+                    .variants
+                    .iter()
+                    .max_by(|a, b| {
+                        a.total_pnl
+                            .partial_cmp(&b.total_pnl)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .expect("checked non-empty report variants");
+                bail!(
+                    "promotion rejected: no variants passed gates; best candidate failed: {}",
+                    promotion_rejection_reasons(best, &gate).join("; ")
+                );
+            }
+        };
 
         let mut risk_notes = Vec::new();
         if selected.unresolved_fills > 0 {
             risk_notes.push(format!(
                 "selected variant has {} unresolved fills",
                 selected.unresolved_fills
+            ));
+        }
+        let (dominant_zone, dominant_zone_trade_share) = dominant_zone_share(selected);
+        if let (Some(zone), Some(share)) = (&dominant_zone, dominant_zone_trade_share) {
+            risk_notes.push(format!(
+                "dominant zone {zone} carries {:.1}% of selected trades",
+                100.0 * share
             ));
         }
         risk_notes.extend(report.data_manifest.notes.iter().cloned());
@@ -242,10 +273,80 @@ impl PromotionArtifact {
             total_pnl: selected.total_pnl,
             avg_pnl: selected.avg_pnl,
             total_fees: selected.total_fees,
+            sharpe_like: selected.sharpe_like,
+            dominant_zone,
+            dominant_zone_trade_share,
             risk_notes,
             promotion_gate: gate,
         })
     }
+}
+
+fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if selected.strategy_params.is_null() {
+        reasons.push("selected variant lacks strategy_params; regenerate the report".to_string());
+    }
+    if selected.trades < gate.min_trades {
+        reasons.push(format!(
+            "trades {} below minimum {}",
+            selected.trades, gate.min_trades
+        ));
+    }
+    if selected.win_rate < gate.min_win_rate {
+        reasons.push(format!(
+            "win_rate {:.4} below minimum {:.4}",
+            selected.win_rate, gate.min_win_rate
+        ));
+    }
+    if selected.total_pnl < gate.min_total_pnl {
+        reasons.push(format!(
+            "total_pnl {:.4} below minimum {:.4}",
+            selected.total_pnl, gate.min_total_pnl
+        ));
+    }
+    if selected.sharpe_like < gate.min_sharpe_like {
+        reasons.push(format!(
+            "sharpe_like {:.4} below minimum {:.4}",
+            selected.sharpe_like, gate.min_sharpe_like
+        ));
+    }
+    if selected.unresolved_fills > gate.max_unresolved_fills {
+        reasons.push(format!(
+            "unresolved_fills {} above maximum {}",
+            selected.unresolved_fills, gate.max_unresolved_fills
+        ));
+    }
+    if selected.trades > 0 && gate.max_zone_trade_share < 1.0 {
+        match dominant_zone_share(selected) {
+            (Some(zone), Some(share)) if share > gate.max_zone_trade_share => {
+                reasons.push(format!(
+                    "zone {zone} trade share {:.4} above maximum {:.4}",
+                    share, gate.max_zone_trade_share
+                ));
+            }
+            (None, None) => reasons.push("by_zone breakdown is empty".to_string()),
+            _ => {}
+        }
+    }
+    reasons
+}
+
+fn dominant_zone_share(selected: &VariantReport) -> (Option<String>, Option<f64>) {
+    let Some((zone, report)) = selected
+        .by_zone
+        .iter()
+        .max_by_key(|(_, report)| report.trades)
+    else {
+        return (None, None);
+    };
+    if selected.trades == 0 {
+        return (Some(zone.clone()), Some(0.0));
+    }
+    (
+        Some(zone.clone()),
+        Some(report.trades as f64 / selected.trades as f64),
+    )
 }
 
 fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataManifest {
@@ -425,6 +526,31 @@ mod tests {
         }
     }
 
+    fn zone_split(primary: u64, terminal: u64) -> BTreeMap<String, ZoneReport> {
+        BTreeMap::from([
+            (
+                "primary".to_string(),
+                ZoneReport {
+                    trades: primary,
+                    wins: primary / 2,
+                    losses: primary - primary / 2,
+                    win_rate: 0.5,
+                    pnl: primary as f64 * 0.01,
+                },
+            ),
+            (
+                "terminal".to_string(),
+                ZoneReport {
+                    trades: terminal,
+                    wins: terminal / 2,
+                    losses: terminal - terminal / 2,
+                    win_rate: 0.5,
+                    pnl: terminal as f64 * 0.01,
+                },
+            ),
+        ])
+    }
+
     #[test]
     fn report_contains_manifest_and_sorted_variant() {
         let cfg = cfg();
@@ -451,11 +577,17 @@ mod tests {
         worse.win_rate = 0.4;
         worse.total_pnl = 1.0;
         worse.avg_pnl = 0.03;
+        worse.by_zone = zone_split(16, 14);
         let mut better = worse.clone();
         better.strategy.risk_profile = "better".to_string();
         better.total_pnl = 2.0;
+        better.sharpe_like = 1.0;
+        let mut overfit = better.clone();
+        overfit.strategy.risk_profile = "overfit".to_string();
+        overfit.total_pnl = 3.0;
+        overfit.by_zone = zone_split(30, 0);
         let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
-        report.variants = vec![worse, better];
+        report.variants = vec![worse, overfit, better];
 
         let artifact =
             PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap();
@@ -463,6 +595,10 @@ mod tests {
         assert_eq!(artifact.selected_strategy.risk_profile, "better");
         assert_eq!(artifact.trades, 30);
         assert_eq!(artifact.data_manifest_hash, report.data_manifest.manifest_hash);
+        assert_eq!(artifact.dominant_zone.as_deref(), Some("primary"));
+        assert!(
+            (artifact.dominant_zone_trade_share.unwrap() - (16.0 / 30.0)).abs() < f64::EPSILON
+        );
     }
 
     #[test]
@@ -482,7 +618,7 @@ mod tests {
             avg_pnl: 0.03,
             total_fees: 0.0,
             sharpe_like: 1.0,
-            by_zone: BTreeMap::new(),
+            by_zone: zone_split(15, 15),
         });
 
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
@@ -506,11 +642,59 @@ mod tests {
             avg_pnl: 0.20,
             total_fees: 0.0,
             sharpe_like: 1.0,
-            by_zone: BTreeMap::new(),
+            by_zone: zone_split(3, 2),
         });
 
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
         assert!(err.to_string().contains("trades 5 below minimum"));
+    }
+
+    #[test]
+    fn promotion_rejects_unresolved_fills_by_default() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 1,
+            win_rate: 0.66,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("unresolved_fills 1 above maximum 0"));
+    }
+
+    #[test]
+    fn promotion_rejects_zone_concentration() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 0,
+            win_rate: 0.66,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(29, 1),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("zone primary trade share"));
     }
 }

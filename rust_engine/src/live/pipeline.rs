@@ -1869,6 +1869,9 @@ mod tests {
             total_pnl: 1.0,
             avg_pnl: 0.03,
             total_fees: 0.1,
+            sharpe_like: 1.0,
+            dominant_zone: Some("primary".to_string()),
+            dominant_zone_trade_share: Some(0.5),
             risk_notes: Vec::new(),
             promotion_gate: PromotionGate::default(),
         }

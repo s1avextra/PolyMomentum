@@ -1,0 +1,62 @@
+name: Linux Release Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "codex/**"
+    paths:
+      - "rust_engine/**"
+      - "deploy/**"
+      - ".github/workflows/linux-release.yml"
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86-64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust_engine/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust_engine/Cargo.lock', 'rust_engine/Cargo.toml') }}
+
+      - name: Test
+        working-directory: rust_engine
+        run: cargo test --locked
+
+      - name: Build release binary
+        working-directory: rust_engine
+        run: |
+          export POLYMOMENTUM_GIT_SHA="${GITHUB_SHA}"
+          export POLYMOMENTUM_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cargo build --release --locked --bin polymomentum-engine
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          install -m 0755 rust_engine/target/release/polymomentum-engine dist/polymomentum-engine-linux-x86_64
+          sha256sum dist/polymomentum-engine-linux-x86_64 > dist/polymomentum-engine-linux-x86_64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymomentum-engine-linux-x86_64-${{ github.sha }}
+          path: |
+            dist/polymomentum-engine-linux-x86_64
+            dist/polymomentum-engine-linux-x86_64.sha256
+          if-no-files-found: error

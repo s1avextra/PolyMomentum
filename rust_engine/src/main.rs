@@ -369,6 +369,15 @@ enum ExperimentCommand {
         /// Minimum selected-variant total PnL.
         #[arg(long, default_value_t = 0.0)]
         min_total_pnl: f64,
+        /// Minimum selected-variant Sharpe-like score.
+        #[arg(long, default_value_t = 0.0)]
+        min_sharpe_like: f64,
+        /// Maximum unresolved fills allowed in the selected variant.
+        #[arg(long, default_value_t = 0)]
+        max_unresolved_fills: usize,
+        /// Maximum share of selected trades allowed from one timing zone.
+        #[arg(long, default_value_t = 0.70)]
+        max_zone_trade_share: f64,
         /// Permit promotion when the data manifest is incomplete.
         #[arg(long, default_value_t = false)]
         allow_incomplete_data: bool,
@@ -1027,6 +1036,9 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_trades,
             min_win_rate,
             min_total_pnl,
+            min_sharpe_like,
+            max_unresolved_fills,
+            max_zone_trade_share,
             allow_incomplete_data,
         } => {
             let report_doc = match backtest::experiment::read_report(&report) {
@@ -1040,6 +1052,9 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_trades,
                 min_win_rate,
                 min_total_pnl,
+                min_sharpe_like,
+                max_unresolved_fills,
+                max_zone_trade_share,
                 require_complete_data: !allow_incomplete_data,
             };
             let artifact = match backtest::experiment::PromotionArtifact::from_report(&report_doc, gate) {
@@ -1061,6 +1076,9 @@ fn cmd_experiment(command: ExperimentCommand) {
                     "trades": artifact.trades,
                     "win_rate": artifact.win_rate,
                     "total_pnl": artifact.total_pnl,
+                    "sharpe_like": artifact.sharpe_like,
+                    "dominant_zone": artifact.dominant_zone,
+                    "dominant_zone_trade_share": artifact.dominant_zone_trade_share,
                     "data_manifest_hash": artifact.data_manifest_hash,
                     "source_report_hash": artifact.source_report_hash,
                 }))

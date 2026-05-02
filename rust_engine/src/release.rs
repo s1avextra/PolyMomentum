@@ -140,6 +140,7 @@ pub fn run_preflight(
         check_live_credentials(settings, &mut checks);
         check_live_alerts(settings, &mut checks);
     } else {
+        check_paper_bankroll(settings, &mut checks);
         push(
             &mut checks,
             "live_safeguard",
@@ -523,6 +524,25 @@ fn check_dir(name: &'static str, path: &str, mode: RuntimeMode, checks: &mut Vec
     }
 }
 
+fn check_paper_bankroll(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if settings.bankroll_usd > 0.0 {
+        push(
+            checks,
+            "paper_bankroll",
+            CheckStatus::Ok,
+            format!("BANKROLL_USD={:.2}", settings.bankroll_usd),
+        );
+    } else {
+        push(
+            checks,
+            "paper_bankroll",
+            CheckStatus::Fail,
+            "paper mode requires BANKROLL_USD > 0 so fills and risk limits are exercised"
+                .to_string(),
+        );
+    }
+}
+
 fn check_kill_switch(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
     if Path::new(&settings.kill_switch_path).exists() {
         push(
@@ -667,6 +687,7 @@ mod tests {
         s.venue_raw = "paper_only".to_string();
         s.venue_parse_error = None;
         s.alert_required = false;
+        s.bankroll_usd = 100.0;
         s.promotion_artifact_path.clear();
         s.promotion_required = false;
         s.clob_v2_ready = false;
@@ -684,6 +705,16 @@ mod tests {
         let s = test_settings(&tmp);
         let report = run_preflight(&s, RuntimeMode::Paper, false);
         assert!(report.ok, "{}", report.failure_summary());
+    }
+
+    #[test]
+    fn paper_preflight_rejects_zero_bankroll() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.bankroll_usd = 0.0;
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("BANKROLL_USD > 0"));
     }
 
     #[test]
