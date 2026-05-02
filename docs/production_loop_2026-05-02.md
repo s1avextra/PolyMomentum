@@ -301,3 +301,71 @@ VPS inspection before deployment:
   process is active. No peer private directories were read.
 - Because an orphan PolyMomentum runtime exists, do not enable/restart the
   systemd service until that process is intentionally drained or stopped.
+
+VPS execution after deployment:
+
+- Built Linux candidate `7d24032` on the VPS as a one-off constrained build
+  (`CARGO_BUILD_JOBS=1`, `nice -n 10`) because the local dev box is macOS/ARM
+  and no Linux cross-toolchain was available. This is not acceptable as the
+  long-term build path; use CI/dev-box Linux artifacts next.
+- Installed candidate as `/opt/polymomentum/polymomentum-engine`; paper
+  preflight passed with release manifest `git_sha=7d24032`.
+- Stopped only the unmanaged orphan PolyMomentum process. It had cwd
+  `/opt/polymomentum/releases/2026-04-15T130625Z (deleted)` and no session file
+  descriptor open.
+- Started `polymomentum-engine.service` in paper mode under systemd.
+  - `ActiveState=active`, `SubState=running`, `NRestarts=0`.
+  - Resource limits visible: `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`.
+  - Healthcheck timer active/waiting.
+- Peer status after start:
+  - `adgts`: active/running.
+  - `polyarbitrage`: active/running.
+
+Candidate paper evidence:
+
+- Isolated pre-service VPS candidate run:
+  `/opt/polymomentum/a_plus_candidate_20260502T1400Z/logs/sessions/session_20260502_135842.jsonl`
+  - All public feeds connected.
+  - Gamma fetched 5,246 markets initially; scanner found 111 active candle
+    contracts.
+  - Diagnostics: `ok=true`, 881 events, 429 signal evaluations, 2 orders
+    placed/filled, 2 resolutions, 0 rejects, 0 malformed, 0 errors.
+  - Replay validation: `total=429 mismatches=0 (0.00%)`.
+- Managed systemd paper run:
+  `/opt/polymomentum/logs/sessions/session_20260502_140326.jsonl`
+  - All public feeds connected.
+  - Gamma fetched 5,446 markets; scanner found 120 active candle contracts.
+  - Diagnostics after first minutes: `ok=true`, 817 events, 398 signal
+    evaluations, 0 malformed, 0 system/fatal errors.
+  - Replay validation: `total=398 mismatches=0 (0.00%)`.
+
+Live-readiness blockers found on VPS:
+
+- Wallet is not live-ready:
+  - Address has about 5.38 POL and 6.03 USDC.e.
+  - pUSD balance is 0.
+  - CTF Exchange V2 pUSD allowance is 0.
+  - Neg Risk CTF Exchange V2 pUSD allowance is 0.
+  - New `live_wallet` preflight check fails closed.
+- Production env is not configured for live:
+  - No explicit `VENUE`, `OPERATOR_COUNTRY`,
+    `POLYMOMENTUM_VENUE_COMPLIANCE_OK`, `CLOB_V2_READY`, or
+    `POLYMOMENTUM_LIVE_RECONCILIATION_READY` in `/etc/polymomentum/env`.
+  - No promotion artifact configured.
+- Disk is an operational blocker:
+  - Root filesystem is 93% used; healthcheck raised `HEALTH[disk_full]`.
+  - PolyMomentum-owned sizes: releases ~712 MB, logs ~190 MB, data ~97 MB,
+    old `.venv` ~432 MB. Cleaning enough to get below 90% requires an explicit
+    retention decision because most candidates are pre-existing artifacts.
+
+Current grade after this iteration: A- for paper-mode operations, not A+.
+
+Why still not A+:
+
+- Live is intentionally blocked by wallet readiness and missing promotion
+  artifact.
+- Disk pressure is above the healthcheck threshold.
+- Only a short VPS paper soak has run; A+ still needs 24-48h managed paper
+  evidence under systemd.
+- Build/deploy needs a proper Linux artifact path instead of building on the
+  VPS.
