@@ -83,7 +83,7 @@ enum Command {
         #[arg(long, default_value_t = 100.0)]
         min_liquidity: f64,
     },
-    /// Print wallet balances (USDC.e, native USDC, POL).
+    /// Print wallet balances (pUSD, USDC diagnostics, POL).
     Wallet,
     /// Read-only CLOB diagnostics. These do not place orders.
     Clob {
@@ -515,9 +515,16 @@ async fn cmd_wallet(s: &config::Settings) {
         Ok(reader) => match reader.fetch_balances().await {
             Ok(b) => {
                 println!("address      {}", b.address);
+                println!("pusd         ${:.2}", b.pusd);
                 println!("usdc_e       ${:.2}", b.usdc_e);
                 println!("usdc_native  ${:.2}", b.usdc_native);
-                println!("total_usdc   ${:.2}", b.total_usdc);
+                println!("stable_total ${:.2}", b.total_stable_diagnostics);
+                println!("pusd_allow   ${:.2} CTF Exchange V2", b.pusd_allowance_exchange);
+                println!(
+                    "pusd_allow   ${:.2} Neg Risk CTF Exchange V2",
+                    b.pusd_allowance_neg_risk_exchange
+                );
+                println!("usdc_e_allow ${:.2} Collateral Onramp", b.usdc_e_allowance_onramp);
                 println!("pol          {:.4}", b.pol);
             }
             Err(e) => {

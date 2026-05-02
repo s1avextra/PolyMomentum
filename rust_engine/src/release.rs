@@ -135,6 +135,7 @@ pub fn run_preflight(
     if mode.is_live() {
         check_live_confirmation(i_understand_live, &mut checks);
         check_live_venue(settings, &mut checks);
+        check_clob_v2_ready(settings, &mut checks);
         check_live_credentials(settings, &mut checks);
         check_live_alerts(settings, &mut checks);
     } else {
@@ -164,6 +165,7 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "operator_country_present": !settings.operator_country.trim().is_empty(),
         "venue_compliance_ok": settings.venue_compliance_ok,
         "polymarket_us_api_enabled": settings.polymarket_us_api_enabled,
+        "clob_v2_ready": settings.clob_v2_ready,
         "private_key_present": !settings.private_key.is_empty(),
         "poly_api_key_present": !settings.poly_api_key.is_empty(),
         "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
@@ -390,6 +392,36 @@ fn check_live_credentials(settings: &Settings, checks: &mut Vec<PreflightCheck>)
     }
 }
 
+fn check_clob_v2_ready(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if crate::signing::CLOB_ORDER_SIGNING_VERSION != 2 {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Fail,
+            format!(
+                "compiled CLOB order signer is V{}; live mode requires CLOB V2 signing",
+                crate::signing::CLOB_ORDER_SIGNING_VERSION
+            ),
+        );
+    } else if settings.clob_v2_ready {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Ok,
+            "CLOB_V2_READY=1 acknowledges the live order path has been migrated and verified"
+                .to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Fail,
+            "live mode requires CLOB_V2_READY=1 until the V2 order-signing path is verified"
+                .to_string(),
+        );
+    }
+}
+
 fn check_live_alerts(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
     let webhook_present = std::env::var("SLACK_WEBHOOK_URL")
         .or_else(|_| std::env::var("ALERT_WEBHOOK_URL"))
@@ -608,6 +640,7 @@ mod tests {
         s.alert_required = false;
         s.promotion_artifact_path.clear();
         s.promotion_required = false;
+        s.clob_v2_ready = false;
         s.private_key.clear();
         s.poly_api_key.clear();
         s.poly_api_secret.clear();
@@ -632,6 +665,27 @@ mod tests {
         assert!(report
             .failure_summary()
             .contains("VENUE=paper_only refuses real-money live mode"));
+    }
+
+    #[test]
+    fn live_preflight_requires_compiled_clob_v2_signer() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = true;
+        s.private_key = "0xabc".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "secret".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("live mode requires CLOB V2 signing"));
     }
 
     #[test]

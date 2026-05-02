@@ -98,17 +98,13 @@ CLOB V2 fees are applied by the protocol at match time, not embedded in the
 signed order. The current code must stop signing fees and must use CLOB market
 info or SDK fee handling for live/paper parity.
 
-### 4. Neg-risk and tick size are not carried into live orders
+### 4. Tick size is not carried into live orders
 
-`rust_engine/src/live/pipeline.rs` currently calls:
-
-- `place_maker_order(..., false)`
-- `place_taker_order(..., false)`
-
-This forces non-neg-risk signing even when market metadata says otherwise.
-`rust_engine/src/clob.rs` also hardcodes `tick_size = 0.01` in live order
-helpers. CLOB order options require correct `tickSize` and `negRisk`, and the
-docs say both are available from market metadata or CLOB endpoints.
+`rust_engine/src/live/pipeline.rs` now passes market `neg_risk` metadata into
+the blocked live order path, but `rust_engine/src/clob.rs` still hardcodes
+`tick_size = 0.01` in live order helpers. CLOB order options require correct
+`tickSize` and `negRisk`, and the docs say both are available from market
+metadata or CLOB endpoints.
 
 ### 5. Collateral docs and wallet checks are V1-era
 
@@ -133,7 +129,9 @@ Goal: keep paper/backtest research moving while blocking unsafe capital flow.
 Steps:
 
 1. Keep `LIVE_MODE=false` by default and require an explicit `CLOB_V2_READY=true`
-   guard before live order posting.
+   guard before live order posting. Implemented in code as `CLOB_V2_READY=1`,
+   with an additional compiled-signer-version check so the flag cannot unlock
+   the current V1 signing path.
 2. On the VPS, do not run CPU-heavy sweeps. Use the dev machine for sweeps and
    export artifacts to the VPS.
 3. Keep shared parquet rules intact: no deletion of peer-owned parquet, no
@@ -207,13 +205,15 @@ Goal: prove the wallet can trade V2 without discovering allowance failures live.
 
 Steps:
 
-1. Update wallet balance reader to include pUSD.
+1. Update wallet balance reader to include pUSD. Done for balance display and
+   bankroll auto-detection.
 2. Keep USDC.e/native USDC/POL readings as diagnostics only.
 3. Add allowance checks for pUSD against V2 CTF Exchange and V2 Neg Risk CTF
-   Exchange.
+   Exchange. Done in the read-only `wallet` command.
 4. Update `docs/SETUP_API_KEYS.md` from USDC.e-first to pUSD-first setup.
 5. Add a `wallet doctor` command that prints balances, allowances, signature
-   type, funder, and whether the account is ready for BUY/SELL orders.
+   type, funder, and whether the account is ready for BUY/SELL orders. Partial:
+   the existing `wallet` command now prints pUSD and allowance diagnostics.
 
 Verification:
 
@@ -339,10 +339,13 @@ Stop conditions:
 
 ## Immediate Next Actions
 
-1. Add an explicit live-order guard until Phase 1 is complete.
+1. Add an explicit live-order guard until Phase 1 is complete. Done:
+   live preflight and pipeline initialization now fail closed unless
+   `CLOB_V2_READY=1` and the compiled order signer reports CLOB V2.
 2. Integrate or wrap `polymarket_client_sdk_v2` for CLOB V2 order signing.
 3. Add CLOB V2 golden tests and an auth/order doctor command.
-4. Replace hardcoded tick/fee/neg-risk handling in the live pipeline.
+4. Replace hardcoded tick/fee/neg-risk handling in the live pipeline. Partial:
+   neg-risk is now passed from market metadata; tick and fee remain blockers.
 5. Add pUSD wallet/allowance checks.
 6. Add authenticated user-channel reconciliation.
 7. Re-run the production loop: paper diagnostics, replay comparison, fixes, then

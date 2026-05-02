@@ -17,6 +17,8 @@ pub const EXCHANGE_ADDRESS: &str = "4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
 pub const NEG_RISK_EXCHANGE_ADDRESS: &str = "C5d563A36AE78145C45a50134d48A1215220f80a";
 /// Polygon chain ID
 pub const CHAIN_ID: u64 = 137;
+/// Current compiled order signer generation. CLOB V2 live mode must require 2.
+pub const CLOB_ORDER_SIGNING_VERSION: u8 = 1;
 
 /// EIP-712 order struct for the Polymarket CTF Exchange.
 #[derive(Debug, Clone)]

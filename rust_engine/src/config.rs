@@ -88,6 +88,7 @@ pub struct Settings {
     pub operator_country: String,
     pub venue_compliance_ok: bool,
     pub polymarket_us_api_enabled: bool,
+    pub clob_v2_ready: bool,
 
     pub private_key: String,
     pub polygon_rpc_url: String,
@@ -195,6 +196,7 @@ impl Settings {
             operator_country: env_str("OPERATOR_COUNTRY", ""),
             venue_compliance_ok: env_bool("POLYMOMENTUM_VENUE_COMPLIANCE_OK", false),
             polymarket_us_api_enabled: env_bool("POLYMARKET_US_API_ENABLED", false),
+            clob_v2_ready: env_bool("CLOB_V2_READY", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
             polygon_rpc_url: env_str("POLYGON_RPC_URL", "https://polygon-rpc.com"),

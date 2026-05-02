@@ -335,6 +335,18 @@ impl Pipeline {
         };
         momentum_map.insert("BTC".to_string(), MomentumDetector::new(None, mom_cfg));
 
+        if matches!(mode, Mode::Live) && crate::signing::CLOB_ORDER_SIGNING_VERSION != 2 {
+            bail!(
+                "live CLOB order placement blocked: compiled signer is V{} but live mode requires CLOB V2 signing",
+                crate::signing::CLOB_ORDER_SIGNING_VERSION
+            );
+        }
+        if matches!(mode, Mode::Live) && !settings.clob_v2_ready {
+            bail!(
+                "live CLOB order placement blocked: set CLOB_V2_READY=1 only after V2 signing and reconciliation are verified"
+            );
+        }
+
         // Initialize CLOB client only in live mode and only if API creds present.
         let clob = if matches!(mode, Mode::Live)
             && !settings.poly_api_key.is_empty()
@@ -1083,6 +1095,7 @@ impl Pipeline {
                 let shares = (position / limit_price).round().max(1.0);
                 let zone = decision.zone.as_str();
                 let prefer_maker = self.runtime_strategy.prefer_maker && zone != "terminal";
+                let neg_risk = contract.market.neg_risk;
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
                     token_id.clone(),
@@ -1124,13 +1137,13 @@ impl Pipeline {
                     let maker = clob
                         .write()
                         .await
-                        .place_maker_order(token_id, limit_price, shares, "BUY", false)
+                        .place_maker_order(token_id, limit_price, shares, "BUY", neg_risk)
                         .await;
                     if maker.is_err() {
                         tracing::warn!("CLOB maker rejected; taker fallback");
                         clob.write()
                             .await
-                            .place_taker_order(token_id, limit_price, shares, "BUY", false)
+                            .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk)
                             .await
                     } else {
                         maker
@@ -1138,7 +1151,7 @@ impl Pipeline {
                 } else {
                     clob.write()
                         .await
-                        .place_taker_order(token_id, limit_price, shares, "BUY", false)
+                        .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk)
                         .await
                 };
                 let submit_latency_s = SystemTime::now()
@@ -1556,13 +1569,20 @@ async fn try_wallet_bankroll(settings: &Settings) -> Option<f64> {
     let r = crate::data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key)
         .ok()?;
     let b = r.fetch_balances().await.ok()?;
-    if b.usdc_e > 0.0 {
+    if b.pusd > 0.0 {
         tracing::info!(
             address = b.address,
-            usdc_e = b.usdc_e,
-            "auto-detected bankroll"
+            pusd = b.pusd,
+            "auto-detected CLOB V2 bankroll"
         );
-        Some(b.usdc_e)
+        Some(b.pusd)
+    } else if b.usdc_e > 0.0 {
+        tracing::warn!(
+            address = b.address,
+            usdc_e = b.usdc_e,
+            "USDC.e balance detected but CLOB V2 live bankroll requires pUSD"
+        );
+        None
     } else {
         None
     }
