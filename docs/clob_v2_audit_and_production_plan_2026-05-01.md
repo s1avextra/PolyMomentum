@@ -98,13 +98,12 @@ CLOB V2 fees are applied by the protocol at match time, not embedded in the
 signed order. The current code must stop signing fees and must use CLOB market
 info or SDK fee handling for live/paper parity.
 
-### 4. Tick size is not carried into live orders
+### 4. Fees are not carried into live orders dynamically
 
 `rust_engine/src/live/pipeline.rs` now passes market `neg_risk` metadata into
-the blocked live order path, but `rust_engine/src/clob.rs` still hardcodes
-`tick_size = 0.01` in live order helpers. CLOB order options require correct
-`tickSize` and `negRisk`, and the docs say both are available from market
-metadata or CLOB endpoints.
+the blocked live order path and rounds prices using market `minimum_tick_size`
+when Gamma supplies it. Dynamic fee handling is still missing: the V1 signer
+embeds `feeRateBps`, while CLOB V2 applies operator-set fees at match time.
 
 ### 5. Collateral docs and wallet checks are V1-era
 
@@ -185,10 +184,12 @@ Steps:
 
 1. Add a CLOB market info cache keyed by condition ID/token ID.
 2. Populate minimum tick size, minimum order size, fee details, token mapping,
-   RFQ flag, and neg-risk from current CLOB/Gamma metadata.
+   RFQ flag, and neg-risk from current CLOB/Gamma metadata. Partial:
+   Gamma `minimum_tick_size` is now parsed and live rounding uses it.
 3. Feed these values into live order creation and into paper/backtest fill
    models.
-4. Remove hardcoded `0.01` live tick size.
+4. Remove hardcoded `0.01` live tick size. Done for Gamma-provided
+   `minimum_tick_size`; CLOB endpoint fallback cache is still pending.
 5. Replace hardcoded `0.072`/`200 bps` fee assumptions with dynamic fee details
    in diagnostics and strategy evaluation.
 
@@ -345,7 +346,8 @@ Stop conditions:
 2. Integrate or wrap `polymarket_client_sdk_v2` for CLOB V2 order signing.
 3. Add CLOB V2 golden tests and an auth/order doctor command.
 4. Replace hardcoded tick/fee/neg-risk handling in the live pipeline. Partial:
-   neg-risk is now passed from market metadata; tick and fee remain blockers.
+   neg-risk and Gamma-provided tick size are now passed from market metadata;
+   fee handling remains a blocker.
 5. Add pUSD wallet/allowance checks.
 6. Add authenticated user-channel reconciliation.
 7. Re-run the production loop: paper diagnostics, replay comparison, fixes, then

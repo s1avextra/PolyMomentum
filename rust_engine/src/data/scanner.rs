@@ -191,6 +191,7 @@ mod tests {
             group_slug: String::new(),
             neg_risk: false,
             neg_risk_augmented: false,
+            minimum_tick_size: None,
         }
     }
 

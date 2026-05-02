@@ -30,4 +30,5 @@ pub struct Market {
     pub group_slug: String,
     pub neg_risk: bool,
     pub neg_risk_augmented: bool,
+    pub minimum_tick_size: Option<f64>,
 }

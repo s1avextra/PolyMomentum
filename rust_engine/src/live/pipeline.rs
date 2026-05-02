@@ -1089,9 +1089,10 @@ impl Pipeline {
                     tracing::error!("live mode but no CLOB client (missing api keys / private key)");
                     return Ok(());
                 };
-                // Round to tick (0.01) and ensure we don't crash on degenerate inputs.
-                let tick = 0.01_f64;
-                let limit_price = ((market_price / tick).round() * tick).clamp(0.01, 0.99);
+                // Round to the market's advertised tick and keep a sane fallback
+                // for legacy metadata that does not include minimum_tick_size.
+                let tick = contract.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
+                let limit_price = ((market_price / tick).round() * tick).clamp(tick, 1.0 - tick);
                 let shares = (position / limit_price).round().max(1.0);
                 let zone = decision.zone.as_str();
                 let prefer_maker = self.runtime_strategy.prefer_maker && zone != "terminal";

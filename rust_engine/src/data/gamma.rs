@@ -311,6 +311,10 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
             .to_string(),
         neg_risk: raw.get("negRisk").and_then(|v| v.as_bool()).unwrap_or(false),
         neg_risk_augmented,
+        minimum_tick_size: raw
+            .get("minimum_tick_size")
+            .or_else(|| raw.get("minimumTickSize"))
+            .and_then(parse_f64),
     })
 }
 
@@ -352,6 +356,7 @@ mod tests {
             "active": true,
             "closed": false,
             "endDate": "2026-04-04T07:00:00Z",
+            "minimum_tick_size": "0.001",
         });
         let m = parse_gamma_market(&raw).unwrap();
         assert_eq!(m.condition_id, "0xabc");
@@ -359,5 +364,6 @@ mod tests {
         assert_eq!(m.outcomes[0].token_id, "t1");
         assert_eq!(m.outcomes[0].name, "Up");
         assert!((m.outcomes[0].price - 0.5).abs() < 1e-9);
+        assert_eq!(m.minimum_tick_size, Some(0.001));
     }
 }
