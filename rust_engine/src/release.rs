@@ -668,14 +668,14 @@ mod tests {
     }
 
     #[test]
-    fn live_preflight_requires_compiled_clob_v2_signer() {
+    fn live_preflight_requires_clob_v2_ready_flag() {
         let tmp = TempDir::new().unwrap();
         let mut s = test_settings(&tmp);
         s.venue = VenueMode::PolymarketInternational;
         s.venue_raw = "polymarket_international".to_string();
         s.operator_country = "IE".to_string();
         s.venue_compliance_ok = true;
-        s.clob_v2_ready = true;
+        s.clob_v2_ready = false;
         s.private_key = "0xabc".to_string();
         s.poly_api_key = "key".to_string();
         s.poly_api_secret = "secret".to_string();
@@ -685,7 +685,7 @@ mod tests {
         assert!(!report.ok);
         assert!(report
             .failure_summary()
-            .contains("live mode requires CLOB V2 signing"));
+            .contains("live mode requires CLOB_V2_READY=1"));
     }
 
     #[test]

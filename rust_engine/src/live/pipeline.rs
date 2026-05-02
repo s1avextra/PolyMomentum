@@ -1138,13 +1138,13 @@ impl Pipeline {
                     let maker = clob
                         .write()
                         .await
-                        .place_maker_order(token_id, limit_price, shares, "BUY", neg_risk)
+                        .place_maker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
                         .await;
                     if maker.is_err() {
                         tracing::warn!("CLOB maker rejected; taker fallback");
                         clob.write()
                             .await
-                            .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk)
+                            .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
                             .await
                     } else {
                         maker
@@ -1152,7 +1152,7 @@ impl Pipeline {
                 } else {
                     clob.write()
                         .await
-                        .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk)
+                        .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
                         .await
                 };
                 let submit_latency_s = SystemTime::now()

@@ -19,8 +19,10 @@ Official sources reviewed:
 
 ## Verdict
 
-PolyMomentum is pointed at the correct international production hosts, but it is
-not yet correctly using CLOB V2 throughout live order execution.
+PolyMomentum is pointed at the correct international production hosts, and the
+raw order signer has been migrated to the documented CLOB V2 EIP-712 shape.
+The system is still not production-ready for capital because authenticated
+user-channel/REST reconciliation and live canary evidence are missing.
 
 Current state grade for production trading: C-.
 
@@ -30,13 +32,12 @@ Why:
   stronger than the initial audit state.
 - The CLOB read path targets the current international CLOB REST host and market
   WebSocket host.
-- Live order submission still builds and signs a V1-shaped raw order. That is a
-  hard blocker for capital deployment because CLOB V2 production no longer
-  supports V1-signed orders.
-- Wallet/collateral documentation and balance checks still reference USDC.e,
-  while CLOB V2 production collateral is pUSD.
-- The live pipeline still hardcodes several market parameters that CLOB V2 says
-  are market-specific or exchange-managed.
+- Live order submission now builds a V2-shaped raw order, but it has not yet
+  been proven with a funded canary and reconciliation evidence.
+- Wallet diagnostics are pUSD-first and check V2 allowances, but wrapping and
+  a funded canary still have to be verified operationally.
+- The live pipeline now uses market neg-risk and Gamma-provided tick size, but
+  still lacks CLOB V2 market-info fee parity and user-channel reconciliation.
 
 ## What Is Correct
 
@@ -62,41 +63,30 @@ Public diagnostics/read-only CLOB calls are mostly compatible:
 
 ## CLOB V2 Blockers
 
-### 1. Manual order signing is still V1
+### 1. Manual order signing is now V2-shaped, but unproven live
 
-`rust_engine/src/signing.rs` still uses:
+`rust_engine/src/signing.rs` now uses:
 
-- V1 exchange address: `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
-- V1 neg-risk exchange address: `0xC5d563A36AE78145C45a50134d48A1215220f80a`
-- EIP-712 exchange domain version `"1"`
-- V1 signed order fields: `taker`, `expiration`, `nonce`, `feeRateBps`
-
-CLOB V2 requires:
-
-- Exchange address: `0xE111180000d2663C0091e4f400237545B87B996B`
-- Neg-risk exchange address: `0xe2222d279d744050d28e00520010520000310F59`
+- CLOB V2 exchange address: `0xE111180000d2663C0091e4f400237545B87B996B`
+- CLOB V2 neg-risk exchange address: `0xe2222d279d744050d28e00520010520000310F59`
 - EIP-712 exchange domain version `"2"`
 - V2 signed order fields: `timestamp`, `metadata`, `builder`
-- No signed `taker`, `expiration`, `nonce`, or `feeRateBps`
+- no signed `taker`, `expiration`, `nonce`, or `feeRateBps`
 
-### 2. Order wire body is not V2-complete
+Remaining risk: this is a raw local implementation, not the official SDK, and
+still needs a funded canary against production CLOB V2 before capital ramp.
 
-`rust_engine/src/clob.rs` posts `SignedOrderRequest` with top-level
-`signature` and a nested `OrderPayload` that only contains the V1 fields.
+### 2. Order wire body is V2-shaped
 
-CLOB V2 docs show the order body carrying V2 order fields including
-`timestamp`, `metadata`, `builder`, and the signature inside the order object.
-The wire body may still include legacy compatibility fields such as expiration
-for GTD handling, but they are no longer part of the signed struct.
+`rust_engine/src/clob.rs` now posts the signature inside the order object,
+includes V2 `timestamp`, `metadata`, and `builder` fields, includes `deferExec`,
+and omits removed V1 fields `nonce`, `feeRateBps`, and `taker`.
 
 ### 3. Fees are hardcoded and embedded in signing
 
-`rust_engine/src/clob.rs` hardcodes `fee_bps = 0` for GTC and `200` for FOK, and
-`rust_engine/src/signing.rs` signs `feeRateBps`.
-
-CLOB V2 fees are applied by the protocol at match time, not embedded in the
-signed order. The current code must stop signing fees and must use CLOB market
-info or SDK fee handling for live/paper parity.
+`rust_engine/src/signing.rs` no longer signs `feeRateBps`. CLOB V2 fees are
+applied by the protocol at match time, not embedded in the signed order. Paper
+and backtest still need CLOB V2 market-info fee details for closer parity.
 
 ### 4. Fees are not carried into live orders dynamically
 
@@ -105,11 +95,11 @@ the blocked live order path and rounds prices using market `minimum_tick_size`
 when Gamma supplies it. Dynamic fee handling is still missing: the V1 signer
 embeds `feeRateBps`, while CLOB V2 applies operator-set fees at match time.
 
-### 5. Collateral docs and wallet checks are V1-era
+### 5. Collateral docs and wallet checks are partially migrated
 
 `docs/SETUP_API_KEYS.md`, `rust_engine/src/data/wallet.rs`, and related CLI copy
-still emphasize USDC.e. CLOB V2 uses pUSD as the trading collateral. API-only
-wallet setup must include pUSD balance/allowance and the V2 exchange allowance.
+now emphasize pUSD and V2 exchange allowances. Remaining work is an explicit
+wrap/allowance doctor with a single ready/not-ready result.
 
 ### 6. User-channel reconciliation is still incomplete
 
@@ -151,8 +141,9 @@ Goal: make the order path CLOB V2-correct before any live trading.
 
 Preferred implementation:
 
-1. Use the official Rust V2 SDK, `polymarket_client_sdk_v2`, as the source of
-   truth for order creation, signing, auth, and posting.
+1. Prefer the official Rust V2 SDK, `polymarket_client_sdk_v2`, as the source of
+   truth for order creation, signing, auth, and posting. Current state uses a
+   raw V2-compatible signer, so SDK parity/golden tests remain desirable.
 2. Wrap it behind our own narrow `ClobExecutionAdapter` so strategy code does
    not depend directly on SDK internals.
 3. Keep the existing read-only `ClobClient` for diagnostics if it remains useful.
@@ -343,7 +334,8 @@ Stop conditions:
 1. Add an explicit live-order guard until Phase 1 is complete. Done:
    live preflight and pipeline initialization now fail closed unless
    `CLOB_V2_READY=1` and the compiled order signer reports CLOB V2.
-2. Integrate or wrap `polymarket_client_sdk_v2` for CLOB V2 order signing.
+2. Integrate or wrap `polymarket_client_sdk_v2` for CLOB V2 order signing, or
+   add golden tests proving the current raw signer matches the SDK.
 3. Add CLOB V2 golden tests and an auth/order doctor command.
 4. Replace hardcoded tick/fee/neg-risk handling in the live pipeline. Partial:
    neg-risk and Gamma-provided tick size are now passed from market metadata;

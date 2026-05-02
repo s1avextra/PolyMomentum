@@ -11,14 +11,14 @@
 use k256::ecdsa::{RecoveryId, Signature, SigningKey};
 use sha3::{Digest, Keccak256};
 
-/// Standard CTF Exchange (non neg-risk)
-pub const EXCHANGE_ADDRESS: &str = "4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
-/// Neg-risk CTF Exchange
-pub const NEG_RISK_EXCHANGE_ADDRESS: &str = "C5d563A36AE78145C45a50134d48A1215220f80a";
+/// CLOB V2 standard CTF Exchange (non neg-risk)
+pub const EXCHANGE_ADDRESS: &str = "E111180000d2663C0091e4f400237545B87B996B";
+/// CLOB V2 neg-risk CTF Exchange
+pub const NEG_RISK_EXCHANGE_ADDRESS: &str = "e2222d279d744050d28e00520010520000310F59";
 /// Polygon chain ID
 pub const CHAIN_ID: u64 = 137;
 /// Current compiled order signer generation. CLOB V2 live mode must require 2.
-pub const CLOB_ORDER_SIGNING_VERSION: u8 = 1;
+pub const CLOB_ORDER_SIGNING_VERSION: u8 = 2;
 
 /// EIP-712 order struct for the Polymarket CTF Exchange.
 #[derive(Debug, Clone)]
@@ -26,15 +26,14 @@ pub struct Order {
     pub salt: u128,
     pub maker: [u8; 20],
     pub signer: [u8; 20],
-    pub taker: [u8; 20],    // 0x000...000 for public orders
     pub token_id: String,    // uint256 as decimal string
-    pub maker_amount: u128,  // USDC.e amount (6 decimals)
+    pub maker_amount: u128,  // pUSD amount (6 decimals) for BUY
     pub taker_amount: u128,  // conditional token amount (6 decimals)
-    pub expiration: u64,     // 0 = no expiration
-    pub nonce: u64,          // 0 for new orders
-    pub fee_rate_bps: u64,   // fee in basis points
     pub side: u8,            // 0 = BUY, 1 = SELL
     pub signature_type: u8,  // 0 = EOA
+    pub timestamp_ms: u128,
+    pub metadata: [u8; 32],
+    pub builder: [u8; 32],
 }
 
 /// Signed order ready for CLOB submission.
@@ -52,13 +51,11 @@ pub fn build_order(
     price: f64,
     size: f64,
     side: &str,       // "BUY" or "SELL"
-    fee_rate_bps: u64,
     neg_risk: bool,
     tick_size: f64,   // price grid step (0.01 or 0.001)
 ) -> Order {
     let maker = address_from_key(signing_key);
     let signer = maker;
-    let taker = [0u8; 20]; // public order
 
     // Round price to the tick grid (CLOB rejects off-grid prices)
     let rounded_price = (price / tick_size).round() * tick_size;
@@ -68,7 +65,7 @@ pub fn build_order(
     // Round size to 2 decimal places (Polymarket standard)
     let rounded_size = (size * 100.0).round() / 100.0;
 
-    // Price/size to maker/taker amounts (6 decimal places, USDC.e precision)
+    // Price/size to maker/taker amounts (6 decimal places, pUSD precision)
     // The amounts must be consistent: maker_amount / taker_amount = price
     // for the CLOB's price check to pass.
     let (maker_amount, taker_amount) = if side == "BUY" {
@@ -90,8 +87,8 @@ pub fn build_order(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs();
-    let salt = (now as u128).wrapping_mul(rand::random::<u64>() as u128) % (1u128 << 64);
+        .as_millis();
+    let salt = now.wrapping_mul(rand::random::<u64>() as u128) % (1u128 << 64);
 
     let _ = neg_risk; // used for exchange address selection in sign_order
 
@@ -99,15 +96,14 @@ pub fn build_order(
         salt,
         maker,
         signer,
-        taker,
         token_id: token_id.to_string(),
         maker_amount,
         taker_amount,
-        expiration: 0,
-        nonce: 0,
-        fee_rate_bps,
         side: side_num,
         signature_type: 0, // EOA
+        timestamp_ms: now,
+        metadata: [0u8; 32],
+        builder: [0u8; 32],
     }
 }
 
@@ -147,7 +143,7 @@ fn eip712_domain_separator(verifying_contract: &str) -> [u8; 32] {
     );
 
     let name_hash = keccak256(b"Polymarket CTF Exchange");
-    let version_hash = keccak256(b"1");
+    let version_hash = keccak256(b"2");
 
     let mut chain_id_bytes = [0u8; 32];
     chain_id_bytes[24..32].copy_from_slice(&CHAIN_ID.to_be_bytes());
@@ -169,7 +165,7 @@ fn eip712_domain_separator(verifying_contract: &str) -> [u8; 32] {
 /// EIP-712 type hash for the Order struct.
 fn order_type_hash() -> [u8; 32] {
     keccak256(
-        b"Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)",
+        b"Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)",
     )
 }
 
@@ -177,12 +173,11 @@ fn order_type_hash() -> [u8; 32] {
 fn order_struct_hash(order: &Order) -> [u8; 32] {
     let type_hash = order_type_hash();
 
-    let mut encoded = Vec::with_capacity(416);
+    let mut encoded = Vec::with_capacity(384);
     encoded.extend_from_slice(&type_hash);
     encoded.extend_from_slice(&u256_bytes(order.salt));
     encoded.extend_from_slice(&address_padded(&order.maker));
     encoded.extend_from_slice(&address_padded(&order.signer));
-    encoded.extend_from_slice(&address_padded(&order.taker));
 
     // tokenId is a uint256 — Polymarket IDs are typically 256-bit,
     // far exceeding u128. Parse decimal string to 32-byte big-endian.
@@ -190,11 +185,11 @@ fn order_struct_hash(order: &Order) -> [u8; 32] {
 
     encoded.extend_from_slice(&u256_bytes(order.maker_amount));
     encoded.extend_from_slice(&u256_bytes(order.taker_amount));
-    encoded.extend_from_slice(&u256_bytes(order.expiration as u128));
-    encoded.extend_from_slice(&u256_bytes(order.nonce as u128));
-    encoded.extend_from_slice(&u256_bytes(order.fee_rate_bps as u128));
     encoded.extend_from_slice(&u256_bytes(order.side as u128));
     encoded.extend_from_slice(&u256_bytes(order.signature_type as u128));
+    encoded.extend_from_slice(&u256_bytes(order.timestamp_ms));
+    encoded.extend_from_slice(&order.metadata);
+    encoded.extend_from_slice(&order.builder);
 
     keccak256(&encoded)
 }
@@ -372,15 +367,14 @@ mod tests {
             salt: 12345,
             maker: address_from_key(&key),
             signer: address_from_key(&key),
-            taker: [0u8; 20],
             token_id: "71321045679252212594626385532706912750332728571942532289631379312455583992563".to_string(),
             maker_amount: 5_000_000,
             taker_amount: 10_000_000,
-            expiration: 0,
-            nonce: 0,
-            fee_rate_bps: 0,
             side: 0,
             signature_type: 0,
+            timestamp_ms: 1_713_398_400_000,
+            metadata: [0u8; 32],
+            builder: [0u8; 32],
         };
         let signed = sign_order(&order, &key, false);
         // 65 bytes = 130 hex chars

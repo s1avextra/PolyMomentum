@@ -41,10 +41,11 @@ pub struct ClobClient {
 #[derive(Debug, Serialize)]
 struct SignedOrderRequest {
     order: OrderPayload,
-    signature: String,
-    owner: String,        // maker address
+    owner: String,        // API key owner in the CLOB V2 wire body
     #[serde(rename = "orderType")]
     order_type: String,   // "GTC" or "FOK"
+    #[serde(rename = "deferExec")]
+    defer_exec: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +53,6 @@ struct OrderPayload {
     salt: String,
     maker: String,
     signer: String,
-    taker: String,
     #[serde(rename = "tokenId")]
     token_id: String,
     #[serde(rename = "makerAmount")]
@@ -60,12 +60,13 @@ struct OrderPayload {
     #[serde(rename = "takerAmount")]
     taker_amount: String,
     expiration: String,
-    nonce: String,
-    #[serde(rename = "feeRateBps")]
-    fee_rate_bps: String,
     side: String,
     #[serde(rename = "signatureType")]
-    signature_type: String,
+    signature_type: u8,
+    timestamp: String,
+    metadata: String,
+    builder: String,
+    signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,8 +226,9 @@ impl ClobClient {
         size: f64,
         side: &str,
         neg_risk: bool,
+        tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(token_id, price, size, side, "GTC", neg_risk, 0.01)
+        self.place_order_internal(token_id, price, size, side, "GTC", neg_risk, tick_size)
             .await
     }
 
@@ -238,8 +240,9 @@ impl ClobClient {
         size: f64,
         side: &str,
         neg_risk: bool,
+        tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(token_id, price, size, side, "FOK", neg_risk, 0.01)
+        self.place_order_internal(token_id, price, size, side, "FOK", neg_risk, tick_size)
             .await
     }
 
@@ -261,9 +264,9 @@ impl ClobClient {
 
         let t0 = Instant::now();
 
-        // Build and sign the order
-        let fee_bps = if order_type == "GTC" { 0 } else { 200 }; // 0% maker, 2% taker
-        let order = signing::build_order(key, token_id, price, size, side, fee_bps, neg_risk, tick_size);
+        // Build and sign the CLOB V2 order. Fees are protocol/operator-set at
+        // match time in V2 and are not part of the signed EIP-712 struct.
+        let order = signing::build_order(key, token_id, price, size, side, neg_risk, tick_size);
         let signed = signing::sign_order(&order, key, neg_risk);
 
         let sign_us = t0.elapsed().as_micros();
@@ -274,19 +277,20 @@ impl ClobClient {
                 salt: signed.order.salt.to_string(),
                 maker: format!("0x{}", hex::encode(signed.order.maker)),
                 signer: format!("0x{}", hex::encode(signed.order.signer)),
-                taker: format!("0x{}", hex::encode(signed.order.taker)),
                 token_id: signed.order.token_id.clone(),
                 maker_amount: signed.order.maker_amount.to_string(),
                 taker_amount: signed.order.taker_amount.to_string(),
-                expiration: signed.order.expiration.to_string(),
-                nonce: signed.order.nonce.to_string(),
-                fee_rate_bps: signed.order.fee_rate_bps.to_string(),
-                side: signed.order.side.to_string(),
-                signature_type: signed.order.signature_type.to_string(),
+                expiration: "0".to_string(),
+                side: side.to_string(),
+                signature_type: signed.order.signature_type,
+                timestamp: signed.order.timestamp_ms.to_string(),
+                metadata: format!("0x{}", hex::encode(signed.order.metadata)),
+                builder: format!("0x{}", hex::encode(signed.order.builder)),
+                signature: format!("0x{}", signed.signature),
             },
-            signature: format!("0x{}", signed.signature),
-            owner: self.maker_address.clone(),
+            owner: self.api_key.clone(),
             order_type: order_type.to_string(),
+            defer_exec: false,
         };
 
         let body = serde_json::to_string(&payload).map_err(|e| format!("Serialize: {}", e))?;
