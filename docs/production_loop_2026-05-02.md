@@ -261,3 +261,43 @@ A+ promotion checklist:
    fees/slippage-adjusted PnL.
 5. Run a supervised $1 live canary and require CLOB user-channel/REST evidence
    for every accepted, filled, canceled, or rejected order.
+
+## A+ readiness iteration - 2026-05-02 12:20 UTC
+
+Target A+ gates tightened:
+
+1. Live startup must verify wallet readiness from chain state, not merely
+   private-key shape.
+2. Wallet diagnostics must distinguish "wallet empty/not approved" from "RPC
+   read failed".
+3. VPS work must not start a second PolyMomentum runtime while an existing
+   orphan process is still running.
+
+Implemented locally:
+
+- Added `polymomentum-engine wallet --json` with `live_ready` and readiness
+  detail.
+- Live `preflight` and `live` startup now append a fail-closed `live_wallet`
+  check in live mode.
+- Wallet balance/allowance reads now propagate RPC failures instead of silently
+  converting failed calls into zero balances.
+- VPS setup template now exposes `CLOB_V2_READY` and
+  `POLYMOMENTUM_LIVE_RECONCILIATION_READY` explicitly.
+
+Fresh local verification:
+
+- Unit/integration tests: `cargo test` passed, 126 lib tests + 126 binary tests.
+- Live-shaped preflight with valid test key and unreachable RPC:
+  `ok=false`, with `live_wallet` failing on `wallet fetch failed: fetch pUSD
+  balance`.
+
+VPS inspection before deployment:
+
+- Host time checked at `2026-05-02T12:15:16Z`.
+- `polymomentum-engine.service` is inactive, but an orphan
+  `/opt/polymomentum/polymomentum-engine` process owned by `polymomentum` has
+  been running for about 7 days.
+- `adgts` is active; `polyarbitrage` service is inactive, while its collector
+  process is active. No peer private directories were read.
+- Because an orphan PolyMomentum runtime exists, do not enable/restart the
+  systemd service until that process is intentionally drained or stopped.

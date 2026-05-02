@@ -118,7 +118,11 @@ enum Command {
         min_liquidity: f64,
     },
     /// Print wallet balances (pUSD, USDC diagnostics, POL).
-    Wallet,
+    Wallet {
+        /// Emit machine-readable JSON including live_ready.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read-only CLOB diagnostics. These do not place orders.
     Clob {
         #[command(subcommand)]
@@ -399,7 +403,7 @@ async fn main() {
         Command::Live { mode, i_understand_live, promotion_artifact } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
-            let preflight = release::run_preflight(&settings, mode, i_understand_live);
+            let preflight = run_startup_preflight(&settings, mode, i_understand_live).await;
             if !preflight.ok {
                 eprintln!("preflight failed: {}", preflight.failure_summary());
                 std::process::exit(2);
@@ -450,7 +454,7 @@ async fn main() {
         Command::Preflight { mode, i_understand_live, promotion_artifact } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
-            let report = release::run_preflight(&settings, mode, i_understand_live);
+            let report = run_startup_preflight(&settings, mode, i_understand_live).await;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("serialize preflight report")
@@ -471,7 +475,7 @@ async fn main() {
         Command::Scan { max_hours, min_liquidity } => {
             cmd_scan(&settings, max_hours, min_liquidity).await;
         }
-        Command::Wallet => cmd_wallet(&settings).await,
+        Command::Wallet { json } => cmd_wallet(&settings, json).await,
         Command::Clob { command } => cmd_clob(&settings, command).await,
         Command::Experiment { command } => cmd_experiment(command),
         Command::Diagnostics { command } => cmd_diagnostics(command),
@@ -554,6 +558,57 @@ async fn main() {
 fn apply_promotion_override(settings: &mut config::Settings, path: Option<String>) {
     if let Some(path) = path {
         settings.promotion_artifact_path = path;
+    }
+}
+
+async fn run_startup_preflight(
+    settings: &config::Settings,
+    mode: RuntimeMode,
+    i_understand_live: bool,
+) -> release::PreflightReport {
+    let mut report = release::run_preflight(settings, mode, i_understand_live);
+    if mode.is_live() {
+        let check = live_wallet_preflight_check(settings).await;
+        report.checks.push(check);
+        report.ok = !report
+            .checks
+            .iter()
+            .any(|c| c.status == release::CheckStatus::Fail);
+    }
+    report
+}
+
+async fn live_wallet_preflight_check(settings: &config::Settings) -> release::PreflightCheck {
+    if settings.private_key.is_empty() {
+        return release::PreflightCheck {
+            name: "live_wallet",
+            status: release::CheckStatus::Fail,
+            detail: "PRIVATE_KEY not set; cannot verify wallet live_ready".to_string(),
+        };
+    }
+    match data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key) {
+        Ok(reader) => match reader.fetch_balances().await {
+            Ok(balances) if balances.live_ready() => release::PreflightCheck {
+                name: "live_wallet",
+                status: release::CheckStatus::Ok,
+                detail: balances.live_ready_detail(),
+            },
+            Ok(balances) => release::PreflightCheck {
+                name: "live_wallet",
+                status: release::CheckStatus::Fail,
+                detail: balances.live_ready_detail(),
+            },
+            Err(e) => release::PreflightCheck {
+                name: "live_wallet",
+                status: release::CheckStatus::Fail,
+                detail: format!("wallet fetch failed: {e}"),
+            },
+        },
+        Err(e) => release::PreflightCheck {
+            name: "live_wallet",
+            status: release::CheckStatus::Fail,
+            detail: format!("wallet init failed: {e}"),
+        },
     }
 }
 
@@ -822,7 +877,7 @@ async fn cmd_scan(s: &config::Settings, max_hours: f64, min_liquidity: f64) {
     }
 }
 
-async fn cmd_wallet(s: &config::Settings) {
+async fn cmd_wallet(s: &config::Settings, json: bool) {
     if s.private_key.is_empty() {
         eprintln!("PRIVATE_KEY not set");
         std::process::exit(1);
@@ -830,6 +885,26 @@ async fn cmd_wallet(s: &config::Settings) {
     match data::wallet::WalletReader::new(&s.polygon_rpc_url, &s.private_key) {
         Ok(reader) => match reader.fetch_balances().await {
             Ok(b) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "address": b.address,
+                            "pusd": b.pusd,
+                            "usdc_e": b.usdc_e,
+                            "usdc_native": b.usdc_native,
+                            "stable_total": b.total_stable_diagnostics,
+                            "pusd_allowance_exchange": b.pusd_allowance_exchange,
+                            "pusd_allowance_neg_risk_exchange": b.pusd_allowance_neg_risk_exchange,
+                            "usdc_e_allowance_onramp": b.usdc_e_allowance_onramp,
+                            "pol": b.pol,
+                            "live_ready": b.live_ready(),
+                            "detail": b.live_ready_detail(),
+                        }))
+                        .expect("serialize wallet")
+                    );
+                    return;
+                }
                 println!("address      {}", b.address);
                 println!("pusd         ${:.2}", b.pusd);
                 println!("usdc_e       ${:.2}", b.usdc_e);
@@ -842,13 +917,9 @@ async fn cmd_wallet(s: &config::Settings) {
                 );
                 println!("usdc_e_allow ${:.2} Collateral Onramp", b.usdc_e_allowance_onramp);
                 println!("pol          {:.4}", b.pol);
-                let live_ready = b.pusd >= 1.0
-                    && b.pusd_allowance_exchange >= 1.0
-                    && b.pusd_allowance_neg_risk_exchange >= 1.0
-                    && b.pol >= 0.01;
                 println!(
                     "live_ready   {}",
-                    if live_ready {
+                    if b.live_ready() {
                         "yes"
                     } else {
                         "no (needs pUSD, both CTF Exchange V2 pUSD allowances, and >=0.01 POL)"

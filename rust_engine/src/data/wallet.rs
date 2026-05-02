@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use k256::ecdsa::SigningKey;
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 
@@ -15,7 +16,7 @@ pub const COLLATERAL_ONRAMP: &str = "0x93070a847efEf7F70739046A929D47a521F5B8ee"
 const BALANCE_OF: &str = "0x70a08231";
 const ALLOWANCE: &str = "0xdd62ed3e";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WalletBalances {
     pub address: String,
     pub pusd: f64,
@@ -26,6 +27,37 @@ pub struct WalletBalances {
     pub pusd_allowance_neg_risk_exchange: f64,
     pub usdc_e_allowance_onramp: f64,
     pub pol: f64,
+}
+
+impl WalletBalances {
+    pub fn live_ready(&self) -> bool {
+        self.pusd >= 1.0
+            && self.pusd_allowance_exchange >= 1.0
+            && self.pusd_allowance_neg_risk_exchange >= 1.0
+            && self.pol >= 0.01
+    }
+
+    pub fn live_ready_detail(&self) -> String {
+        if self.live_ready() {
+            format!(
+                "wallet live_ready yes: address={} pUSD=${:.2} CTF_V2_allow=${:.2} NegRisk_allow=${:.2} POL={:.4}",
+                self.address,
+                self.pusd,
+                self.pusd_allowance_exchange,
+                self.pusd_allowance_neg_risk_exchange,
+                self.pol
+            )
+        } else {
+            format!(
+                "wallet live_ready no: needs pUSD>=1.00, both CTF Exchange V2 pUSD allowances>=1.00, and POL>=0.01; observed address={} pUSD=${:.2} CTF_V2_allow=${:.2} NegRisk_allow=${:.2} POL={:.4}",
+                self.address,
+                self.pusd,
+                self.pusd_allowance_exchange,
+                self.pusd_allowance_neg_risk_exchange,
+                self.pol
+            )
+        }
+    }
 }
 
 pub fn address_from_private_key(pk_hex: &str) -> Result<String> {
@@ -95,22 +127,34 @@ impl WalletReader {
     }
 
     pub async fn fetch_balances(&self) -> Result<WalletBalances> {
-        let pusd = self.balance_of(PUSD).await.unwrap_or(0) as f64 / 1e6;
-        let usdc_e = self.balance_of(USDC_E).await.unwrap_or(0) as f64 / 1e6;
-        let usdc_native = self.balance_of(USDC_NATIVE).await.unwrap_or(0) as f64 / 1e6;
+        let pusd = self
+            .balance_of(PUSD)
+            .await
+            .context("fetch pUSD balance")? as f64
+            / 1e6;
+        let usdc_e = self
+            .balance_of(USDC_E)
+            .await
+            .context("fetch USDC.e balance")? as f64
+            / 1e6;
+        let usdc_native = self
+            .balance_of(USDC_NATIVE)
+            .await
+            .context("fetch native USDC balance")? as f64
+            / 1e6;
         let pusd_allowance_exchange = self
             .allowance_of(PUSD, CTF_EXCHANGE_V2)
             .await
-            .unwrap_or(0.0);
+            .context("fetch pUSD CTF Exchange V2 allowance")?;
         let pusd_allowance_neg_risk_exchange = self
             .allowance_of(PUSD, NEG_RISK_CTF_EXCHANGE_V2)
             .await
-            .unwrap_or(0.0);
+            .context("fetch pUSD Neg Risk CTF Exchange V2 allowance")?;
         let usdc_e_allowance_onramp = self
             .allowance_of(USDC_E, COLLATERAL_ONRAMP)
             .await
-            .unwrap_or(0.0);
-        let pol = self.fetch_pol_balance().await.unwrap_or(0.0);
+            .context("fetch USDC.e Collateral Onramp allowance")?;
+        let pol = self.fetch_pol_balance().await.context("fetch POL balance")?;
         Ok(WalletBalances {
             address: self.address.clone(),
             pusd,
@@ -177,5 +221,21 @@ mod tests {
         assert_eq!(hex_units("0x0", 6), 0.0);
         assert_eq!(hex_units("0xf4240", 6), 1.0);
         assert_eq!(hex_units("0x1e8480", 6), 2.0);
+    }
+
+    #[test]
+    fn live_ready_requires_pusd_allowances_and_pol() {
+        let mut b = WalletBalances {
+            address: "0xabc".to_string(),
+            pusd: 1.0,
+            pusd_allowance_exchange: 1.0,
+            pusd_allowance_neg_risk_exchange: 1.0,
+            pol: 0.01,
+            ..Default::default()
+        };
+        assert!(b.live_ready());
+        b.pol = 0.009;
+        assert!(!b.live_ready());
+        assert!(b.live_ready_detail().contains("live_ready no"));
     }
 }
