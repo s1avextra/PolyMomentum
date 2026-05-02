@@ -55,6 +55,39 @@ enum Command {
         #[arg(long)]
         promotion_artifact: Option<String>,
     },
+    /// Replay the live decision/order diagnostics loop from cached PMXT + BTC data.
+    LiveReplay {
+        /// Inclusive UTC start hour (RFC3339), e.g. 2026-04-25T10:00:00Z.
+        #[arg(long)]
+        start: String,
+        /// Inclusive UTC end hour. Defaults to `start`.
+        #[arg(long)]
+        end: Option<String>,
+        /// PMXT v2 cache directory.
+        #[arg(long)]
+        cache_dir: Option<String>,
+        /// BTC tick/kline CSV used as the virtual exchange price feed.
+        #[arg(long)]
+        btc_csv: String,
+        /// Replay bankroll used for sizing.
+        #[arg(long, default_value_t = 100.0)]
+        bankroll: f64,
+        /// Simulated insert latency in milliseconds.
+        #[arg(long, default_value_t = 50)]
+        latency_ms: u64,
+        /// Output session JSONL directory. Defaults to SESSION_LOG_DIR.
+        #[arg(long)]
+        session_log_dir: Option<String>,
+        /// Permit downloading missing PMXT hours. Default is cache-only.
+        #[arg(long, default_value_t = false)]
+        allow_download: bool,
+        /// Permit Gamma fetches for missing historical metadata.
+        #[arg(long, default_value_t = false)]
+        allow_gamma_fetch: bool,
+        /// Cap the BTC candle universe for short resource-friendly diagnostics.
+        #[arg(long)]
+        max_contracts: Option<usize>,
+    },
     /// Run startup checks without opening market-data or order connections.
     Preflight {
         /// Paper or live mode to validate.
@@ -380,6 +413,33 @@ async fn main() {
                 }
             }
         }
+        Command::LiveReplay {
+            start,
+            end,
+            cache_dir,
+            btc_csv,
+            bankroll,
+            latency_ms,
+            session_log_dir,
+            allow_download,
+            allow_gamma_fetch,
+            max_contracts,
+        } => {
+            cmd_live_replay(
+                &settings,
+                &start,
+                end.as_deref(),
+                cache_dir.as_deref(),
+                &btc_csv,
+                bankroll,
+                latency_ms,
+                session_log_dir.as_deref(),
+                allow_download,
+                allow_gamma_fetch,
+                max_contracts,
+            )
+            .await;
+        }
         Command::Preflight { mode, i_understand_live, promotion_artifact } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
@@ -509,6 +569,225 @@ fn init_tracing(level: &str) {
         .with_env_filter(filter)
         .with_target(false)
         .try_init();
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_live_replay(
+    settings: &config::Settings,
+    start: &str,
+    end: Option<&str>,
+    cache_dir: Option<&str>,
+    btc_csv: &str,
+    bankroll: f64,
+    latency_ms: u64,
+    session_log_dir: Option<&str>,
+    allow_download: bool,
+    allow_gamma_fetch: bool,
+    max_contracts: Option<usize>,
+) {
+    use chrono::{DateTime, Duration as ChronoDuration, Utc};
+
+    let start_dt: DateTime<Utc> = match DateTime::parse_from_rfc3339(start) {
+        Ok(d) => d.with_timezone(&Utc),
+        Err(e) => {
+            eprintln!("--start must be RFC3339: {e}");
+            std::process::exit(2);
+        }
+    };
+    let end_dt = match end {
+        Some(e) => match DateTime::parse_from_rfc3339(e) {
+            Ok(d) => d.with_timezone(&Utc),
+            Err(err) => {
+                eprintln!("--end must be RFC3339: {err}");
+                std::process::exit(2);
+            }
+        },
+        None => start_dt,
+    };
+    if end_dt < start_dt {
+        eprintln!("--end must be >= --start");
+        std::process::exit(2);
+    }
+
+    let mut hours = Vec::new();
+    let mut cur = start_dt;
+    while cur <= end_dt {
+        hours.push(cur);
+        cur = cur + ChronoDuration::hours(1);
+    }
+
+    let cache_dir_path = cache_dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(
+                std::env::var("PMXT_V2_CACHE_DIR")
+                    .unwrap_or_else(|_| backtest::pmxt::DEFAULT_CACHE_DIR.to_string()),
+            )
+        });
+    let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
+    for &h in &hours {
+        if allow_download {
+            eprintln!("live-replay: ensuring PMXT archive hour {h}");
+            if let Err(e) = loader.download_hour(h, false).await {
+                eprintln!("download {h} failed: {e}");
+                std::process::exit(1);
+            }
+        } else if !loader.is_cached(h) {
+            eprintln!(
+                "PMXT hour {h} is not cached in {}; pass --allow-download to fetch it",
+                cache_dir_path.display()
+            );
+            std::process::exit(1);
+        }
+    }
+
+    let gamma_cache_path = cache_dir_path.join("gamma_market_cache.json");
+    let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> =
+        match std::fs::read_to_string(&gamma_cache_path) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Default::default(),
+        };
+    if allow_gamma_fetch {
+        let mut all_cids = std::collections::HashSet::new();
+        for &h in &hours {
+            eprintln!("live-replay: scanning condition_ids for {h}");
+            match loader.distinct_condition_ids(h) {
+                Ok(s) => all_cids.extend(s),
+                Err(e) => {
+                    eprintln!("read distinct cids for {h}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        let missing_cids: Vec<String> = all_cids
+            .iter()
+            .filter(|c| !cached_markets.contains_key(*c))
+            .cloned()
+            .collect();
+        if !missing_cids.is_empty() {
+            eprintln!(
+                "live-replay: fetching Gamma metadata for {} missing condition_ids",
+                missing_cids.len()
+            );
+            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+            match gamma.fetch_markets_by_condition_ids(&missing_cids).await {
+                Ok(markets) => {
+                    for m in markets {
+                        cached_markets.insert(m.condition_id.clone(), m);
+                    }
+                    if let Ok(s) = serde_json::to_string(&cached_markets) {
+                        let _ = std::fs::write(&gamma_cache_path, s);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Gamma lookup failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    } else {
+        eprintln!(
+            "live-replay: using cached Gamma metadata from {}",
+            gamma_cache_path.display()
+        );
+    }
+    if cached_markets.is_empty() {
+        eprintln!(
+            "live-replay has no cached Gamma metadata at {}; pass --allow-gamma-fetch to build it",
+            gamma_cache_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
+    let mut contracts = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
+    contracts.retain(|c| c.asset == "BTC");
+    let start_ts = start_dt.timestamp() as f64;
+    let end_ts = end_dt.timestamp() as f64 + 3600.0;
+    contracts.retain(|c| {
+        let close_t = chrono::DateTime::parse_from_rfc3339(&c.end_date)
+            .map(|d| d.timestamp() as f64)
+            .unwrap_or(0.0);
+        let window_minutes = live::window::estimate_window_minutes(&c.window_description);
+        let window_minutes = if window_minutes > 0.0 { window_minutes } else { 60.0 };
+        let open_t = close_t - window_minutes * 60.0;
+        close_t > start_ts && open_t < end_ts
+    });
+    if contracts.is_empty() {
+        eprintln!("live-replay found no BTC candle contracts in [{start}, {}]", end.unwrap_or(start));
+        std::process::exit(1);
+    }
+    contracts.sort_by(|a, b| {
+        a.end_date
+            .cmp(&b.end_date)
+            .then_with(|| a.market.condition_id.cmp(&b.market.condition_id))
+    });
+    if let Some(limit) = max_contracts {
+        contracts.truncate(limit);
+    }
+    if contracts.is_empty() {
+        eprintln!("live-replay --max-contracts must be greater than zero");
+        std::process::exit(2);
+    }
+    eprintln!("live-replay: BTC candle contracts={}", contracts.len());
+
+    let mut btc = backtest::btc_history::BTCHistory::new();
+    if let Err(e) = btc.load_csv(btc_csv) {
+        eprintln!("BTC CSV load failed: {e}");
+        std::process::exit(1);
+    }
+    if btc.n_ticks() < 50 {
+        eprintln!("not enough BTC ticks in {btc_csv} ({} < 50)", btc.n_ticks());
+        std::process::exit(1);
+    }
+    let replay_start_ms = start_dt.timestamp_millis();
+    let replay_end_ms = (end_dt + ChronoDuration::hours(1)).timestamp_millis();
+    let btc_start_ms = btc.first_timestamp_ms();
+    let btc_end_ms = btc.last_timestamp_ms();
+    if btc_end_ms < replay_start_ms || btc_start_ms > replay_end_ms {
+        eprintln!(
+            "BTC CSV does not overlap replay window: btc_ms=[{btc_start_ms},{btc_end_ms}] replay_ms=[{replay_start_ms},{replay_end_ms}]"
+        );
+        std::process::exit(1);
+    }
+
+    let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
+        .ok()
+        .or_else(|| {
+            let p = std::path::PathBuf::from(backtest::distill::SHARED_CACHE_DIR);
+            if p.exists() {
+                Some(backtest::distill::SHARED_CACHE_DIR.to_string())
+            } else {
+                None
+            }
+        })
+        .map(std::path::PathBuf::from);
+    let session_log_dir = session_log_dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(&settings.session_log_dir));
+    let cfg = live::replay::LiveReplayConfig {
+        hours,
+        universe: backtest::harness::CandleUniverse { contracts },
+        btc_history: std::sync::Arc::new(btc),
+        bankroll_usd: bankroll,
+        cache_dir: cache_dir_path,
+        session_log_dir,
+        latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
+        shared_distilled_dir: shared_dir,
+        strategy: live::replay::ReplayStrategy::from_settings(settings),
+    };
+    match live::replay::run_live_replay(cfg, settings).await {
+        Ok(report) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize live replay report")
+            );
+        }
+        Err(e) => {
+            eprintln!("live-replay failed: {e:?}");
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn cmd_scan(s: &config::Settings, max_hours: f64, min_liquidity: f64) {

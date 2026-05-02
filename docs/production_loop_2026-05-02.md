@@ -84,6 +84,52 @@ Remaining archive issue:
   loop unless the hour is pre-distilled or the sidecar/shared candle cache is
   reused.
 
+## Cached live replay loop
+
+Reason for this loop: paper/live parity can be tested much faster and more
+causally by replaying cached PMXT L2 events through the same live decision and
+diagnostics path, with a cached BTC tape as the exchange-price feed. This is
+the missing bridge between research backtests and production paper/live runs.
+
+New command:
+
+```bash
+polymomentum-engine live-replay \
+  --start 2026-04-25T10:00:00Z \
+  --end 2026-04-25T10:00:00Z \
+  --cache-dir /Users/ttoomm/Documents/PolyMomentum/data/pmxt_cache \
+  --btc-csv /private/tmp/pm_btc_ticks_20260425.csv \
+  --session-log-dir /private/tmp/polymomentum-live-replay/sessions \
+  --max-contracts 1
+```
+
+Resource controls:
+
+- Cache-only by default; missing PMXT hours fail unless `--allow-download` is
+  explicit.
+- Cached Gamma metadata is used by default; the expensive archive condition-id
+  scan plus network Gamma fill is only enabled by `--allow-gamma-fetch`.
+- `--max-contracts` caps the replay universe for short diagnostics, so a live
+  replay smoke does not contend with local or VPS peer bot workloads.
+- The command now fails fast if the BTC CSV range does not overlap the replay
+  hour. The failed guard test caught the invalid pairing of
+  `2026-04-23T00:00:00Z` with `/private/tmp/pm_btc_ticks_20260425.csv`.
+
+Latest capped replay:
+
+- Session: `/private/tmp/polymomentum-live-replay/sessions/session_20260502_081034.jsonl`
+- Hour: `2026-04-25T10:00:00Z`.
+- Contracts: 1.
+- PMXT events loaded/processed: 219,023 / 219,023.
+- Orders placed/filled/rejected: 1/1/0.
+- Diagnostics: `ok=true`, 0 malformed, 0 system errors, 0 fatal errors.
+- Replay validation: `total=119748 mismatches=0 (0.00%)`.
+
+Current limitation: this proves deterministic decision/diagnostics/fill-model
+parity on cached public data. It cannot prove authenticated live exchange
+behavior, user WebSocket reconciliation, allowance failures, or live CLOB
+reject semantics; those still require paper/live canary loops with credentials.
+
 ## Preflight
 
 Paper preflight:
@@ -101,11 +147,12 @@ Live-shaped local preflight:
 
 ## Current grade
 
-Current state: C.
+Current state: C+.
 
-Paper runtime and V2 order-shape readiness improved, but production capital
-still needs authenticated user-channel reconciliation evidence, funded canary
-evidence, promotion artifact evidence, and a practical archive harness loop.
+Paper runtime, V2 order-shape readiness, and cached live replay parity improved,
+but production capital still needs authenticated user-channel reconciliation
+evidence, funded canary evidence, promotion artifact evidence, and broader
+archive replay coverage.
 
 ## Next steps
 

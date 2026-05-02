@@ -716,7 +716,7 @@ fn load_existing_checkpoints(
 /// Build the engine's fill model from a strategy variant. `prefer_maker` →
 /// probabilistic Maker (with taker fallback); otherwise OneTickTaker.
 /// Perfect / BookWalk are reserved for future variants.
-fn build_fill_model(v: &StrategyVariant) -> FillModel {
+pub(crate) fn build_fill_model(v: &StrategyVariant) -> FillModel {
     if v.prefer_maker {
         FillModel::Maker(Maker::new(
             v.maker_fill_prob,

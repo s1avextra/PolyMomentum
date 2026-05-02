@@ -36,6 +36,7 @@ struct Counters {
 
 pub struct SessionMonitor {
     session_id: String,
+    events_path: PathBuf,
     summary_path: PathBuf,
     file: Mutex<std::fs::File>,
     start_time: f64,
@@ -61,11 +62,24 @@ impl SessionMonitor {
         tracing::info!(?events_path, "session monitor started");
         Ok(Self {
             session_id,
+            events_path,
             summary_path,
             file: Mutex::new(file),
             start_time,
             counters: Mutex::new(Counters::default()),
         })
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn events_path(&self) -> &std::path::Path {
+        &self.events_path
+    }
+
+    pub fn summary_path(&self) -> &std::path::Path {
+        &self.summary_path
     }
 
     fn write_event(&self, category: &str, event_type: &str, mut data: Value) {
