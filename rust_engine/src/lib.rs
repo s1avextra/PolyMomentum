@@ -15,6 +15,7 @@
 
 pub mod backtest;
 pub mod clob;
+pub mod clob_user_ws;
 pub mod config;
 pub mod data;
 pub mod exchange;

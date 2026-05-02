@@ -200,6 +200,89 @@ impl OrderManager {
         self.orders.get(intent_id)
     }
 
+    pub fn cancel(&mut self, intent_id: &str, ts: f64) -> Result<&ManagedOrder, String> {
+        self.transition(intent_id, OrderState::Canceled, ts)
+    }
+
+    pub fn intent_id_for_venue_order_id(&self, venue_order_id: &str) -> Option<String> {
+        self.orders.iter().find_map(|(intent_id, order)| {
+            (order.venue_order_id.as_deref() == Some(venue_order_id)).then(|| intent_id.clone())
+        })
+    }
+
+    pub fn ack_by_venue_order_id(
+        &mut self,
+        venue_order_id: &str,
+        ts: f64,
+    ) -> Result<&ManagedOrder, String> {
+        let intent_id = self
+            .intent_id_for_venue_order_id(venue_order_id)
+            .ok_or_else(|| format!("unknown venue_order_id {venue_order_id}"))?;
+        self.ack(&intent_id, Some(venue_order_id.to_string()), ts)
+    }
+
+    pub fn reconcile_live_by_venue_order_id(
+        &mut self,
+        venue_order_id: &str,
+        ts: f64,
+    ) -> Result<&ManagedOrder, String> {
+        let intent_id = self
+            .intent_id_for_venue_order_id(venue_order_id)
+            .ok_or_else(|| format!("unknown venue_order_id {venue_order_id}"))?;
+        let state = self
+            .orders
+            .get(&intent_id)
+            .ok_or_else(|| format!("unknown intent_id {intent_id}"))?
+            .state;
+        if matches!(
+            state,
+            OrderState::IntentCreated | OrderState::RiskAccepted | OrderState::Submitted
+        ) {
+            self.ack(&intent_id, Some(venue_order_id.to_string()), ts)
+        } else {
+            self.orders
+                .get(&intent_id)
+                .ok_or_else(|| format!("unknown intent_id {intent_id}"))
+        }
+    }
+
+    pub fn fill_by_venue_order_id(
+        &mut self,
+        venue_order_id: &str,
+        fill_size: f64,
+        fill_price: f64,
+        fee: f64,
+        ts: f64,
+    ) -> Result<&ManagedOrder, String> {
+        let intent_id = self
+            .intent_id_for_venue_order_id(venue_order_id)
+            .ok_or_else(|| format!("unknown venue_order_id {venue_order_id}"))?;
+        self.fill(&intent_id, fill_size, fill_price, fee, ts)
+    }
+
+    pub fn reject_by_venue_order_id(
+        &mut self,
+        venue_order_id: &str,
+        reason: impl Into<String>,
+        ts: f64,
+    ) -> Result<&ManagedOrder, String> {
+        let intent_id = self
+            .intent_id_for_venue_order_id(venue_order_id)
+            .ok_or_else(|| format!("unknown venue_order_id {venue_order_id}"))?;
+        self.reject(&intent_id, reason, ts)
+    }
+
+    pub fn cancel_by_venue_order_id(
+        &mut self,
+        venue_order_id: &str,
+        ts: f64,
+    ) -> Result<&ManagedOrder, String> {
+        let intent_id = self
+            .intent_id_for_venue_order_id(venue_order_id)
+            .ok_or_else(|| format!("unknown venue_order_id {venue_order_id}"))?;
+        self.cancel(&intent_id, ts)
+    }
+
     fn transition(
         &mut self,
         intent_id: &str,
@@ -282,5 +365,27 @@ mod tests {
         manager.reject(&id, "no liquidity", 1.1).unwrap();
         let err = manager.risk_accept(&id, 1.2).unwrap_err();
         assert!(err.contains("terminal"));
+    }
+
+    #[test]
+    fn reconciles_by_venue_order_id() {
+        let mut manager = OrderManager::new();
+        let intent = intent(10.0);
+        let id = intent.intent_id.clone();
+        manager.create_intent(intent, 1.0).unwrap();
+        manager.risk_accept(&id, 1.1).unwrap();
+        manager
+            .submit(&id, Some("0xvenue".to_string()), 1.2)
+            .unwrap();
+        manager.ack_by_venue_order_id("0xvenue", 1.3).unwrap();
+        let order = manager
+            .fill_by_venue_order_id("0xvenue", 4.0, 0.5, 0.01, 1.4)
+            .unwrap();
+        assert_eq!(order.state, OrderState::PartiallyFilled);
+        assert_eq!(order.filled_size, 4.0);
+        assert_eq!(
+            manager.intent_id_for_venue_order_id("0xvenue").as_deref(),
+            Some(id.as_str())
+        );
     }
 }

@@ -149,6 +149,10 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_order_reconciled(&self, evt: &OrderReconciled) {
+        self.write_event("order", "reconciled", serde_json::to_value(evt).unwrap_or(Value::Null));
+    }
+
     pub fn record_signal_evaluation(&self, evt: &SignalEvaluation) {
         self.counters.lock().unwrap().signal_count += 1;
         self.write_event(
@@ -427,6 +431,19 @@ pub struct OrderFilled {
     pub fill_time_s: f64,
     pub fee: f64,
     pub n_trades: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderReconciled {
+    pub intent_id: String,
+    pub order_id: String,
+    pub source: String,
+    pub venue_state: String,
+    pub filled: f64,
+    pub requested: f64,
+    pub fill_price: f64,
+    pub fee: f64,
+    pub detail: String,
 }
 
 /// Replay-grade signal evaluation event. Schema MUST match Python's

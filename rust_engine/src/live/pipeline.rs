@@ -19,11 +19,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
 use crate::backtest::strategies::StrategyVariant;
 use crate::clob::{create_shared_client, SharedClobClient};
+use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
@@ -33,7 +34,7 @@ use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
 use crate::monitoring::alerter::Alerter;
-use crate::monitoring::session::{SessionMonitor, SignalEvaluation};
+use crate::monitoring::session::{OrderFilled, OrderReconciled, SessionMonitor, SignalEvaluation};
 use crate::polymarket_ws::{
     new_shared_book, new_subscription_notify, polymarket_book_feed, SharedBookState,
 };
@@ -272,6 +273,9 @@ pub struct Pipeline {
     book_state: SharedBookState,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
     resub_notify: Arc<Notify>,
+    tracked_markets: Arc<RwLock<Vec<String>>>,
+    user_resub_notify: Arc<Notify>,
+    reconciled_trade_ids: Mutex<HashSet<String>>,
     stop: Arc<Notify>,
     kill_switch_path: PathBuf,
     cycle_count: Mutex<u64>,
@@ -346,6 +350,11 @@ impl Pipeline {
                 "live CLOB order placement blocked: set CLOB_V2_READY=1 only after V2 signing and reconciliation are verified"
             );
         }
+        if matches!(mode, Mode::Live) && !settings.live_reconciliation_ready {
+            bail!(
+                "live CLOB order placement blocked: set POLYMOMENTUM_LIVE_RECONCILIATION_READY=1 only after user-channel/REST reconciliation is verified"
+            );
+        }
 
         // Initialize CLOB client only in live mode and only if API creds present.
         let clob = if matches!(mode, Mode::Live)
@@ -391,6 +400,9 @@ impl Pipeline {
             book_state: new_shared_book(),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
             resub_notify: new_subscription_notify(),
+            tracked_markets: Arc::new(RwLock::new(Vec::new())),
+            user_resub_notify: new_subscription_notify(),
+            reconciled_trade_ids: Mutex::new(HashSet::new()),
             stop: Arc::new(Notify::new()),
             cycle_count: Mutex::new(0),
         });
@@ -431,6 +443,27 @@ impl Pipeline {
             let nt = self.resub_notify.clone();
             tokio::spawn(async move {
                 polymarket_book_feed(bs, tt, nt).await;
+            });
+        }
+        if matches!(self.mode, Mode::Live) && self.settings.live_reconciliation_ready {
+            let auth = UserChannelAuth::new(
+                self.settings.poly_api_key.clone(),
+                self.settings.poly_api_secret.clone(),
+                self.settings.poly_api_passphrase.clone(),
+            );
+            let markets = self.tracked_markets.clone();
+            let notify = self.user_resub_notify.clone();
+            let (tx, mut rx) = mpsc::channel(1024);
+            tokio::spawn(async move {
+                polymarket_user_feed(auth, markets, notify, tx).await;
+            });
+            let p = self.clone();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if let Err(e) = p.handle_user_event(event).await {
+                        tracing::warn!(error = %e, "CLOB user event reconciliation failed");
+                    }
+                }
             });
         }
         if let Some(clob) = self.clob.clone() {
@@ -524,6 +557,130 @@ impl Pipeline {
         Ok(())
     }
 
+    async fn handle_user_event(&self, event: UserEvent) -> Result<()> {
+        match event {
+            UserEvent::Order(order) => {
+                if order.id.is_empty() {
+                    return Ok(());
+                }
+                let ts = nonzero_ts_or_now(order.timestamp_s());
+                let reconciled = {
+                    let mut orders = self.order_manager.lock().await;
+                    let res = if order.is_canceled() {
+                        orders.cancel_by_venue_order_id(&order.id, ts)
+                    } else {
+                        orders.reconcile_live_by_venue_order_id(&order.id, ts)
+                    };
+                    match res {
+                        Ok(o) => Some(OrderReconciled {
+                            intent_id: o.intent.intent_id.clone(),
+                            order_id: order.id.clone(),
+                            source: "clob_user_ws.order".to_string(),
+                            venue_state: if order.is_canceled() {
+                                "canceled".to_string()
+                            } else {
+                                order.status.clone()
+                            },
+                            filled: o.filled_size.max(order.size_matched()),
+                            requested: o.requested_size.max(order.original_size()),
+                            fill_price: order.price.parse::<f64>().unwrap_or(0.0),
+                            fee: o.total_fees,
+                            detail: order.event_kind.clone(),
+                        }),
+                        Err(e) => {
+                            tracing::debug!(order_id = %short_cid(&order.id), error = %e, "unmatched user-channel order event");
+                            None
+                        }
+                    }
+                };
+                if let Some(evt) = reconciled {
+                    self.monitor.record_order_reconciled(&evt);
+                }
+            }
+            UserEvent::Trade(trade) => {
+                if trade.id.is_empty() {
+                    return Ok(());
+                }
+                if !trade.is_fill_status() && !trade.is_failed() {
+                    return Ok(());
+                }
+                {
+                    let mut seen = self.reconciled_trade_ids.lock().await;
+                    if !seen.insert(trade.id.clone()) {
+                        return Ok(());
+                    }
+                }
+                let ts = nonzero_ts_or_now(trade.timestamp_s());
+                for order_id in trade.candidate_order_ids() {
+                    let outcome = {
+                        let mut orders = self.order_manager.lock().await;
+                        if trade.is_failed() {
+                            match orders.reject_by_venue_order_id(
+                                &order_id,
+                                "clob trade failed",
+                                ts,
+                            ) {
+                                Ok(o) => Some((o.clone(), false)),
+                                Err(_) => None,
+                            }
+                        } else {
+                            match orders.fill_by_venue_order_id(
+                                &order_id,
+                                trade.size(),
+                                trade.price(),
+                                trade.fee(),
+                                ts,
+                            ) {
+                                Ok(o) => Some((o.clone(), true)),
+                                Err(_) => None,
+                            }
+                        }
+                    };
+                    let Some((order, filled)) = outcome else {
+                        continue;
+                    };
+                    self.monitor.record_order_reconciled(&OrderReconciled {
+                        intent_id: order.intent.intent_id.clone(),
+                        order_id: order_id.clone(),
+                        source: "clob_user_ws.trade".to_string(),
+                        venue_state: trade.status.clone(),
+                        filled: order.filled_size,
+                        requested: order.requested_size,
+                        fill_price: trade.price(),
+                        fee: order.total_fees,
+                        detail: trade.id.clone(),
+                    });
+                    if filled {
+                        self.monitor.record_order_filled(&OrderFilled {
+                            intent_id: order.intent.intent_id.clone(),
+                            order_id,
+                            filled: trade.size(),
+                            requested: order.requested_size,
+                            fill_pct: order.fill_pct(),
+                            fill_price: trade.price(),
+                            limit_price: order.intent.limit_price.unwrap_or(trade.price()),
+                            slippage: 0.0,
+                            slippage_bps: 0.0,
+                            fill_time_s: (ts - order.created_ts).max(0.0),
+                            fee: trade.fee(),
+                            n_trades: 1,
+                        });
+                    } else {
+                        self.monitor.record_order_rejected(
+                            &trade.asset_id,
+                            "clob trade failed",
+                            trade.price(),
+                            trade.size(),
+                        );
+                    }
+                    return Ok(());
+                }
+                tracing::debug!(trade_id = %trade.id, "user-channel trade did not match a managed order");
+            }
+        }
+        Ok(())
+    }
+
     pub async fn refresh_contracts(&self) -> Result<()> {
         let markets = self
             .gamma
@@ -558,6 +715,16 @@ impl Pipeline {
             *tt = token_ids;
         }
         self.resub_notify.notify_one();
+        let market_ids: Vec<String> = contracts
+            .iter()
+            .map(|c| c.market.condition_id.clone())
+            .filter(|s| !s.is_empty())
+            .collect();
+        {
+            let mut tm = self.tracked_markets.write().await;
+            *tm = market_ids;
+        }
+        self.user_resub_notify.notify_one();
 
         let n = contracts.len();
         *self.contracts.write().await = contracts;
@@ -1571,6 +1738,17 @@ fn short_cid(s: &str) -> String {
         s.to_string()
     } else {
         s[..16].to_string()
+    }
+}
+
+fn nonzero_ts_or_now(ts: f64) -> f64 {
+    if ts > 0.0 {
+        ts
+    } else {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
     }
 }
 

@@ -12,6 +12,7 @@
 
 mod backtest;
 mod clob;
+mod clob_user_ws;
 mod config;
 mod data;
 mod exchange;
@@ -258,6 +259,12 @@ enum Command {
         /// Variant-fan-out thread count (see harness-sweep --threads).
         #[arg(long, default_value_t = 0)]
         threads: usize,
+        /// Cap the BTC candle universe for short resource-friendly diagnostics.
+        #[arg(long)]
+        max_contracts: Option<usize>,
+        /// Permit archive-wide condition-id scans and Gamma fetches for missing historical metadata.
+        #[arg(long, default_value_t = false)]
+        allow_gamma_fetch: bool,
         /// Write a reproducible JSON experiment report to this path.
         #[arg(long)]
         report_json: Option<String>,
@@ -532,9 +539,11 @@ async fn main() {
             btc_csv,
             latency_ms,
             threads,
+            max_contracts,
+            allow_gamma_fetch,
             report_json,
         } => {
-            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, report_json.as_deref()).await;
+            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, max_contracts, allow_gamma_fetch, report_json.as_deref()).await;
         }
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
@@ -1596,6 +1605,8 @@ async fn cmd_harness(
     btc_csv: Option<&str>,
     latency_ms: u64,
     threads: usize,
+    max_contracts: Option<usize>,
+    allow_gamma_fetch: bool,
     report_json: Option<&str>,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -1651,19 +1662,6 @@ async fn cmd_harness(
         }
     }
 
-    let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for &h in &hours {
-        eprintln!("pmxt: scanning condition_ids for {h}");
-        match loader.distinct_condition_ids(h) {
-            Ok(s) => all_cids.extend(s),
-            Err(e) => {
-                eprintln!("read distinct cids for {}: {e}", h);
-                std::process::exit(1);
-            }
-        }
-    }
-    tracing::info!(cids = all_cids.len(), "distinct condition_ids in archive");
-
     // Gamma lookup is the bottleneck (~50 cids/RTT). Cache the parsed Markets
     // to disk keyed by condition_id so subsequent harness runs are near-instant.
     let cache_dir_path_for_meta = cache_dir_path.clone();
@@ -1672,30 +1670,54 @@ async fn cmd_harness(
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => Default::default(),
     };
-    let cid_vec: Vec<String> = all_cids
-        .iter()
-        .filter(|c| !cached_markets.contains_key(*c))
-        .cloned()
-        .collect();
-    if !cid_vec.is_empty() {
-        eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
-        tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma cache miss; fetching");
-        let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-        let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("Gamma lookup failed: {e}");
-                std::process::exit(1);
+    if allow_gamma_fetch {
+        let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &h in &hours {
+            eprintln!("pmxt: scanning condition_ids for {h}");
+            match loader.distinct_condition_ids(h) {
+                Ok(s) => all_cids.extend(s),
+                Err(e) => {
+                    eprintln!("read distinct cids for {}: {e}", h);
+                    std::process::exit(1);
+                }
             }
-        };
-        for m in new_markets {
-            cached_markets.insert(m.condition_id.clone(), m);
         }
-        if let Ok(s) = serde_json::to_string(&cached_markets) {
-            let _ = std::fs::write(&gamma_cache_path, s);
+        tracing::info!(cids = all_cids.len(), "distinct condition_ids in archive");
+        let cid_vec: Vec<String> = all_cids
+            .iter()
+            .filter(|c| !cached_markets.contains_key(*c))
+            .cloned()
+            .collect();
+        if !cid_vec.is_empty() {
+            eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
+            tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma cache miss; fetching");
+            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+            let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Gamma lookup failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            for m in new_markets {
+                cached_markets.insert(m.condition_id.clone(), m);
+            }
+            if let Ok(s) = serde_json::to_string(&cached_markets) {
+                let _ = std::fs::write(&gamma_cache_path, s);
+            }
         }
     } else {
-        tracing::info!(cached = cached_markets.len(), "Gamma cache hit (no fetch needed)");
+        eprintln!(
+            "harness: using cached Gamma metadata from {}",
+            gamma_cache_path.display()
+        );
+    }
+    if cached_markets.is_empty() {
+        eprintln!(
+            "harness has no cached Gamma metadata at {}; pass --allow-gamma-fetch to build it",
+            gamma_cache_path.display()
+        );
+        std::process::exit(1);
     }
     let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
     tracing::info!(markets = markets.len(), "Gamma metadata loaded");
@@ -1724,6 +1746,18 @@ async fn cmd_harness(
         kept = contracts.len(),
         "candle window filter",
     );
+    contracts.sort_by(|a, b| {
+        a.end_date
+            .cmp(&b.end_date)
+            .then_with(|| a.market.condition_id.cmp(&b.market.condition_id))
+    });
+    if matches!(max_contracts, Some(0)) {
+        eprintln!("harness --max-contracts must be greater than zero");
+        std::process::exit(2);
+    }
+    if let Some(limit) = max_contracts {
+        contracts.truncate(limit);
+    }
     let universe = backtest::harness::CandleUniverse { contracts };
     if universe.contracts.is_empty() {
         eprintln!(

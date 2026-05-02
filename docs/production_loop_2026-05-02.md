@@ -170,3 +170,94 @@ archive replay coverage.
    net PnL after fees/slippage, and no single-window concentration.
 7. Only after steps 1-6, run a tiny live canary with manual supervision,
    alerting enabled, and reconciliation logs checked order by order.
+
+## A+ readiness iteration - 2026-05-02 08:40 UTC
+
+Target A+ gates:
+
+1. Fail closed before live unless venue/compliance, CLOB V2 signing, valid
+   credentials, alerting, and live reconciliation are explicitly ready.
+2. Consume authenticated CLOB user-channel `order` and `trade` events and
+   reconcile them into the local order state machine by venue order ID.
+3. Keep local production loops resource-bounded: cache-only metadata by default,
+   no archive-wide scans unless explicitly requested, and short `--max-contracts`
+   diagnostics for replay/backtest.
+4. Prove the current code with tests, a short real paper run, cached live replay,
+   and bounded archive harness.
+
+Implemented in this iteration:
+
+- Added authenticated CLOB user-channel parser/feed for the documented
+  `wss://ws-subscriptions-clob.polymarket.com/ws/user` subscription shape.
+- Added order-manager reconciliation helpers keyed by venue order ID.
+- Live runtime now subscribes to active condition IDs in live mode and reconciles
+  user-channel order/trade events into `OrderManager` plus session JSONL
+  `order.reconciled` / `order.filled` / `order.rejected` evidence.
+- Live preflight now fails unless
+  `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1` is set.
+- Live preflight now rejects malformed `PRIVATE_KEY` values instead of treating
+  any non-empty string as credential-ready.
+- `harness` now supports `--max-contracts` and uses cached Gamma metadata by
+  default; archive-wide condition-id scans/Gamma fetches require
+  `--allow-gamma-fetch`.
+
+Official references checked for this iteration:
+
+- https://docs.polymarket.com/market-data/websocket/user-channel
+- https://docs.polymarket.com/api-reference/wss/user
+- https://docs.polymarket.com/api-reference/authentication
+- https://docs.polymarket.com/api-reference/trade/get-single-order-by-id
+- https://docs.polymarket.com/api-reference/trade/get-trades
+
+Fresh verification:
+
+- Unit/integration tests: `cargo test` passed, 125 lib tests + 125 binary tests.
+- Paper run: `/private/tmp/polymomentum-a-plus/logs/sessions/session_20260502_083808.jsonl`
+  - Duration: about 2 minutes.
+  - Feeds connected: Binance, Bybit, OKX, Binance alt, Bybit alt.
+  - Active candle contracts scanned: 119.
+  - Diagnostics: `ok=true`, 921 events, 453 signal evaluations, 0 malformed,
+    0 system/fatal errors.
+  - Replay validation: `total=453 mismatches=0 (0.00%)`.
+- Cached live replay:
+  `/private/tmp/polymomentum-live-replay/sessions/session_20260502_085542.jsonl`
+  - 1 BTC candle contract, 219,023 PMXT events processed.
+  - Orders placed/filled/rejected: 1/1/0.
+  - Diagnostics: `ok=true`, 0 malformed, 0 system/fatal errors.
+  - Replay validation: `total=119748 mismatches=0 (0.00%)`.
+- Bounded archive harness:
+  `/private/tmp/polymomentum-a-plus/harness_20260425T10_max1.json`
+  - 1 BTC candle contract, 9 variants, 1 hour, `--threads 1`.
+  - Best variant in this tiny smoke: `loose_maker`, 1 trade, +$6.72.
+  - This validates harness plumbing only; one trade is not promotion evidence.
+- Live-shaped preflight:
+  - Fails closed when `POLYMOMENTUM_LIVE_RECONCILIATION_READY` is absent.
+  - Passes structurally with valid hex key, explicit international venue,
+    compliance acknowledgement, CLOB V2 flag, reconciliation-ready flag, and
+    alerting. This used test credentials only and did not place orders.
+
+Current grade after this iteration: B.
+
+Why not A+ yet:
+
+- No real authenticated user-channel session has been observed with production
+  credentials.
+- No wallet run has proven pUSD balance, both V2 pUSD allowances, and POL gas
+  on the Dublin VPS.
+- No 24-48h VPS paper soak has produced daily diagnostics under shared-resource
+  conditions.
+- No promotion artifact has enough out-of-sample trades and positive net PnL.
+- No funded $1 live canary has been reconciled order by order.
+
+A+ promotion checklist:
+
+1. Run `wallet` on the VPS and require `live_ready yes`.
+2. Run live-shaped preflight on VPS with real credentials, real alerting, and
+   `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1`.
+3. Run 24-48h VPS paper mode with diagnostics every 6h and no peer bot resource
+   degradation.
+4. Run bounded archive harness over many cached/distilled hours, then expand
+   only on a dev box; promote only with sufficient OOS trades and positive net
+   fees/slippage-adjusted PnL.
+5. Run a supervised $1 live canary and require CLOB user-channel/REST evidence
+   for every accepted, filled, canceled, or rejected order.

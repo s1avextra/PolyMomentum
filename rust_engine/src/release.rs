@@ -136,6 +136,7 @@ pub fn run_preflight(
         check_live_confirmation(i_understand_live, &mut checks);
         check_live_venue(settings, &mut checks);
         check_clob_v2_ready(settings, &mut checks);
+        check_live_reconciliation(settings, &mut checks);
         check_live_credentials(settings, &mut checks);
         check_live_alerts(settings, &mut checks);
     } else {
@@ -166,6 +167,7 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "venue_compliance_ok": settings.venue_compliance_ok,
         "polymarket_us_api_enabled": settings.polymarket_us_api_enabled,
         "clob_v2_ready": settings.clob_v2_ready,
+        "live_reconciliation_ready": settings.live_reconciliation_ready,
         "private_key_present": !settings.private_key.is_empty(),
         "poly_api_key_present": !settings.poly_api_key.is_empty(),
         "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
@@ -375,7 +377,16 @@ fn check_live_credentials(settings: &Settings, checks: &mut Vec<PreflightCheck>)
     .filter_map(|(name, value)| if value.is_empty() { Some(name) } else { None })
     .collect();
 
-    if missing.is_empty() {
+    if !settings.private_key.is_empty()
+        && crate::signing::parse_private_key(&settings.private_key).is_none()
+    {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Fail,
+            "PRIVATE_KEY is present but is not a valid secp256k1 hex key".to_string(),
+        );
+    } else if missing.is_empty() {
         push(
             checks,
             "live_credentials",
@@ -418,6 +429,24 @@ fn check_clob_v2_ready(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
             CheckStatus::Fail,
             "live mode requires CLOB_V2_READY=1 until the V2 order-signing path is verified"
                 .to_string(),
+        );
+    }
+}
+
+fn check_live_reconciliation(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if settings.live_reconciliation_ready {
+        push(
+            checks,
+            "live_reconciliation",
+            CheckStatus::Ok,
+            "authenticated user-channel/REST reconciliation is explicitly enabled".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_reconciliation",
+            CheckStatus::Fail,
+            "live mode requires POLYMOMENTUM_LIVE_RECONCILIATION_READY=1 so accepted orders are reconciled from CLOB user-channel/REST evidence".to_string(),
         );
     }
 }
@@ -641,6 +670,7 @@ mod tests {
         s.promotion_artifact_path.clear();
         s.promotion_required = false;
         s.clob_v2_ready = false;
+        s.live_reconciliation_ready = false;
         s.private_key.clear();
         s.poly_api_key.clear();
         s.poly_api_secret.clear();
@@ -686,6 +716,29 @@ mod tests {
         assert!(report
             .failure_summary()
             .contains("live mode requires CLOB_V2_READY=1"));
+    }
+
+    #[test]
+    fn live_preflight_requires_reconciliation_ready_flag() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = true;
+        s.live_reconciliation_ready = false;
+        s.alert_required = true;
+        s.private_key = "0xabc".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "secret".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("POLYMOMENTUM_LIVE_RECONCILIATION_READY=1"));
     }
 
     #[test]
