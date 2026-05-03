@@ -444,3 +444,93 @@ Remaining A+ blockers:
 - Live remains intentionally blocked until pUSD balance/allowances, live CLOB
   V2 readiness, reconciliation readiness, venue-compliance flags, and the
   promotion artifact are all present.
+
+## CI artifact deployment on 2026-05-03T01:55Z
+
+Executed the next A+ production-loop step from `codex/audit1`:
+
+- Pushed branch `codex/audit1` to GitHub.
+- CI run `25266118714` built the first Linux x86_64 artifact for commit
+  `a3544d9`.
+- Added a deployable branch prerelease publishing step because GitHub Actions
+  artifact downloads require API authentication outside the runner.
+- CI run `25266376583` built and published prerelease asset
+  `ci-codex-audit1` for commit `1da342e`.
+- Downloaded release asset
+  `polymomentum-engine-linux-x86_64`; verified SHA256
+  `6c7d95483a3ade26f8c166d204949e29e57002c29e6ce2059efb6822f8063e77`.
+- Verified binary target locally as Linux x86_64 ELF.
+- Deployed the verified binary to the Dublin VPS with `deploy.sh --binary`.
+
+Peer coexistence:
+
+- First deploy attempt aborted before restart because `adgts` was
+  `deactivating`.
+- Waited until peers settled, then ran remote preflight and restarted only
+  `polymomentum-engine.service`.
+- After restart all services were active:
+  `adgts`, `polyarbitrage`, `polyarbitrage-collector`,
+  `polymomentum-engine`, `polymomentum-soak-report.timer`, and
+  `polymomentum-healthcheck.timer`.
+- PolyMomentum release manifest now reports:
+  - `git_sha=1da342e82c20bb808a8c1b277f4d662e5decb363`
+  - `build_timestamp=2026-05-03T01:11:55Z`
+  - mode `paper`
+  - venue `paper_only`
+
+Clean-state reset:
+
+- Fresh binary preflight passed with `paper_bankroll=ok` and
+  `BANKROLL_USD=100.00`.
+- Found stale paper PnL in `/opt/polymomentum/logs/candle/state.db`
+  (`total_pnl=1681.2951`, 96 old paper trades), which made the post-deploy
+  bankroll look like `1781.3`.
+- Backed up the DB to
+  `/opt/polymomentum/logs/candle/state.db.bak.20260503T014839Z`.
+- Cleared only PolyMomentum paper/risk tables and restarted only
+  `polymomentum-engine.service`.
+
+Fresh post-reset paper evidence:
+
+- Session:
+  `/opt/polymomentum/logs/sessions/session_20260503_014839.jsonl`
+- Diagnostics:
+  - `ok=true`
+  - 1,283 signal evaluations
+  - 2 paper orders placed
+  - 2 paper orders filled
+  - 0 rejects
+  - 0 malformed lines
+  - 0 system/fatal errors
+- Replay validation: `total=1283 mismatches=0 (0.00%)`.
+- Soak report:
+  `/opt/polymomentum/logs/soak/soak_20260503T015449Z.json`
+  - `ok=true`
+  - preflight `ok=true`
+  - diagnostics `ok=true`
+  - replay exit `0`
+  - peers active.
+
+Backtest promotion status:
+
+- Local PMXT cache is available for 72 hours across
+  `2026-04-23T00` through `2026-04-25T23`.
+- BTC tick CSV coverage is available for
+  `2026-04-25T09:59:44Z` through `2026-04-26T00:00:00Z`.
+- A one-hour harness smoke for `2026-04-25T10` was started locally with cached
+  PMXT data and BTC CSV, but was stopped after about 11 minutes because a
+  single-hour replay did not complete promptly.
+- Do not run that promotion workload on the VPS. The remaining promotion step
+  needs either local long-running batch time or a cache/distilled replay
+  acceleration pass before a sufficient OOS artifact can be generated.
+
+Current grade: A for deployed paper-mode runtime with clean bankroll, CI
+artifact deployment, active soak reporting, and first fresh order/fill evidence.
+
+Still not A+:
+
+- No promoted strategy artifact yet; the backtest harness path is too slow for
+  the available local turn window.
+- 24-48h soak evidence has started but cannot be compressed into a short run.
+- Live remains blocked by wallet pUSD balance/allowances and live compliance /
+  reconciliation flags.
