@@ -19,7 +19,7 @@ jobs:
   linux-x86-64:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -60,3 +60,21 @@ jobs:
             dist/polymomentum-engine-linux-x86_64
             dist/polymomentum-engine-linux-x86_64.sha256
           if-no-files-found: error
+
+      - name: Publish branch prerelease asset
+        if: startsWith(github.ref, 'refs/heads/codex/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="ci-${GITHUB_REF_NAME//\//-}"
+          title="CI artifact for ${GITHUB_REF_NAME}"
+          notes="Automated Linux x86_64 artifact for ${GITHUB_SHA}."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --prerelease
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --prerelease
+          fi
+          gh release upload "$tag" \
+            dist/polymomentum-engine-linux-x86_64 \
+            dist/polymomentum-engine-linux-x86_64.sha256 \
+            --clobber
