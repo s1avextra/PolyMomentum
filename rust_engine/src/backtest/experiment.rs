@@ -71,6 +71,18 @@ pub struct PromotionGate {
     pub require_complete_data: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiReportPromotionGate {
+    #[serde(default = "default_min_reports")]
+    pub min_reports: usize,
+    #[serde(default = "default_min_profitable_reports")]
+    pub min_profitable_reports: usize,
+    #[serde(default)]
+    pub min_daily_trades: usize,
+    #[serde(default)]
+    pub max_daily_loss: f64,
+}
+
 impl Default for PromotionGate {
     fn default() -> Self {
         Self {
@@ -85,8 +97,27 @@ impl Default for PromotionGate {
     }
 }
 
+impl Default for MultiReportPromotionGate {
+    fn default() -> Self {
+        Self {
+            min_reports: default_min_reports(),
+            min_profitable_reports: default_min_profitable_reports(),
+            min_daily_trades: 0,
+            max_daily_loss: 0.0,
+        }
+    }
+}
+
 fn default_min_trades() -> usize {
     30
+}
+
+fn default_min_reports() -> usize {
+    3
+}
+
+fn default_min_profitable_reports() -> usize {
+    2
 }
 
 fn default_max_zone_trade_share() -> f64 {
@@ -280,6 +311,325 @@ impl PromotionArtifact {
             promotion_gate: gate,
         })
     }
+
+    pub fn from_reports(
+        reports: &[ExperimentReport],
+        gate: PromotionGate,
+        multi_gate: MultiReportPromotionGate,
+    ) -> Result<Self> {
+        let aggregate = aggregate_reports(reports, &multi_gate)?;
+        if gate.require_complete_data && !aggregate.data_manifest.complete {
+            bail!("promotion rejected: aggregate data manifest is incomplete");
+        }
+        if aggregate.variants.is_empty() {
+            bail!("promotion rejected: aggregate report has no variants");
+        }
+
+        let selected = aggregate
+            .variants
+            .iter()
+            .filter(|variant| {
+                promotion_rejection_reasons(variant, &gate).is_empty()
+                    && multi_report_rejection_reasons(reports, variant, &gate, &multi_gate).is_empty()
+            })
+            .max_by(|a, b| {
+                a.total_pnl
+                    .partial_cmp(&b.total_pnl)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let selected = match selected {
+            Some(selected) => selected,
+            None => {
+                let best = aggregate
+                    .variants
+                    .iter()
+                    .max_by(|a, b| {
+                        a.total_pnl
+                            .partial_cmp(&b.total_pnl)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .expect("checked non-empty aggregate variants");
+                let mut reasons = promotion_rejection_reasons(best, &gate);
+                reasons.extend(multi_report_rejection_reasons(
+                    reports,
+                    best,
+                    &gate,
+                    &multi_gate,
+                ));
+                bail!(
+                    "promotion rejected: no variants passed aggregate gates; best candidate failed: {}",
+                    reasons.join("; ")
+                );
+            }
+        };
+
+        let mut selected_report = aggregate.clone();
+        selected_report.variants = vec![selected.clone()];
+        let mut artifact = Self::from_report(&selected_report, gate)?;
+        artifact.risk_notes.extend(multi_report_risk_notes(
+            reports,
+            selected,
+            &multi_gate,
+        ));
+        Ok(artifact)
+    }
+}
+
+fn aggregate_reports(
+    reports: &[ExperimentReport],
+    multi_gate: &MultiReportPromotionGate,
+) -> Result<ExperimentReport> {
+    if reports.len() < multi_gate.min_reports {
+        bail!(
+            "promotion rejected: report count {} below minimum {}",
+            reports.len(),
+            multi_gate.min_reports
+        );
+    }
+
+    let mut groups: BTreeMap<String, Vec<&VariantReport>> = BTreeMap::new();
+    for report in reports {
+        for variant in &report.variants {
+            groups
+                .entry(variant_key(variant))
+                .or_default()
+                .push(variant);
+        }
+    }
+
+    let mut variants = Vec::new();
+    for (_key, group) in groups {
+        if group.len() != reports.len() {
+            continue;
+        }
+        variants.push(aggregate_variant_reports(&group));
+    }
+    variants.sort_by(|a, b| {
+        b.total_pnl
+            .partial_cmp(&a.total_pnl)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let first = reports.first().context("aggregate reports requires at least one report")?;
+    let last = reports.last().unwrap_or(first);
+    let mut market_catalog = MarketCatalog::default();
+    for report in reports {
+        market_catalog
+            .markets
+            .extend(report.market_catalog.markets.clone());
+        market_catalog
+            .token_to_condition
+            .extend(report.market_catalog.token_to_condition.clone());
+    }
+
+    let mut src = DataSourceManifest::new("experiment_reports", "aggregate_backtest");
+    src.start = Some(first.start.clone());
+    src.end = Some(last.end.clone());
+    src.row_count = Some(reports.len() as u64);
+    src.complete = reports.iter().all(|r| r.data_manifest.complete);
+    src.metadata.insert(
+        "report_hashes".to_string(),
+        reports
+            .iter()
+            .map(crate::strategy::spec::stable_json_hash)
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    src.metadata
+        .insert("windows".to_string(), reports.iter().map(|r| {
+            format!("{}..{}", r.start, r.end)
+        }).collect::<Vec<_>>().join(","));
+
+    let mut notes = Vec::new();
+    for report in reports {
+        notes.extend(report.data_manifest.notes.iter().cloned());
+    }
+
+    Ok(ExperimentReport {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        label: format!("aggregate_{}d", reports.len()),
+        mode: "backtest_aggregate".to_string(),
+        start: first.start.clone(),
+        end: last.end.clone(),
+        bankroll_usd: first.bankroll_usd,
+        latency_ms: first.latency_ms,
+        market_catalog,
+        data_manifest: DataManifest::new(vec![src], notes),
+        variants,
+    })
+}
+
+fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
+    let first = group[0];
+    let trades: usize = group.iter().map(|v| v.trades).sum();
+    let wins: usize = group.iter().map(|v| v.wins).sum();
+    let losses: usize = group.iter().map(|v| v.losses).sum();
+    let unresolved_fills: usize = group.iter().map(|v| v.unresolved_fills).sum();
+    let total_pnl: f64 = group.iter().map(|v| v.total_pnl).sum();
+    let total_fees: f64 = group.iter().map(|v| v.total_fees).sum();
+    let mut by_zone: BTreeMap<String, ZoneReport> = BTreeMap::new();
+    for variant in group {
+        for (zone, stats) in &variant.by_zone {
+            let entry = by_zone.entry(zone.clone()).or_insert(ZoneReport {
+                trades: 0,
+                wins: 0,
+                losses: 0,
+                win_rate: 0.0,
+                pnl: 0.0,
+            });
+            entry.trades += stats.trades;
+            entry.wins += stats.wins;
+            entry.losses += stats.losses;
+            entry.pnl += stats.pnl;
+        }
+    }
+    for stats in by_zone.values_mut() {
+        let resolved = stats.wins + stats.losses;
+        stats.win_rate = if resolved == 0 {
+            0.0
+        } else {
+            stats.wins as f64 / resolved as f64
+        };
+    }
+    VariantReport {
+        strategy: first.strategy.clone(),
+        strategy_params: first.strategy_params.clone(),
+        trades,
+        wins,
+        losses,
+        unresolved_fills,
+        win_rate: if wins + losses == 0 {
+            0.0
+        } else {
+            wins as f64 / (wins + losses) as f64
+        },
+        total_pnl,
+        avg_pnl: if trades == 0 { 0.0 } else { total_pnl / trades as f64 },
+        total_fees,
+        sharpe_like: daily_sharpe(group),
+        by_zone,
+    }
+}
+
+fn daily_sharpe(group: &[&VariantReport]) -> f64 {
+    if group.len() < 2 {
+        return group.first().map(|v| v.sharpe_like).unwrap_or(0.0);
+    }
+    let pnls: Vec<f64> = group.iter().map(|v| v.total_pnl).collect();
+    let mean = pnls.iter().sum::<f64>() / pnls.len() as f64;
+    let variance = pnls
+        .iter()
+        .map(|p| {
+            let d = p - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / pnls.len() as f64;
+    let std = variance.sqrt();
+    if std <= f64::EPSILON {
+        0.0
+    } else {
+        mean / std
+    }
+}
+
+fn variant_key(variant: &VariantReport) -> String {
+    format!(
+        "{}:{}:{}",
+        variant.strategy.name, variant.strategy.version, variant.strategy.params_hash
+    )
+}
+
+fn matching_daily_variants<'a>(
+    reports: &'a [ExperimentReport],
+    selected: &VariantReport,
+) -> Vec<&'a VariantReport> {
+    let key = variant_key(selected);
+    reports
+        .iter()
+        .filter_map(|report| report.variants.iter().find(|v| variant_key(v) == key))
+        .collect()
+}
+
+fn multi_report_rejection_reasons(
+    reports: &[ExperimentReport],
+    selected: &VariantReport,
+    gate: &PromotionGate,
+    multi_gate: &MultiReportPromotionGate,
+) -> Vec<String> {
+    let daily = matching_daily_variants(reports, selected);
+    let mut reasons = Vec::new();
+    if daily.len() < multi_gate.min_reports {
+        reasons.push(format!(
+            "daily reports {} below minimum {}",
+            daily.len(),
+            multi_gate.min_reports
+        ));
+    }
+    let profitable = daily.iter().filter(|v| v.total_pnl > 0.0).count();
+    if profitable < multi_gate.min_profitable_reports {
+        reasons.push(format!(
+            "profitable reports {} below minimum {}",
+            profitable, multi_gate.min_profitable_reports
+        ));
+    }
+    if multi_gate.min_daily_trades > 0 {
+        if let Some(min_trades) = daily.iter().map(|v| v.trades).min() {
+            if min_trades < multi_gate.min_daily_trades {
+                reasons.push(format!(
+                    "daily trades {} below minimum {}",
+                    min_trades, multi_gate.min_daily_trades
+                ));
+            }
+        }
+    }
+    if multi_gate.max_daily_loss > 0.0 {
+        if let Some(worst) = daily
+            .iter()
+            .map(|v| v.total_pnl)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            if worst < -multi_gate.max_daily_loss {
+                reasons.push(format!(
+                    "worst daily pnl {:.4} below loss cap -{:.4}",
+                    worst, multi_gate.max_daily_loss
+                ));
+            }
+        }
+    }
+    if daily
+        .iter()
+        .any(|v| v.unresolved_fills > gate.max_unresolved_fills)
+    {
+        reasons.push(format!(
+            "one or more daily reports exceed unresolved fill maximum {}",
+            gate.max_unresolved_fills
+        ));
+    }
+    reasons
+}
+
+fn multi_report_risk_notes(
+    reports: &[ExperimentReport],
+    selected: &VariantReport,
+    multi_gate: &MultiReportPromotionGate,
+) -> Vec<String> {
+    let daily = matching_daily_variants(reports, selected);
+    let profitable = daily.iter().filter(|v| v.total_pnl > 0.0).count();
+    let worst = daily
+        .iter()
+        .map(|v| v.total_pnl)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
+    vec![format!(
+        "multi-report gate: reports={} profitable={} min_profitable={} min_daily_trades={} worst_daily_pnl={:.2}",
+        daily.len(),
+        profitable,
+        multi_gate.min_profitable_reports,
+        multi_gate.min_daily_trades,
+        worst,
+    )]
 }
 
 fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -> Vec<String> {
@@ -696,5 +1046,62 @@ mod tests {
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
         assert!(err.to_string().contains("zone primary trade share"));
+    }
+
+    #[test]
+    fn aggregate_promotion_selects_consistent_profitable_variant() {
+        let cfg = cfg();
+        let mut reports = Vec::new();
+        for (i, consistent_pnl) in [5.0, 4.0, 3.0].into_iter().enumerate() {
+            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            report.variants.push(VariantReport {
+                strategy: StrategySpec::new("s", "1", "consistent", "consistent"),
+                strategy_params: serde_json::json!({"name": "consistent"}),
+                trades: 30,
+                wins: 20,
+                losses: 10,
+                unresolved_fills: 0,
+                win_rate: 20.0 / 30.0,
+                total_pnl: consistent_pnl,
+                avg_pnl: consistent_pnl / 30.0,
+                total_fees: 0.0,
+                sharpe_like: 0.1,
+                by_zone: zone_split(16, 14),
+            });
+            report.variants.push(VariantReport {
+                strategy: StrategySpec::new("s", "1", "lucky", "lucky"),
+                strategy_params: serde_json::json!({"name": "lucky"}),
+                trades: 30,
+                wins: 20,
+                losses: 10,
+                unresolved_fills: 0,
+                win_rate: 20.0 / 30.0,
+                total_pnl: if i == 0 { 100.0 } else { -10.0 },
+                avg_pnl: 0.0,
+                total_fees: 0.0,
+                sharpe_like: 0.1,
+                by_zone: zone_split(16, 14),
+            });
+            reports.push(report);
+        }
+
+        let artifact = PromotionArtifact::from_reports(
+            &reports,
+            PromotionGate {
+                min_trades: 90,
+                ..PromotionGate::default()
+            },
+            MultiReportPromotionGate {
+                min_reports: 3,
+                min_profitable_reports: 2,
+                min_daily_trades: 30,
+                max_daily_loss: 0.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(artifact.selected_strategy.params_hash, "consistent");
+        assert_eq!(artifact.trades, 90);
+        assert_eq!(artifact.total_pnl, 12.0);
     }
 }
