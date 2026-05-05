@@ -151,6 +151,10 @@ pub struct BacktestFill {
 /// been updated (and any due fills flushed). Should return any orders the
 /// strategy wants to place at this instant.
 pub trait Strategy {
+    fn needs_l2_history(&self) -> bool {
+        true
+    }
+
     fn on_event(
         &mut self,
         timestamp_s: f64,
@@ -232,11 +236,12 @@ impl L2BacktestEngine {
         strategy: &mut S,
         default_fee_rate: f64,
     ) {
+        let needs_l2_history = strategy.needs_l2_history();
         for event in events {
             self.event_count += 1;
             let token_id = match &event.body {
-                L2EventBody::BookSnapshot(s) => s.token_id.clone(),
-                L2EventBody::PriceChange(c) => c.token_id.clone(),
+                L2EventBody::BookSnapshot(s) => s.token_id.as_str(),
+                L2EventBody::PriceChange(c) => c.token_id.as_str(),
             };
             if token_id.is_empty() {
                 continue;
@@ -246,22 +251,25 @@ impl L2BacktestEngine {
             // guard as the Python engine.
             self.flush_pending_orders(event.timestamp_s);
 
-            {
+            let mid = {
                 let book = self
                     .books
-                    .entry(token_id.clone())
-                    .or_insert_with(|| TokenBook::new(&token_id));
+                    .entry(token_id.to_string())
+                    .or_insert_with(|| TokenBook::new(token_id));
                 match &event.body {
                     L2EventBody::BookSnapshot(s) => book.apply_snapshot(s),
                     L2EventBody::PriceChange(c) => book.apply_change(c),
                 }
+                book.mid()
+            };
+            if needs_l2_history && mid > 0.0 {
+                self.record_history(token_id, event.timestamp_s, mid);
             }
-            let book_clone = self.books.get(&token_id).cloned().unwrap();
-            let mid = book_clone.mid();
-            if mid > 0.0 {
-                self.record_history(&token_id, event.timestamp_s, mid);
-            }
-            let new_orders = strategy.on_event(event.timestamp_s, &token_id, &book_clone, &self.history);
+            let book = self
+                .books
+                .get(token_id)
+                .expect("book inserted before strategy callback");
+            let new_orders = strategy.on_event(event.timestamp_s, token_id, book, &self.history);
             for mut order in new_orders {
                 if order.fee_rate == 0.0 {
                     order.fee_rate = default_fee_rate;
@@ -281,6 +289,9 @@ impl L2BacktestEngine {
     }
 
     fn flush_pending_orders(&mut self, current_ts: f64) {
+        if self.pending_orders.is_empty() {
+            return;
+        }
         let latency_s = self.latency.insert_ms as f64 / 1000.0;
         let mut still_pending: Vec<BacktestOrder> = Vec::new();
         let drained: Vec<BacktestOrder> = self.pending_orders.drain(..).collect();

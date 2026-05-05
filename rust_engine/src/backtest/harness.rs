@@ -10,7 +10,7 @@
 //! Outputs a per-variant `BacktestResults` you can format with
 //! [`render_table`].
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -59,6 +59,37 @@ impl CandleUniverse {
             .collect()
     }
 
+    pub fn condition_id_set_for_hour(&self, hour: DateTime<Utc>) -> HashSet<String> {
+        let hour_start_s = hour.timestamp() as f64;
+        let hour_end_s = hour_start_s + 3600.0;
+        self.contracts
+            .iter()
+            .filter_map(|c| {
+                let Some(close_s) = chrono::DateTime::parse_from_rfc3339(&c.end_date)
+                    .ok()
+                    .map(|d| d.timestamp() as f64)
+                else {
+                    // Preserve the old broad-filter behavior for malformed
+                    // metadata instead of silently dropping the contract.
+                    return Some(c.market.condition_id.clone());
+                };
+                let window_minutes =
+                    crate::live::window::estimate_window_minutes(&c.window_description);
+                let window_minutes = if window_minutes > 0.0 {
+                    window_minutes
+                } else {
+                    60.0
+                };
+                let open_s = close_s - window_minutes * 60.0;
+                if close_s > hour_start_s && open_s < hour_end_s {
+                    Some(c.market.condition_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn windows(&self) -> Vec<CandleWindow> {
         self.contracts
             .iter()
@@ -92,19 +123,66 @@ impl CandleUniverse {
         }
         m
     }
+
+    fn runtime_by_token_id(&self) -> BTreeMap<String, CandleRuntimeContract> {
+        let mut m = BTreeMap::new();
+        for c in &self.contracts {
+            let rc = CandleRuntimeContract::from_contract(c);
+            if !c.up_token_id.is_empty() {
+                m.insert(c.up_token_id.clone(), rc.clone());
+            }
+            if !c.down_token_id.is_empty() {
+                m.insert(c.down_token_id.clone(), rc.clone());
+            }
+        }
+        m
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CandleRuntimeContract {
+    contract: CandleContract,
+    close_ts_s: f64,
+    open_ts_s: f64,
+    window_minutes: f64,
+}
+
+impl CandleRuntimeContract {
+    fn from_contract(contract: &CandleContract) -> Self {
+        let close_ts_s = chrono::DateTime::parse_from_rfc3339(&contract.end_date)
+            .ok()
+            .map(|d| d.timestamp() as f64)
+            .unwrap_or(0.0);
+        let window_minutes =
+            crate::live::window::estimate_window_minutes(&contract.window_description);
+        let window_minutes = if window_minutes > 0.0 {
+            window_minutes
+        } else {
+            60.0
+        };
+        Self {
+            contract: contract.clone(),
+            close_ts_s,
+            open_ts_s: close_ts_s - window_minutes * 60.0,
+            window_minutes,
+        }
+    }
 }
 
 /// Strategy adapter: glues the live decision logic onto the L2 backtest engine.
 pub struct CandleBacktestStrategy {
     variant: StrategyVariant,
     strategy_spec: StrategySpec,
-    universe_by_token: BTreeMap<String, CandleContract>,
+    universe_by_token: BTreeMap<String, CandleRuntimeContract>,
     momentum: MomentumDetector,
     bankroll_usd: f64,
     btc_history: Arc<BTCHistory>,
     pub decisions: Vec<CandleDecision>,
     /// Per-condition_id flag so we only enter once per market.
     traded: HashSet<String>,
+    /// Live scans roughly every 100ms, so historical L2 bursts should not
+    /// trigger unlimited strategy decisions inside a single live-cycle bucket.
+    last_eval_bucket_by_token: HashMap<String, i64>,
     /// Last timestamp we fed into the detector — throttle add_tick to once
     /// per second to match live cadence (otherwise the 5k-tick deque rolls
     /// over in seconds at ~870 events/s and we lose window history).
@@ -118,6 +196,7 @@ pub struct CandleBacktestStrategy {
     pub skipped_no_signal: u64,
     pub skipped_decision: u64,
     pub skipped_wrong_side: u64,
+    pub skipped_throttled: u64,
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
@@ -141,12 +220,13 @@ impl CandleBacktestStrategy {
         Self {
             variant,
             strategy_spec,
-            universe_by_token: universe.by_token_id(),
+            universe_by_token: universe.runtime_by_token_id(),
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
             btc_history,
             decisions: Vec::new(),
             traded: HashSet::new(),
+            last_eval_bucket_by_token: HashMap::new(),
             last_tick_ts_s: 0.0,
             events_seen: 0,
             events_for_known_token: 0,
@@ -156,12 +236,17 @@ impl CandleBacktestStrategy {
             skipped_no_signal: 0,
             skipped_decision: 0,
             skipped_wrong_side: 0,
+            skipped_throttled: 0,
             skip_reasons: BTreeMap::new(),
         }
     }
 }
 
 impl Strategy for CandleBacktestStrategy {
+    fn needs_l2_history(&self) -> bool {
+        false
+    }
+
     fn on_event(
         &mut self,
         timestamp_s: f64,
@@ -170,32 +255,38 @@ impl Strategy for CandleBacktestStrategy {
         _history: &BTreeMap<String, Vec<(f64, f64)>>,
     ) -> Vec<BacktestOrder> {
         self.events_seen += 1;
-        let Some(contract) = self.universe_by_token.get(token_id).cloned() else {
+        let Some(runtime) = self.universe_by_token.get(token_id) else {
             return Vec::new();
         };
         self.events_for_known_token += 1;
-        let cid = contract.market.condition_id.clone();
-        if self.traded.contains(&cid) {
+        let contract = &runtime.contract;
+        let cid = contract.market.condition_id.as_str();
+        if self.traded.contains(cid) {
             return Vec::new();
         }
 
-        let close = chrono::DateTime::parse_from_rfc3339(&contract.end_date)
-            .ok()
-            .map(|d| d.timestamp() as f64)
-            .unwrap_or(0.0);
-        let parsed = crate::live::window::estimate_window_minutes(&contract.window_description);
-        let window_minutes = if parsed > 0.0 { parsed } else { 60.0 };
-        let open_ts_s = close - window_minutes * 60.0;
-        let minutes_remaining = (close - timestamp_s) / 60.0;
+        let minutes_remaining = (runtime.close_ts_s - timestamp_s) / 60.0;
         if minutes_remaining <= 0.083 || minutes_remaining > 30.0 {
             self.skipped_resolved += 1;
             return Vec::new();
         }
-        let minutes_elapsed = window_minutes - minutes_remaining;
+        let minutes_elapsed = runtime.window_minutes - minutes_remaining;
         if minutes_elapsed < 0.5 {
             self.skipped_too_early += 1;
             return Vec::new();
         }
+        let eval_bucket = (timestamp_s * 10.0).floor() as i64;
+        if self
+            .last_eval_bucket_by_token
+            .get(token_id)
+            .copied()
+            .is_some_and(|last| last == eval_bucket)
+        {
+            self.skipped_throttled += 1;
+            return Vec::new();
+        }
+        self.last_eval_bucket_by_token
+            .insert(token_id.to_string(), eval_bucket);
 
         // Maintain BTC tick history for the momentum detector. Throttle to
         // 1 Hz — the live runtime adds one tick per cycle (~2 Hz) too.
@@ -209,17 +300,17 @@ impl Strategy for CandleBacktestStrategy {
             self.last_tick_ts_s = timestamp_s;
         }
 
-        if self.momentum.get_open_price(&cid).is_none() {
-            let open_btc = self.btc_history.price_at_seconds(open_ts_s);
+        if self.momentum.get_open_price(cid).is_none() {
+            let open_btc = self.btc_history.price_at_seconds(runtime.open_ts_s);
             if open_btc <= 0.0 {
                 self.skipped_no_btc += 1;
                 return Vec::new();
             }
-            self.momentum.set_window_open(&cid, open_btc);
+            self.momentum.set_window_open(cid, open_btc);
         }
 
         let signal = match self.momentum.detect(
-            &cid,
+            cid,
             minutes_elapsed,
             minutes_remaining,
             btc,
@@ -235,14 +326,14 @@ impl Strategy for CandleBacktestStrategy {
         // Use the live book's current best ask for the up/down side prices.
         // This is conservative — the strategy entered on the same book the
         // live runtime would see.
-        let up_price = if token_id == contract.up_token_id {
+        let up_price = if token_id == contract.up_token_id.as_str() {
             book.best_ask
         } else {
             // up token's book hasn't ticked in this batch — fall back to
             // 1 - down_best_ask.
             (1.0 - book.best_ask).max(0.01)
         };
-        let down_price = if token_id == contract.down_token_id {
+        let down_price = if token_id == contract.down_token_id.as_str() {
             book.best_ask
         } else {
             (1.0 - book.best_ask).max(0.01)
@@ -253,7 +344,7 @@ impl Strategy for CandleBacktestStrategy {
             &signal,
             minutes_elapsed,
             minutes_remaining,
-            window_minutes,
+            runtime.window_minutes,
             up_price,
             down_price,
             btc,
@@ -276,9 +367,9 @@ impl Strategy for CandleBacktestStrategy {
         };
 
         let traded_token = if decision.direction == "up" {
-            contract.up_token_id.clone()
+            contract.up_token_id.as_str()
         } else {
-            contract.down_token_id.clone()
+            contract.down_token_id.as_str()
         };
         if traded_token != token_id {
             self.skipped_wrong_side += 1;
@@ -291,7 +382,7 @@ impl Strategy for CandleBacktestStrategy {
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
-        self.traded.insert(cid.clone());
+        self.traded.insert(cid.to_string());
         self.decisions.push(decision.clone());
 
         let position = (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
@@ -301,8 +392,8 @@ impl Strategy for CandleBacktestStrategy {
         }
         let size = (position / market_price).round().max(1.0);
         let signal_contract = Signal::from_candle_decision(
-            cid.clone(),
-            traded_token.clone(),
+            cid.to_string(),
+            traded_token.to_string(),
             &decision,
             serde_json::json!({
                 "zone": decision.zone,
@@ -326,8 +417,8 @@ impl Strategy for CandleBacktestStrategy {
         vec![BacktestOrder {
             intent_id: intent.intent_id,
             timestamp_s,
-            condition_id: cid,
-            token_id: traded_token,
+            condition_id: cid.to_string(),
+            token_id: traded_token.to_string(),
             side: "buy".into(),
             size,
             order_type: "market".into(),
@@ -412,7 +503,7 @@ pub async fn run_harness(
     variants: &[StrategyVariant],
 ) -> Result<Vec<HarnessRun>> {
     let loader = PMXTv2Loader::new(&cfg.cache_dir);
-    let token_filter = cfg.universe.condition_id_set();
+    let all_condition_ids = cfg.universe.condition_id_set();
     let windows = cfg.universe.windows();
 
     // Optional bounded rayon pool. `None` → use the global pool (which respects
@@ -452,6 +543,11 @@ pub async fn run_harness(
             hours_done.insert(h);
         }
         if !hours_done.is_empty() {
+            eprintln!(
+                "harness: resumed {} checkpointed hour(s) from {}",
+                hours_done.len(),
+                dir.display(),
+            );
             tracing::info!(
                 resumed = hours_done.len(),
                 dir = %dir.display(),
@@ -485,12 +581,27 @@ pub async fn run_harness(
             break;
         }
         if hours_done.contains(&h) {
+            eprintln!(
+                "harness: hour {}/{} {} skipped (checkpoint exists)",
+                i + 1,
+                total_hours,
+                h,
+            );
             tracing::info!(hour = %h, "skipped (checkpoint exists)");
             continue;
         }
 
         loader.download_hour(h, false).await?;
         let load_t0 = std::time::Instant::now();
+        let hour_filter = cfg.universe.condition_id_set_for_hour(h);
+        eprintln!(
+            "harness: hour {}/{} {} loading {} overlapping condition_id(s) ({} total)",
+            i + 1,
+            total_hours,
+            h,
+            hour_filter.len(),
+            all_condition_ids.len(),
+        );
 
         // Reader fallback chain: shared distilled → per-tenant sidecar → parquet.
         let mut events_vec: Vec<L2Event> = Vec::new();
@@ -500,7 +611,7 @@ pub async fn run_harness(
             if path.exists() {
                 match crate::backtest::distill::read_distilled(&path) {
                     Ok((mut shared_events, _)) => {
-                        shared_events.retain(|e| token_filter.contains(&e.market_id));
+                        shared_events.retain(|e| hour_filter.contains(&e.market_id));
                         events_vec = shared_events;
                         source = "shared_distilled";
                     }
@@ -511,21 +622,31 @@ pub async fn run_harness(
             }
         }
         if events_vec.is_empty() {
-            events_vec = loader.load_with_sidecar(h, &token_filter)?;
+            events_vec = loader.load_with_sidecar(h, &hour_filter)?;
         }
         events_vec.sort_by(|a, b| {
             a.timestamp_s
                 .partial_cmp(&b.timestamp_s)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        let load_ms = load_t0.elapsed().as_millis() as u64;
         // Wrap in Arc so all variant tasks share the same buffer (no per-task
         // copy of the ~16 MB event vector).
         let events: Arc<Vec<L2Event>> = Arc::new(events_vec);
+        eprintln!(
+            "harness: hour {}/{} {} loaded {} event(s) from {} in {:.2}s",
+            i + 1,
+            total_hours,
+            h,
+            events.len(),
+            source,
+            load_ms as f64 / 1000.0,
+        );
         tracing::info!(
             hour = %h,
             events = events.len(),
-            cids = token_filter.len(),
-            elapsed_ms = load_t0.elapsed().as_millis() as u64,
+            cids = hour_filter.len(),
+            elapsed_ms = load_ms,
             source,
             "L2 events loaded",
         );
@@ -580,9 +701,20 @@ pub async fn run_harness(
             acc.unresolved_fills.extend(hour_res.unresolved_fills);
         }
         hours_done.insert(h);
+        let replay_ms = replay_t0.elapsed().as_millis() as u64;
+        eprintln!(
+            "harness: hour {}/{} {} replayed {} variant(s) in {:.2}s (done {}/{})",
+            i + 1,
+            total_hours,
+            h,
+            variants.len(),
+            replay_ms as f64 / 1000.0,
+            hours_done.len(),
+            total_hours,
+        );
         tracing::info!(
             hour = %h,
-            replay_ms = replay_t0.elapsed().as_millis() as u64,
+            replay_ms = replay_ms,
             variants = variants.len(),
             threads = effective_threads,
             done = hours_done.len(),
@@ -886,6 +1018,22 @@ mod tests {
             assert_eq!(s.variant.name, p.variant.name);
             assert_eq!(s.results.n_trades(), p.results.n_trades());
         }
+    }
+
+    #[test]
+    fn condition_id_set_for_hour_filters_to_overlapping_windows() {
+        let (cfg, _) = synthetic_cfg();
+        let active_hour = chrono::DateTime::parse_from_rfc3339("2026-04-26T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let inactive_hour = chrono::DateTime::parse_from_rfc3339("2026-04-26T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let active = cfg.universe.condition_id_set_for_hour(active_hour);
+        assert!(active.contains("0xabc"));
+        let inactive = cfg.universe.condition_id_set_for_hour(inactive_hour);
+        assert!(!inactive.contains("0xabc"));
     }
 
     #[test]

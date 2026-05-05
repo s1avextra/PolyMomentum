@@ -263,6 +263,16 @@ enum Command {
         /// Variant-fan-out thread count (see harness-sweep --threads).
         #[arg(long, default_value_t = 0)]
         threads: usize,
+        /// Pause/resume checkpoint dir. Per-hour `<hour>.json` files are
+        /// written after each hour completes; touch `<dir>/PAUSE` (or send
+        /// SIGINT) for a clean exit between hours.
+        #[arg(long)]
+        checkpoint: Option<String>,
+        /// Acknowledge an existing checkpoint dir and continue. Without
+        /// this flag, a non-empty checkpoint dir aborts the run to avoid
+        /// silently mixing two runs' results.
+        #[arg(long, default_value_t = false)]
+        resume: bool,
         /// Cap the BTC candle universe for short resource-friendly diagnostics.
         #[arg(long)]
         max_contracts: Option<usize>,
@@ -552,11 +562,13 @@ async fn main() {
             btc_csv,
             latency_ms,
             threads,
+            checkpoint,
+            resume,
             max_contracts,
             allow_gamma_fetch,
             report_json,
         } => {
-            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, max_contracts, allow_gamma_fetch, report_json.as_deref()).await;
+            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, checkpoint.as_deref(), resume, max_contracts, allow_gamma_fetch, report_json.as_deref()).await;
         }
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
@@ -1694,6 +1706,8 @@ async fn cmd_harness(
     btc_csv: Option<&str>,
     latency_ms: u64,
     threads: usize,
+    checkpoint: Option<&str>,
+    resume: bool,
     max_contracts: Option<usize>,
     allow_gamma_fetch: bool,
     report_json: Option<&str>,
@@ -1903,6 +1917,49 @@ async fn cmd_harness(
             if p.exists() { Some(backtest::distill::SHARED_CACHE_DIR.to_string()) } else { None }
         })
         .map(std::path::PathBuf::from);
+    let checkpoint_dir = if let Some(p) = checkpoint {
+        let path = std::path::PathBuf::from(p);
+        if path.is_dir() {
+            let has_state = std::fs::read_dir(&path)
+                .map(|it| {
+                    it.flatten().any(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .ends_with(".json")
+                    })
+                })
+                .unwrap_or(false);
+            if has_state && !resume {
+                eprintln!(
+                    "checkpoint dir {} contains existing state; pass --resume to continue, \
+                     or pick a fresh dir to start over.",
+                    path.display(),
+                );
+                std::process::exit(2);
+            }
+        } else if path.exists() {
+            eprintln!("--checkpoint {} exists but isn't a directory", path.display());
+            std::process::exit(2);
+        }
+        Some(path)
+    } else {
+        None
+    };
+    let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let f = stop_flag.clone();
+        tokio::spawn(async move {
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM");
+            let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("install SIGINT");
+            tokio::select! {
+                _ = term.recv() => tracing::warn!("SIGTERM received — harness will pause after current hour"),
+                _ = int.recv() => tracing::warn!("SIGINT received — harness will pause after current hour"),
+            }
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
     let cfg = backtest::harness::HarnessConfig {
         hours,
         universe,
@@ -1912,10 +1969,8 @@ async fn cmd_harness(
         latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
-        // The default-variants harness is fast; checkpointing is exposed only
-        // on `harness-sweep`. Setting these to None here is intentional.
-        checkpoint_dir: None,
-        stop_flag: None,
+        checkpoint_dir: checkpoint_dir.clone(),
+        stop_flag: Some(stop_flag),
     };
 
     let variants = backtest::strategies::default_variants();
@@ -1925,6 +1980,9 @@ async fn cmd_harness(
         variants.len(),
         cfg.hours.len(),
     );
+    if let Some(d) = &checkpoint_dir {
+        eprintln!("harness: checkpoint dir {}", d.display());
+    }
     match backtest::harness::run_harness(&cfg, &variants).await {
         Ok(runs) => {
             if let Some(path) = report_json {
