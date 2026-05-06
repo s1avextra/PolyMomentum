@@ -24,6 +24,9 @@ pub struct SessionDiagnostics {
     pub event_counts: BTreeMap<String, u64>,
     pub signals: SignalDiagnostics,
     pub orders: OrderDiagnostics,
+    pub resolutions: ResolutionDiagnostics,
+    pub oracle: OracleDiagnostics,
+    pub risk: RiskDiagnostics,
     pub system: SystemDiagnostics,
     pub warnings: Vec<String>,
 }
@@ -64,6 +67,34 @@ pub struct OrderDiagnostics {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct ResolutionDiagnostics {
+    pub resolved: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub total_pnl: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct OracleDiagnostics {
+    pub checks: u64,
+    pub disagreements: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RiskDiagnostics {
+    pub snapshots: u64,
+    pub first_bankroll: Option<f64>,
+    pub last_bankroll: Option<f64>,
+    pub first_realized_pnl: Option<f64>,
+    pub last_realized_pnl: Option<f64>,
+    pub first_wins: Option<u64>,
+    pub first_losses: Option<u64>,
+    pub last_wins: Option<u64>,
+    pub last_losses: Option<u64>,
+    pub max_positions: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SystemDiagnostics {
     pub errors: u64,
     pub fatal_errors: u64,
@@ -91,6 +122,9 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
         event_counts: BTreeMap::new(),
         signals: SignalDiagnostics::default(),
         orders: OrderDiagnostics::default(),
+        resolutions: ResolutionDiagnostics::default(),
+        oracle: OracleDiagnostics::default(),
+        risk: RiskDiagnostics::default(),
         system: SystemDiagnostics::default(),
         warnings: Vec::new(),
     };
@@ -117,6 +151,9 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("order", "placed") => record_order_placed(&mut out, &v),
             ("order", "filled") => record_order_filled(&mut out, &v),
             ("order", "rejected") => out.orders.rejected += 1,
+            ("resolution", "resolved") => record_resolution(&mut out, &v),
+            ("oracle", "resolution") => record_oracle_resolution(&mut out, &v),
+            ("risk", "state") => record_risk_state(&mut out, &v),
             _ => {}
         }
     }
@@ -212,22 +249,37 @@ fn record_release_manifest(out: &mut SessionDiagnostics, v: &Value) {
 
 fn record_system_error(out: &mut SessionDiagnostics, v: &Value) {
     out.system.errors += 1;
-    if !v.get("recoverable").and_then(|x| x.as_bool()).unwrap_or(true) {
+    if !v
+        .get("recoverable")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(true)
+    {
         out.system.fatal_errors += 1;
     }
     if out.system.first_errors.len() < 10 {
-        let component = v.get("component").and_then(|x| x.as_str()).unwrap_or("unknown");
+        let component = v
+            .get("component")
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown");
         let error = v.get("error").and_then(|x| x.as_str()).unwrap_or("");
-        out.system.first_errors.push(format!("{component}: {error}"));
+        out.system
+            .first_errors
+            .push(format!("{component}: {error}"));
     }
 }
 
 fn record_signal_evaluation(out: &mut SessionDiagnostics, v: &Value) {
     out.signals.evaluations += 1;
-    if v.get("decision_trade").and_then(|x| x.as_bool()).unwrap_or(false) {
+    if v.get("decision_trade")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
         out.signals.decision_trades += 1;
     }
-    if v.get("execution_attempted").and_then(|x| x.as_bool()).unwrap_or(false) {
+    if v.get("execution_attempted")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
         out.signals.execution_attempted += 1;
     }
     if v.get("traded").and_then(|x| x.as_bool()).unwrap_or(false) {
@@ -256,6 +308,44 @@ fn record_order_filled(out: &mut SessionDiagnostics, v: &Value) {
     if missing_string(v, "intent_id") {
         out.orders.missing_intent_id += 1;
     }
+}
+
+fn record_resolution(out: &mut SessionDiagnostics, v: &Value) {
+    out.resolutions.resolved += 1;
+    if v.get("won").and_then(|x| x.as_bool()).unwrap_or(false) {
+        out.resolutions.wins += 1;
+    } else {
+        out.resolutions.losses += 1;
+    }
+    out.resolutions.total_pnl += v.get("pnl").and_then(|x| x.as_f64()).unwrap_or(0.0);
+}
+
+fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
+    out.oracle.checks += 1;
+    if !v.get("agreed").and_then(|x| x.as_bool()).unwrap_or(true) {
+        out.oracle.disagreements += 1;
+    }
+}
+
+fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
+    out.risk.snapshots += 1;
+    let bankroll = v.get("bankroll").and_then(|x| x.as_f64());
+    let realized_pnl = v.get("realized_pnl").and_then(|x| x.as_f64());
+    let wins = v.get("wins").and_then(|x| x.as_u64());
+    let losses = v.get("losses").and_then(|x| x.as_u64());
+    let positions = v.get("positions").and_then(|x| x.as_u64()).unwrap_or(0);
+
+    if out.risk.first_bankroll.is_none() {
+        out.risk.first_bankroll = bankroll;
+        out.risk.first_realized_pnl = realized_pnl;
+        out.risk.first_wins = wins;
+        out.risk.first_losses = losses;
+    }
+    out.risk.last_bankroll = bankroll;
+    out.risk.last_realized_pnl = realized_pnl;
+    out.risk.last_wins = wins;
+    out.risk.last_losses = losses;
+    out.risk.max_positions = out.risk.max_positions.max(positions);
 }
 
 fn missing_string(v: &Value, key: &str) -> bool {
@@ -296,6 +386,22 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.orders.placed_missing_state
         ));
     }
+    if out.orders.rejected > 0 {
+        out.warnings
+            .push(format!("{} rejected order event(s)", out.orders.rejected));
+    }
+    if out.resolutions.resolved > out.orders.filled {
+        out.warnings.push(format!(
+            "{} resolution event(s) but only {} filled order event(s); session may include restored paper state",
+            out.resolutions.resolved, out.orders.filled
+        ));
+    }
+    if out.oracle.disagreements > 0 {
+        out.warnings.push(format!(
+            "{} oracle disagreement(s) between local resolution and Polymarket",
+            out.oracle.disagreements
+        ));
+    }
     if out.system.fatal_errors > 0 {
         out.warnings
             .push(format!("{} fatal system error(s)", out.system.fatal_errors));
@@ -310,6 +416,9 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.signals.missing_replay_fields == 0
         && out.orders.missing_intent_id == 0
         && out.orders.placed_missing_state == 0
+        && out.orders.rejected == 0
+        && out.resolutions.resolved <= out.orders.filled
+        && out.oracle.disagreements == 0
         && out.system.fatal_errors == 0;
 }
 
@@ -367,6 +476,74 @@ mod tests {
         assert_eq!(diag.promotion_strategy_hash.as_deref(), Some("strategy"));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);
+    }
+
+    #[test]
+    fn session_diagnostics_flags_restored_resolution_and_oracle_disagreement() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "order",
+                "type": "filled",
+                "intent_id": "intent_1"
+            }),
+            serde_json::json!({
+                "cat": "resolution",
+                "type": "resolved",
+                "won": true,
+                "pnl": 1.0
+            }),
+            serde_json::json!({
+                "cat": "resolution",
+                "type": "resolved",
+                "won": false,
+                "pnl": -1.0
+            }),
+            serde_json::json!({
+                "cat": "oracle",
+                "type": "resolution",
+                "agreed": false
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(!diag.ok);
+        assert_eq!(diag.resolutions.resolved, 2);
+        assert_eq!(diag.oracle.disagreements, 1);
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("restored paper state")));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("oracle disagreement")));
     }
 
     #[test]
