@@ -236,6 +236,159 @@ The current running session must be treated as invalid for live-readiness
 because it was started before oracle correction landed. Restart the clean clock
 after deploying the correction binary and resetting paper state.
 
+## Oracle-Correction Deployment
+
+CI artifact commit `97483cbfc80aa390b0a282c537e402b55fb1dc36` was deployed to
+the VPS in paper mode after the oracle-PnL reconciliation fix:
+
+- Artifact SHA256:
+  `2ea0a253794a0123228f7829b21fd3ecfc5a1b40006e6c1b129ddcfad3715e20`
+- Build timestamp: `2026-05-06T08:02:11Z`
+- Promotion artifact hash unchanged:
+  `3691ff1d390821e73b44e951470420924e95a43f6d6c554f76c5e748a6c82b26`
+
+The first post-deploy restart produced a non-trustworthy baseline because the
+service was active around the DB reset. A hard stop/reset/start was then run
+against PolyMomentum only:
+
+- Backup:
+  `/opt/polymomentum/logs/candle/state.db.bak.paper_oracle_correction_clean_retry.20260506T081315Z`
+- Fresh session:
+  `/opt/polymomentum/logs/sessions/session_20260506_081315.jsonl`
+- State DB counts before start and after the initial check:
+  `trades=0`, `paper_positions=0`, `oracle_pending=0`, `state=0`
+- First strict diagnostics:
+  - `ok=true`
+  - first bankroll: `100.0`
+  - first realized PnL: `0.0`
+  - orders: `0 placed / 0 filled / 0 rejected`
+  - oracle disagreements/corrections: `0 / 0`
+  - warnings: `[]`
+
+Manual low-impact soak after the clean restart:
+
+- Report: `/opt/polymomentum/logs/soak/soak_20260506T081445Z.json`
+- Local copy:
+  `logs/soak_evidence/20260506_oracle_correction_clean/soak_20260506T081445Z.json`
+- Session snapshot:
+  `logs/soak_evidence/20260506_oracle_correction_clean/session_20260506_081315_snapshot.jsonl`
+- Session SHA256:
+  `789ef386658f321236a492689cda354ac74ec6b326052e11f62cbc759bcf7b05`
+- Soak `ok=true`
+- Replay exit: `0`
+- Current-code local replay: `total=366 mismatches=0 (0.00%)`
+- Current-code strict diagnostics:
+  - `ok=true`
+  - events: `753`
+  - signal evaluations/skips: `366 / 366`
+  - orders/resolutions/oracle checks: `0 / 0 / 0`
+  - first/last bankroll: `100.0 / 100.0`
+  - warnings: `[]`
+
+Second manual low-impact soak after the same clean restart captured the first
+oracle-correction-build trade:
+
+- Report: `/opt/polymomentum/logs/soak/soak_20260506T082735Z.json`
+- Local copy:
+  `logs/soak_evidence/20260506_oracle_correction_clean/soak_20260506T082735Z.json`
+- Session snapshot:
+  `logs/soak_evidence/20260506_oracle_correction_clean/session_20260506_081315_082735_snapshot.jsonl`
+- Session SHA256:
+  `eb4809142f04611423f94b5451752bdb81888e7cfb18579cbae64ce69089621e`
+- Soak `ok=true`
+- Soak replay exit: `0`
+- Soak replay: `total=2501 mismatches=0 (0.00%)`
+- Soak diagnostics:
+  - orders: `1 placed / 1 filled / 0 rejected`
+  - resolutions: `1`, wins/losses `1 / 0`, PnL `+7.4087`
+  - oracle checks/disagreements/corrections: `1 / 0 / 0`
+  - first/last bankroll: `100.0 / 107.41`
+  - warnings: `[]`
+- Current-code local replay on the later copied snapshot:
+  `total=2577 mismatches=0 (0.00%)`
+- Current-code local diagnostics on the later copied snapshot:
+  - `ok=true`
+  - events: `5274`
+  - orders/resolutions/oracle checks: `1 / 1 / 1`
+  - last realized PnL: `+7.41`
+  - warnings: `[]`
+
+Resource coexistence check:
+
+- Peer services remained active: `adgts`, `polyarbitrage`,
+  `polyarbitrage-collector`.
+- PolyMomentum service resource controls:
+  `CPUQuotaPerSecUSec=800ms`, `MemoryMax=512M`, `TasksMax=256`, `Nice=5`.
+- A peer `strategy-finder` process was visible from process metadata using about
+  one CPU core. It was not inspected beyond process metadata and was not
+  touched.
+
+The live-readiness paper clock restarts from the clean oracle-correction
+session at `2026-05-06T08:13:15Z`.
+
+## Promoted Cached Replay Parity
+
+Cached live-replay exposed a transition gap: paper/live loaded the promoted
+`maker_first` artifact, while `live-replay` rebuilt a strategy only from
+environment settings. That made cached replay useful for plumbing, but not a
+true proof of the promoted strategy handoff.
+
+Code fix:
+
+- `live-replay` now accepts `--promotion-artifact`.
+- `ReplayStrategy::load` validates and loads the same promoted
+  `StrategyVariant` hash used by paper/live.
+- The release manifest in replay now carries the promoted hash/source.
+
+Verification:
+
+```bash
+cargo test --manifest-path rust_engine/Cargo.toml --locked --lib
+```
+
+Result: `135 passed`.
+
+Promoted cached live-replay, local dev box only:
+
+- Command window: `2026-04-25T10:00:00Z`
+- Cache: `data/pmxt_cache`
+- BTC tape: `/private/tmp/pm_btc_ticks_20260425.csv`
+- Contracts cap: `5`
+- Promotion artifact:
+  `logs/experiments/promotion_20260425T00_23_livecadence.json`
+- Report:
+  `logs/experiments/live_replay_20260506_promoted/live_replay_report_20260425T10_max5_maker_first.json`
+- Session:
+  `logs/experiments/live_replay_20260506_promoted/session_20260506_082302.jsonl`
+- Report SHA256:
+  `489791fb5df0908ead618ae6d984f4f39e9e5030fa1348dd67c095295ae7a282`
+- Diagnostics SHA256:
+  `bfdeed899dd7f9eef956764315ab790e536775223f1abf46be5b663df05379c2`
+- Strategy/source:
+  `maker_first`,
+  `promotion:logs/experiments/promotion_20260425T00_23_livecadence.json`
+- PMXT events loaded/processed: `911400 / 911400`
+- Session diagnostics:
+  - `ok=true`
+  - signal evaluations: `715788`
+  - orders: `1 placed / 1 filled / 0 rejected`
+  - replay: `total=715788 mismatches=0 (0.00%)`
+  - fill price: `0.87`, fees: `0.0`
+
+Matching capped L2 harness, same hour/contracts/cache:
+
+- Report:
+  `logs/experiments/backtest_parity_20260506/harness_20260425T10_max5_oracle_correction.json`
+- Report SHA256:
+  `2f84066dac8ddeca660ff43865b6d282e7d800d7d7c9017c9ffa67203c1c5152`
+- `maker_first`: `1` trade, `1` win, `0` losses, `+1.43` PnL, `0.0` fees,
+  zone `primary`.
+
+Interpretation: the promoted cached-feed replay and the backtest harness now
+agree on the order/fill economics for this capped sample. This is a parity
+smoke, not statistical proof; the same promoted bridge should be rerun over
+larger cached windows on the dev box.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
@@ -261,17 +414,21 @@ Result: `4 passed`.
 ## Decision
 
 We can move on from the original 16h runtime soak into strategy/parity work, but
-the live-readiness clock must restart from the clean session at
-`2026-05-06T05:40:27Z`.
+the live-readiness clock must restart from the clean oracle-correction session
+at `2026-05-06T08:13:15Z`.
 
 Next steps:
 
-1. Let the clean paper session produce its next soak report.
-2. Run strict diagnostics locally on that clean report/session until the VPS
-   binary with the hardened diagnostics is deployed.
+1. Let the clean oracle-correction paper session produce its next scheduled
+   soak report.
+2. Run strict diagnostics locally on that clean report/session and confirm that
+   oracle corrections, if any, adjust realized PnL instead of leaving
+   unresolved disagreements.
 3. Treat the terminal-zone concentration as a strategy research issue before
    live: paper holdout showed stronger performance than the original backtest,
    but with slightly higher terminal concentration.
-4. Do exact same-window archive replay only after May 5/6 PMXT archive data is
+4. Expand the promoted cached-replay/backtest parity from the capped
+   `2026-04-25T10` smoke to multi-hour cached windows on the dev box.
+5. Do exact same-window archive replay only after May 5/6 PMXT archive data is
    available locally or in the shared cache. As of this checkpoint, neither
    local nor shared cache had May 5/6 archive files.

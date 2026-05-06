@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
@@ -28,7 +28,7 @@ use crate::strategy::decision::{decide_candle_trade, DEFAULT_MIN_CONFIDENCE, DEF
 use crate::strategy::decision::{CandleDecision, DecisionResult, ZoneConfig};
 use crate::strategy::microstructure::{BookLevelView, BookMicrostructure, MicrostructureConfig};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
-use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
+use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
 #[derive(Clone)]
 pub struct LiveReplayConfig {
@@ -51,6 +51,38 @@ pub struct ReplayStrategy {
 }
 
 impl ReplayStrategy {
+    pub fn load(settings: &Settings) -> Result<Self> {
+        let path = settings.promotion_artifact_path.trim();
+        if path.is_empty() {
+            return Ok(Self::from_settings(settings));
+        }
+
+        let artifact = crate::backtest::experiment::read_promotion(path)
+            .with_context(|| format!("load promotion artifact {path}"))?;
+        if artifact.selected_strategy.name != "candle_momentum" {
+            bail!(
+                "unsupported promoted strategy {}",
+                artifact.selected_strategy.name
+            );
+        }
+        let variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
+            .context("parse promoted strategy_params as StrategyVariant")?;
+        let params_hash = stable_json_hash(&variant);
+        if params_hash != artifact.selected_strategy.params_hash {
+            bail!(
+                "promotion artifact hash mismatch: strategy_params hash {} != selected_strategy hash {}",
+                params_hash,
+                artifact.selected_strategy.params_hash
+            );
+        }
+
+        Ok(Self {
+            variant,
+            strategy_spec: artifact.selected_strategy,
+            source: format!("promotion:{path}"),
+        })
+    }
+
     pub fn from_settings(settings: &Settings) -> Self {
         let zone_config = ZoneConfig::from_settings(settings);
         let mut variant = StrategyVariant::baseline();
@@ -656,5 +688,52 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let monitor = Arc::new(SessionMonitor::open(tmp.path()).unwrap());
         assert!(monitor.events_path().exists());
+    }
+
+    #[test]
+    fn replay_strategy_loads_promotion_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("promotion.json");
+        let variant = StrategyVariant::maker_first();
+        let strategy_spec = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            &variant,
+            format!(
+                "position_pct={:.4};max_per_market_usd={:.2}",
+                variant.position_pct, variant.max_per_market_usd
+            ),
+        );
+        let artifact = crate::backtest::experiment::PromotionArtifact {
+            schema_version: 1,
+            created_at: "2026-05-06T00:00:00Z".to_string(),
+            source_report_hash: "source".to_string(),
+            source_label: "unit".to_string(),
+            source_window: "2026-04-25T10:00:00Z..2026-04-25T10:00:00Z".to_string(),
+            selected_strategy: strategy_spec.clone(),
+            strategy_params: serde_json::to_value(&variant).unwrap(),
+            data_manifest_hash: "manifest".to_string(),
+            market_count: 1,
+            trades: 30,
+            win_rate: 0.7,
+            total_pnl: 10.0,
+            avg_pnl: 0.33,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            dominant_zone: None,
+            dominant_zone_trade_share: None,
+            risk_notes: Vec::new(),
+            promotion_gate: crate::backtest::experiment::PromotionGate::default(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+        let replay = ReplayStrategy::load(&settings).unwrap();
+
+        assert_eq!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
+        assert_eq!(replay.variant.name, "maker_first");
+        assert!(replay.variant.prefer_maker);
+        assert!(replay.source.starts_with("promotion:"));
     }
 }

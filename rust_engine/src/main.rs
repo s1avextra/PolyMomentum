@@ -88,6 +88,9 @@ enum Command {
         /// Cap the BTC candle universe for short resource-friendly diagnostics.
         #[arg(long)]
         max_contracts: Option<usize>,
+        /// Promotion artifact JSON to replay the same strategy as paper/live.
+        #[arg(long)]
+        promotion_artifact: Option<String>,
     },
     /// Run startup checks without opening market-data or order connections.
     Preflight {
@@ -497,7 +500,10 @@ async fn main() {
             allow_download,
             allow_gamma_fetch,
             max_contracts,
+            promotion_artifact,
         } => {
+            let mut settings = settings.clone();
+            apply_promotion_override(&mut settings, promotion_artifact);
             cmd_live_replay(
                 &settings,
                 &start,
@@ -902,7 +908,13 @@ async fn cmd_live_replay(
         session_log_dir,
         latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
         shared_distilled_dir: shared_dir,
-        strategy: live::replay::ReplayStrategy::from_settings(settings),
+        strategy: match live::replay::ReplayStrategy::load(settings) {
+            Ok(strategy) => strategy,
+            Err(e) => {
+                eprintln!("live-replay strategy load failed: {e:#}");
+                std::process::exit(2);
+            }
+        },
     };
     match live::replay::run_live_replay(cfg, settings).await {
         Ok(report) => {
