@@ -89,6 +89,34 @@ Fresh clean strict diagnostics:
 - First realized PnL: `0.0`
 - Warnings: `[]`
 
+## Hardened Binary Deployed
+
+After CI built commit `412a04184ae150b343e570c2cefd2c8bcfb91a2f`, deployed
+the Linux x86_64 artifact to the VPS:
+
+- Artifact SHA256:
+  `a9770281ee2f3db181ac4dd646b77d136cd1de1827006b81b9ec5b4d9e8a8cf6`
+- Build timestamp: `2026-05-06T05:48:05Z`
+- Deployment mode: `paper`
+- Promotion artifact unchanged:
+  `3691ff1d390821e73b44e951470420924e95a43f6d6c554f76c5e748a6c82b26`
+
+To make the next soak window strict and unambiguous, reset the PolyMomentum DB
+again after deployment:
+
+- Backup:
+  `/opt/polymomentum/logs/candle/state.db.bak.paper_clean3_after_diag_deploy.20260506T071711Z`
+- Fresh deployed session:
+  `/opt/polymomentum/logs/sessions/session_20260506_071712.jsonl`
+- First strict diagnostics after risk snapshots:
+  - `ok=true`
+  - first bankroll: `100.0`
+  - first realized PnL: `0.0`
+  - orders: `0 placed / 0 filled / 0 rejected`
+  - resolutions: `0`
+  - oracle disagreements: `0`
+  - warnings: `[]`
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
