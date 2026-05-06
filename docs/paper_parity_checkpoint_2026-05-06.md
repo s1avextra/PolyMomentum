@@ -463,6 +463,81 @@ treated as invalid for live-readiness. After this guard is built by CI and
 deployed, restart only PolyMomentum with a clean paper DB; do not touch peer
 bot services or private directories.
 
+## Settlement-Cutoff Deployment
+
+Commit `41d3f9edef535c8a4e542e66e00a272a6ffe6e5b` was pushed on
+`codex/audit1` and CI run `25432551837` completed successfully. The GitHub
+artifact metadata was visible, but the artifact zip endpoint required
+authentication from this environment, so deployment used a one-off VPS fallback
+build:
+
+- Build source: public branch `codex/audit1`
+- Commit check: exact SHA `41d3f9edef535c8a4e542e66e00a272a6ffe6e5b`
+- Build command: `nice -n 10 cargo build --release -j 1 --bin
+  polymomentum-engine`
+- Build duration: `15m 52s`
+- Build SHA256:
+  `dfda9a0f785d85beea4227ef4ae85d7291a78bb2e8df41ca9d09a8e63de8679d`
+- Build temp dir: `/tmp/pm_build_41d3f9e.zlnbhK`
+- Cleanup: temp build dir and `/tmp/polymomentum-engine-41d3f9e` removed
+  after deploy; disk returned to about `4.2G` free.
+
+The build was intentionally single-job and low-priority. No other Rust build was
+visible before starting it, and peer services stayed active.
+
+Deploy:
+
+- Mode: `paper`
+- Binary path: `/opt/polymomentum/polymomentum-engine`
+- Deployed git SHA: `41d3f9edef535c8a4e542e66e00a272a6ffe6e5b`
+- Build timestamp: `2026-05-06T13:45:14Z`
+- Preflight: `ok=true`
+- PolyMomentum resource controls after restart:
+  `CPUQuotaPerSecUSec=800ms`, `MemoryMax=536870912`, `TasksMax=256`
+
+Clean paper reset after deploy:
+
+- Backup:
+  `/opt/polymomentum/logs/candle/state.db.bak.paper_settlement_cutoff_clean.20260506T140356Z`
+- Fresh session:
+  `/opt/polymomentum/logs/sessions/session_20260506_140356.jsonl`
+- Peer services active after reset:
+  `adgts`, `polyarbitrage`, `polyarbitrage-collector`,
+  `polymomentum-engine`
+
+First post-cutoff short paper loop:
+
+- Soak report:
+  `/opt/polymomentum/logs/soak/soak_20260506T140749Z.json`
+- Local evidence:
+  `logs/soak_evidence/20260506_settlement_cutoff_clean/`
+- Soak report SHA256:
+  `a87af5fd58f1d8e36884db2b3c2dd3809b4ab00f78b15d0db8c861b89a8cc3c4`
+- Session snapshot SHA256:
+  `dfca8a91199c913911ff7ec52f8d9bd4d40218d4dd096391005ab274cd4fc4fe`
+- Local diagnostics SHA256:
+  `cb613ab57f7d3d1cf599e012ed80116e18ea22391ed571f70226037973bcad2e`
+- Local replay SHA256:
+  `7e980ed7e6898e08bba81030a2f1c8f575237ce0cdfae1c2ca9accbeadd47b7e`
+
+Local strict diagnostics on the copied session snapshot:
+
+- `ok=true`
+- Events: `5318`
+- Signal evaluations/skips: `2638 / 2637`
+- Orders: `1 placed / 1 filled / 0 rejected`
+- Resolutions: `1`, wins/losses `1 / 0`, PnL `+11.0737`
+- Oracle checks/disagreements/corrections: `1 / 0 / 0`
+- Near-threshold resolutions: `0`
+- Minimum absolute BTC move: `$148.68`
+- First/last bankroll: `100.0 / 111.07`
+- Warnings: `[]`
+- Replay: `total=2638 mismatches=0 (0.00%)`
+
+Interpretation: the first post-cutoff production loop is green, including
+paper lifecycle, replay parity, oracle settlement, and peer coexistence. This is
+a deployment and plumbing acceptance check, not a long statistical soak.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
