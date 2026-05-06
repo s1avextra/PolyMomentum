@@ -155,6 +155,47 @@ This is not statistically sufficient, but it confirms that the post-deploy
 clean baseline is instrumented correctly and that the promoted strategy is
 producing replayable paper orders without terminal-zone concentration so far.
 
+## Second Hardened Soak Evidence
+
+Manual low-impact soak at `2026-05-06T07:48:51Z`, before the scheduled timer
+report:
+
+- Report: `/opt/polymomentum/logs/soak/soak_20260506T074851Z.json`
+- Local copy:
+  `logs/soak_evidence/20260506_hardened_clean/soak_20260506T074851Z.json`
+- Session snapshot:
+  `logs/soak_evidence/20260506_hardened_clean/session_20260506_071712_074851_snapshot.jsonl`
+- Session SHA256:
+  `4493fdee58a5ef11761e51011fdd2b94173c4079b13569a3cac8f0d91a9f118a`
+- Soak `ok=true`
+- Replay exit: `0`
+- Local replay: `total=8585 mismatches=0 (0.00%)`
+- Peer services active: `adgts`, `polyarbitrage`,
+  `polyarbitrage-collector`
+
+Strict diagnostics on the local snapshot:
+
+- `ok=true`
+- Events: `17450`
+- Orders: `9 placed / 9 filled / 0 rejected`
+- Resolved trades: `8`
+- Wins / losses: `7 / 1`
+- Oracle disagreements: `0`
+- First bankroll: `100.0`
+- Last realized PnL: `63.34`
+- Warnings: `[]`
+
+Small-sample strategy sweep over the eight resolved trades:
+
+- `maker_first`: `8` trades, `7` wins, `1` loss, `+52.68` synthetic PnL,
+  `+6.585` PnL/trade.
+- Zones: `1` early, `1` late, `6` primary.
+- Terminal-only variants still had `0` trades in the clean sample.
+
+The sample is still too small for promotion, but it is useful because it has a
+loss, open-position overlap, oracle verification, replay validation, and no
+terminal-zone concentration.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
@@ -165,6 +206,8 @@ Diagnostics now reports and gates:
 - non-green if rejected orders are present
 - non-green if resolution count exceeds filled orders
 - non-green if oracle disagreements are present
+- non-green if the first risk snapshot starts with already-realized paper PnL
+  or pre-existing paper wins/losses
 
 Verification:
 

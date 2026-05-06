@@ -402,6 +402,25 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.oracle.disagreements
         ));
     }
+    if out
+        .risk
+        .first_realized_pnl
+        .map(|pnl| pnl.abs() > 1e-9)
+        .unwrap_or(false)
+    {
+        out.warnings.push(format!(
+            "session starts with non-zero realized PnL {:.4}; state was not a clean baseline",
+            out.risk.first_realized_pnl.unwrap_or(0.0)
+        ));
+    }
+    let first_wins = out.risk.first_wins.unwrap_or(0);
+    let first_losses = out.risk.first_losses.unwrap_or(0);
+    if first_wins > 0 || first_losses > 0 {
+        out.warnings.push(format!(
+            "session starts with existing paper results wins={} losses={}; state was not a clean baseline",
+            first_wins, first_losses
+        ));
+    }
     if out.system.fatal_errors > 0 {
         out.warnings
             .push(format!("{} fatal system error(s)", out.system.fatal_errors));
@@ -419,6 +438,13 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.orders.rejected == 0
         && out.resolutions.resolved <= out.orders.filled
         && out.oracle.disagreements == 0
+        && out
+            .risk
+            .first_realized_pnl
+            .map(|pnl| pnl.abs() <= 1e-9)
+            .unwrap_or(true)
+        && first_wins == 0
+        && first_losses == 0
         && out.system.fatal_errors == 0;
 }
 
@@ -544,6 +570,60 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("oracle disagreement")));
+    }
+
+    #[test]
+    fn session_diagnostics_flags_nonzero_starting_risk_state() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "risk",
+                "type": "state",
+                "bankroll": 125.0,
+                "realized_pnl": 25.0,
+                "wins": 2,
+                "losses": 1,
+                "positions": 0
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(!diag.ok);
+        assert_eq!(diag.risk.first_realized_pnl, Some(25.0));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("non-zero realized PnL")));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("existing paper results")));
     }
 
     #[test]
