@@ -117,6 +117,44 @@ again after deployment:
   - oracle disagreements: `0`
   - warnings: `[]`
 
+## First Hardened Soak Evidence
+
+Manual low-impact soak report after the hardened deployment:
+
+- Report: `/opt/polymomentum/logs/soak/soak_20260506T072631Z.json`
+- Local copy:
+  `logs/soak_evidence/20260506_hardened_clean/soak_20260506T072631Z.json`
+- Session snapshot:
+  `logs/soak_evidence/20260506_hardened_clean/session_20260506_071712_snapshot.jsonl`
+- Session SHA256:
+  `9a9f883f85c2ab2109d53511b9e656c81b66188b58b24f0c741deafe7ec93ad4`
+- Soak `ok=true`
+- Replay exit: `0`
+- Local replay: `total=1543 mismatches=0 (0.00%)`
+- Peer services active: `adgts`, `polyarbitrage`,
+  `polyarbitrage-collector`
+
+Strict diagnostics on the local snapshot:
+
+- `ok=true`
+- Events: `3169`
+- Orders: `3 placed / 3 filled / 0 rejected`
+- Resolved trades: `2`
+- Oracle disagreements: `0`
+- First bankroll: `100.0`
+- Last realized PnL: `20.61`
+- Warnings: `[]`
+
+Small-sample strategy sweep over the two resolved trades:
+
+- `maker_first`: `2` trades, `2` wins, `+19.64` synthetic PnL.
+- Zones: `1` late, `1` primary.
+- Terminal-only variants had `0` trades in this tiny clean snapshot.
+
+This is not statistically sufficient, but it confirms that the post-deploy
+clean baseline is instrumented correctly and that the promoted strategy is
+producing replayable paper orders without terminal-zone concentration so far.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
