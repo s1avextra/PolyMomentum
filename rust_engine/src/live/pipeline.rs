@@ -131,6 +131,12 @@ struct OraclePending {
     our_close_btc: f64,
     end_time: f64,
     attempts: u32,
+    direction: Option<String>,
+    entry_price: Option<f64>,
+    fee: Option<f64>,
+    size: Option<f64>,
+    provisional_won: Option<bool>,
+    provisional_pnl: Option<f64>,
 }
 
 impl OraclePending {
@@ -141,6 +147,12 @@ impl OraclePending {
             "our_close_btc": self.our_close_btc,
             "end_time": self.end_time,
             "attempts": self.attempts,
+            "direction": self.direction,
+            "entry_price": self.entry_price,
+            "fee": self.fee,
+            "size": self.size,
+            "provisional_won": self.provisional_won,
+            "provisional_pnl": self.provisional_pnl,
         })
     }
 
@@ -154,7 +166,36 @@ impl OraclePending {
                 .get("attempts")
                 .and_then(|x| x.as_u64())
                 .unwrap_or(0) as u32,
+            direction: v
+                .get("direction")
+                .and_then(|x| x.as_str())
+                .map(ToString::to_string),
+            entry_price: v.get("entry_price").and_then(|x| x.as_f64()),
+            fee: v.get("fee").and_then(|x| x.as_f64()),
+            size: v.get("size").and_then(|x| x.as_f64()),
+            provisional_won: v.get("provisional_won").and_then(|x| x.as_bool()),
+            provisional_pnl: v.get("provisional_pnl").and_then(|x| x.as_f64()),
         })
+    }
+
+    fn oracle_pnl(&self, polymarket_actual: &str) -> Option<(bool, f64, bool, f64)> {
+        let direction = self.direction.as_deref()?;
+        let entry_price = self.entry_price?;
+        let size = self.size?;
+        let fee = self.fee.unwrap_or(0.0);
+        let provisional_won = self.provisional_won?;
+        let provisional_pnl = self.provisional_pnl?;
+        let final_won = polymarket_actual == direction;
+        let final_pnl = paper_outcome_pnl(final_won, entry_price, size, fee);
+        Some((final_won, final_pnl, provisional_won, provisional_pnl))
+    }
+}
+
+fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
+    if won {
+        (1.0 - entry_price) * size - fee
+    } else {
+        -entry_price * size - fee
     }
 }
 
@@ -1429,11 +1470,7 @@ impl Pipeline {
                 };
                 let actual = if close_price >= pos.open_btc { "up" } else { "down" };
                 let won = actual == pos.direction;
-                let pnl = if won {
-                    (1.0 - pos.entry_price) * pos.size - pos.fee
-                } else {
-                    -pos.entry_price * pos.size - pos.fee
-                };
+                let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
                 self.risk.record_pnl(pnl).await.ok();
                 self.risk.record_fees(pos.fee).await;
                 let mut bs = self.breaker.lock().await;
@@ -1459,6 +1496,12 @@ impl Pipeline {
                         our_close_btc: close_price,
                         end_time: pos.end_time,
                         attempts: 0,
+                        direction: Some(pos.direction.clone()),
+                        entry_price: Some(pos.entry_price),
+                        fee: Some(pos.fee),
+                        size: Some(pos.size),
+                        provisional_won: Some(won),
+                        provisional_pnl: Some(pnl),
                     },
                 );
 
@@ -1543,6 +1586,34 @@ impl Pipeline {
                             delay,
                         );
                         if !agreed {
+                            if let Some((final_won, final_pnl, provisional_won, provisional_pnl)) =
+                                entry.oracle_pnl(res_str)
+                            {
+                                let pnl_delta = final_pnl - provisional_pnl;
+                                if pnl_delta.abs() > 1e-9 {
+                                    if let Err(e) = self.risk.record_pnl(pnl_delta).await {
+                                        tracing::warn!(
+                                            cid = short_cid(&cid),
+                                            error = %e,
+                                            "oracle pnl correction failed"
+                                        );
+                                    } else {
+                                        let mut bs = self.breaker.lock().await;
+                                        bs.correct_resolution(provisional_won, final_won, pnl_delta);
+                                        drop(bs);
+                                        self.monitor.record_oracle_correction(
+                                            &cid,
+                                            entry.direction.as_deref().unwrap_or("unknown"),
+                                            &entry.our_actual,
+                                            res_str,
+                                            provisional_won,
+                                            final_won,
+                                            provisional_pnl,
+                                            final_pnl,
+                                        );
+                                    }
+                                }
+                            }
                             tracing::warn!(
                                 cid = short_cid(&cid),
                                 ours = %entry.our_actual,

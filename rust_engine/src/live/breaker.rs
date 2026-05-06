@@ -38,6 +38,25 @@ impl BreakerState {
         }
     }
 
+    pub fn correct_resolution(&mut self, provisional_won: bool, final_won: bool, pnl_delta: f64) {
+        if provisional_won != final_won {
+            if provisional_won {
+                self.wins = self.wins.saturating_sub(1);
+            } else {
+                self.losses = self.losses.saturating_sub(1);
+            }
+            if final_won {
+                self.wins += 1;
+            } else {
+                self.losses += 1;
+            }
+        }
+        self.realized_pnl += pnl_delta;
+        if self.realized_pnl > self.peak_pnl {
+            self.peak_pnl = self.realized_pnl;
+        }
+    }
+
     /// Should we trip the breaker now?
     ///
     /// `open_exposure` is the total $ at risk in open paper positions —
@@ -101,5 +120,17 @@ mod tests {
         // Then take a big drawdown via open exposure
         let trip = s.should_trip(&BreakerConfig::default(), 50.0, 100.0);
         assert_eq!(trip, Some("drawdown"));
+    }
+
+    #[test]
+    fn correction_moves_win_to_loss_and_adjusts_pnl() {
+        let mut s = BreakerState::default();
+        s.record_resolution(true, 10.0);
+        s.correct_resolution(true, false, -15.0);
+
+        assert_eq!(s.wins, 0);
+        assert_eq!(s.losses, 1);
+        assert_eq!(s.realized_pnl, -5.0);
+        assert_eq!(s.peak_pnl, 10.0);
     }
 }

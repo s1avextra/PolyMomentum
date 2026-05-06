@@ -242,6 +242,34 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_oracle_correction(
+        &self,
+        contract_id: &str,
+        predicted: &str,
+        provisional_actual: &str,
+        polymarket_actual: &str,
+        provisional_won: bool,
+        final_won: bool,
+        provisional_pnl: f64,
+        final_pnl: f64,
+    ) {
+        self.write_event(
+            "oracle",
+            "correction",
+            json!({
+                "cid": short(contract_id, 16),
+                "predicted": predicted,
+                "provisional_actual": provisional_actual,
+                "polymarket_actual": polymarket_actual,
+                "provisional_won": provisional_won,
+                "final_won": final_won,
+                "provisional_pnl": round_n(provisional_pnl, 4),
+                "final_pnl": round_n(final_pnl, 4),
+                "pnl_delta": round_n(final_pnl - provisional_pnl, 4),
+            }),
+        );
+    }
+
     pub fn record_risk_state(
         &self,
         bankroll: f64,

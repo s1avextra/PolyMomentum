@@ -196,6 +196,46 @@ The sample is still too small for promotion, but it is useful because it has a
 loss, open-position overlap, oracle verification, replay validation, and no
 terminal-zone concentration.
 
+## Oracle Disagreement Found
+
+After the second manual soak, strict diagnostics correctly flipped non-green on
+the running session:
+
+- Disagreement CID: `0x1dd0bd3ab835e0`
+- Local paper actual: `down`
+- Polymarket actual: `up`
+- Local open BTC: `81428.50`
+- Local close BTC: `81425.12`
+- Difference: `-3.39`
+
+The edge case is a tight market where the local exchange-mid close disagreed
+with Polymarket's official settlement. This is exactly why paper cannot only
+log oracle disagreements. Paper PnL must reconcile to oracle truth because live
+PnL is determined by Polymarket settlement.
+
+Code fix:
+
+- `OraclePending` now stores direction, entry price, size, fee, provisional PnL,
+  and provisional win/loss.
+- On oracle disagreement, paper computes the final Polymarket-settled PnL and
+  applies the delta to `RiskManager`.
+- The circuit breaker moves the provisional win/loss bucket to the final
+  oracle bucket and adjusts realized PnL.
+- Session logs now emit `oracle.correction` with provisional/final outcome and
+  PnL delta.
+
+Verification:
+
+```bash
+cargo test --manifest-path rust_engine/Cargo.toml --locked --lib
+```
+
+Result: `134 passed`.
+
+The current running session must be treated as invalid for live-readiness
+because it was started before oracle correction landed. Restart the clean clock
+after deploying the correction binary and resetting paper state.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
@@ -208,6 +248,7 @@ Diagnostics now reports and gates:
 - non-green if oracle disagreements are present
 - non-green if the first risk snapshot starts with already-realized paper PnL
   or pre-existing paper wins/losses
+- oracle correction events with provisional/final PnL deltas
 
 Verification:
 

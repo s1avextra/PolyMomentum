@@ -78,6 +78,8 @@ pub struct ResolutionDiagnostics {
 pub struct OracleDiagnostics {
     pub checks: u64,
     pub disagreements: u64,
+    pub corrections: u64,
+    pub total_pnl_delta: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -153,6 +155,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("order", "rejected") => out.orders.rejected += 1,
             ("resolution", "resolved") => record_resolution(&mut out, &v),
             ("oracle", "resolution") => record_oracle_resolution(&mut out, &v),
+            ("oracle", "correction") => record_oracle_correction(&mut out, &v),
             ("risk", "state") => record_risk_state(&mut out, &v),
             _ => {}
         }
@@ -325,6 +328,14 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
     if !v.get("agreed").and_then(|x| x.as_bool()).unwrap_or(true) {
         out.oracle.disagreements += 1;
     }
+}
+
+fn record_oracle_correction(out: &mut SessionDiagnostics, v: &Value) {
+    out.oracle.corrections += 1;
+    out.oracle.total_pnl_delta += v
+        .get("pnl_delta")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(0.0);
 }
 
 fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
