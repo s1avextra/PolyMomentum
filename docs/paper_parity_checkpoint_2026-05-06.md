@@ -389,6 +389,80 @@ agree on the order/fill economics for this capped sample. This is a parity
 smoke, not statistical proof; the same promoted bridge should be rerun over
 larger cached windows on the dev box.
 
+## Final-Seconds Settlement Guard
+
+The oracle-correction build then exposed a sharper production issue in the
+running VPS paper session that started at `2026-05-06T08:13:15Z`:
+
+- Orders/resolutions: `22 / 22`
+- Oracle checks/disagreements/corrections: `22 / 4 / 4`
+- Pre-correction paper PnL: `+456.6831`
+- Oracle PnL delta: `-208.751`
+
+All four corrections came from final-seconds entries:
+
+- `remaining_min=0.15`, local BTC move `+56.21`, local `up`, Polymarket `down`
+- `remaining_min=0.25`, local BTC move `-11.17`, local `down`, Polymarket `up`
+- `remaining_min=0.25`, local BTC move `-7.99`, local `down`, Polymarket `up`
+- `remaining_min=0.20`, local BTC move `-23.54`, local `down`, Polymarket `up`
+
+This is not only a near-zero-threshold problem. It is a settlement-basis
+problem: the local exchange-mid candle close can diverge from Polymarket's
+official settlement source during the final seconds. Live PnL is determined by
+Polymarket, so paper must not rely on entries in that unstable window.
+
+Code fix:
+
+- Shared decision logic now skips new entries when
+  `minutes_remaining <= 0.30` with skip reason `settlement_cutoff`.
+- Diagnostics now tracks `resolutions.near_threshold` and
+  `resolutions.min_abs_btc_move` and marks sessions non-green when any
+  resolution is within `$5` BTC of the candle threshold.
+- Cached live-replay now records full paper-like lifecycle events:
+  `order.placed`, `order.filled`, `resolution.resolved`,
+  `oracle.resolution`, and `risk.state`.
+- Promotion gates now include minimum loss count, active-zone count, and
+  optional Wilson lower-bound win-rate checks.
+- Backtest fills now retain their fill-model reason for maker/taker
+  calibration.
+
+Local verification, dev box only:
+
+- Promoted cached live-replay window: `2026-04-25T10:00:00Z`
+- Session:
+  `/private/tmp/polymomentum-live-replay-cutoff/session_20260506_112336.jsonl`
+- Diagnostics: `ok=true`
+- Orders/resolutions/oracle checks: `1 / 1 / 1`
+- Replay validator: `total=715788 mismatches=0 (0.00%)`
+- Realized PnL: `+1.43`
+- Minimum absolute BTC settlement move: `$54.95`
+- Diagnostics compare against the previous promoted replay: `ok=true`, zero
+  event-count deltas.
+
+Matching capped harness, same hour/contracts/cache:
+
+- Report:
+  `/private/tmp/polymomentum-live-replay-cutoff/harness_20260425T10_max5_cutoff.json`
+- `maker_first`: `1` trade, `1` win, `0` losses, `+1.43` PnL, zone `primary`
+- Terminal-only variants: `0` trades after the cutoff
+
+Verification:
+
+```bash
+cargo test --manifest-path rust_engine/Cargo.toml --locked --lib
+cargo build --manifest-path rust_engine/Cargo.toml --locked
+```
+
+Result:
+
+- Tests: `138 passed`
+- Build: passed with existing dead-code warnings only
+
+The running VPS paper session that produced the four corrections must be
+treated as invalid for live-readiness. After this guard is built by CI and
+deployed, restart only PolyMomentum with a clean paper DB; do not touch peer
+bot services or private directories.
+
 ## Code Hardening
 
 Diagnostics now reports and gates:
@@ -419,16 +493,24 @@ at `2026-05-06T08:13:15Z`.
 
 Next steps:
 
-1. Let the clean oracle-correction paper session produce its next scheduled
-   soak report.
-2. Run strict diagnostics locally on that clean report/session and confirm that
-   oracle corrections, if any, adjust realized PnL instead of leaving
-   unresolved disagreements.
-3. Treat the terminal-zone concentration as a strategy research issue before
-   live: paper holdout showed stronger performance than the original backtest,
-   but with slightly higher terminal concentration.
-4. Expand the promoted cached-replay/backtest parity from the capped
-   `2026-04-25T10` smoke to multi-hour cached windows on the dev box.
-5. Do exact same-window archive replay only after May 5/6 PMXT archive data is
-   available locally or in the shared cache. As of this checkpoint, neither
-   local nor shared cache had May 5/6 archive files.
+1. Commit, push, and wait for CI to build the Linux artifact containing the
+   settlement cutoff and lifecycle replay fixes.
+2. Deploy the artifact to the VPS in paper mode, then stop/reset/start only
+   `polymomentum-engine.service`.
+3. Confirm peer coexistence after restart: `adgts`, `polyarbitrage`,
+   `polyarbitrage-collector`, timers, PolyMomentum `CPUQuota`, `MemoryMax`,
+   and no VPS sweeps or release builds.
+4. Run a short clean paper soak. Gate: strict diagnostics `ok=true`, replay
+   mismatches `0`, rejected orders `0`, oracle disagreements/corrections `0`,
+   near-threshold resolutions `0`, first bankroll `100.0`.
+5. Run a longer clean paper soak. Gate: same as step 4 plus non-trivial fills,
+   open/close lifecycle parity, and stable resource usage.
+6. Expand cached replay/backtest parity on the dev box across multi-hour
+   holdouts. Gate: promoted live-replay and harness agree on order counts,
+   resolution counts, PnL, and zone attribution.
+7. Promote only with anti-overfit gates enabled: minimum losses, at least two
+   active zones, Wilson lower-bound threshold, unresolved fills `0`, and no
+   dominant-zone concentration.
+8. Move to live only after paper and cached replay are both green under the
+   same promoted artifact, with CLOB v2 preflight, wallet/allowance checks, and
+   reconciliation ready flags passing.

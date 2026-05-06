@@ -72,6 +72,8 @@ pub struct ResolutionDiagnostics {
     pub wins: u64,
     pub losses: u64,
     pub total_pnl: f64,
+    pub near_threshold: u64,
+    pub min_abs_btc_move: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -321,6 +323,18 @@ fn record_resolution(out: &mut SessionDiagnostics, v: &Value) {
         out.resolutions.losses += 1;
     }
     out.resolutions.total_pnl += v.get("pnl").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    if let Some(btc_move) = v.get("btc_move").and_then(|x| x.as_f64()) {
+        let abs_move = btc_move.abs();
+        out.resolutions.min_abs_btc_move = Some(
+            out.resolutions
+                .min_abs_btc_move
+                .map(|existing| existing.min(abs_move))
+                .unwrap_or(abs_move),
+        );
+        if abs_move < SETTLEMENT_BASIS_WARN_BTC {
+            out.resolutions.near_threshold += 1;
+        }
+    }
 }
 
 fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
@@ -413,6 +427,12 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.oracle.disagreements
         ));
     }
+    if out.resolutions.near_threshold > 0 {
+        out.warnings.push(format!(
+            "{} resolution(s) within ${:.2} BTC of the candle threshold; settlement-basis risk is elevated",
+            out.resolutions.near_threshold, SETTLEMENT_BASIS_WARN_BTC
+        ));
+    }
     if out
         .risk
         .first_realized_pnl
@@ -448,6 +468,7 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.orders.placed_missing_state == 0
         && out.orders.rejected == 0
         && out.resolutions.resolved <= out.orders.filled
+        && out.resolutions.near_threshold == 0
         && out.oracle.disagreements == 0
         && out
             .risk
@@ -458,6 +479,8 @@ fn finalize(out: &mut SessionDiagnostics) {
         && first_losses == 0
         && out.system.fatal_errors == 0;
 }
+
+const SETTLEMENT_BASIS_WARN_BTC: f64 = 5.0;
 
 #[cfg(test)]
 mod tests {
@@ -635,6 +658,66 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("existing paper results")));
+    }
+
+    #[test]
+    fn session_diagnostics_flags_tight_settlement_basis() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": true,
+                "execution_attempted": true,
+                "traded": false
+            }),
+            serde_json::json!({
+                "cat": "order",
+                "type": "placed",
+                "intent_id": "intent_1",
+                "state": "acked"
+            }),
+            serde_json::json!({
+                "cat": "order",
+                "type": "filled",
+                "intent_id": "intent_1"
+            }),
+            serde_json::json!({
+                "cat": "resolution",
+                "type": "resolved",
+                "won": true,
+                "pnl": 1.0,
+                "btc_move": 3.39
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(!diag.ok);
+        assert_eq!(diag.resolutions.near_threshold, 1);
+        assert_eq!(diag.resolutions.min_abs_btc_move, Some(3.39));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("settlement-basis risk")));
     }
 
     #[test]

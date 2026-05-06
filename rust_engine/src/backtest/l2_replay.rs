@@ -396,7 +396,7 @@ impl L2BacktestEngine {
                 slippage: result.slippage_per_share,
                 book_age_ms,
                 success: true,
-                reason: String::new(),
+                reason: result.reason.as_str().to_string(),
             });
         }
         self.pending_orders = still_pending;

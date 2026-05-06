@@ -57,8 +57,14 @@ pub struct ZoneReport {
 pub struct PromotionGate {
     #[serde(default = "default_min_trades")]
     pub min_trades: usize,
+    #[serde(default = "default_min_losses")]
+    pub min_losses: usize,
+    #[serde(default = "default_min_zone_count")]
+    pub min_zone_count: usize,
     #[serde(default)]
     pub min_win_rate: f64,
+    #[serde(default)]
+    pub min_wilson_win_rate_lower: f64,
     #[serde(default)]
     pub min_total_pnl: f64,
     #[serde(default)]
@@ -87,7 +93,10 @@ impl Default for PromotionGate {
     fn default() -> Self {
         Self {
             min_trades: default_min_trades(),
+            min_losses: default_min_losses(),
+            min_zone_count: default_min_zone_count(),
             min_win_rate: 0.0,
+            min_wilson_win_rate_lower: 0.0,
             min_total_pnl: 0.0,
             min_sharpe_like: 0.0,
             max_unresolved_fills: 0,
@@ -110,6 +119,14 @@ impl Default for MultiReportPromotionGate {
 
 fn default_min_trades() -> usize {
     30
+}
+
+fn default_min_losses() -> usize {
+    1
+}
+
+fn default_min_zone_count() -> usize {
+    2
 }
 
 fn default_min_reports() -> usize {
@@ -287,6 +304,10 @@ impl PromotionArtifact {
                 100.0 * share
             ));
         }
+        risk_notes.push(format!(
+            "wilson win-rate lower bound 95%: {:.3}",
+            wilson_win_rate_lower(selected.wins, selected.trades)
+        ));
         risk_notes.extend(report.data_manifest.notes.iter().cloned());
 
         Ok(Self {
@@ -643,10 +664,30 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
             selected.trades, gate.min_trades
         ));
     }
+    if selected.losses < gate.min_losses {
+        reasons.push(format!(
+            "losses {} below minimum {}",
+            selected.losses, gate.min_losses
+        ));
+    }
+    let zone_count = active_zone_count(selected);
+    if zone_count < gate.min_zone_count {
+        reasons.push(format!(
+            "active zones {} below minimum {}",
+            zone_count, gate.min_zone_count
+        ));
+    }
     if selected.win_rate < gate.min_win_rate {
         reasons.push(format!(
             "win_rate {:.4} below minimum {:.4}",
             selected.win_rate, gate.min_win_rate
+        ));
+    }
+    let wilson_lower = wilson_win_rate_lower(selected.wins, selected.trades);
+    if wilson_lower < gate.min_wilson_win_rate_lower {
+        reasons.push(format!(
+            "wilson_win_rate_lower {:.4} below minimum {:.4}",
+            wilson_lower, gate.min_wilson_win_rate_lower
         ));
     }
     if selected.total_pnl < gate.min_total_pnl {
@@ -680,6 +721,28 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
         }
     }
     reasons
+}
+
+fn active_zone_count(selected: &VariantReport) -> usize {
+    selected
+        .by_zone
+        .values()
+        .filter(|report| report.trades > 0)
+        .count()
+}
+
+fn wilson_win_rate_lower(wins: usize, trades: usize) -> f64 {
+    if trades == 0 {
+        return 0.0;
+    }
+    let n = trades as f64;
+    let p = wins as f64 / n;
+    let z = 1.96;
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let centre = p + z2 / (2.0 * n);
+    let margin = z * ((p * (1.0 - p) + z2 / (4.0 * n)) / n).sqrt();
+    ((centre - margin) / denom).clamp(0.0, 1.0)
 }
 
 fn dominant_zone_share(selected: &VariantReport) -> (Option<String>, Option<f64>) {
@@ -924,12 +987,17 @@ mod tests {
             results: BacktestResults::default(),
         });
         worse.trades = 30;
+        worse.wins = 12;
+        worse.losses = 18;
         worse.win_rate = 0.4;
         worse.total_pnl = 1.0;
         worse.avg_pnl = 0.03;
         worse.by_zone = zone_split(16, 14);
         let mut better = worse.clone();
         better.strategy.risk_profile = "better".to_string();
+        better.wins = 20;
+        better.losses = 10;
+        better.win_rate = 20.0 / 30.0;
         better.total_pnl = 2.0;
         better.sharpe_like = 1.0;
         let mut overfit = better.clone();
@@ -1046,6 +1114,61 @@ mod tests {
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
         assert!(err.to_string().contains("zone primary trade share"));
+    }
+
+    #[test]
+    fn promotion_rejects_lossless_tiny_sample_by_default() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 30,
+            losses: 0,
+            unresolved_fills: 0,
+            win_rate: 1.0,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("losses 0 below minimum 1"));
+    }
+
+    #[test]
+    fn promotion_rejects_low_wilson_bound_when_requested() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 0,
+            win_rate: 20.0 / 30.0,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(
+            &report,
+            PromotionGate {
+                min_wilson_win_rate_lower: 0.50,
+                ..PromotionGate::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("wilson_win_rate_lower"));
     }
 
     #[test]

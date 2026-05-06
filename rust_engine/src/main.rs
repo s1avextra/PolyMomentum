@@ -376,9 +376,18 @@ enum ExperimentCommand {
         /// Minimum selected-variant trade count.
         #[arg(long, default_value_t = 30)]
         min_trades: usize,
+        /// Minimum selected-variant loss count, guarding against lossless tiny samples.
+        #[arg(long, default_value_t = 1)]
+        min_losses: usize,
+        /// Minimum number of timing zones with at least one selected-variant trade.
+        #[arg(long, default_value_t = 2)]
+        min_zone_count: usize,
         /// Minimum selected-variant win rate, e.g. 0.52.
         #[arg(long, default_value_t = 0.0)]
         min_win_rate: f64,
+        /// Minimum Wilson 95% lower bound for selected-variant win rate.
+        #[arg(long, default_value_t = 0.0)]
+        min_wilson_win_rate_lower: f64,
         /// Minimum selected-variant total PnL.
         #[arg(long, default_value_t = 0.0)]
         min_total_pnl: f64,
@@ -407,9 +416,18 @@ enum ExperimentCommand {
         /// Minimum aggregate trade count.
         #[arg(long, default_value_t = 90)]
         min_trades: usize,
+        /// Minimum aggregate loss count, guarding against lossless tiny samples.
+        #[arg(long, default_value_t = 1)]
+        min_losses: usize,
+        /// Minimum number of timing zones with at least one selected aggregate trade.
+        #[arg(long, default_value_t = 2)]
+        min_zone_count: usize,
         /// Minimum aggregate win rate, e.g. 0.52.
         #[arg(long, default_value_t = 0.0)]
         min_win_rate: f64,
+        /// Minimum Wilson 95% lower bound for selected aggregate win rate.
+        #[arg(long, default_value_t = 0.0)]
+        min_wilson_win_rate_lower: f64,
         /// Minimum aggregate total PnL.
         #[arg(long, default_value_t = 0.0)]
         min_total_pnl: f64,
@@ -1101,7 +1119,10 @@ fn cmd_experiment(command: ExperimentCommand) {
             report,
             output,
             min_trades,
+            min_losses,
+            min_zone_count,
             min_win_rate,
+            min_wilson_win_rate_lower,
             min_total_pnl,
             min_sharpe_like,
             max_unresolved_fills,
@@ -1117,7 +1138,10 @@ fn cmd_experiment(command: ExperimentCommand) {
             };
             let gate = backtest::experiment::PromotionGate {
                 min_trades,
+                min_losses,
+                min_zone_count,
                 min_win_rate,
+                min_wilson_win_rate_lower,
                 min_total_pnl,
                 min_sharpe_like,
                 max_unresolved_fills,
@@ -1156,7 +1180,10 @@ fn cmd_experiment(command: ExperimentCommand) {
             report,
             output,
             min_trades,
+            min_losses,
+            min_zone_count,
             min_win_rate,
+            min_wilson_win_rate_lower,
             min_total_pnl,
             min_sharpe_like,
             max_unresolved_fills,
@@ -1179,7 +1206,10 @@ fn cmd_experiment(command: ExperimentCommand) {
             }
             let gate = backtest::experiment::PromotionGate {
                 min_trades,
+                min_losses,
+                min_zone_count,
                 min_win_rate,
+                min_wilson_win_rate_lower,
                 min_total_pnl,
                 min_sharpe_like,
                 max_unresolved_fills,

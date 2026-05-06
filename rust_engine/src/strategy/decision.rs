@@ -15,6 +15,7 @@ pub const DEFAULT_DEAD_ZONE_HI: f64 = 0.90;
 pub const DEFAULT_MIN_PRICE: f64 = 0.10;
 pub const DEFAULT_MAX_PRICE: f64 = 0.90;
 pub const DEFAULT_EDGE_CAP: f64 = 0.25;
+pub const DEFAULT_SETTLEMENT_CUTOFF_MINUTES: f64 = 0.30;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandleDecision {
@@ -181,6 +182,17 @@ pub fn decide_candle_trade(
     let (mut z_min_conf, mut z_min_z, z_min_edge) =
         zone_thresholds(zone, min_confidence, min_edge, cfg);
 
+    if minutes_remaining <= DEFAULT_SETTLEMENT_CUTOFF_MINUTES {
+        return DecisionResult::Skip(SkipReason::new(
+            "settlement_cutoff",
+            zone,
+            format!(
+                "{:.2} <= {:.2}",
+                minutes_remaining, DEFAULT_SETTLEMENT_CUTOFF_MINUTES
+            ),
+        ));
+    }
+
     if cross_asset_boost > 0.0 {
         z_min_conf = (z_min_conf - cross_asset_boost).max(0.40);
         z_min_z = (z_min_z - cross_asset_boost).max(0.1);
@@ -343,8 +355,10 @@ mod tests {
     }
 
     #[test]
-    fn produces_trade_at_terminal() {
-        // Strong up momentum, low up price, terminal zone — should fire.
+    fn skips_settlement_cutoff() {
+        // The terminal seconds are where local exchange mid and official
+        // Polymarket settlement can disagree, so the shared decision path
+        // refuses new entries there.
         let sig = mk_signal(0.75, 2.0, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
@@ -352,12 +366,8 @@ mod tests {
             DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
         );
         match r {
-            DecisionResult::Trade(t) => {
-                assert_eq!(t.direction, "up");
-                assert_eq!(t.zone, "terminal");
-                assert!(t.edge > 0.0);
-            }
-            DecisionResult::Skip(s) => panic!("expected trade, got skip {}", s.reason),
+            DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_cutoff"),
+            _ => panic!("expected skip"),
         }
     }
 

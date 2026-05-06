@@ -140,6 +140,9 @@ pub struct LiveReplayReport {
     pub orders_submitted: usize,
     pub fills_success: usize,
     pub fills_failed: usize,
+    pub resolutions: usize,
+    pub total_pnl: f64,
+    pub oracle_checks: usize,
     pub strategy: String,
     pub strategy_source: String,
 }
@@ -192,6 +195,7 @@ pub async fn run_live_replay(
     monitor.save_summary()?;
 
     let summary = engine.summary();
+    let lifecycle = strategy.lifecycle;
     Ok(LiveReplayReport {
         schema_version: 1,
         session_id: monitor.session_id().to_string(),
@@ -204,6 +208,9 @@ pub async fn run_live_replay(
         orders_submitted: strategy.orders_submitted,
         fills_success: summary.fills_success as usize,
         fills_failed: summary.fills_failed as usize,
+        resolutions: lifecycle.resolutions,
+        total_pnl: lifecycle.realized_pnl,
+        oracle_checks: lifecycle.oracle_checks,
         strategy: cfg.strategy.variant.name,
         strategy_source: cfg.strategy.source,
     })
@@ -242,8 +249,27 @@ struct LiveReplayStrategy {
     btc_history: Arc<BTCHistory>,
     monitor: Arc<SessionMonitor>,
     traded: HashSet<String>,
+    replay_positions: BTreeMap<String, ReplayPosition>,
+    lifecycle: ReplayLifecycle,
     last_tick_ts_s: f64,
     orders_submitted: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayPosition {
+    condition_id: String,
+    direction: String,
+    open_btc: f64,
+    close_ts_s: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ReplayLifecycle {
+    realized_pnl: f64,
+    wins: u64,
+    losses: u64,
+    resolutions: usize,
+    oracle_checks: usize,
 }
 
 impl LiveReplayStrategy {
@@ -270,12 +296,15 @@ impl LiveReplayStrategy {
             btc_history,
             monitor,
             traded: HashSet::new(),
+            replay_positions: BTreeMap::new(),
+            lifecycle: ReplayLifecycle::default(),
             last_tick_ts_s: 0.0,
             orders_submitted: 0,
         }
     }
 
-    async fn record_fills(&self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
+    async fn record_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
+        self.record_risk_state(0.0, 0);
         for fill in fills {
             let order_id = replay_order_id(&fill.order.intent_id);
             if fill.success {
@@ -305,6 +334,8 @@ impl LiveReplayStrategy {
                     fee: fill.fee,
                     n_trades: 1,
                 });
+                self.record_open_position(fill);
+                self.record_resolution(fill);
             } else {
                 self.monitor.record_order_rejected(
                     &fill.order.token_id,
@@ -314,6 +345,89 @@ impl LiveReplayStrategy {
                 );
             }
         }
+    }
+
+    fn record_open_position(&self, fill: &crate::backtest::l2_replay::BacktestFill) {
+        let exposure = fill.cost.abs();
+        self.monitor.record_risk_state(
+            self.bankroll_usd + self.lifecycle.realized_pnl,
+            exposure,
+            (self.bankroll_usd + self.lifecycle.realized_pnl - exposure).max(0.0),
+            1,
+            self.lifecycle.realized_pnl,
+            self.lifecycle.wins,
+            self.lifecycle.losses,
+        );
+    }
+
+    fn record_resolution(&mut self, fill: &crate::backtest::l2_replay::BacktestFill) {
+        let Some(pos) = self.replay_positions.get(&fill.order.intent_id).cloned() else {
+            self.monitor.record_error(
+                "live_replay_resolution",
+                "missing replay position for fill intent",
+                true,
+            );
+            return;
+        };
+        let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
+        if close_btc <= 0.0 || pos.open_btc <= 0.0 {
+            self.monitor.record_error(
+                "live_replay_resolution",
+                "missing BTC open/close price for replay fill",
+                true,
+            );
+            return;
+        }
+
+        let actual = if close_btc >= pos.open_btc { "up" } else { "down" };
+        let won = actual == pos.direction;
+        let pnl = paper_outcome_pnl(won, fill.fill_price, fill.filled_size, fill.fee);
+        self.monitor.record_resolution(
+            &pos.condition_id,
+            &pos.direction,
+            actual,
+            won,
+            pnl,
+            fill.fill_price,
+            pos.open_btc,
+            close_btc,
+        );
+
+        let outcome_prices = replay_outcome_prices(actual);
+        self.monitor.record_oracle_resolution(
+            &pos.condition_id,
+            actual,
+            pos.open_btc,
+            close_btc,
+            actual,
+            &outcome_prices,
+            true,
+            true,
+            0.0,
+        );
+
+        self.lifecycle.resolutions += 1;
+        self.lifecycle.oracle_checks += 1;
+        self.lifecycle.realized_pnl += pnl;
+        if won {
+            self.lifecycle.wins += 1;
+        } else {
+            self.lifecycle.losses += 1;
+        }
+        self.record_risk_state(0.0, 0);
+    }
+
+    fn record_risk_state(&self, exposure: f64, positions: u64) {
+        let bankroll = self.bankroll_usd + self.lifecycle.realized_pnl;
+        self.monitor.record_risk_state(
+            bankroll,
+            exposure,
+            (bankroll - exposure).max(0.0),
+            positions,
+            self.lifecycle.realized_pnl,
+            self.lifecycle.wins,
+            self.lifecycle.losses,
+        );
     }
 
     fn fresh_ask(&self, token_id: &str, now_ts: f64, fallback: f64) -> f64 {
@@ -568,6 +682,19 @@ impl LiveReplayStrategy {
             ),
         );
         let order_id = replay_order_id(&intent.intent_id);
+        let close_ts_s = chrono::DateTime::parse_from_rfc3339(&contract.end_date)
+            .ok()
+            .map(|d| d.timestamp() as f64)
+            .unwrap_or(0.0);
+        self.replay_positions.insert(
+            intent.intent_id.clone(),
+            ReplayPosition {
+                condition_id: contract.market.condition_id.clone(),
+                direction: decision.direction.clone(),
+                open_btc: signal.open_price,
+                close_ts_s,
+            },
+        );
         let _ = self
             .order_manager
             .create_intent(intent.clone(), timestamp_s);
@@ -638,6 +765,22 @@ impl LiveReplayStrategy {
             fee_rate: variant.default_fee_rate,
             maker_fee_rate: variant.maker_fee_rate,
         }
+    }
+}
+
+fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
+    if won {
+        (1.0 - entry_price) * size - fee
+    } else {
+        -entry_price * size - fee
+    }
+}
+
+fn replay_outcome_prices(actual: &str) -> [f64; 2] {
+    if actual == "up" {
+        [1.0, 0.0]
+    } else {
+        [0.0, 1.0]
     }
 }
 
