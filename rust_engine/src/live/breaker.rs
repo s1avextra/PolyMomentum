@@ -25,6 +25,18 @@ pub struct BreakerState {
     pub peak_pnl: f64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BreakerMetrics {
+    pub total_trades: u64,
+    pub win_rate: f64,
+    pub realized_drawdown: f64,
+    pub realized_drawdown_pct: f64,
+    pub open_exposure: f64,
+    pub stressed_pnl: f64,
+    pub stressed_drawdown: f64,
+    pub stressed_drawdown_pct: f64,
+}
+
 impl BreakerState {
     pub fn record_resolution(&mut self, won: bool, pnl: f64) {
         if won {
@@ -57,29 +69,59 @@ impl BreakerState {
         }
     }
 
+    pub fn metrics(&self, open_exposure: f64, initial_bankroll: f64) -> BreakerMetrics {
+        let total = self.wins + self.losses;
+        let win_rate = if total > 0 { self.wins as f64 / total as f64 } else { 0.0 };
+        let initial_bankroll = initial_bankroll.max(1.0);
+        let realized_drawdown = (self.peak_pnl - self.realized_pnl).max(0.0);
+        let realized_drawdown_pct = if self.peak_pnl > 0.0 {
+            realized_drawdown / self.peak_pnl
+        } else if self.realized_pnl < 0.0 {
+            self.realized_pnl.abs() / initial_bankroll
+        } else {
+            0.0
+        };
+        let open_exposure = open_exposure.max(0.0);
+        let stressed_pnl = self.realized_pnl - open_exposure;
+        let stressed_drawdown = (self.peak_pnl - stressed_pnl).max(0.0);
+        let stressed_drawdown_pct = if self.peak_pnl > 0.0 {
+            stressed_drawdown / self.peak_pnl
+        } else if stressed_pnl < 0.0 {
+            stressed_pnl.abs() / initial_bankroll
+        } else {
+            0.0
+        };
+
+        BreakerMetrics {
+            total_trades: total,
+            win_rate,
+            realized_drawdown,
+            realized_drawdown_pct,
+            open_exposure,
+            stressed_pnl,
+            stressed_drawdown,
+            stressed_drawdown_pct,
+        }
+    }
+
     /// Should we trip the breaker now?
     ///
-    /// `open_exposure` is the total $ at risk in open paper positions —
-    /// folded into effective PnL so a sudden bankroll concentration trips
-    /// the breaker without waiting for resolution.
+    /// Realized drawdown is the primary circuit breaker. Open exposure is
+    /// still stress-tested, but bounded paper/live positions are not treated
+    /// as realized losses while stressed PnL remains positive.
     pub fn should_trip(&self, cfg: &BreakerConfig, open_exposure: f64, initial_bankroll: f64) -> Option<&'static str> {
-        let total = self.wins + self.losses;
-        if total < cfg.min_trades as u64 {
+        let metrics = self.metrics(open_exposure, initial_bankroll);
+        if metrics.total_trades < cfg.min_trades as u64 {
             return None;
         }
-        let win_rate = self.wins as f64 / total as f64;
-        if win_rate < cfg.min_win_rate {
+        if metrics.win_rate < cfg.min_win_rate {
             return Some("win_rate_low");
         }
-        let effective_pnl = self.realized_pnl - open_exposure;
-        let drawdown = self.peak_pnl - effective_pnl;
-        let dd_pct = if self.peak_pnl > 0.0 {
-            drawdown / self.peak_pnl
-        } else {
-            effective_pnl.abs() / initial_bankroll.max(1.0)
+        if metrics.realized_drawdown_pct > cfg.max_drawdown_pct {
+            return Some("realized_drawdown");
         };
-        if dd_pct > cfg.max_drawdown_pct {
-            return Some("drawdown");
+        if metrics.stressed_pnl < 0.0 && metrics.stressed_drawdown_pct > cfg.max_drawdown_pct {
+            return Some("open_exposure_stress");
         }
         None
     }
@@ -113,13 +155,34 @@ mod tests {
     #[test]
     fn trips_on_drawdown() {
         let mut s = BreakerState::default();
-        // Build up to peak
+        for _ in 0..20 {
+            s.record_resolution(true, 5.0);
+        }
+        for _ in 0..10 {
+            s.record_resolution(false, -10.0);
+        }
+        let trip = s.should_trip(&BreakerConfig::default(), 0.0, 100.0);
+        assert_eq!(trip, Some("realized_drawdown"));
+    }
+
+    #[test]
+    fn does_not_trip_on_positive_open_exposure_stress() {
+        let mut s = BreakerState::default();
         for _ in 0..30 {
             s.record_resolution(true, 1.0);
         }
-        // Then take a big drawdown via open exposure
+        let trip = s.should_trip(&BreakerConfig::default(), 20.0, 100.0);
+        assert_eq!(trip, None);
+    }
+
+    #[test]
+    fn trips_on_negative_open_exposure_stress() {
+        let mut s = BreakerState::default();
+        for _ in 0..30 {
+            s.record_resolution(true, 1.0);
+        }
         let trip = s.should_trip(&BreakerConfig::default(), 50.0, 100.0);
-        assert_eq!(trip, Some("drawdown"));
+        assert_eq!(trip, Some("open_exposure_stress"));
     }
 
     #[test]

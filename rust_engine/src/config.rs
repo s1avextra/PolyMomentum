@@ -120,6 +120,9 @@ pub struct Settings {
     pub candle_edge_cap: f64,
     pub candle_skip_dead_zone: bool,
     pub candle_min_ev_buffer: f64,
+    pub candle_settlement_guard_minutes: f64,
+    pub candle_settlement_min_abs_move_usd: f64,
+    pub candle_settlement_sigma_buffer: f64,
 
     pub candle_noise_z_threshold: f64,
     pub candle_position_pct: f64,
@@ -229,6 +232,9 @@ impl Settings {
             candle_edge_cap: env_f64("CANDLE_EDGE_CAP", 0.25),
             candle_skip_dead_zone: env_bool("CANDLE_SKIP_DEAD_ZONE", true),
             candle_min_ev_buffer: env_f64("CANDLE_MIN_EV_BUFFER", 0.05),
+            candle_settlement_guard_minutes: env_f64("CANDLE_SETTLEMENT_GUARD_MINUTES", 1.0),
+            candle_settlement_min_abs_move_usd: env_f64("CANDLE_SETTLEMENT_MIN_ABS_MOVE_USD", 10.0),
+            candle_settlement_sigma_buffer: env_f64("CANDLE_SETTLEMENT_SIGMA_BUFFER", 0.0),
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
             candle_position_pct: env_f64("CANDLE_POSITION_PCT", 0.10),

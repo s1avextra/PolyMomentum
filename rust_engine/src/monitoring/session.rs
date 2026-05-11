@@ -304,6 +304,13 @@ impl SessionMonitor {
         wins: u64,
         losses: u64,
         realized_pnl: f64,
+        peak_pnl: f64,
+        open_exposure: f64,
+        stressed_pnl: f64,
+        realized_drawdown: f64,
+        realized_drawdown_pct: f64,
+        stressed_drawdown: f64,
+        stressed_drawdown_pct: f64,
     ) {
         self.write_event(
             "risk",
@@ -314,6 +321,13 @@ impl SessionMonitor {
                 "wins": wins,
                 "losses": losses,
                 "realized_pnl": round_n(realized_pnl, 4),
+                "peak_pnl": round_n(peak_pnl, 4),
+                "open_exposure": round_n(open_exposure, 4),
+                "stressed_pnl": round_n(stressed_pnl, 4),
+                "realized_drawdown": round_n(realized_drawdown, 4),
+                "realized_drawdown_pct": round_n(realized_drawdown_pct, 4),
+                "stressed_drawdown": round_n(stressed_drawdown, 4),
+                "stressed_drawdown_pct": round_n(stressed_drawdown_pct, 4),
             }),
         );
     }

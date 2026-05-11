@@ -16,6 +16,9 @@ pub const DEFAULT_MIN_PRICE: f64 = 0.10;
 pub const DEFAULT_MAX_PRICE: f64 = 0.90;
 pub const DEFAULT_EDGE_CAP: f64 = 0.25;
 pub const DEFAULT_SETTLEMENT_CUTOFF_MINUTES: f64 = 0.30;
+pub const DEFAULT_SETTLEMENT_GUARD_MINUTES: f64 = 1.0;
+pub const DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD: f64 = 10.0;
+pub const DEFAULT_SETTLEMENT_SIGMA_BUFFER: f64 = 0.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandleDecision {
@@ -65,6 +68,24 @@ pub struct ZoneConfig {
     pub max_price: f64,
     pub edge_cap: f64,
     pub min_ev_buffer: f64,
+    #[serde(default = "default_settlement_guard_minutes")]
+    pub settlement_guard_minutes: f64,
+    #[serde(default = "default_settlement_min_abs_move_usd")]
+    pub settlement_min_abs_move_usd: f64,
+    #[serde(default = "default_settlement_sigma_buffer")]
+    pub settlement_sigma_buffer: f64,
+}
+
+fn default_settlement_guard_minutes() -> f64 {
+    DEFAULT_SETTLEMENT_GUARD_MINUTES
+}
+
+fn default_settlement_min_abs_move_usd() -> f64 {
+    DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD
+}
+
+fn default_settlement_sigma_buffer() -> f64 {
+    DEFAULT_SETTLEMENT_SIGMA_BUFFER
 }
 
 impl Default for ZoneConfig {
@@ -86,6 +107,9 @@ impl Default for ZoneConfig {
             max_price: DEFAULT_MAX_PRICE,
             edge_cap: DEFAULT_EDGE_CAP,
             min_ev_buffer: 0.05,
+            settlement_guard_minutes: DEFAULT_SETTLEMENT_GUARD_MINUTES,
+            settlement_min_abs_move_usd: DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD,
+            settlement_sigma_buffer: DEFAULT_SETTLEMENT_SIGMA_BUFFER,
         }
     }
 }
@@ -109,6 +133,9 @@ impl ZoneConfig {
             max_price: s.candle_max_price,
             edge_cap: s.candle_edge_cap,
             min_ev_buffer: s.candle_min_ev_buffer,
+            settlement_guard_minutes: s.candle_settlement_guard_minutes,
+            settlement_min_abs_move_usd: s.candle_settlement_min_abs_move_usd,
+            settlement_sigma_buffer: s.candle_settlement_sigma_buffer,
         }
     }
 }
@@ -145,6 +172,31 @@ pub fn zone_thresholds(
             min_edge.max(cfg.late_min_edge),
         ),
     }
+}
+
+fn remaining_sigma_usd(btc_price: f64, implied_vol: f64, minutes_remaining: f64) -> f64 {
+    if btc_price <= 0.0
+        || implied_vol <= 0.0
+        || minutes_remaining <= 0.0
+        || !btc_price.is_finite()
+        || !implied_vol.is_finite()
+        || !minutes_remaining.is_finite()
+    {
+        return 0.0;
+    }
+    let minutes_per_year = 365.0 * 24.0 * 60.0;
+    btc_price * implied_vol * (minutes_remaining / minutes_per_year).sqrt()
+}
+
+pub fn settlement_guard_buffer_usd(
+    cfg: &ZoneConfig,
+    btc_price: f64,
+    implied_vol: f64,
+    minutes_remaining: f64,
+) -> f64 {
+    let sigma_buffer =
+        cfg.settlement_sigma_buffer * remaining_sigma_usd(btc_price, implied_vol, minutes_remaining);
+    cfg.settlement_min_abs_move_usd.max(sigma_buffer).max(0.0)
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +243,24 @@ pub fn decide_candle_trade(
                 minutes_remaining, DEFAULT_SETTLEMENT_CUTOFF_MINUTES
             ),
         ));
+    }
+
+    if cfg.settlement_guard_minutes > 0.0
+        && minutes_remaining <= cfg.settlement_guard_minutes
+        && btc_price.is_finite()
+        && open_btc.is_finite()
+        && open_btc > 0.0
+    {
+        let threshold_distance = (btc_price - open_btc).abs();
+        let required_distance =
+            settlement_guard_buffer_usd(cfg, btc_price, implied_vol, minutes_remaining);
+        if threshold_distance < required_distance {
+            return DecisionResult::Skip(SkipReason::new(
+                "settlement_margin",
+                zone,
+                format!("distance={threshold_distance:.2}<required={required_distance:.2}"),
+            ));
+        }
     }
 
     if cross_asset_boost > 0.0 {
@@ -369,6 +439,33 @@ mod tests {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_cutoff"),
             _ => panic!("expected skip"),
         }
+    }
+
+    #[test]
+    fn skips_inside_settlement_margin() {
+        let sig = mk_signal(0.95, 2.0, "up");
+        let cfg = ZoneConfig::default();
+        let r = decide_candle_trade(
+            &sig, 4.2, 0.8, 5.0, 0.40, 0.60, 70_002.0, 70_000.0, 0.5,
+            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+        );
+        match r {
+            DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_margin"),
+            _ => panic!("expected skip"),
+        }
+    }
+
+    #[test]
+    fn settlement_guard_uses_volatility_buffer() {
+        let cfg = ZoneConfig {
+            settlement_sigma_buffer: 0.15,
+            ..ZoneConfig::default()
+        };
+        let low_vol = settlement_guard_buffer_usd(&cfg, 70_000.0, 0.10, 2.0);
+        let high_vol = settlement_guard_buffer_usd(&cfg, 70_000.0, 0.80, 2.0);
+
+        assert!(low_vol >= DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD);
+        assert!(high_vol > low_vol);
     }
 
     #[test]

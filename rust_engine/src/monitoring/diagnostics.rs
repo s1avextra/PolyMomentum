@@ -101,6 +101,13 @@ pub struct RiskDiagnostics {
     pub breaker_tripped: bool,
     pub last_breaker_state: Option<String>,
     pub last_breaker_reason: Option<String>,
+    pub last_breaker_peak_pnl: Option<f64>,
+    pub last_breaker_open_exposure: Option<f64>,
+    pub last_breaker_stressed_pnl: Option<f64>,
+    pub last_breaker_realized_drawdown: Option<f64>,
+    pub last_breaker_realized_drawdown_pct: Option<f64>,
+    pub last_breaker_stressed_drawdown: Option<f64>,
+    pub last_breaker_stressed_drawdown_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -403,6 +410,17 @@ fn record_breaker_state(out: &mut SessionDiagnostics, v: &Value) {
     }
     out.risk.last_breaker_state = Some(state);
     out.risk.last_breaker_reason = Some(reason);
+    out.risk.last_breaker_peak_pnl = v.get("peak_pnl").and_then(|x| x.as_f64());
+    out.risk.last_breaker_open_exposure = v.get("open_exposure").and_then(|x| x.as_f64());
+    out.risk.last_breaker_stressed_pnl = v.get("stressed_pnl").and_then(|x| x.as_f64());
+    out.risk.last_breaker_realized_drawdown =
+        v.get("realized_drawdown").and_then(|x| x.as_f64());
+    out.risk.last_breaker_realized_drawdown_pct =
+        v.get("realized_drawdown_pct").and_then(|x| x.as_f64());
+    out.risk.last_breaker_stressed_drawdown =
+        v.get("stressed_drawdown").and_then(|x| x.as_f64());
+    out.risk.last_breaker_stressed_drawdown_pct =
+        v.get("stressed_drawdown_pct").and_then(|x| x.as_f64());
 }
 
 fn missing_string(v: &Value, key: &str) -> bool {
@@ -457,6 +475,16 @@ fn finalize(out: &mut SessionDiagnostics) {
         out.warnings.push(format!(
             "{} oracle disagreement(s) between local resolution and Polymarket",
             out.oracle.disagreements
+        ));
+    }
+    let unresolved_oracle_disagreements = out
+        .oracle
+        .disagreements
+        .saturating_sub(out.oracle.corrections);
+    if unresolved_oracle_disagreements > 0 {
+        out.warnings.push(format!(
+            "{} oracle disagreement(s) have no recorded PnL correction",
+            unresolved_oracle_disagreements
         ));
     }
     if out.oracle.ties > 0 {
@@ -521,8 +549,7 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.orders.placed_missing_state == 0
         && out.orders.rejected == 0
         && out.resolutions.resolved <= out.orders.filled
-        && out.resolutions.near_threshold == 0
-        && out.oracle.disagreements == 0
+        && unresolved_oracle_disagreements == 0
         && out.oracle.ties == 0
         && out
             .risk
@@ -659,6 +686,10 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("oracle disagreement")));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("no recorded PnL correction")));
     }
 
     #[test]
@@ -825,7 +856,7 @@ mod tests {
 
         let diag = analyze_session(&path).unwrap();
 
-        assert!(!diag.ok);
+        assert!(diag.ok);
         assert_eq!(diag.resolutions.near_threshold, 1);
         assert_eq!(diag.resolutions.min_abs_btc_move, Some(3.39));
         assert!(diag

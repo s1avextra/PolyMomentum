@@ -1743,7 +1743,10 @@ async fn cmd_harness_sweep(
     // BTC tape
     let mut btc = backtest::btc_history::BTCHistory::new();
     if let Some(p) = btc_csv {
-        btc.load_csv(p).ok();
+        if let Err(e) = btc.load_csv(p) {
+            eprintln!("BTC CSV load failed: {e}");
+            std::process::exit(1);
+        }
     } else {
         let pad_ms = 3_600_000;
         let start_ms = start_dt.timestamp_millis() - pad_ms;
@@ -1758,6 +1761,10 @@ async fn cmd_harness_sweep(
                 }
             }
         }
+    }
+    if btc.n_ticks() < 50 {
+        eprintln!("not enough BTC ticks ({} < 50)", btc.n_ticks());
+        std::process::exit(1);
     }
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")

@@ -452,8 +452,20 @@ impl Pipeline {
             cycle_count: Mutex::new(0),
         });
         if breaker_tripped {
-            p.monitor
-                .record_breaker_state("restored_tripped", "state_db", 0, 0, 0.0);
+            p.monitor.record_breaker_state(
+                "restored_tripped",
+                "state_db",
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            );
         }
 
         Ok(p)
@@ -1713,9 +1725,37 @@ impl Pipeline {
         *tripped = true;
         let _ = self.risk.set_meta("candle_breaker_tripped", "1").await;
         let bs = *self.breaker.lock().await;
-        self.monitor
-            .record_breaker_state("tripped", reason, bs.wins, bs.losses, bs.realized_pnl);
-        tracing::warn!(reason, wins = bs.wins, losses = bs.losses, pnl = bs.realized_pnl, "candle.circuit_breaker.tripped");
+        let open_exposure: f64 = self
+            .paper_positions
+            .lock()
+            .await
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum();
+        let metrics = bs.metrics(open_exposure, self.settings.bankroll_usd.max(1.0));
+        self.monitor.record_breaker_state(
+            "tripped",
+            reason,
+            bs.wins,
+            bs.losses,
+            bs.realized_pnl,
+            bs.peak_pnl,
+            metrics.open_exposure,
+            metrics.stressed_pnl,
+            metrics.realized_drawdown,
+            metrics.realized_drawdown_pct,
+            metrics.stressed_drawdown,
+            metrics.stressed_drawdown_pct,
+        );
+        tracing::warn!(
+            reason,
+            wins = bs.wins,
+            losses = bs.losses,
+            pnl = bs.realized_pnl,
+            open_exposure = metrics.open_exposure,
+            stressed_pnl = metrics.stressed_pnl,
+            "candle.circuit_breaker.tripped"
+        );
         let _ = self
             .alerter
             .send(
