@@ -297,6 +297,27 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_breaker_state(
+        &self,
+        state: &str,
+        reason: &str,
+        wins: u64,
+        losses: u64,
+        realized_pnl: f64,
+    ) {
+        self.write_event(
+            "risk",
+            "breaker",
+            json!({
+                "state": state,
+                "reason": short(reason, 100),
+                "wins": wins,
+                "losses": losses,
+                "realized_pnl": round_n(realized_pnl, 4),
+            }),
+        );
+    }
+
     pub fn record_price_snapshot(
         &self,
         btc_price: f64,

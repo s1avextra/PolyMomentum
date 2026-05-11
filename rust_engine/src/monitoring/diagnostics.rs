@@ -80,6 +80,7 @@ pub struct ResolutionDiagnostics {
 pub struct OracleDiagnostics {
     pub checks: u64,
     pub disagreements: u64,
+    pub ties: u64,
     pub corrections: u64,
     pub total_pnl_delta: f64,
 }
@@ -96,6 +97,10 @@ pub struct RiskDiagnostics {
     pub last_wins: Option<u64>,
     pub last_losses: Option<u64>,
     pub max_positions: u64,
+    pub breaker_events: u64,
+    pub breaker_tripped: bool,
+    pub last_breaker_state: Option<String>,
+    pub last_breaker_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -159,6 +164,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("oracle", "resolution") => record_oracle_resolution(&mut out, &v),
             ("oracle", "correction") => record_oracle_correction(&mut out, &v),
             ("risk", "state") => record_risk_state(&mut out, &v),
+            ("risk", "breaker") => record_breaker_state(&mut out, &v),
             _ => {}
         }
     }
@@ -342,6 +348,13 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
     if !v.get("agreed").and_then(|x| x.as_bool()).unwrap_or(true) {
         out.oracle.disagreements += 1;
     }
+    if v.get("polymarket_actual")
+        .and_then(|x| x.as_str())
+        .map(|s| s == "tie")
+        .unwrap_or(false)
+    {
+        out.oracle.ties += 1;
+    }
 }
 
 fn record_oracle_correction(out: &mut SessionDiagnostics, v: &Value) {
@@ -371,6 +384,25 @@ fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
     out.risk.last_wins = wins;
     out.risk.last_losses = losses;
     out.risk.max_positions = out.risk.max_positions.max(positions);
+}
+
+fn record_breaker_state(out: &mut SessionDiagnostics, v: &Value) {
+    out.risk.breaker_events += 1;
+    let state = v
+        .get("state")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let reason = v
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    if matches!(state.as_str(), "tripped" | "restored_tripped") {
+        out.risk.breaker_tripped = true;
+    }
+    out.risk.last_breaker_state = Some(state);
+    out.risk.last_breaker_reason = Some(reason);
 }
 
 fn missing_string(v: &Value, key: &str) -> bool {
@@ -427,6 +459,12 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.oracle.disagreements
         ));
     }
+    if out.oracle.ties > 0 {
+        out.warnings.push(format!(
+            "{} Polymarket tie resolution(s); tie risk must be investigated before live promotion",
+            out.oracle.ties
+        ));
+    }
     if out.resolutions.near_threshold > 0 {
         out.warnings.push(format!(
             "{} resolution(s) within ${:.2} BTC of the candle threshold; settlement-basis risk is elevated",
@@ -456,9 +494,24 @@ fn finalize(out: &mut SessionDiagnostics) {
         out.warnings
             .push(format!("{} fatal system error(s)", out.system.fatal_errors));
     }
+    if out.risk.breaker_tripped {
+        let reason = out
+            .risk
+            .last_breaker_reason
+            .as_deref()
+            .unwrap_or("unknown");
+        out.warnings.push(format!(
+            "circuit breaker is tripped (reason={reason}); no new paper/live trades will be evaluated"
+        ));
+    }
     if out.signals.evaluations == 0 {
-        out.warnings
-            .push("no signal evaluations captured; diagnostic run may be too short".to_string());
+        if out.risk.breaker_tripped {
+            out.warnings
+                .push("no signal evaluations captured because the circuit breaker is tripped".to_string());
+        } else {
+            out.warnings
+                .push("no signal evaluations captured; diagnostic run may be too short".to_string());
+        }
     }
 
     out.ok = out.release_manifest_seen
@@ -470,6 +523,7 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.resolutions.resolved <= out.orders.filled
         && out.resolutions.near_threshold == 0
         && out.oracle.disagreements == 0
+        && out.oracle.ties == 0
         && out
             .risk
             .first_realized_pnl
@@ -477,6 +531,7 @@ fn finalize(out: &mut SessionDiagnostics) {
             .unwrap_or(true)
         && first_wins == 0
         && first_losses == 0
+        && !out.risk.breaker_tripped
         && out.system.fatal_errors == 0;
 }
 
@@ -658,6 +713,65 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("existing paper results")));
+    }
+
+    #[test]
+    fn session_diagnostics_flags_breaker_and_tie_resolution() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "risk",
+                "type": "breaker",
+                "state": "tripped",
+                "reason": "oracle_tie",
+                "wins": 0,
+                "losses": 1,
+                "realized_pnl": -7.5
+            }),
+            serde_json::json!({
+                "cat": "oracle",
+                "type": "resolution",
+                "polymarket_actual": "tie",
+                "agreed": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(!diag.ok);
+        assert_eq!(diag.oracle.ties, 1);
+        assert!(diag.risk.breaker_tripped);
+        assert_eq!(diag.risk.last_breaker_reason.as_deref(), Some("oracle_tie"));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("tie resolution")));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("circuit breaker is tripped")));
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("because the circuit breaker is tripped")));
     }
 
     #[test]

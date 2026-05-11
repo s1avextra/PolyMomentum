@@ -185,7 +185,11 @@ impl OraclePending {
         let fee = self.fee.unwrap_or(0.0);
         let provisional_won = self.provisional_won?;
         let provisional_pnl = self.provisional_pnl?;
-        let final_won = polymarket_actual == direction;
+        let final_won = match polymarket_actual {
+            "up" | "down" => polymarket_actual == direction,
+            "tie" => false,
+            _ => return None,
+        };
         let final_pnl = paper_outcome_pnl(final_won, entry_price, size, fee);
         Some((final_won, final_pnl, provisional_won, provisional_pnl))
     }
@@ -447,6 +451,10 @@ impl Pipeline {
             stop: Arc::new(Notify::new()),
             cycle_count: Mutex::new(0),
         });
+        if breaker_tripped {
+            p.monitor
+                .record_breaker_state("restored_tripped", "state_db", 0, 0, 0.0);
+        }
 
         Ok(p)
     }
@@ -1567,6 +1575,7 @@ impl Pipeline {
                         }
                     }
                     Ok((res, [n0, n1])) => {
+                        let is_tie = matches!(res, Resolution::Tie);
                         let res_str = res.as_str();
                         let agreed = res_str == entry.our_actual;
                         let now = SystemTime::now()
@@ -1622,6 +1631,10 @@ impl Pipeline {
                             );
                         } else {
                             tracing::info!(cid = short_cid(&cid), "candle.oracle.agreed");
+                        }
+                        if is_tie {
+                            self.trip_breaker("oracle_tie").await;
+                            self.stop.notify_one();
                         }
                         to_remove.push(cid);
                     }
@@ -1700,6 +1713,8 @@ impl Pipeline {
         *tripped = true;
         let _ = self.risk.set_meta("candle_breaker_tripped", "1").await;
         let bs = *self.breaker.lock().await;
+        self.monitor
+            .record_breaker_state("tripped", reason, bs.wins, bs.losses, bs.realized_pnl);
         tracing::warn!(reason, wins = bs.wins, losses = bs.losses, pnl = bs.realized_pnl, "candle.circuit_breaker.tripped");
         let _ = self
             .alerter
@@ -1981,5 +1996,30 @@ mod tests {
         let err = RuntimeStrategy::load(&settings).unwrap_err();
 
         assert!(err.to_string().contains("hash mismatch"));
+    }
+
+    #[test]
+    fn oracle_pnl_treats_polymarket_tie_as_loss() {
+        let pending = OraclePending {
+            our_actual: "up".to_string(),
+            our_open_btc: 100.0,
+            our_close_btc: 110.0,
+            end_time: 1.0,
+            attempts: 0,
+            direction: Some("up".to_string()),
+            entry_price: Some(0.42),
+            fee: Some(0.01),
+            size: Some(10.0),
+            provisional_won: Some(true),
+            provisional_pnl: Some(5.79),
+        };
+
+        let (final_won, final_pnl, provisional_won, provisional_pnl) =
+            pending.oracle_pnl("tie").unwrap();
+
+        assert!(!final_won);
+        assert!(provisional_won);
+        assert!((final_pnl - -4.21).abs() < 1e-9);
+        assert!((provisional_pnl - 5.79).abs() < 1e-9);
     }
 }
