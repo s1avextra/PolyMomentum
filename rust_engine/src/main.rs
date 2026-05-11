@@ -88,6 +88,9 @@ enum Command {
         /// Cap the BTC candle universe for short resource-friendly diagnostics.
         #[arg(long)]
         max_contracts: Option<usize>,
+        /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
+        #[arg(long)]
+        window_minutes: Option<f64>,
         /// Promotion artifact JSON to replay the same strategy as paper/live.
         #[arg(long)]
         promotion_artifact: Option<String>,
@@ -238,6 +241,9 @@ enum Command {
         /// Write a reproducible JSON experiment report to this path.
         #[arg(long)]
         report_json: Option<String>,
+        /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
+        #[arg(long)]
+        window_minutes: Option<f64>,
     },
     /// Run the full L2-backtest harness over PMXT v2 archives. Loads candle
     /// markets from Gamma, downloads/streams the requested UTC hours,
@@ -279,6 +285,9 @@ enum Command {
         /// Cap the BTC candle universe for short resource-friendly diagnostics.
         #[arg(long)]
         max_contracts: Option<usize>,
+        /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
+        #[arg(long)]
+        window_minutes: Option<f64>,
         /// Permit archive-wide condition-id scans and Gamma fetches for missing historical metadata.
         #[arg(long, default_value_t = false)]
         allow_gamma_fetch: bool,
@@ -449,6 +458,9 @@ enum ExperimentCommand {
         /// Minimum selected-variant trades required in each daily report.
         #[arg(long, default_value_t = 10)]
         min_daily_trades: usize,
+        /// Minimum selected-variant PnL required in each daily report.
+        #[arg(long, default_value_t = 0.0)]
+        min_daily_pnl: f64,
         /// Optional selected-variant daily loss cap; 0 disables it.
         #[arg(long, default_value_t = 0.0)]
         max_daily_loss: f64,
@@ -518,6 +530,7 @@ async fn main() {
             allow_download,
             allow_gamma_fetch,
             max_contracts,
+            window_minutes,
             promotion_artifact,
         } => {
             let mut settings = settings.clone();
@@ -534,6 +547,7 @@ async fn main() {
                 allow_download,
                 allow_gamma_fetch,
                 max_contracts,
+                window_minutes,
             )
             .await;
         }
@@ -596,6 +610,7 @@ async fn main() {
             checkpoint,
             resume,
             report_json,
+            window_minutes,
         } => {
             let conf = parse_csv_floats(&conf);
             let zs = parse_csv_floats(&z);
@@ -619,6 +634,7 @@ async fn main() {
                 checkpoint.as_deref(),
                 resume,
                 report_json.as_deref(),
+                window_minutes,
             ).await;
         }
         Command::Harness {
@@ -632,10 +648,11 @@ async fn main() {
             checkpoint,
             resume,
             max_contracts,
+            window_minutes,
             allow_gamma_fetch,
             report_json,
         } => {
-            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, checkpoint.as_deref(), resume, max_contracts, allow_gamma_fetch, report_json.as_deref()).await;
+            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, checkpoint.as_deref(), resume, max_contracts, window_minutes, allow_gamma_fetch, report_json.as_deref()).await;
         }
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
@@ -647,6 +664,37 @@ fn apply_promotion_override(settings: &mut config::Settings, path: Option<String
     if let Some(path) = path {
         settings.promotion_artifact_path = path;
     }
+}
+
+fn filter_contracts_by_window_minutes(
+    contracts: &mut Vec<data::scanner::CandleContract>,
+    target_minutes: Option<f64>,
+    label: &str,
+) {
+    let Some(target) = target_minutes else {
+        return;
+    };
+    if target <= 0.0 {
+        eprintln!("--window-minutes must be > 0");
+        std::process::exit(2);
+    }
+    let before = contracts.len();
+    contracts.retain(|c| {
+        let minutes = live::window::estimate_window_minutes(&c.window_description);
+        (minutes - target).abs() < 1e-6
+    });
+    eprintln!(
+        "{label}: window_minutes={target} kept {}/{} contract(s)",
+        contracts.len(),
+        before
+    );
+    tracing::info!(
+        label,
+        target_minutes = target,
+        before,
+        kept = contracts.len(),
+        "window length filter",
+    );
 }
 
 async fn run_startup_preflight(
@@ -736,6 +784,7 @@ async fn cmd_live_replay(
     allow_download: bool,
     allow_gamma_fetch: bool,
     max_contracts: Option<usize>,
+    window_minutes: Option<f64>,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -854,6 +903,7 @@ async fn cmd_live_replay(
     let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
     let mut contracts = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
     contracts.retain(|c| c.asset == "BTC");
+    filter_contracts_by_window_minutes(&mut contracts, window_minutes, "live-replay");
     let start_ts = start_dt.timestamp() as f64;
     let end_ts = end_dt.timestamp() as f64 + 3600.0;
     contracts.retain(|c| {
@@ -1191,6 +1241,7 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_reports,
             min_profitable_reports,
             min_daily_trades,
+            min_daily_pnl,
             max_daily_loss,
             allow_incomplete_data,
         } => {
@@ -1220,6 +1271,7 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_reports,
                 min_profitable_reports,
                 min_daily_trades,
+                min_daily_pnl,
                 max_daily_loss,
             };
             let artifact =
@@ -1568,7 +1620,7 @@ fn parse_csv_floats(s: &str) -> Vec<f64> {
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_harness_sweep(
-    settings: &config::Settings,
+    _settings: &config::Settings,
     start: &str,
     end: Option<&str>,
     bankroll: f64,
@@ -1585,6 +1637,7 @@ async fn cmd_harness_sweep(
     checkpoint: Option<&str>,
     resume: bool,
     report_json: Option<&str>,
+    window_minutes: Option<f64>,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -1645,51 +1698,30 @@ async fn cmd_harness_sweep(
             std::process::exit(1);
         }
     }
-    let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for &h in &hours {
-        eprintln!("pmxt: scanning condition_ids for {h}");
-        match loader.distinct_condition_ids(h) {
-            Ok(s) => all_cids.extend(s),
-            Err(e) => {
-                eprintln!("read distinct cids for {}: {e}", h);
-                std::process::exit(1);
-            }
-        }
-    }
     let cache_dir_path_for_meta = cache_dir_path.clone();
     let gamma_cache_path = cache_dir_path_for_meta.join("gamma_market_cache.json");
-    let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> =
+    let cached_markets: std::collections::BTreeMap<String, data::models::Market> =
         match std::fs::read_to_string(&gamma_cache_path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => Default::default(),
         };
-    let cid_vec: Vec<String> = all_cids
-        .iter()
-        .filter(|c| !cached_markets.contains_key(*c))
-        .cloned()
-        .collect();
-    if !cid_vec.is_empty() {
-        eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
-        tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma fetch");
-        let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-        let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("Gamma lookup failed: {e}");
-                std::process::exit(1);
-            }
-        };
-        for m in new_markets {
-            cached_markets.insert(m.condition_id.clone(), m);
-        }
-        if let Ok(s) = serde_json::to_string(&cached_markets) {
-            let _ = std::fs::write(&gamma_cache_path, s);
-        }
+    if cached_markets.is_empty() {
+        eprintln!(
+            "harness-sweep has no cached Gamma metadata at {}; run `harness --allow-gamma-fetch` once to hydrate it",
+            gamma_cache_path.display()
+        );
+        std::process::exit(1);
     }
+    eprintln!(
+        "harness-sweep: using cached Gamma metadata from {} ({} markets)",
+        gamma_cache_path.display(),
+        cached_markets.len()
+    );
     let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
 
     let mut contracts = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
     contracts.retain(|c| c.asset == "BTC");
+    filter_contracts_by_window_minutes(&mut contracts, window_minutes, "harness-sweep");
     let start_ts = start_dt.timestamp() as f64;
     let end_ts = end_dt.timestamp() as f64 + 3600.0;
     contracts.retain(|c| {
@@ -1865,6 +1897,7 @@ async fn cmd_harness(
     checkpoint: Option<&str>,
     resume: bool,
     max_contracts: Option<usize>,
+    window_minutes: Option<f64>,
     allow_gamma_fetch: bool,
     report_json: Option<&str>,
 ) {
@@ -1987,6 +2020,7 @@ async fn cmd_harness(
     //    feed pulled separately). Plenty of room to widen later.
     let mut contracts = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
     contracts.retain(|c| c.asset == "BTC");
+    filter_contracts_by_window_minutes(&mut contracts, window_minutes, "harness");
     // Keep candles whose [open_time, close_time] OVERLAPS the harness hours.
     let start_ts = start_dt.timestamp() as f64;
     let end_ts = end_dt.timestamp() as f64 + 3600.0;

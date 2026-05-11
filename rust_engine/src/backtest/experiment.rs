@@ -86,6 +86,8 @@ pub struct MultiReportPromotionGate {
     #[serde(default)]
     pub min_daily_trades: usize,
     #[serde(default)]
+    pub min_daily_pnl: f64,
+    #[serde(default)]
     pub max_daily_loss: f64,
 }
 
@@ -112,6 +114,7 @@ impl Default for MultiReportPromotionGate {
             min_reports: default_min_reports(),
             min_profitable_reports: default_min_profitable_reports(),
             min_daily_trades: 0,
+            min_daily_pnl: 0.0,
             max_daily_loss: 0.0,
         }
     }
@@ -605,6 +608,20 @@ fn multi_report_rejection_reasons(
             }
         }
     }
+    if multi_gate.min_daily_pnl > 0.0 {
+        if let Some(worst) = daily
+            .iter()
+            .map(|v| v.total_pnl)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            if worst < multi_gate.min_daily_pnl {
+                reasons.push(format!(
+                    "worst daily pnl {:.4} below minimum {:.4}",
+                    worst, multi_gate.min_daily_pnl
+                ));
+            }
+        }
+    }
     if multi_gate.max_daily_loss > 0.0 {
         if let Some(worst) = daily
             .iter()
@@ -644,11 +661,12 @@ fn multi_report_risk_notes(
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(0.0);
     vec![format!(
-        "multi-report gate: reports={} profitable={} min_profitable={} min_daily_trades={} worst_daily_pnl={:.2}",
+        "multi-report gate: reports={} profitable={} min_profitable={} min_daily_trades={} min_daily_pnl={:.2} worst_daily_pnl={:.2}",
         daily.len(),
         profitable,
         multi_gate.min_profitable_reports,
         multi_gate.min_daily_trades,
+        multi_gate.min_daily_pnl,
         worst,
     )]
 }
@@ -1218,6 +1236,7 @@ mod tests {
                 min_reports: 3,
                 min_profitable_reports: 2,
                 min_daily_trades: 30,
+                min_daily_pnl: 0.0,
                 max_daily_loss: 0.0,
             },
         )
@@ -1226,5 +1245,62 @@ mod tests {
         assert_eq!(artifact.selected_strategy.params_hash, "consistent");
         assert_eq!(artifact.trades, 90);
         assert_eq!(artifact.total_pnl, 12.0);
+    }
+
+    #[test]
+    fn aggregate_promotion_respects_min_daily_pnl() {
+        let cfg = cfg();
+        let mut reports = Vec::new();
+        for (fragile_pnl, robust_pnl) in [(100.0, 20.0), (100.0, 20.0), (1.0, 20.0)] {
+            let mut report = ExperimentReport::from_harness("day", &cfg, &[]);
+            report.variants.push(VariantReport {
+                strategy: StrategySpec::new("s", "1", "fragile", "fragile"),
+                strategy_params: serde_json::json!({"name": "fragile"}),
+                trades: 40,
+                wins: 28,
+                losses: 12,
+                unresolved_fills: 0,
+                win_rate: 0.7,
+                total_pnl: fragile_pnl,
+                avg_pnl: fragile_pnl / 40.0,
+                total_fees: 0.0,
+                sharpe_like: 0.1,
+                by_zone: zone_split(20, 20),
+            });
+            report.variants.push(VariantReport {
+                strategy: StrategySpec::new("s", "1", "robust", "robust"),
+                strategy_params: serde_json::json!({"name": "robust"}),
+                trades: 40,
+                wins: 28,
+                losses: 12,
+                unresolved_fills: 0,
+                win_rate: 0.7,
+                total_pnl: robust_pnl,
+                avg_pnl: robust_pnl / 40.0,
+                total_fees: 0.0,
+                sharpe_like: 0.1,
+                by_zone: zone_split(20, 20),
+            });
+            reports.push(report);
+        }
+
+        let artifact = PromotionArtifact::from_reports(
+            &reports,
+            PromotionGate {
+                min_trades: 120,
+                ..PromotionGate::default()
+            },
+            MultiReportPromotionGate {
+                min_reports: 3,
+                min_profitable_reports: 3,
+                min_daily_trades: 40,
+                min_daily_pnl: 10.0,
+                max_daily_loss: 0.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(artifact.selected_strategy.params_hash, "robust");
+        assert_eq!(artifact.total_pnl, 60.0);
     }
 }
