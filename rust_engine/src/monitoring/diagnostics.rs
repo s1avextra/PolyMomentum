@@ -119,6 +119,7 @@ pub struct SystemDiagnostics {
     pub runtime_strategy_source: Option<String>,
     pub runtime_strategy_hash: Option<String>,
     pub runtime_strategy_risk_profile: Option<String>,
+    pub settlement_cutoff_minutes: Option<f64>,
     pub settlement_guard_minutes: Option<f64>,
     pub settlement_min_abs_move_usd: Option<f64>,
     pub settlement_sigma_buffer: Option<f64>,
@@ -295,6 +296,9 @@ fn record_runtime_strategy(out: &mut SessionDiagnostics, v: &Value) {
         .and_then(|s| s.get("risk_profile"))
         .and_then(|x| x.as_str())
         .map(ToString::to_string);
+    out.system.settlement_cutoff_minutes = v
+        .get("settlement_cutoff_minutes")
+        .and_then(|x| x.as_f64());
     out.system.settlement_guard_minutes = v
         .get("settlement_guard_minutes")
         .and_then(|x| x.as_f64());
@@ -636,6 +640,7 @@ mod tests {
                     "params_hash": "runtime_strategy",
                     "risk_profile": "test-risk"
                 },
+                "settlement_cutoff_minutes": 1.5,
                 "settlement_guard_minutes": 5.0,
                 "settlement_min_abs_move_usd": 25.0,
                 "settlement_sigma_buffer": 0.2
@@ -675,6 +680,7 @@ mod tests {
             diag.system.runtime_strategy_hash.as_deref(),
             Some("runtime_strategy")
         );
+        assert_eq!(diag.system.settlement_cutoff_minutes, Some(1.5));
         assert_eq!(diag.system.settlement_guard_minutes, Some(5.0));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);

@@ -128,6 +128,7 @@ impl SessionMonitor {
             json!({
                 "source": source,
                 "strategy": strategy,
+                "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
                 "settlement_guard_minutes": zone_config.settlement_guard_minutes,
                 "settlement_min_abs_move_usd": zone_config.settlement_min_abs_move_usd,
                 "settlement_sigma_buffer": zone_config.settlement_sigma_buffer,

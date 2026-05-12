@@ -68,6 +68,11 @@ pub struct ZoneConfig {
     pub max_price: f64,
     pub edge_cap: f64,
     pub min_ev_buffer: f64,
+    #[serde(
+        default = "default_settlement_cutoff_minutes",
+        skip_serializing_if = "is_default_settlement_cutoff_minutes"
+    )]
+    pub settlement_cutoff_minutes: f64,
     #[serde(default = "default_settlement_guard_minutes")]
     pub settlement_guard_minutes: f64,
     #[serde(default = "default_settlement_min_abs_move_usd")]
@@ -78,6 +83,14 @@ pub struct ZoneConfig {
 
 fn default_settlement_guard_minutes() -> f64 {
     DEFAULT_SETTLEMENT_GUARD_MINUTES
+}
+
+fn default_settlement_cutoff_minutes() -> f64 {
+    DEFAULT_SETTLEMENT_CUTOFF_MINUTES
+}
+
+fn is_default_settlement_cutoff_minutes(v: &f64) -> bool {
+    (*v - DEFAULT_SETTLEMENT_CUTOFF_MINUTES).abs() <= f64::EPSILON
 }
 
 fn default_settlement_min_abs_move_usd() -> f64 {
@@ -107,6 +120,7 @@ impl Default for ZoneConfig {
             max_price: DEFAULT_MAX_PRICE,
             edge_cap: DEFAULT_EDGE_CAP,
             min_ev_buffer: 0.05,
+            settlement_cutoff_minutes: DEFAULT_SETTLEMENT_CUTOFF_MINUTES,
             settlement_guard_minutes: DEFAULT_SETTLEMENT_GUARD_MINUTES,
             settlement_min_abs_move_usd: DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD,
             settlement_sigma_buffer: DEFAULT_SETTLEMENT_SIGMA_BUFFER,
@@ -133,6 +147,7 @@ impl ZoneConfig {
             max_price: s.candle_max_price,
             edge_cap: s.candle_edge_cap,
             min_ev_buffer: s.candle_min_ev_buffer,
+            settlement_cutoff_minutes: s.candle_settlement_cutoff_minutes,
             settlement_guard_minutes: s.candle_settlement_guard_minutes,
             settlement_min_abs_move_usd: s.candle_settlement_min_abs_move_usd,
             settlement_sigma_buffer: s.candle_settlement_sigma_buffer,
@@ -145,6 +160,13 @@ impl ZoneConfig {
     pub fn apply_settings_safety_floor(&mut self, s: &crate::config::Settings) -> bool {
         let mut changed = false;
 
+        if s.candle_settlement_cutoff_minutes.is_finite()
+            && s.candle_settlement_cutoff_minutes >= 0.0
+            && self.settlement_cutoff_minutes < s.candle_settlement_cutoff_minutes
+        {
+            self.settlement_cutoff_minutes = s.candle_settlement_cutoff_minutes;
+            changed = true;
+        }
         if s.candle_settlement_guard_minutes.is_finite()
             && s.candle_settlement_guard_minutes >= 0.0
             && self.settlement_guard_minutes < s.candle_settlement_guard_minutes
@@ -265,13 +287,13 @@ pub fn decide_candle_trade(
     let (mut z_min_conf, mut z_min_z, z_min_edge) =
         zone_thresholds(zone, min_confidence, min_edge, cfg);
 
-    if minutes_remaining <= DEFAULT_SETTLEMENT_CUTOFF_MINUTES {
+    if minutes_remaining <= cfg.settlement_cutoff_minutes {
         return DecisionResult::Skip(SkipReason::new(
             "settlement_cutoff",
             zone,
             format!(
                 "{:.2} <= {:.2}",
-                minutes_remaining, DEFAULT_SETTLEMENT_CUTOFF_MINUTES
+                minutes_remaining, cfg.settlement_cutoff_minutes
             ),
         ));
     }
@@ -502,29 +524,51 @@ mod tests {
     #[test]
     fn settings_safety_floor_only_tightens_settlement_params() {
         let mut cfg = ZoneConfig {
+            settlement_cutoff_minutes: 0.1,
             settlement_guard_minutes: 0.5,
             settlement_min_abs_move_usd: 2.0,
             settlement_sigma_buffer: 0.1,
             ..ZoneConfig::default()
         };
         let mut settings = crate::config::Settings::from_env();
+        settings.candle_settlement_cutoff_minutes = 1.5;
         settings.candle_settlement_guard_minutes = 5.0;
         settings.candle_settlement_min_abs_move_usd = 25.0;
         settings.candle_settlement_sigma_buffer = 0.2;
 
         assert!(cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.settlement_cutoff_minutes, 1.5);
         assert_eq!(cfg.settlement_guard_minutes, 5.0);
         assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
         assert_eq!(cfg.settlement_sigma_buffer, 0.2);
 
+        settings.candle_settlement_cutoff_minutes = 0.3;
         settings.candle_settlement_guard_minutes = 1.0;
         settings.candle_settlement_min_abs_move_usd = 10.0;
         settings.candle_settlement_sigma_buffer = 0.0;
 
         assert!(!cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.settlement_cutoff_minutes, 1.5);
         assert_eq!(cfg.settlement_guard_minutes, 5.0);
         assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
         assert_eq!(cfg.settlement_sigma_buffer, 0.2);
+    }
+
+    #[test]
+    fn configurable_cutoff_skips_late_entries() {
+        let sig = mk_signal(0.95, 2.0, "up");
+        let cfg = ZoneConfig {
+            settlement_cutoff_minutes: 1.5,
+            ..ZoneConfig::default()
+        };
+        let r = decide_candle_trade(
+            &sig, 4.0, 1.0, 5.0, 0.30, 0.70, 70_500.0, 70_000.0, 0.5,
+            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+        );
+        match r {
+            DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_cutoff"),
+            _ => panic!("expected skip"),
+        }
     }
 
     #[test]

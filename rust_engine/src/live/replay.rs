@@ -84,8 +84,9 @@ impl ReplayStrategy {
                 strategy_spec.version.clone(),
                 &variant,
                 format!(
-                    "{};settlement_floor guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
+                    "{};settlement_floor cutoff_min={:.2},guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
                     strategy_spec.risk_profile,
+                    variant.zone_config.settlement_cutoff_minutes,
                     variant.zone_config.settlement_guard_minutes,
                     variant.zone_config.settlement_min_abs_move_usd,
                     variant.zone_config.settlement_sigma_buffer,
@@ -895,6 +896,7 @@ mod tests {
 
         let mut settings = Settings::from_env();
         settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_cutoff_minutes = 0.30;
         settings.candle_settlement_guard_minutes = 1.0;
         settings.candle_settlement_min_abs_move_usd = 10.0;
         settings.candle_settlement_sigma_buffer = 0.0;
@@ -911,6 +913,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("promotion.json");
         let mut variant = StrategyVariant::maker_first();
+        variant.zone_config.settlement_cutoff_minutes = 0.1;
         variant.zone_config.settlement_guard_minutes = 0.5;
         variant.zone_config.settlement_min_abs_move_usd = 2.0;
         variant.zone_config.settlement_sigma_buffer = 0.0;
@@ -948,11 +951,13 @@ mod tests {
 
         let mut settings = Settings::from_env();
         settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_cutoff_minutes = 1.5;
         settings.candle_settlement_guard_minutes = 5.0;
         settings.candle_settlement_min_abs_move_usd = 25.0;
         settings.candle_settlement_sigma_buffer = 0.2;
         let replay = ReplayStrategy::load(&settings).unwrap();
 
+        assert_eq!(replay.variant.zone_config.settlement_cutoff_minutes, 1.5);
         assert_eq!(replay.variant.zone_config.settlement_guard_minutes, 5.0);
         assert_eq!(replay.variant.zone_config.settlement_min_abs_move_usd, 25.0);
         assert_eq!(replay.variant.zone_config.settlement_sigma_buffer, 0.2);
