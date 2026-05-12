@@ -45,6 +45,11 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="/opt/polymomentum"
+SCP_CMD="${SCP_CMD:-scp}"
+
+scp_copy() {
+    $SCP_CMD "$@"
+}
 
 if [ -n "$BINARY_PATH" ]; then
     case "$BINARY_PATH" in
@@ -85,18 +90,18 @@ fi
 
 echo "=== Copying binary to $VPS ==="
 ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data"
-scp "$BIN" "$VPS:$APP_DIR/polymomentum-engine.new"
+scp_copy "$BIN" "$VPS:$APP_DIR/polymomentum-engine.new"
 ssh "$VPS" "chown polymomentum:polymomentum $APP_DIR/polymomentum-engine.new && \
     chmod 0755 $APP_DIR/polymomentum-engine.new && \
     mv $APP_DIR/polymomentum-engine.new $APP_DIR/polymomentum-engine"
 
 echo "=== Installing support scripts and timers ==="
-scp "$ROOT_DIR/deploy/healthcheck.sh" "$VPS:/tmp/polymomentum-healthcheck.sh"
-scp "$ROOT_DIR/deploy/soak-report.sh" "$VPS:/tmp/polymomentum-soak-report.sh"
-scp "$ROOT_DIR/deploy/polymomentum-healthcheck.service" "$VPS:/tmp/polymomentum-healthcheck.service"
-scp "$ROOT_DIR/deploy/polymomentum-healthcheck.timer" "$VPS:/tmp/polymomentum-healthcheck.timer"
-scp "$ROOT_DIR/deploy/polymomentum-soak-report.service" "$VPS:/tmp/polymomentum-soak-report.service"
-scp "$ROOT_DIR/deploy/polymomentum-soak-report.timer" "$VPS:/tmp/polymomentum-soak-report.timer"
+scp_copy "$ROOT_DIR/deploy/healthcheck.sh" "$VPS:/tmp/polymomentum-healthcheck.sh"
+scp_copy "$ROOT_DIR/deploy/soak-report.sh" "$VPS:/tmp/polymomentum-soak-report.sh"
+scp_copy "$ROOT_DIR/deploy/polymomentum-healthcheck.service" "$VPS:/tmp/polymomentum-healthcheck.service"
+scp_copy "$ROOT_DIR/deploy/polymomentum-healthcheck.timer" "$VPS:/tmp/polymomentum-healthcheck.timer"
+scp_copy "$ROOT_DIR/deploy/polymomentum-soak-report.service" "$VPS:/tmp/polymomentum-soak-report.service"
+scp_copy "$ROOT_DIR/deploy/polymomentum-soak-report.timer" "$VPS:/tmp/polymomentum-soak-report.timer"
 ssh "$VPS" "sudo install -o polymomentum -g polymomentum -m 0755 /tmp/polymomentum-healthcheck.sh $APP_DIR/healthcheck.sh && \
     sudo install -o polymomentum -g polymomentum -m 0755 /tmp/polymomentum-soak-report.sh $APP_DIR/soak-report.sh && \
     sudo install -o root -g root -m 0644 /tmp/polymomentum-healthcheck.service /etc/systemd/system/polymomentum-healthcheck.service && \
@@ -112,7 +117,7 @@ if [ "$MODE" = "live" ]; then
     sed -i.bak 's|--mode live$|--mode live --i-understand-live|' "$SERVICE_TMP"
     rm -f "$SERVICE_TMP.bak"
 fi
-scp "$SERVICE_TMP" "$VPS:/tmp/polymomentum-engine.service"
+scp_copy "$SERVICE_TMP" "$VPS:/tmp/polymomentum-engine.service"
 rm -f "$SERVICE_TMP"
 ssh "$VPS" "sudo mv /tmp/polymomentum-engine.service /etc/systemd/system/polymomentum-engine.service && \
     sudo systemctl daemon-reload && \
