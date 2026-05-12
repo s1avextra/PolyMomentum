@@ -17,7 +17,6 @@ Environment=KILL_SWITCH_PATH=/tmp/polymomentum/KILL
 Environment=BANKROLL_USD=100
 ExecStartPre=/opt/polymomentum/polymomentum-engine preflight --mode paper
 ExecStart=/opt/polymomentum/polymomentum-engine live --mode paper
-ExecStop=/bin/kill -SIGTERM $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30

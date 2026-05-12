@@ -358,6 +358,16 @@ impl Pipeline {
             risk.get_meta("candle_breaker_tripped").await?.as_deref(),
             Some("1")
         );
+        let breaker_state = match risk.get_meta("candle_breaker_state").await? {
+            Some(raw) => match serde_json::from_str::<BreakerState>(&raw) {
+                Ok(state) => state,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to restore candle breaker metrics");
+                    BreakerState::default()
+                }
+            },
+            None => BreakerState::default(),
+        };
         let mut paper_positions = HashMap::new();
         for (cid, payload) in risk.load_paper_positions().await.unwrap_or_default() {
             if let Some(pp) = PaperPosition::from_json(cid.clone(), &payload) {
@@ -376,6 +386,10 @@ impl Pipeline {
         if !oracle_pending.is_empty() {
             tracing::info!(n = oracle_pending.len(), "restored oracle-pending");
         }
+        let restored_open_exposure: f64 = paper_positions
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum();
 
         let mut momentum_map = HashMap::new();
         let mom_cfg = MomentumConfig {
@@ -439,7 +453,7 @@ impl Pipeline {
             traded: Mutex::new(HashSet::new()),
             paper_positions: Mutex::new(paper_positions),
             oracle_pending: Mutex::new(oracle_pending),
-            breaker: Mutex::new(BreakerState::default()),
+            breaker: Mutex::new(breaker_state),
             breaker_tripped: Mutex::new(breaker_tripped),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
@@ -452,19 +466,23 @@ impl Pipeline {
             cycle_count: Mutex::new(0),
         });
         if breaker_tripped {
+            let metrics = breaker_state.metrics(
+                restored_open_exposure,
+                p.settings.bankroll_usd.max(1.0),
+            );
             p.monitor.record_breaker_state(
                 "restored_tripped",
                 "state_db",
-                0,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                breaker_state.wins,
+                breaker_state.losses,
+                breaker_state.realized_pnl,
+                breaker_state.peak_pnl,
+                metrics.open_exposure,
+                metrics.stressed_pnl,
+                metrics.realized_drawdown,
+                metrics.realized_drawdown_pct,
+                metrics.stressed_drawdown,
+                metrics.stressed_drawdown_pct,
             );
         }
 
@@ -1496,6 +1514,7 @@ impl Pipeline {
                 let mut bs = self.breaker.lock().await;
                 bs.record_resolution(won, pnl);
                 drop(bs);
+                self.persist_breaker_state().await;
 
                 self.monitor.record_resolution(
                     cid,
@@ -1622,6 +1641,7 @@ impl Pipeline {
                                         let mut bs = self.breaker.lock().await;
                                         bs.correct_resolution(provisional_won, final_won, pnl_delta);
                                         drop(bs);
+                                        self.persist_breaker_state().await;
                                         self.monitor.record_oracle_correction(
                                             &cid,
                                             entry.direction.as_deref().unwrap_or("unknown"),
@@ -1724,6 +1744,7 @@ impl Pipeline {
         }
         *tripped = true;
         let _ = self.risk.set_meta("candle_breaker_tripped", "1").await;
+        self.persist_breaker_state().await;
         let bs = *self.breaker.lock().await;
         let open_exposure: f64 = self
             .paper_positions
@@ -1778,6 +1799,18 @@ impl Pipeline {
             .collect();
         if let Err(e) = self.risk.save_paper_positions(&entries).await {
             tracing::warn!(error = %e, "persist paper positions failed");
+        }
+    }
+
+    async fn persist_breaker_state(&self) {
+        let bs = *self.breaker.lock().await;
+        match serde_json::to_string(&bs) {
+            Ok(payload) => {
+                if let Err(e) = self.risk.set_meta("candle_breaker_state", &payload).await {
+                    tracing::warn!(error = %e, "persist breaker state failed");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "serialize breaker state failed"),
         }
     }
 

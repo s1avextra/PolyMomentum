@@ -1,5 +1,7 @@
 //! Circuit breaker — drawdown + win-rate guard for paper/live trading.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy)]
 pub struct BreakerConfig {
     pub min_trades: u32,
@@ -17,7 +19,7 @@ impl Default for BreakerConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct BreakerState {
     pub wins: u64,
     pub losses: u64,
@@ -138,6 +140,21 @@ mod tests {
             s.record_resolution(false, -1.0);
         }
         assert!(s.should_trip(&BreakerConfig::default(), 0.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn breaker_state_json_round_trip_preserves_metrics() {
+        let mut s = BreakerState::default();
+        s.record_resolution(true, 12.5);
+        s.record_resolution(false, -4.25);
+
+        let raw = serde_json::to_string(&s).unwrap();
+        let restored: BreakerState = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(restored.wins, 1);
+        assert_eq!(restored.losses, 1);
+        assert_eq!(restored.realized_pnl, 8.25);
+        assert_eq!(restored.peak_pnl, 12.5);
     }
 
     #[test]
