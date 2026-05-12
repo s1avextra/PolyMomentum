@@ -138,6 +138,37 @@ impl ZoneConfig {
             settlement_sigma_buffer: s.candle_settlement_sigma_buffer,
         }
     }
+
+    /// Apply runtime safety floors from settings without relaxing a promoted
+    /// strategy artifact. This keeps ops able to tighten settlement-basis risk
+    /// while preserving the artifact hash gate.
+    pub fn apply_settings_safety_floor(&mut self, s: &crate::config::Settings) -> bool {
+        let mut changed = false;
+
+        if s.candle_settlement_guard_minutes.is_finite()
+            && s.candle_settlement_guard_minutes >= 0.0
+            && self.settlement_guard_minutes < s.candle_settlement_guard_minutes
+        {
+            self.settlement_guard_minutes = s.candle_settlement_guard_minutes;
+            changed = true;
+        }
+        if s.candle_settlement_min_abs_move_usd.is_finite()
+            && s.candle_settlement_min_abs_move_usd >= 0.0
+            && self.settlement_min_abs_move_usd < s.candle_settlement_min_abs_move_usd
+        {
+            self.settlement_min_abs_move_usd = s.candle_settlement_min_abs_move_usd;
+            changed = true;
+        }
+        if s.candle_settlement_sigma_buffer.is_finite()
+            && s.candle_settlement_sigma_buffer >= 0.0
+            && self.settlement_sigma_buffer < s.candle_settlement_sigma_buffer
+        {
+            self.settlement_sigma_buffer = s.candle_settlement_sigma_buffer;
+            changed = true;
+        }
+
+        changed
+    }
 }
 
 pub fn zone_for(elapsed_pct: f64) -> &'static str {
@@ -466,6 +497,34 @@ mod tests {
 
         assert!(low_vol >= DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD);
         assert!(high_vol > low_vol);
+    }
+
+    #[test]
+    fn settings_safety_floor_only_tightens_settlement_params() {
+        let mut cfg = ZoneConfig {
+            settlement_guard_minutes: 0.5,
+            settlement_min_abs_move_usd: 2.0,
+            settlement_sigma_buffer: 0.1,
+            ..ZoneConfig::default()
+        };
+        let mut settings = crate::config::Settings::from_env();
+        settings.candle_settlement_guard_minutes = 5.0;
+        settings.candle_settlement_min_abs_move_usd = 25.0;
+        settings.candle_settlement_sigma_buffer = 0.2;
+
+        assert!(cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.settlement_guard_minutes, 5.0);
+        assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
+        assert_eq!(cfg.settlement_sigma_buffer, 0.2);
+
+        settings.candle_settlement_guard_minutes = 1.0;
+        settings.candle_settlement_min_abs_move_usd = 10.0;
+        settings.candle_settlement_sigma_buffer = 0.0;
+
+        assert!(!cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.settlement_guard_minutes, 5.0);
+        assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
+        assert_eq!(cfg.settlement_sigma_buffer, 0.2);
     }
 
     #[test]

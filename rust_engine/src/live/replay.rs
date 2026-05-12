@@ -65,7 +65,7 @@ impl ReplayStrategy {
                 artifact.selected_strategy.name
             );
         }
-        let variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
+        let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
@@ -75,11 +75,29 @@ impl ReplayStrategy {
                 artifact.selected_strategy.params_hash
             );
         }
+        let safety_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
+        let mut strategy_spec = artifact.selected_strategy;
+        let mut source = format!("promotion:{path}");
+        if safety_floor_applied {
+            strategy_spec = StrategySpec::from_serializable_params(
+                strategy_spec.name.clone(),
+                strategy_spec.version.clone(),
+                &variant,
+                format!(
+                    "{};settlement_floor guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
+                    strategy_spec.risk_profile,
+                    variant.zone_config.settlement_guard_minutes,
+                    variant.zone_config.settlement_min_abs_move_usd,
+                    variant.zone_config.settlement_sigma_buffer,
+                ),
+            );
+            source = format!("{source}+settlement_floor");
+        }
 
         Ok(Self {
             variant,
-            strategy_spec: artifact.selected_strategy,
-            source: format!("promotion:{path}"),
+            strategy_spec,
+            source,
         })
     }
 
@@ -872,11 +890,68 @@ mod tests {
 
         let mut settings = Settings::from_env();
         settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_guard_minutes = 1.0;
+        settings.candle_settlement_min_abs_move_usd = 10.0;
+        settings.candle_settlement_sigma_buffer = 0.0;
         let replay = ReplayStrategy::load(&settings).unwrap();
 
         assert_eq!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
         assert_eq!(replay.variant.name, "maker_first");
         assert!(replay.variant.prefer_maker);
         assert!(replay.source.starts_with("promotion:"));
+    }
+
+    #[test]
+    fn replay_strategy_applies_same_settlement_safety_floor_as_live() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("promotion.json");
+        let mut variant = StrategyVariant::maker_first();
+        variant.zone_config.settlement_guard_minutes = 0.5;
+        variant.zone_config.settlement_min_abs_move_usd = 2.0;
+        variant.zone_config.settlement_sigma_buffer = 0.0;
+        let strategy_spec = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            &variant,
+            format!(
+                "position_pct={:.4};max_per_market_usd={:.2}",
+                variant.position_pct, variant.max_per_market_usd
+            ),
+        );
+        let artifact = crate::backtest::experiment::PromotionArtifact {
+            schema_version: 1,
+            created_at: "2026-05-06T00:00:00Z".to_string(),
+            source_report_hash: "source".to_string(),
+            source_label: "unit".to_string(),
+            source_window: "2026-04-25T10:00:00Z..2026-04-25T10:00:00Z".to_string(),
+            selected_strategy: strategy_spec.clone(),
+            strategy_params: serde_json::to_value(&variant).unwrap(),
+            data_manifest_hash: "manifest".to_string(),
+            market_count: 1,
+            trades: 30,
+            win_rate: 0.7,
+            total_pnl: 10.0,
+            avg_pnl: 0.33,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            dominant_zone: None,
+            dominant_zone_trade_share: None,
+            risk_notes: Vec::new(),
+            promotion_gate: crate::backtest::experiment::PromotionGate::default(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_guard_minutes = 5.0;
+        settings.candle_settlement_min_abs_move_usd = 25.0;
+        settings.candle_settlement_sigma_buffer = 0.2;
+        let replay = ReplayStrategy::load(&settings).unwrap();
+
+        assert_eq!(replay.variant.zone_config.settlement_guard_minutes, 5.0);
+        assert_eq!(replay.variant.zone_config.settlement_min_abs_move_usd, 25.0);
+        assert_eq!(replay.variant.zone_config.settlement_sigma_buffer, 0.2);
+        assert_ne!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
+        assert!(replay.source.ends_with("+settlement_floor"));
     }
 }

@@ -232,7 +232,7 @@ impl RuntimeStrategy {
                 artifact.selected_strategy.name
             );
         }
-        let variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
+        let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
@@ -242,8 +242,26 @@ impl RuntimeStrategy {
                 artifact.selected_strategy.params_hash
             );
         }
+        let safety_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
+        let mut strategy_spec = artifact.selected_strategy;
+        let mut source = format!("promotion:{path}");
+        if safety_floor_applied {
+            strategy_spec = StrategySpec::from_serializable_params(
+                strategy_spec.name.clone(),
+                strategy_spec.version.clone(),
+                &variant,
+                format!(
+                    "{};settlement_floor guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
+                    strategy_spec.risk_profile,
+                    variant.zone_config.settlement_guard_minutes,
+                    variant.zone_config.settlement_min_abs_move_usd,
+                    variant.zone_config.settlement_sigma_buffer,
+                ),
+            );
+            source = format!("{source}+settlement_floor");
+        }
         Ok(Self {
-            strategy_spec: artifact.selected_strategy,
+            strategy_spec,
             zone_config: variant.zone_config,
             skip_dead_zone: variant.skip_dead_zone,
             min_confidence: variant.min_confidence,
@@ -253,7 +271,7 @@ impl RuntimeStrategy {
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
             microstructure: variant.microstructure,
-            source: format!("promotion:{path}"),
+            source,
         })
     }
 
@@ -2045,6 +2063,9 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
         let mut settings = Settings::from_env();
         settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_guard_minutes = 1.0;
+        settings.candle_settlement_min_abs_move_usd = 10.0;
+        settings.candle_settlement_sigma_buffer = 0.0;
 
         let runtime = RuntimeStrategy::load(&settings).unwrap();
 
@@ -2053,6 +2074,34 @@ mod tests {
         assert_eq!(runtime.min_confidence, variant.min_confidence);
         assert_eq!(runtime.min_edge, variant.min_edge);
         assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
+    }
+
+    #[test]
+    fn runtime_strategy_applies_settlement_safety_floor_to_promotion() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("promotion.json");
+        let mut variant = StrategyVariant::loose_maker();
+        variant.zone_config.settlement_guard_minutes = 0.5;
+        variant.zone_config.settlement_min_abs_move_usd = 2.0;
+        variant.zone_config.settlement_sigma_buffer = 0.0;
+        let artifact = promotion_for_variant(&variant);
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+        settings.candle_settlement_guard_minutes = 5.0;
+        settings.candle_settlement_min_abs_move_usd = 25.0;
+        settings.candle_settlement_sigma_buffer = 0.2;
+
+        let runtime = RuntimeStrategy::load(&settings).unwrap();
+
+        assert_eq!(runtime.zone_config.settlement_guard_minutes, 5.0);
+        assert_eq!(runtime.zone_config.settlement_min_abs_move_usd, 25.0);
+        assert_eq!(runtime.zone_config.settlement_sigma_buffer, 0.2);
+        assert_ne!(
+            runtime.strategy_spec.params_hash,
+            artifact.selected_strategy.params_hash
+        );
+        assert!(runtime.source.ends_with("+settlement_floor"));
     }
 
     #[test]
