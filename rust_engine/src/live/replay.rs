@@ -174,6 +174,11 @@ pub async fn run_live_replay(
         settings,
         crate::config::RuntimeMode::Paper,
     ));
+    monitor.record_runtime_strategy(
+        &cfg.strategy.source,
+        &cfg.strategy.strategy_spec,
+        &cfg.strategy.variant.zone_config,
+    );
 
     let loader = PMXTv2Loader::new(&cfg.cache_dir);
     let token_filter = cfg.universe.condition_id_set();

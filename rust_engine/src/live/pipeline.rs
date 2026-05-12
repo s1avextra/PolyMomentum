@@ -514,6 +514,11 @@ impl Pipeline {
 
     pub async fn run(self: &Arc<Self>) -> Result<()> {
         self.monitor.record_release_manifest(&self.release_manifest);
+        self.monitor.record_runtime_strategy(
+            &self.runtime_strategy.source,
+            &self.runtime_strategy.strategy_spec,
+            &self.runtime_strategy.zone_config,
+        );
         tracing::info!(
             mode = self.mode.as_str(),
             venue = self.release_manifest.venue.as_str(),

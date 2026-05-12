@@ -115,6 +115,13 @@ pub struct SystemDiagnostics {
     pub errors: u64,
     pub fatal_errors: u64,
     pub first_errors: Vec<String>,
+    pub runtime_strategy_seen: bool,
+    pub runtime_strategy_source: Option<String>,
+    pub runtime_strategy_hash: Option<String>,
+    pub runtime_strategy_risk_profile: Option<String>,
+    pub settlement_guard_minutes: Option<f64>,
+    pub settlement_min_abs_move_usd: Option<f64>,
+    pub settlement_sigma_buffer: Option<f64>,
 }
 
 pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
@@ -161,6 +168,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
 
         match (cat, ty) {
             ("system", "release_manifest") => record_release_manifest(&mut out, &v),
+            ("system", "runtime_strategy") => record_runtime_strategy(&mut out, &v),
             ("system", "error") => record_system_error(&mut out, &v),
             ("signal", "evaluation") => record_signal_evaluation(&mut out, &v),
             ("signal", "skip") => out.signals.skips += 1,
@@ -201,6 +209,12 @@ pub fn compare_sessions(
     }
     if left.promotion_data_manifest_hash != right.promotion_data_manifest_hash {
         mismatches.push("promotion data manifest hash differs".to_string());
+    }
+    if left.system.runtime_strategy_hash.is_some()
+        && right.system.runtime_strategy_hash.is_some()
+        && left.system.runtime_strategy_hash != right.system.runtime_strategy_hash
+    {
+        mismatches.push("runtime strategy hash differs".to_string());
     }
 
     let mut keys: Vec<String> = left
@@ -263,6 +277,33 @@ fn record_release_manifest(out: &mut SessionDiagnostics, v: &Value) {
         .and_then(|p| p.get("data_manifest_hash"))
         .and_then(|x| x.as_str())
         .map(ToString::to_string);
+}
+
+fn record_runtime_strategy(out: &mut SessionDiagnostics, v: &Value) {
+    out.system.runtime_strategy_seen = true;
+    out.system.runtime_strategy_source = v
+        .get("source")
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.system.runtime_strategy_hash = v
+        .get("strategy")
+        .and_then(|s| s.get("params_hash"))
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.system.runtime_strategy_risk_profile = v
+        .get("strategy")
+        .and_then(|s| s.get("risk_profile"))
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string);
+    out.system.settlement_guard_minutes = v
+        .get("settlement_guard_minutes")
+        .and_then(|x| x.as_f64());
+    out.system.settlement_min_abs_move_usd = v
+        .get("settlement_min_abs_move_usd")
+        .and_then(|x| x.as_f64());
+    out.system.settlement_sigma_buffer = v
+        .get("settlement_sigma_buffer")
+        .and_then(|x| x.as_f64());
 }
 
 fn record_system_error(out: &mut SessionDiagnostics, v: &Value) {
@@ -586,6 +627,20 @@ mod tests {
                 }
             }),
             serde_json::json!({
+                "cat": "system",
+                "type": "runtime_strategy",
+                "source": "promotion:/tmp/promotion.json+settlement_floor",
+                "strategy": {
+                    "name": "candle_momentum",
+                    "version": "1",
+                    "params_hash": "runtime_strategy",
+                    "risk_profile": "test-risk"
+                },
+                "settlement_guard_minutes": 5.0,
+                "settlement_min_abs_move_usd": 25.0,
+                "settlement_sigma_buffer": 0.2
+            }),
+            serde_json::json!({
                 "cat": "signal",
                 "type": "evaluation",
                 "decision_trade": true,
@@ -616,6 +671,11 @@ mod tests {
         assert!(diag.ok, "{:?}", diag.warnings);
         assert_eq!(diag.mode.as_deref(), Some("paper"));
         assert_eq!(diag.promotion_strategy_hash.as_deref(), Some("strategy"));
+        assert_eq!(
+            diag.system.runtime_strategy_hash.as_deref(),
+            Some("runtime_strategy")
+        );
+        assert_eq!(diag.system.settlement_guard_minutes, Some(5.0));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);
     }

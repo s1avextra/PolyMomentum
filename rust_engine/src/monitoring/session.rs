@@ -116,6 +116,25 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_runtime_strategy(
+        &self,
+        source: &str,
+        strategy: &crate::strategy::spec::StrategySpec,
+        zone_config: &crate::strategy::decision::ZoneConfig,
+    ) {
+        self.write_event(
+            "system",
+            "runtime_strategy",
+            json!({
+                "source": source,
+                "strategy": strategy,
+                "settlement_guard_minutes": zone_config.settlement_guard_minutes,
+                "settlement_min_abs_move_usd": zone_config.settlement_min_abs_move_usd,
+                "settlement_sigma_buffer": zone_config.settlement_sigma_buffer,
+            }),
+        );
+    }
+
     pub fn record_order_placed(&self, evt: &OrderPlaced) {
         self.counters.lock().unwrap().order_count += 1;
         self.write_event("order", "placed", serde_json::to_value(evt).unwrap_or(Value::Null));
