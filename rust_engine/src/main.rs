@@ -862,7 +862,21 @@ async fn cmd_live_replay(
         }
         let missing_cids: Vec<String> = all_cids
             .iter()
-            .filter(|c| !cached_markets.contains_key(*c))
+            .filter(|c| {
+                cached_markets
+                    .get(*c)
+                    .map(|m| {
+                        let ended = chrono::DateTime::parse_from_rfc3339(&m.end_date)
+                            .map(|d| d.with_timezone(&Utc) < Utc::now())
+                            .unwrap_or(false);
+                        let terminal = m.closed
+                            && m.outcomes.len() == 2
+                            && (m.outcomes.iter().any(|o| o.price >= 0.99)
+                                || (m.outcomes[0].price - m.outcomes[1].price).abs() <= 1e-9);
+                        ended && !terminal
+                    })
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect();
         if !missing_cids.is_empty() {

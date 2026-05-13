@@ -160,6 +160,7 @@ pub struct LiveReplayReport {
     pub fills_success: usize,
     pub fills_failed: usize,
     pub resolutions: usize,
+    pub shadow_resolutions: usize,
     pub total_pnl: f64,
     pub oracle_checks: usize,
     pub strategy: String,
@@ -217,6 +218,7 @@ pub async fn run_live_replay(
         &mut strategy,
         cfg.strategy.variant.default_fee_rate,
     );
+    strategy.record_shadow_resolutions();
     strategy.record_fills(&engine.fills).await;
     monitor.save_summary()?;
 
@@ -235,6 +237,7 @@ pub async fn run_live_replay(
         fills_success: summary.fills_success as usize,
         fills_failed: summary.fills_failed as usize,
         resolutions: lifecycle.resolutions,
+        shadow_resolutions: lifecycle.shadow_resolutions,
         total_pnl: lifecycle.realized_pnl,
         oracle_checks: lifecycle.oracle_checks,
         strategy: cfg.strategy.variant.name,
@@ -276,6 +279,7 @@ struct LiveReplayStrategy {
     monitor: Arc<SessionMonitor>,
     traded: HashSet<String>,
     replay_positions: BTreeMap<String, ReplayPosition>,
+    shadow_positions: BTreeMap<String, ShadowReplayPosition>,
     lifecycle: ReplayLifecycle,
     last_tick_ts_s: f64,
     orders_submitted: usize,
@@ -290,12 +294,21 @@ struct ReplayPosition {
     close_ts_s: f64,
 }
 
+#[derive(Debug, Clone)]
+struct ShadowReplayPosition {
+    contract: CandleContract,
+    direction: String,
+    open_btc: f64,
+    close_ts_s: f64,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ReplayLifecycle {
     realized_pnl: f64,
     wins: u64,
     losses: u64,
     resolutions: usize,
+    shadow_resolutions: usize,
     oracle_checks: usize,
 }
 
@@ -325,6 +338,7 @@ impl LiveReplayStrategy {
             monitor,
             traded: HashSet::new(),
             replay_positions: BTreeMap::new(),
+            shadow_positions: BTreeMap::new(),
             lifecycle: ReplayLifecycle::default(),
             last_tick_ts_s: 0.0,
             orders_submitted: 0,
@@ -374,6 +388,56 @@ impl LiveReplayStrategy {
                 );
             }
         }
+    }
+
+    fn record_shadow_resolutions(&mut self) {
+        let positions: Vec<ShadowReplayPosition> =
+            self.shadow_positions.values().cloned().collect();
+        for pos in positions {
+            let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
+            if close_btc <= 0.0 || pos.open_btc <= 0.0 {
+                self.monitor.record_error(
+                    "live_replay_shadow_resolution",
+                    "missing BTC open/close price for shadow replay",
+                    true,
+                );
+                continue;
+            }
+
+            let actual = if close_btc >= pos.open_btc { "up" } else { "down" };
+            self.monitor.record_shadow_resolution(
+                &pos.contract.market.condition_id,
+                &pos.direction,
+                actual,
+                pos.open_btc,
+                close_btc,
+            );
+            self.lifecycle.shadow_resolutions += 1;
+
+            if let Some((polymarket_actual, outcome_prices, polymarket_closed)) =
+                replay_polymarket_resolution(&pos.contract)
+            {
+                self.monitor.record_oracle_resolution(
+                    &pos.contract.market.condition_id,
+                    actual,
+                    pos.open_btc,
+                    close_btc,
+                    &polymarket_actual,
+                    &outcome_prices,
+                    polymarket_closed,
+                    polymarket_actual == actual,
+                    0.0,
+                );
+                self.lifecycle.oracle_checks += 1;
+            } else {
+                self.monitor.record_error(
+                    "live_replay_shadow_oracle",
+                    "missing cached official resolution for shadow replay",
+                    true,
+                );
+            }
+        }
+        self.record_risk_state(0.0, 0);
     }
 
     fn record_open_position(&self, fill: &crate::backtest::l2_replay::BacktestFill) {
@@ -639,6 +703,14 @@ impl Strategy for LiveReplayStrategy {
                 decision.fair_value,
                 decision.edge,
             );
+            self.shadow_positions
+                .entry(cid)
+                .or_insert_with(|| ShadowReplayPosition {
+                    contract: contract.clone(),
+                    direction: decision.direction.clone(),
+                    open_btc: signal.open_price,
+                    close_ts_s: close,
+                });
             return Vec::new();
         }
 
@@ -839,6 +911,42 @@ fn replay_outcome_prices(actual: &str) -> [f64; 2] {
     }
 }
 
+fn replay_polymarket_resolution(contract: &CandleContract) -> Option<(String, [f64; 2], bool)> {
+    let up_price = contract
+        .market
+        .outcomes
+        .iter()
+        .find(|o| o.token_id == contract.up_token_id)
+        .map(|o| o.price)
+        .unwrap_or(contract.up_price);
+    let down_price = contract
+        .market
+        .outcomes
+        .iter()
+        .find(|o| o.token_id == contract.down_token_id)
+        .map(|o| o.price)
+        .unwrap_or(contract.down_price);
+    let outcome_prices = [up_price, down_price];
+    let terminal = up_price >= 0.99
+        || down_price >= 0.99
+        || ((up_price - down_price).abs() <= 1e-9 && up_price > 0.0);
+    if !terminal {
+        return None;
+    }
+    if up_price <= 0.0 && down_price <= 0.0 {
+        return None;
+    }
+
+    let actual = if (up_price - down_price).abs() <= 1e-9 {
+        "tie"
+    } else if up_price > down_price {
+        "up"
+    } else {
+        "down"
+    };
+    Some((actual.to_string(), outcome_prices, contract.market.closed))
+}
+
 fn replay_microstructure(book: &TokenBook) -> BookMicrostructure {
     let bids: Vec<BookLevelView> = book
         .bid_levels()
@@ -868,6 +976,7 @@ fn short_cid(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::models::{Market, Outcome};
     use tempfile::TempDir;
 
     #[test]
@@ -994,5 +1103,67 @@ mod tests {
         assert_eq!(replay.variant.zone_config.settlement_sigma_buffer, 0.2);
         assert_ne!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
         assert!(replay.source.ends_with("+settlement_floor"));
+    }
+
+    fn replay_resolution_contract(up_price: f64, down_price: f64, closed: bool) -> CandleContract {
+        let up_token_id = "up-token".to_string();
+        let down_token_id = "down-token".to_string();
+        CandleContract {
+            market: Market {
+                condition_id: "0x0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_string(),
+                outcomes: vec![
+                    Outcome {
+                        token_id: up_token_id.clone(),
+                        name: "Up".to_string(),
+                        price: up_price,
+                    },
+                    Outcome {
+                        token_id: down_token_id.clone(),
+                        name: "Down".to_string(),
+                        price: down_price,
+                    },
+                ],
+                closed,
+                end_date: "2026-05-13T12:05:00Z".to_string(),
+                ..Default::default()
+            },
+            up_token_id,
+            down_token_id,
+            up_price: 0.5,
+            down_price: 0.5,
+            end_date: "2026-05-13T12:05:00Z".to_string(),
+            hours_left: 0.0,
+            volume: 0.0,
+            liquidity: 0.0,
+            window_description: "12:00PM-12:05PM ET".to_string(),
+            asset: "BTC".to_string(),
+        }
+    }
+
+    #[test]
+    fn replay_polymarket_resolution_reads_terminal_outcomes() {
+        let up = replay_polymarket_resolution(&replay_resolution_contract(1.0, 0.0, true))
+            .unwrap();
+        assert_eq!(up.0, "up");
+        assert_eq!(up.1, [1.0, 0.0]);
+        assert!(up.2);
+
+        let down = replay_polymarket_resolution(&replay_resolution_contract(0.0, 1.0, true))
+            .unwrap();
+        assert_eq!(down.0, "down");
+
+        let tie = replay_polymarket_resolution(&replay_resolution_contract(0.5, 0.5, true))
+            .unwrap();
+        assert_eq!(tie.0, "tie");
+    }
+
+    #[test]
+    fn replay_polymarket_resolution_ignores_stale_nonterminal_prices() {
+        let closed_but_stale = replay_resolution_contract(0.62, 0.38, true);
+        assert!(replay_polymarket_resolution(&closed_but_stale).is_none());
+
+        let open_and_nonterminal = replay_resolution_contract(0.51, 0.49, false);
+        assert!(replay_polymarket_resolution(&open_and_nonterminal).is_none());
     }
 }
