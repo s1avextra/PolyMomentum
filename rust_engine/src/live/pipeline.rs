@@ -1012,7 +1012,12 @@ impl Pipeline {
                         )
                     });
                     if det.get_open_price(&cid).is_none() {
-                        det.set_window_open(&cid, asset_price);
+                        let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
+                        let Some(open_price) = ps.price_near_seconds(&c.asset, open_ts, 2.0) else {
+                            self.monitor.record_signal_skip(&cid, "open_price_unavailable");
+                            continue;
+                        };
+                        det.set_window_open(&cid, open_price);
                     }
                     det.detect(&cid, minutes_elapsed, minutes_left, asset_price, None)
                 };
