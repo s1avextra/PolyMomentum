@@ -179,6 +179,7 @@ pub async fn run_live_replay(
         &cfg.strategy.source,
         &cfg.strategy.strategy_spec,
         &cfg.strategy.variant.zone_config,
+        settings.candle_settlement_alignment_ready,
     );
 
     let loader = PMXTv2Loader::new(&cfg.cache_dir);
@@ -208,6 +209,7 @@ pub async fn run_live_replay(
         cfg.bankroll_usd,
         cfg.btc_history.clone(),
         monitor.clone(),
+        settings.candle_settlement_alignment_ready,
     );
     let mut engine = L2BacktestEngine::new(build_fill_model(&cfg.strategy.variant), cfg.latency);
     engine.replay(
@@ -277,6 +279,7 @@ struct LiveReplayStrategy {
     lifecycle: ReplayLifecycle,
     last_tick_ts_s: f64,
     orders_submitted: usize,
+    settlement_alignment_ready: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +306,7 @@ impl LiveReplayStrategy {
         bankroll_usd: f64,
         btc_history: Arc<BTCHistory>,
         monitor: Arc<SessionMonitor>,
+        settlement_alignment_ready: bool,
     ) -> Self {
         Self {
             replay_strategy,
@@ -324,6 +328,7 @@ impl LiveReplayStrategy {
             lifecycle: ReplayLifecycle::default(),
             last_tick_ts_s: 0.0,
             orders_submitted: 0,
+            settlement_alignment_ready,
         }
     }
 
@@ -473,6 +478,9 @@ impl LiveReplayStrategy {
         zone: String,
         reason: String,
         detail: String,
+        decision_trade: bool,
+        fair: f64,
+        edge: f64,
     ) {
         let aggregate = format!("{reason}_{zone}");
         self.monitor
@@ -502,9 +510,9 @@ impl LiveReplayStrategy {
             book_bid_depth: 0.0,
             book_ask_depth: 0.0,
             zone,
-            fair: 0.0,
-            edge: 0.0,
-            decision_trade: false,
+            fair,
+            edge,
+            decision_trade,
             execution_attempted: false,
             traded: false,
             skip_reason: Some(reason),
@@ -609,10 +617,30 @@ impl Strategy for LiveReplayStrategy {
                     skip.zone,
                     skip.reason,
                     skip.detail,
+                    false,
+                    0.0,
+                    0.0,
                 );
                 return Vec::new();
             }
         };
+        if !self.settlement_alignment_ready {
+            self.record_skip(
+                timestamp_s,
+                &contract,
+                &signal,
+                up_price,
+                down_price,
+                implied_vol,
+                decision.zone,
+                "settlement_alignment_unverified".to_string(),
+                "CANDLE_SETTLEMENT_ALIGNMENT_READY=false".to_string(),
+                false,
+                decision.fair_value,
+                decision.edge,
+            );
+            return Vec::new();
+        }
 
         let traded_token = if decision.direction == "up" {
             contract.up_token_id.clone()
@@ -638,6 +666,9 @@ impl Strategy for LiveReplayStrategy {
                 decision.zone,
                 skip.reason,
                 skip.detail,
+                true,
+                decision.fair_value,
+                decision.edge,
             );
             return Vec::new();
         }

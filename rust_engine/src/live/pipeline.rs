@@ -519,6 +519,7 @@ impl Pipeline {
             &self.runtime_strategy.source,
             &self.runtime_strategy.strategy_spec,
             &self.runtime_strategy.zone_config,
+            self.settings.candle_settlement_alignment_ready,
         );
         tracing::info!(
             mode = self.mode.as_str(),
@@ -1078,6 +1079,47 @@ impl Pipeline {
                         });
                     }
                     DecisionResult::Trade(decision) => {
+                        if !self.settings.candle_settlement_alignment_ready {
+                            let reason = "settlement_alignment_unverified".to_string();
+                            let aggregate = format!("{}_{}", reason, decision.zone);
+                            self.monitor.record_signal_skip(&cid, &aggregate);
+                            self.monitor.record_signal_evaluation(&SignalEvaluation {
+                                ts_ms: eval_ts_ms,
+                                cid: short_cid(&cid),
+                                asset: c.asset.clone(),
+                                open: signal.open_price,
+                                px: signal.current_price,
+                                chg: signal.price_change,
+                                chg_pct: signal.price_change_pct,
+                                cons: signal.consistency,
+                                z: signal.z_score,
+                                conf: signal.confidence,
+                                elapsed_min: signal.minutes_elapsed,
+                                remaining_min: signal.minutes_remaining,
+                                dir: signal.direction.clone(),
+                                vol_fast,
+                                vol_slow,
+                                implied_vol: ps.implied_vol,
+                                cross_boost: 0.0,
+                                up_price,
+                                down_price,
+                                book_spread: 0.0,
+                                book_pressure: 0.0,
+                                book_bid_depth: 0.0,
+                                book_ask_depth: 0.0,
+                                zone: decision.zone.clone(),
+                                fair: decision.fair_value,
+                                edge: decision.edge,
+                                decision_trade: false,
+                                execution_attempted: false,
+                                traded: false,
+                                skip_reason: Some(reason),
+                                skip_detail: Some(
+                                    "CANDLE_SETTLEMENT_ALIGNMENT_READY=false".to_string(),
+                                ),
+                            });
+                            continue;
+                        }
                         let traded_token_id = if decision.direction == "up" {
                             &c.up_token_id
                         } else {

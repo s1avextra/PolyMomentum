@@ -83,6 +83,10 @@ pub struct OracleDiagnostics {
     pub ties: u64,
     pub corrections: u64,
     pub total_pnl_delta: f64,
+    pub disagreement_min_abs_move: Option<f64>,
+    pub disagreement_max_abs_move: Option<f64>,
+    pub tie_min_abs_move: Option<f64>,
+    pub tie_max_abs_move: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -119,6 +123,7 @@ pub struct SystemDiagnostics {
     pub runtime_strategy_source: Option<String>,
     pub runtime_strategy_hash: Option<String>,
     pub runtime_strategy_risk_profile: Option<String>,
+    pub settlement_alignment_ready: Option<bool>,
     pub settlement_cutoff_minutes: Option<f64>,
     pub settlement_guard_minutes: Option<f64>,
     pub settlement_min_abs_move_usd: Option<f64>,
@@ -296,6 +301,9 @@ fn record_runtime_strategy(out: &mut SessionDiagnostics, v: &Value) {
         .and_then(|s| s.get("risk_profile"))
         .and_then(|x| x.as_str())
         .map(ToString::to_string);
+    out.system.settlement_alignment_ready = v
+        .get("settlement_alignment_ready")
+        .and_then(|x| x.as_bool());
     out.system.settlement_cutoff_minutes = v
         .get("settlement_cutoff_minutes")
         .and_then(|x| x.as_f64());
@@ -397,8 +405,13 @@ fn record_resolution(out: &mut SessionDiagnostics, v: &Value) {
 
 fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
     out.oracle.checks += 1;
+    let abs_move = oracle_abs_move(v);
     if !v.get("agreed").and_then(|x| x.as_bool()).unwrap_or(true) {
         out.oracle.disagreements += 1;
+        if let Some(abs_move) = abs_move {
+            update_min(&mut out.oracle.disagreement_min_abs_move, abs_move);
+            update_max(&mut out.oracle.disagreement_max_abs_move, abs_move);
+        }
     }
     if v.get("polymarket_actual")
         .and_then(|x| x.as_str())
@@ -406,7 +419,25 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
         .unwrap_or(false)
     {
         out.oracle.ties += 1;
+        if let Some(abs_move) = abs_move {
+            update_min(&mut out.oracle.tie_min_abs_move, abs_move);
+            update_max(&mut out.oracle.tie_max_abs_move, abs_move);
+        }
     }
+}
+
+fn oracle_abs_move(v: &Value) -> Option<f64> {
+    let open = v.get("our_open_btc").and_then(|x| x.as_f64())?;
+    let close = v.get("our_close_btc").and_then(|x| x.as_f64())?;
+    Some((close - open).abs())
+}
+
+fn update_min(slot: &mut Option<f64>, value: f64) {
+    *slot = Some(slot.map(|existing| existing.min(value)).unwrap_or(value));
+}
+
+fn update_max(slot: &mut Option<f64>, value: f64) {
+    *slot = Some(slot.map(|existing| existing.max(value)).unwrap_or(value));
 }
 
 fn record_oracle_correction(out: &mut SessionDiagnostics, v: &Value) {
@@ -517,9 +548,13 @@ fn finalize(out: &mut SessionDiagnostics) {
         ));
     }
     if out.oracle.disagreements > 0 {
+        let move_range = oracle_move_range(
+            out.oracle.disagreement_min_abs_move,
+            out.oracle.disagreement_max_abs_move,
+        );
         out.warnings.push(format!(
-            "{} oracle disagreement(s) between local resolution and Polymarket",
-            out.oracle.disagreements
+            "{} oracle disagreement(s) between local resolution and Polymarket{}",
+            out.oracle.disagreements, move_range
         ));
     }
     let unresolved_oracle_disagreements = out
@@ -533,10 +568,16 @@ fn finalize(out: &mut SessionDiagnostics) {
         ));
     }
     if out.oracle.ties > 0 {
+        let move_range = oracle_move_range(out.oracle.tie_min_abs_move, out.oracle.tie_max_abs_move);
         out.warnings.push(format!(
-            "{} Polymarket tie resolution(s); tie risk must be investigated before live promotion",
-            out.oracle.ties
+            "{} Polymarket tie resolution(s){}; tie risk must be investigated before live promotion",
+            out.oracle.ties, move_range
         ));
+    }
+    if out.system.settlement_alignment_ready == Some(false) {
+        out.warnings.push(
+            "settlement alignment is not verified; runtime is settlement-shadow gated".to_string(),
+        );
     }
     if out.resolutions.near_threshold > 0 {
         out.warnings.push(format!(
@@ -609,6 +650,16 @@ fn finalize(out: &mut SessionDiagnostics) {
 
 const SETTLEMENT_BASIS_WARN_BTC: f64 = 5.0;
 
+fn oracle_move_range(min: Option<f64>, max: Option<f64>) -> String {
+    match (min, max) {
+        (Some(min), Some(max)) if (max - min).abs() <= f64::EPSILON => {
+            format!(" at local |BTC move| ${min:.2}")
+        }
+        (Some(min), Some(max)) => format!(" at local |BTC move| range ${min:.2}-${max:.2}"),
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +691,7 @@ mod tests {
                     "params_hash": "runtime_strategy",
                     "risk_profile": "test-risk"
                 },
+                "settlement_alignment_ready": false,
                 "settlement_cutoff_minutes": 1.5,
                 "settlement_guard_minutes": 5.0,
                 "settlement_min_abs_move_usd": 25.0,
@@ -682,6 +734,7 @@ mod tests {
         );
         assert_eq!(diag.system.settlement_cutoff_minutes, Some(1.5));
         assert_eq!(diag.system.settlement_guard_minutes, Some(5.0));
+        assert_eq!(diag.system.settlement_alignment_ready, Some(false));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);
     }
@@ -722,6 +775,8 @@ mod tests {
             serde_json::json!({
                 "cat": "oracle",
                 "type": "resolution",
+                "our_open_btc": 100000.0,
+                "our_close_btc": 100028.64,
                 "agreed": false
             }),
             serde_json::json!({
@@ -744,6 +799,8 @@ mod tests {
         assert!(!diag.ok);
         assert_eq!(diag.resolutions.resolved, 2);
         assert_eq!(diag.oracle.disagreements, 1);
+        assert!((diag.oracle.disagreement_min_abs_move.unwrap() - 28.64).abs() < 1e-9);
+        assert!((diag.oracle.disagreement_max_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!(diag
             .warnings
             .iter()
@@ -840,6 +897,8 @@ mod tests {
             serde_json::json!({
                 "cat": "oracle",
                 "type": "resolution",
+                "our_open_btc": 100000.0,
+                "our_close_btc": 100028.64,
                 "polymarket_actual": "tie",
                 "agreed": false
             }),
@@ -855,6 +914,8 @@ mod tests {
 
         assert!(!diag.ok);
         assert_eq!(diag.oracle.ties, 1);
+        assert!((diag.oracle.tie_min_abs_move.unwrap() - 28.64).abs() < 1e-9);
+        assert!((diag.oracle.tie_max_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!(diag.risk.breaker_tripped);
         assert_eq!(diag.risk.last_breaker_reason.as_deref(), Some("oracle_tie"));
         assert!(diag

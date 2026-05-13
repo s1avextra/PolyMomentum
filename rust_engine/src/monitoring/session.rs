@@ -121,6 +121,7 @@ impl SessionMonitor {
         source: &str,
         strategy: &crate::strategy::spec::StrategySpec,
         zone_config: &crate::strategy::decision::ZoneConfig,
+        settlement_alignment_ready: bool,
     ) {
         self.write_event(
             "system",
@@ -128,6 +129,7 @@ impl SessionMonitor {
             json!({
                 "source": source,
                 "strategy": strategy,
+                "settlement_alignment_ready": settlement_alignment_ready,
                 "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
                 "settlement_guard_minutes": zone_config.settlement_guard_minutes,
                 "settlement_min_abs_move_usd": zone_config.settlement_min_abs_move_usd,

@@ -131,6 +131,7 @@ pub fn run_preflight(
     check_runtime_paths(settings, mode, &mut checks);
     check_kill_switch(settings, &mut checks);
     check_promotion_artifact(settings, &mut checks);
+    check_settlement_alignment(settings, mode, &mut checks);
 
     if mode.is_live() {
         check_live_confirmation(i_understand_live, &mut checks);
@@ -179,6 +180,7 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "candle_position_pct": settings.candle_position_pct,
         "candle_prefer_maker": settings.candle_prefer_maker,
         "candle_cross_asset_enabled": settings.candle_cross_asset_enabled,
+        "candle_settlement_alignment_ready": settings.candle_settlement_alignment_ready,
         "alert_required": settings.alert_required,
         "promotion_artifact_present": !settings.promotion_artifact_path.trim().is_empty(),
         "promotion_required": settings.promotion_required,
@@ -191,6 +193,31 @@ fn redacted_config_hash(settings: &Settings) -> String {
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
     let digest = Sha256::digest(bytes);
     format!("{digest:x}")
+}
+
+fn check_settlement_alignment(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+    if settings.candle_settlement_alignment_ready {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Ok,
+            "CANDLE_SETTLEMENT_ALIGNMENT_READY=true".to_string(),
+        );
+    } else if mode.is_live() {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Fail,
+            "live requires CANDLE_SETTLEMENT_ALIGNMENT_READY=true after oracle-alignment validation".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Warn,
+            "paper runs settlement-shadow only until CANDLE_SETTLEMENT_ALIGNMENT_READY=true".to_string(),
+        );
+    }
 }
 
 fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
@@ -723,6 +750,9 @@ mod tests {
         let s = test_settings(&tmp);
         let report = run_preflight(&s, RuntimeMode::Live, false);
         assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("CANDLE_SETTLEMENT_ALIGNMENT_READY=true"));
         assert!(report
             .failure_summary()
             .contains("VENUE=paper_only refuses real-money live mode"));
