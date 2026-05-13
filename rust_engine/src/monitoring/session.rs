@@ -235,6 +235,28 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_shadow_resolution(
+        &self,
+        contract_id: &str,
+        predicted: &str,
+        actual: &str,
+        open_btc: f64,
+        close_btc: f64,
+    ) {
+        self.write_event(
+            "shadow",
+            "resolved",
+            json!({
+                "cid": short(contract_id, 16),
+                "predicted": predicted,
+                "actual": actual,
+                "open_btc": round_n(open_btc, 2),
+                "close_btc": round_n(close_btc, 2),
+                "btc_move": round_n(close_btc - open_btc, 2),
+            }),
+        );
+    }
+
     pub fn record_oracle_resolution(
         &self,
         contract_id: &str,

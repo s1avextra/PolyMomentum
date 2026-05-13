@@ -90,6 +90,7 @@ struct PaperPosition {
     end_time: f64,
     asset: String,
     contract_id: String,
+    shadow: bool,
 }
 
 impl PaperPosition {
@@ -103,6 +104,7 @@ impl PaperPosition {
             "end_time": self.end_time,
             "asset": self.asset,
             "contract_id": self.contract_id,
+            "shadow": self.shadow,
         })
     }
 
@@ -120,6 +122,7 @@ impl PaperPosition {
                 .unwrap_or("BTC")
                 .to_string(),
             contract_id: cid,
+            shadow: v.get("shadow").and_then(|x| x.as_bool()).unwrap_or(false),
         })
     }
 }
@@ -137,6 +140,7 @@ struct OraclePending {
     size: Option<f64>,
     provisional_won: Option<bool>,
     provisional_pnl: Option<f64>,
+    shadow: bool,
 }
 
 impl OraclePending {
@@ -153,6 +157,7 @@ impl OraclePending {
             "size": self.size,
             "provisional_won": self.provisional_won,
             "provisional_pnl": self.provisional_pnl,
+            "shadow": self.shadow,
         })
     }
 
@@ -175,6 +180,7 @@ impl OraclePending {
             size: v.get("size").and_then(|x| x.as_f64()),
             provisional_won: v.get("provisional_won").and_then(|x| x.as_bool()),
             provisional_pnl: v.get("provisional_pnl").and_then(|x| x.as_f64()),
+            shadow: v.get("shadow").and_then(|x| x.as_bool()).unwrap_or(false),
         })
     }
 
@@ -1118,6 +1124,28 @@ impl Pipeline {
                                     "CANDLE_SETTLEMENT_ALIGNMENT_READY=false".to_string(),
                                 ),
                             });
+                            let entry_price = if decision.direction == "up" {
+                                up_price
+                            } else {
+                                down_price
+                            };
+                            let shadow_position = PaperPosition {
+                                direction: decision.direction.clone(),
+                                entry_price,
+                                fee: 0.0,
+                                size: 0.0,
+                                open_btc: signal.open_price,
+                                end_time: end.timestamp() as f64,
+                                asset: c.asset.clone(),
+                                contract_id: c.market.condition_id.clone(),
+                                shadow: true,
+                            };
+                            let mut positions = self.paper_positions.lock().await;
+                            if !positions.contains_key(&cid) {
+                                positions.insert(cid.clone(), shadow_position);
+                                drop(positions);
+                                self.persist_paper_positions().await;
+                            }
                             continue;
                         }
                         let traded_token_id = if decision.direction == "up" {
@@ -1399,6 +1427,7 @@ impl Pipeline {
                     end_time: end_ts,
                     asset: contract.asset.clone(),
                     contract_id: contract.market.condition_id.clone(),
+                    shadow: false,
                 };
                 self.paper_positions
                     .lock()
@@ -1575,6 +1604,40 @@ impl Pipeline {
                 let actual = if close_price >= pos.open_btc { "up" } else { "down" };
                 let won = actual == pos.direction;
                 let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
+                if pos.shadow {
+                    self.monitor.record_shadow_resolution(
+                        cid,
+                        &pos.direction,
+                        actual,
+                        pos.open_btc,
+                        close_price,
+                    );
+                    self.oracle_pending.lock().await.insert(
+                        cid.clone(),
+                        OraclePending {
+                            our_actual: actual.to_string(),
+                            our_open_btc: pos.open_btc,
+                            our_close_btc: close_price,
+                            end_time: pos.end_time,
+                            attempts: 0,
+                            direction: Some(pos.direction.clone()),
+                            entry_price: Some(pos.entry_price),
+                            fee: Some(pos.fee),
+                            size: Some(pos.size),
+                            provisional_won: Some(won),
+                            provisional_pnl: Some(0.0),
+                            shadow: true,
+                        },
+                    );
+                    tracing::info!(
+                        cid = short_cid(cid),
+                        predicted = %pos.direction,
+                        actual,
+                        "candle.shadow.resolved"
+                    );
+                    resolved.push(cid.clone());
+                    continue;
+                }
                 self.risk.record_pnl(pnl).await.ok();
                 self.risk.record_fees(pos.fee).await;
                 let mut bs = self.breaker.lock().await;
@@ -1607,6 +1670,7 @@ impl Pipeline {
                         size: Some(pos.size),
                         provisional_won: Some(won),
                         provisional_pnl: Some(pnl),
+                        shadow: false,
                     },
                 );
 
@@ -1692,47 +1756,60 @@ impl Pipeline {
                             delay,
                         );
                         if !agreed {
-                            if let Some((final_won, final_pnl, provisional_won, provisional_pnl)) =
-                                entry.oracle_pnl(res_str)
-                            {
-                                let pnl_delta = final_pnl - provisional_pnl;
-                                if pnl_delta.abs() > 1e-9 {
-                                    if let Err(e) = self.risk.record_pnl(pnl_delta).await {
-                                        tracing::warn!(
-                                            cid = short_cid(&cid),
-                                            error = %e,
-                                            "oracle pnl correction failed"
-                                        );
-                                    } else {
-                                        let mut bs = self.breaker.lock().await;
-                                        bs.correct_resolution(provisional_won, final_won, pnl_delta);
-                                        drop(bs);
-                                        self.persist_breaker_state().await;
-                                        self.monitor.record_oracle_correction(
-                                            &cid,
-                                            entry.direction.as_deref().unwrap_or("unknown"),
-                                            &entry.our_actual,
-                                            res_str,
-                                            provisional_won,
-                                            final_won,
-                                            provisional_pnl,
-                                            final_pnl,
-                                        );
+                            if entry.shadow {
+                                tracing::warn!(
+                                    cid = short_cid(&cid),
+                                    ours = %entry.our_actual,
+                                    polymarket = res_str,
+                                    "candle.oracle.shadow_disagreement"
+                                );
+                            } else {
+                                if let Some((final_won, final_pnl, provisional_won, provisional_pnl)) =
+                                    entry.oracle_pnl(res_str)
+                                {
+                                    let pnl_delta = final_pnl - provisional_pnl;
+                                    if pnl_delta.abs() > 1e-9 {
+                                        if let Err(e) = self.risk.record_pnl(pnl_delta).await {
+                                            tracing::warn!(
+                                                cid = short_cid(&cid),
+                                                error = %e,
+                                                "oracle pnl correction failed"
+                                            );
+                                        } else {
+                                            let mut bs = self.breaker.lock().await;
+                                            bs.correct_resolution(provisional_won, final_won, pnl_delta);
+                                            drop(bs);
+                                            self.persist_breaker_state().await;
+                                            self.monitor.record_oracle_correction(
+                                                &cid,
+                                                entry.direction.as_deref().unwrap_or("unknown"),
+                                                &entry.our_actual,
+                                                res_str,
+                                                provisional_won,
+                                                final_won,
+                                                provisional_pnl,
+                                                final_pnl,
+                                            );
+                                        }
                                     }
                                 }
+                                tracing::warn!(
+                                    cid = short_cid(&cid),
+                                    ours = %entry.our_actual,
+                                    polymarket = res_str,
+                                    "candle.oracle.disagreement"
+                                );
                             }
-                            tracing::warn!(
-                                cid = short_cid(&cid),
-                                ours = %entry.our_actual,
-                                polymarket = res_str,
-                                "candle.oracle.disagreement"
-                            );
                         } else {
                             tracing::info!(cid = short_cid(&cid), "candle.oracle.agreed");
                         }
                         if is_tie {
-                            self.trip_breaker("oracle_tie").await;
-                            self.stop.notify_one();
+                            if entry.shadow {
+                                tracing::warn!(cid = short_cid(&cid), "candle.oracle.shadow_tie");
+                            } else {
+                                self.trip_breaker("oracle_tie").await;
+                                self.stop.notify_one();
+                            }
                         }
                         to_remove.push(cid);
                     }
@@ -2186,6 +2263,7 @@ mod tests {
             size: Some(10.0),
             provisional_won: Some(true),
             provisional_pnl: Some(5.79),
+            shadow: false,
         };
 
         let (final_won, final_pnl, provisional_won, provisional_pnl) =
@@ -2195,5 +2273,28 @@ mod tests {
         assert!(provisional_won);
         assert!((final_pnl - -4.21).abs() < 1e-9);
         assert!((provisional_pnl - 5.79).abs() < 1e-9);
+    }
+
+    #[test]
+    fn paper_position_shadow_flag_round_trips_with_legacy_default() {
+        let pos = PaperPosition {
+            direction: "up".to_string(),
+            entry_price: 0.42,
+            fee: 0.0,
+            size: 0.0,
+            open_btc: 100.0,
+            end_time: 10.0,
+            asset: "BTC".to_string(),
+            contract_id: "cid".to_string(),
+            shadow: true,
+        };
+        let encoded = pos.to_json();
+        let decoded = PaperPosition::from_json("cid".to_string(), &encoded).unwrap();
+        assert!(decoded.shadow);
+
+        let mut legacy = encoded;
+        legacy.as_object_mut().unwrap().remove("shadow");
+        let decoded_legacy = PaperPosition::from_json("cid".to_string(), &legacy).unwrap();
+        assert!(!decoded_legacy.shadow);
     }
 }
