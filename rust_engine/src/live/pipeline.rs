@@ -1596,11 +1596,15 @@ impl Pipeline {
                 if now < pos.end_time {
                     continue;
                 }
-                let close_price = if pos.asset == "BTC" {
-                    btc
-                } else {
-                    ps.alt_mid.get(&pos.asset).copied().unwrap_or(btc)
-                };
+                let close_price = ps
+                    .price_near_seconds(&pos.asset, pos.end_time, 2.0)
+                    .unwrap_or_else(|| {
+                        if pos.asset == "BTC" {
+                            btc
+                        } else {
+                            ps.alt_mid.get(&pos.asset).copied().unwrap_or(btc)
+                        }
+                    });
                 let actual = if close_price >= pos.open_btc { "up" } else { "down" };
                 let won = actual == pos.direction;
                 let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);

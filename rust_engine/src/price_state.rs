@@ -3,8 +3,11 @@
 //! Lives in the library so both binaries (`polymomentum-engine` and the
 //! legacy `polymomentum-legacy`) and the `exchange` module can share it.
 
-use std::collections::HashMap;
-use std::time::Instant;
+use std::collections::{HashMap, VecDeque};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+const PRICE_HISTORY_MAX_AGE_S: f64 = 3_600.0;
+const PRICE_HISTORY_MIN_STEP_S: f64 = 0.05;
 
 #[derive(Debug, Clone)]
 pub struct PriceState {
@@ -17,6 +20,8 @@ pub struct PriceState {
     pub alt_prices: HashMap<String, HashMap<String, f64>>,
     pub alt_mid: HashMap<String, f64>,
     pub alt_timestamps: HashMap<String, Instant>,
+    price_history: VecDeque<(f64, f64)>,
+    alt_history: HashMap<String, VecDeque<(f64, f64)>>,
 }
 
 impl Default for PriceState {
@@ -37,6 +42,8 @@ impl PriceState {
             alt_prices: HashMap::new(),
             alt_mid: HashMap::new(),
             alt_timestamps: HashMap::new(),
+            price_history: VecDeque::new(),
+            alt_history: HashMap::new(),
         }
     }
 
@@ -66,6 +73,7 @@ impl PriceState {
             let min = live.iter().cloned().fold(f64::MAX, f64::min);
             let max = live.iter().cloned().fold(f64::MIN, f64::max);
             self.spread = max - min;
+            record_history(&mut self.price_history, now_seconds(), self.mid_price);
         }
     }
 
@@ -93,11 +101,38 @@ impl PriceState {
             .collect();
 
         if !live.is_empty() {
-            self.alt_mid.insert(
-                asset.to_string(),
-                live.iter().sum::<f64>() / live.len() as f64,
+            let mid = live.iter().sum::<f64>() / live.len() as f64;
+            self.alt_mid.insert(asset.to_string(), mid);
+            record_history(
+                self.alt_history.entry(asset.to_string()).or_default(),
+                now_seconds(),
+                mid,
             );
         }
+    }
+
+    pub fn price_near_seconds(
+        &self,
+        asset: &str,
+        target_s: f64,
+        max_distance_s: f64,
+    ) -> Option<f64> {
+        let history = if asset == "BTC" {
+            &self.price_history
+        } else {
+            self.alt_history.get(asset)?
+        };
+        history
+            .iter()
+            .filter_map(|(ts, price)| {
+                let distance = (*ts - target_s).abs();
+                (distance <= max_distance_s).then_some((distance, *price))
+            })
+            .min_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(_, price)| price)
     }
 
     pub fn n_live_sources(&self) -> usize {
@@ -106,5 +141,60 @@ impl PriceState {
             .values()
             .filter(|t| now.duration_since(**t).as_secs() < 10)
             .count()
+    }
+}
+
+fn record_history(history: &mut VecDeque<(f64, f64)>, ts_s: f64, price: f64) {
+    if price <= 0.0 {
+        return;
+    }
+    if history
+        .back()
+        .map(|(last_ts, _)| ts_s - *last_ts < PRICE_HISTORY_MIN_STEP_S)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    history.push_back((ts_s, price));
+    let cutoff = ts_s - PRICE_HISTORY_MAX_AGE_S;
+    while history
+        .front()
+        .map(|(old_ts, _)| *old_ts < cutoff)
+        .unwrap_or(false)
+    {
+        history.pop_front();
+    }
+}
+
+fn now_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn price_history_returns_nearest_price_inside_tolerance() {
+        let mut ps = PriceState::new();
+        record_history(&mut ps.price_history, 100.0, 10.0);
+        record_history(&mut ps.price_history, 101.0, 11.0);
+        record_history(&mut ps.price_history, 103.0, 13.0);
+
+        assert_eq!(ps.price_near_seconds("BTC", 100.8, 1.0), Some(11.0));
+        assert_eq!(ps.price_near_seconds("BTC", 105.0, 1.0), None);
+    }
+
+    #[test]
+    fn price_history_retains_only_recent_window() {
+        let mut history = VecDeque::new();
+        record_history(&mut history, 0.0, 10.0);
+        record_history(&mut history, PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0);
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.front().copied(), Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0)));
     }
 }

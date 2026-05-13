@@ -83,6 +83,7 @@ pub struct OracleDiagnostics {
     pub ties: u64,
     pub corrections: u64,
     pub total_pnl_delta: f64,
+    pub first_disagreements: Vec<String>,
     pub disagreement_min_abs_move: Option<f64>,
     pub disagreement_max_abs_move: Option<f64>,
     pub tie_min_abs_move: Option<f64>,
@@ -411,6 +412,23 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
         if let Some(abs_move) = abs_move {
             update_min(&mut out.oracle.disagreement_min_abs_move, abs_move);
             update_max(&mut out.oracle.disagreement_max_abs_move, abs_move);
+        }
+        if out.oracle.first_disagreements.len() < 10 {
+            let cid = v.get("cid").and_then(|x| x.as_str()).unwrap_or("unknown");
+            let ours = v
+                .get("our_actual")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            let polymarket = v
+                .get("polymarket_actual")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            let move_detail = abs_move
+                .map(|m| format!(" abs_move={m:.2}"))
+                .unwrap_or_default();
+            out.oracle.first_disagreements.push(format!(
+                "{cid}: ours={ours} polymarket={polymarket}{move_detail}"
+            ));
         }
     }
     if v.get("polymarket_actual")
@@ -775,6 +793,9 @@ mod tests {
             serde_json::json!({
                 "cat": "oracle",
                 "type": "resolution",
+                "cid": "0xabc",
+                "our_actual": "up",
+                "polymarket_actual": "down",
                 "our_open_btc": 100000.0,
                 "our_close_btc": 100028.64,
                 "agreed": false
@@ -799,6 +820,10 @@ mod tests {
         assert!(!diag.ok);
         assert_eq!(diag.resolutions.resolved, 2);
         assert_eq!(diag.oracle.disagreements, 1);
+        assert_eq!(
+            diag.oracle.first_disagreements,
+            vec!["0xabc: ours=up polymarket=down abs_move=28.64"]
+        );
         assert!((diag.oracle.disagreement_min_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!((diag.oracle.disagreement_max_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!(diag
