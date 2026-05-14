@@ -80,12 +80,18 @@ pub struct ResolutionDiagnostics {
 pub struct OracleDiagnostics {
     pub checks: u64,
     pub disagreements: u64,
+    pub actionable_disagreements: u64,
+    pub below_floor_disagreements: u64,
     pub ties: u64,
     pub corrections: u64,
     pub total_pnl_delta: f64,
     pub first_disagreements: Vec<String>,
     pub disagreement_min_abs_move: Option<f64>,
     pub disagreement_max_abs_move: Option<f64>,
+    pub actionable_disagreement_min_abs_move: Option<f64>,
+    pub actionable_disagreement_max_abs_move: Option<f64>,
+    pub below_floor_disagreement_min_abs_move: Option<f64>,
+    pub below_floor_disagreement_max_abs_move: Option<f64>,
     pub tie_min_abs_move: Option<f64>,
     pub tie_max_abs_move: Option<f64>,
 }
@@ -409,9 +415,37 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
     let abs_move = oracle_abs_move(v);
     if !v.get("agreed").and_then(|x| x.as_bool()).unwrap_or(true) {
         out.oracle.disagreements += 1;
+        let below_floor = match (abs_move, out.system.settlement_min_abs_move_usd) {
+            (Some(abs_move), Some(floor)) if floor > 0.0 => abs_move < floor,
+            _ => false,
+        };
         if let Some(abs_move) = abs_move {
             update_min(&mut out.oracle.disagreement_min_abs_move, abs_move);
             update_max(&mut out.oracle.disagreement_max_abs_move, abs_move);
+            if below_floor {
+                update_min(
+                    &mut out.oracle.below_floor_disagreement_min_abs_move,
+                    abs_move,
+                );
+                update_max(
+                    &mut out.oracle.below_floor_disagreement_max_abs_move,
+                    abs_move,
+                );
+            } else {
+                update_min(
+                    &mut out.oracle.actionable_disagreement_min_abs_move,
+                    abs_move,
+                );
+                update_max(
+                    &mut out.oracle.actionable_disagreement_max_abs_move,
+                    abs_move,
+                );
+            }
+        }
+        if below_floor {
+            out.oracle.below_floor_disagreements += 1;
+        } else {
+            out.oracle.actionable_disagreements += 1;
         }
         if out.oracle.first_disagreements.len() < 10 {
             let cid = v.get("cid").and_then(|x| x.as_str()).unwrap_or("unknown");
@@ -426,8 +460,13 @@ fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
             let move_detail = abs_move
                 .map(|m| format!(" abs_move={m:.2}"))
                 .unwrap_or_default();
+            let class_detail = if below_floor {
+                " class=below_settlement_floor"
+            } else {
+                " class=actionable"
+            };
             out.oracle.first_disagreements.push(format!(
-                "{cid}: ours={ours} polymarket={polymarket}{move_detail}"
+                "{cid}: ours={ours} polymarket={polymarket}{move_detail}{class_detail}"
             ));
         }
     }
@@ -565,23 +604,38 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.resolutions.resolved, out.orders.filled
         ));
     }
-    if out.oracle.disagreements > 0 {
+    if out.oracle.actionable_disagreements > 0 {
         let move_range = oracle_move_range(
-            out.oracle.disagreement_min_abs_move,
-            out.oracle.disagreement_max_abs_move,
+            out.oracle.actionable_disagreement_min_abs_move,
+            out.oracle.actionable_disagreement_max_abs_move,
         );
         out.warnings.push(format!(
-            "{} oracle disagreement(s) between local resolution and Polymarket{}",
-            out.oracle.disagreements, move_range
+            "{} actionable oracle disagreement(s) between local resolution and Polymarket{}",
+            out.oracle.actionable_disagreements, move_range
+        ));
+    }
+    if out.oracle.below_floor_disagreements > 0 {
+        let move_range = oracle_move_range(
+            out.oracle.below_floor_disagreement_min_abs_move,
+            out.oracle.below_floor_disagreement_max_abs_move,
+        );
+        let floor = out
+            .system
+            .settlement_min_abs_move_usd
+            .map(|v| format!(" below configured ${v:.2} settlement floor"))
+            .unwrap_or_else(|| " below configured settlement floor".to_string());
+        out.warnings.push(format!(
+            "{} below-floor oracle disagreement(s){}{}; excluded from executable settlement gate",
+            out.oracle.below_floor_disagreements, move_range, floor
         ));
     }
     let unresolved_oracle_disagreements = out
         .oracle
-        .disagreements
+        .actionable_disagreements
         .saturating_sub(out.oracle.corrections);
     if unresolved_oracle_disagreements > 0 {
         out.warnings.push(format!(
-            "{} oracle disagreement(s) have no recorded PnL correction",
+            "{} actionable oracle disagreement(s) have no recorded PnL correction",
             unresolved_oracle_disagreements
         ));
     }
@@ -822,8 +876,10 @@ mod tests {
         assert_eq!(diag.oracle.disagreements, 1);
         assert_eq!(
             diag.oracle.first_disagreements,
-            vec!["0xabc: ours=up polymarket=down abs_move=28.64"]
+            vec!["0xabc: ours=up polymarket=down abs_move=28.64 class=actionable"]
         );
+        assert_eq!(diag.oracle.actionable_disagreements, 1);
+        assert_eq!(diag.oracle.below_floor_disagreements, 0);
         assert!((diag.oracle.disagreement_min_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!((diag.oracle.disagreement_max_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!(diag
@@ -838,6 +894,83 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("no recorded PnL correction")));
+    }
+
+    #[test]
+    fn session_diagnostics_excludes_below_floor_oracle_disagreement_from_gate() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "system",
+                "type": "runtime_strategy",
+                "source": "promotion:/tmp/promotion.json+settlement_floor",
+                "strategy": {
+                    "name": "candle_momentum",
+                    "version": "1",
+                    "params_hash": "runtime_strategy",
+                    "risk_profile": "test-risk"
+                },
+                "settlement_alignment_ready": false,
+                "settlement_cutoff_minutes": 1.5,
+                "settlement_guard_minutes": 5.0,
+                "settlement_min_abs_move_usd": 25.0,
+                "settlement_sigma_buffer": 0.2
+            }),
+            serde_json::json!({
+                "cat": "oracle",
+                "type": "resolution",
+                "cid": "0xsmall",
+                "our_actual": "up",
+                "polymarket_actual": "down",
+                "our_open_btc": 100000.0,
+                "our_close_btc": 100011.61,
+                "agreed": false
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(diag.ok, "{:?}", diag.warnings);
+        assert_eq!(diag.oracle.disagreements, 1);
+        assert_eq!(diag.oracle.actionable_disagreements, 0);
+        assert_eq!(diag.oracle.below_floor_disagreements, 1);
+        assert_eq!(
+            diag.oracle.first_disagreements,
+            vec!["0xsmall: ours=up polymarket=down abs_move=11.61 class=below_settlement_floor"]
+        );
+        assert!(diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("below-floor oracle disagreement")));
+        assert!(!diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("actionable oracle disagreement")));
     }
 
     #[test]

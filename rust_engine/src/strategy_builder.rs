@@ -430,19 +430,21 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         StrategyBuilderCheckStatus::Fail
                     },
                     format!(
-                        "{} ok={} events={} shadow={} oracle={} disagreements={} errors={}",
+                        "{} ok={} events={} shadow={} oracle={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
                         session,
                         diag.ok,
                         diag.total_events,
                         shadow,
                         diag.oracle.checks,
                         diag.oracle.disagreements,
+                        diag.oracle.actionable_disagreements,
+                        diag.oracle.below_floor_disagreements,
                         diag.system.errors
                     ),
                 ));
                 let status = if shadow >= input.min_shadow_resolutions
                     && diag.oracle.checks >= shadow
-                    && diag.oracle.disagreements == 0
+                    && diag.oracle.actionable_disagreements == 0
                     && diag.oracle.ties == 0
                     && diag.system.errors == 0
                 {
@@ -454,14 +456,28 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                     "replay.shadow_oracle",
                     status,
                     format!(
-                        "{} shadow={} min_shadow={} oracle={} ties={} disagreements={} errors={}",
+                        "{} shadow={} min_shadow={} oracle={} ties={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
                         session,
                         shadow,
                         input.min_shadow_resolutions,
                         diag.oracle.checks,
                         diag.oracle.ties,
                         diag.oracle.disagreements,
+                        diag.oracle.actionable_disagreements,
+                        diag.oracle.below_floor_disagreements,
                         diag.system.errors
+                    ),
+                ));
+                checks.push(check(
+                    "replay.below_floor_oracle",
+                    if diag.oracle.below_floor_disagreements == 0 {
+                        StrategyBuilderCheckStatus::Ok
+                    } else {
+                        StrategyBuilderCheckStatus::Warn
+                    },
+                    format!(
+                        "{} below_floor_disagreements={} excluded_from_executable_gate=true",
+                        session, diag.oracle.below_floor_disagreements
                     ),
                 ));
             }
@@ -793,5 +809,77 @@ mod tests {
     fn unknown_profile_is_rejected() {
         let err = StrategyBuilderProfile::from_name("mystery").unwrap_err();
         assert!(err.to_string().contains("unknown strategy-builder profile"));
+    }
+
+    #[test]
+    fn audit_warns_but_does_not_fail_below_floor_oracle_disagreement() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "system",
+                "type": "runtime_strategy",
+                "settlement_alignment_ready": false,
+                "settlement_min_abs_move_usd": 25.0,
+                "strategy": {"params_hash": "strategy"}
+            }),
+            serde_json::json!({
+                "cat": "shadow",
+                "type": "resolved"
+            }),
+            serde_json::json!({
+                "cat": "oracle",
+                "type": "resolution",
+                "cid": "0xabc",
+                "our_actual": "up",
+                "polymarket_actual": "down",
+                "our_open_btc": 100000.0,
+                "our_close_btc": 100011.61,
+                "agreed": false
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let audit = audit(StrategyBuilderAuditInput {
+            report_paths: Vec::new(),
+            promotion_artifact: None,
+            replay_sessions: vec![path.display().to_string()],
+            min_trades: 1,
+            min_win_rate: 0.0,
+            min_wilson_win_rate_lower: 0.0,
+            min_total_pnl: 0.0,
+            min_shadow_resolutions: 1,
+        });
+
+        assert!(audit.ok);
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "replay.shadow_oracle" && c.status == StrategyBuilderCheckStatus::Ok
+        }));
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "replay.below_floor_oracle" && c.status == StrategyBuilderCheckStatus::Warn
+        }));
     }
 }
