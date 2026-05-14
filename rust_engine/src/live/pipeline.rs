@@ -796,7 +796,21 @@ impl Pipeline {
             .gamma
             .fetch_markets_by_end_date(3.0, 0.0)
             .await?;
-        let contracts = scan_candle_markets(&markets, 1.0, 50.0);
+        let mut contracts = scan_candle_markets(&markets, 1.0, 50.0);
+        if self.settings.candle_window_minutes > 0.0 {
+            let before = contracts.len();
+            let target = self.settings.candle_window_minutes;
+            contracts.retain(|c| {
+                let minutes = estimate_window_minutes(&c.window_description);
+                (minutes - target).abs() < 0.05
+            });
+            tracing::info!(
+                target,
+                kept = contracts.len(),
+                before,
+                "candle.window_filter"
+            );
+        }
 
         let active_cids: HashSet<String> =
             contracts.iter().map(|c| c.market.condition_id.clone()).collect();
