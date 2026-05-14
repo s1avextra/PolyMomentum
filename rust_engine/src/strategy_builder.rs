@@ -40,6 +40,9 @@ pub struct StrategyBuilderAuditInput {
     pub min_wilson_win_rate_lower: f64,
     pub min_total_pnl: f64,
     pub min_shadow_resolutions: u64,
+    pub min_research_reports: usize,
+    pub min_replay_sessions: usize,
+    pub a_plus_min_shadow_resolutions: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +71,7 @@ pub struct StrategyBuilderStage {
 pub struct StrategyBuilderAudit {
     pub schema_version: u32,
     pub ok: bool,
+    pub a_plus_ready: bool,
     pub grade: String,
     pub checks: Vec<StrategyBuilderCheck>,
     pub next_steps: Vec<String>,
@@ -407,6 +411,19 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
             )),
         }
     }
+    checks.push(check(
+        "a_plus.research_reports",
+        if input.report_paths.len() >= input.min_research_reports {
+            StrategyBuilderCheckStatus::Ok
+        } else {
+            StrategyBuilderCheckStatus::Warn
+        },
+        format!(
+            "reports={} min_research_reports={}",
+            input.report_paths.len(),
+            input.min_research_reports
+        ),
+    ));
 
     if let Some(path) = &input.promotion_artifact {
         audit_promotion(path, &input, &mut checks);
@@ -417,6 +434,20 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
             "no promotion artifact supplied".to_string(),
         ));
     }
+
+    checks.push(check(
+        "a_plus.replay_sessions",
+        if input.replay_sessions.len() >= input.min_replay_sessions {
+            StrategyBuilderCheckStatus::Ok
+        } else {
+            StrategyBuilderCheckStatus::Warn
+        },
+        format!(
+            "replay_sessions={} min_replay_sessions={}",
+            input.replay_sessions.len(),
+            input.min_replay_sessions
+        ),
+    ));
 
     for session in &input.replay_sessions {
         match diagnostics::analyze_session(session) {
@@ -480,6 +511,18 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         session, diag.oracle.below_floor_disagreements
                     ),
                 ));
+                checks.push(check(
+                    "replay.a_plus_sample",
+                    if shadow >= input.a_plus_min_shadow_resolutions {
+                        StrategyBuilderCheckStatus::Ok
+                    } else {
+                        StrategyBuilderCheckStatus::Warn
+                    },
+                    format!(
+                        "{} shadow={} a_plus_min_shadow_resolutions={}",
+                        session, shadow, input.a_plus_min_shadow_resolutions
+                    ),
+                ));
             }
             Err(e) => checks.push(check(
                 "replay.session",
@@ -506,19 +549,21 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         .filter(|c| c.status == StrategyBuilderCheckStatus::Warn)
         .count();
     let ok = fail_count == 0;
+    let a_plus_ready = ok && warn_count == 0;
     let grade = match (fail_count, warn_count) {
-        (0, 0) => "A",
+        (0, 0) => "A+",
         (0, 1..=2) => "A-",
         (0, _) => "B",
         (1..=2, _) => "C",
         _ => "D",
     }
     .to_string();
-    let next_steps = next_steps(ok, warn_count);
+    let next_steps = next_steps(ok, warn_count, a_plus_ready);
 
     StrategyBuilderAudit {
         schema_version: 1,
         ok,
+        a_plus_ready,
         grade,
         checks,
         next_steps,
@@ -611,7 +656,7 @@ fn promotion_hash_status(
     }
 }
 
-fn next_steps(ok: bool, warn_count: usize) -> Vec<String> {
+fn next_steps(ok: bool, warn_count: usize, a_plus_ready: bool) -> Vec<String> {
     if !ok {
         return vec![
             "Fix failed checks before promoting or changing paper/live gates.".to_string(),
@@ -623,6 +668,14 @@ fn next_steps(ok: bool, warn_count: usize) -> Vec<String> {
         return vec![
             "Review warnings and document why they are acceptable for the current gate.".to_string(),
             "Run a fresh paper-shadow window and compare diagnostics before enabling settlement alignment."
+                .to_string(),
+        ];
+    }
+    if a_plus_ready {
+        return vec![
+            "Begin or continue paper soak on the A+ artifact with diagnostics collection."
+                .to_string(),
+            "Keep live trading gated until paper soak remains A+ across a fresh resolved sample."
                 .to_string(),
         ];
     }
@@ -872,6 +925,9 @@ mod tests {
             min_wilson_win_rate_lower: 0.0,
             min_total_pnl: 0.0,
             min_shadow_resolutions: 1,
+            min_research_reports: 0,
+            min_replay_sessions: 1,
+            a_plus_min_shadow_resolutions: 1,
         });
 
         assert!(audit.ok);

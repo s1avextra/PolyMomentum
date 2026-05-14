@@ -224,6 +224,15 @@ enum Command {
         /// Comma-separated EV buffers (negative disables the EV gate).
         #[arg(long, default_value = "-1.0,0.05")]
         ev_buffer: String,
+        /// Comma-separated settlement floors in USD for the final-window guard.
+        #[arg(long, default_value = "10.0")]
+        settlement_floor: String,
+        /// Comma-separated final-window settlement guard lengths in minutes.
+        #[arg(long, default_value = "1.0")]
+        settlement_guard_minutes: String,
+        /// Comma-separated volatility-scaled settlement buffer multipliers.
+        #[arg(long, default_value = "0.0")]
+        settlement_sigma_buffer: String,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -561,6 +570,15 @@ enum StrategyBuilderCommand {
         /// Minimum shadow resolutions expected in each replay session.
         #[arg(long, default_value_t = 1)]
         min_shadow_resolutions: u64,
+        /// Minimum daily/holdout research reports required for an A+ audit.
+        #[arg(long, default_value_t = 3)]
+        min_research_reports: usize,
+        /// Minimum replay or paper sessions required for an A+ audit.
+        #[arg(long, default_value_t = 1)]
+        min_replay_sessions: usize,
+        /// Minimum shadow resolutions per replay/paper session required for A+.
+        #[arg(long, default_value_t = 50)]
+        a_plus_min_shadow_resolutions: u64,
     },
 }
 
@@ -683,6 +701,9 @@ async fn main() {
             z,
             edge,
             ev_buffer,
+            settlement_floor,
+            settlement_guard_minutes,
+            settlement_sigma_buffer,
             also_maker,
             top,
             threads,
@@ -695,6 +716,9 @@ async fn main() {
             let zs = parse_csv_floats(&z);
             let edges = parse_csv_floats(&edge);
             let evs = parse_csv_floats(&ev_buffer);
+            let settlement_floors = parse_csv_floats(&settlement_floor);
+            let settlement_guards = parse_csv_floats(&settlement_guard_minutes);
+            let settlement_sigmas = parse_csv_floats(&settlement_sigma_buffer);
             cmd_harness_sweep(
                 &settings,
                 &start,
@@ -707,6 +731,9 @@ async fn main() {
                 zs,
                 edges,
                 evs,
+                settlement_floors,
+                settlement_guards,
+                settlement_sigmas,
                 also_maker,
                 top,
                 threads,
@@ -793,6 +820,9 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_wilson_win_rate_lower,
             min_total_pnl,
             min_shadow_resolutions,
+            min_research_reports,
+            min_replay_sessions,
+            a_plus_min_shadow_resolutions,
         } => {
             let audit = strategy_builder::audit(strategy_builder::StrategyBuilderAuditInput {
                 report_paths: report,
@@ -803,6 +833,9 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 min_wilson_win_rate_lower,
                 min_total_pnl,
                 min_shadow_resolutions,
+                min_research_reports,
+                min_replay_sessions,
+                a_plus_min_shadow_resolutions,
             });
             println!(
                 "{}",
@@ -1832,6 +1865,9 @@ async fn cmd_harness_sweep(
     z: Vec<f64>,
     edge: Vec<f64>,
     ev_buffer: Vec<f64>,
+    settlement_min_abs_move_usd: Vec<f64>,
+    settlement_guard_minutes: Vec<f64>,
+    settlement_sigma_buffer: Vec<f64>,
     also_maker: bool,
     top: usize,
     threads: usize,
@@ -1873,6 +1909,9 @@ async fn cmd_harness_sweep(
         z,
         edge,
         ev_buffer,
+        settlement_min_abs_move_usd,
+        settlement_guard_minutes,
+        settlement_sigma_buffer,
         also_maker,
     };
     let variants = grid.variants();
