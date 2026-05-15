@@ -1053,6 +1053,12 @@ impl Pipeline {
                     &self.runtime_strategy.zone_config,
                     0.0, // cross-asset boost not yet wired
                 );
+                let signal_token_id = if signal.direction == "up" {
+                    &c.up_token_id
+                } else {
+                    &c.down_token_id
+                };
+                let signal_micro = live_microstructure(signal_token_id, &books, now_ts);
 
                 let (vol_fast, vol_slow) = {
                     let moms = self.momentum.lock().await;
@@ -1089,10 +1095,10 @@ impl Pipeline {
                             cross_boost: 0.0,
                             up_price,
                             down_price,
-                            book_spread: 0.0,
-                            book_pressure: 0.0,
-                            book_bid_depth: 0.0,
-                            book_ask_depth: 0.0,
+                            book_spread: signal_micro.spread,
+                            book_pressure: signal_micro.pressure,
+                            book_bid_depth: signal_micro.bid_depth,
+                            book_ask_depth: signal_micro.ask_depth,
                             zone: skip.zone.clone(),
                             fair: 0.0,
                             edge: 0.0,
@@ -1128,10 +1134,10 @@ impl Pipeline {
                                 cross_boost: 0.0,
                                 up_price,
                                 down_price,
-                                book_spread: 0.0,
-                                book_pressure: 0.0,
-                                book_bid_depth: 0.0,
-                                book_ask_depth: 0.0,
+                                book_spread: signal_micro.spread,
+                                book_pressure: signal_micro.pressure,
+                                book_bid_depth: signal_micro.bid_depth,
+                                book_ask_depth: signal_micro.ask_depth,
                                 zone: decision.zone.clone(),
                                 fair: decision.fair_value,
                                 edge: decision.edge,
