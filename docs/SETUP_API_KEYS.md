@@ -28,7 +28,7 @@ Verify with the bot:
 
 ```bash
 PRIVATE_KEY=0x...your_key... \
-POLYGON_RPC_URL=https://polygon-rpc.com \
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com \
 ./target/release/polymomentum-engine wallet
 ```
 
@@ -71,7 +71,7 @@ PRIVATE_KEY=0x...
 POLY_API_KEY=...
 POLY_API_SECRET=...
 POLY_API_PASSPHRASE=...
-POLYGON_RPC_URL=https://polygon-rpc.com
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ALERT_REQUIRED=1
 VENUE=paper_only

@@ -39,7 +39,7 @@ POLY_API_KEY=
 POLY_API_SECRET=
 POLY_API_PASSPHRASE=
 PRIVATE_KEY=
-POLYGON_RPC_URL=https://polygon-rpc.com
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
 
 # Slack alerter — REQUIRED in live mode (set ALERT_REQUIRED=1 to fail fast)
 SLACK_WEBHOOK_URL=

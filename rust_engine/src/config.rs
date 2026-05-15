@@ -207,7 +207,10 @@ impl Settings {
             live_reconciliation_ready: env_bool("POLYMOMENTUM_LIVE_RECONCILIATION_READY", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
-            polygon_rpc_url: env_str("POLYGON_RPC_URL", "https://polygon-rpc.com"),
+            polygon_rpc_url: env_str(
+                "POLYGON_RPC_URL",
+                "https://polygon-bor-rpc.publicnode.com",
+            ),
 
             bankroll_usd: env_f64("BANKROLL_USD", 0.0),
             max_total_exposure_usd: env_f64("MAX_TOTAL_EXPOSURE_USD", 80.0),
