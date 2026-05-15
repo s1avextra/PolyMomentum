@@ -51,10 +51,17 @@ pub struct SessionComparison {
 pub struct SignalDiagnostics {
     pub evaluations: u64,
     pub skips: u64,
+    pub skip_reasons: BTreeMap<String, u64>,
     pub decision_trades: u64,
     pub execution_attempted: u64,
     pub traded_true: u64,
     pub missing_replay_fields: u64,
+    pub evals_with_book_spread: u64,
+    pub evals_with_book_depth: u64,
+    pub max_book_spread: Option<f64>,
+    pub max_book_bid_depth: Option<f64>,
+    pub max_book_ask_depth: Option<f64>,
+    pub max_abs_book_pressure: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -184,7 +191,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("system", "runtime_strategy") => record_runtime_strategy(&mut out, &v),
             ("system", "error") => record_system_error(&mut out, &v),
             ("signal", "evaluation") => record_signal_evaluation(&mut out, &v),
-            ("signal", "skip") => out.signals.skips += 1,
+            ("signal", "skip") => record_signal_skip(&mut out, &v),
             ("order", "placed") => record_order_placed(&mut out, &v),
             ("order", "filled") => record_order_filled(&mut out, &v),
             ("order", "rejected") => out.orders.rejected += 1,
@@ -346,6 +353,16 @@ fn record_system_error(out: &mut SessionDiagnostics, v: &Value) {
     }
 }
 
+fn record_signal_skip(out: &mut SessionDiagnostics, v: &Value) {
+    out.signals.skips += 1;
+    let reason = v
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    *out.signals.skip_reasons.entry(reason).or_insert(0) += 1;
+}
+
 fn record_signal_evaluation(out: &mut SessionDiagnostics, v: &Value) {
     out.signals.evaluations += 1;
     if v.get("decision_trade")
@@ -368,6 +385,22 @@ fn record_signal_evaluation(out: &mut SessionDiagnostics, v: &Value) {
             out.signals.missing_replay_fields += 1;
             break;
         }
+    }
+    if let Some(spread) = finite_f64(v, "book_spread") {
+        update_max(&mut out.signals.max_book_spread, spread.abs());
+        if spread.abs() > 0.0 {
+            out.signals.evals_with_book_spread += 1;
+        }
+    }
+    let bid_depth = finite_f64(v, "book_bid_depth").unwrap_or(0.0).max(0.0);
+    let ask_depth = finite_f64(v, "book_ask_depth").unwrap_or(0.0).max(0.0);
+    update_max(&mut out.signals.max_book_bid_depth, bid_depth);
+    update_max(&mut out.signals.max_book_ask_depth, ask_depth);
+    if bid_depth > 0.0 && ask_depth > 0.0 {
+        out.signals.evals_with_book_depth += 1;
+    }
+    if let Some(pressure) = finite_f64(v, "book_pressure") {
+        update_max(&mut out.signals.max_abs_book_pressure, pressure.abs());
     }
 }
 
@@ -563,6 +596,11 @@ fn missing_string(v: &Value, key: &str) -> bool {
         .unwrap_or(true)
 }
 
+fn finite_f64(v: &Value, key: &str) -> Option<f64> {
+    let value = v.get(key).and_then(|x| x.as_f64())?;
+    value.is_finite().then_some(value)
+}
+
 fn finalize(out: &mut SessionDiagnostics) {
     if !out.release_manifest_seen {
         out.warnings
@@ -698,6 +736,11 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.warnings
                 .push("no signal evaluations captured; diagnostic run may be too short".to_string());
         }
+    } else if out.signals.evals_with_book_spread == 0 {
+        out.warnings.push(
+            "no signal evaluation carried non-zero book spread; CLOB feed health is unproven"
+                .to_string(),
+        );
     }
 
     out.ok = out.release_manifest_seen
@@ -809,6 +852,83 @@ mod tests {
         assert_eq!(diag.system.settlement_alignment_ready, Some(false));
         assert_eq!(diag.orders.placed, 1);
         assert_eq!(diag.signals.decision_trades, 1);
+    }
+
+    #[test]
+    fn session_diagnostics_summarizes_signal_feed_health() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "skip",
+                "reason": "low_edge_fast"
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "skip",
+                "reason": "low_edge_fast"
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "skip",
+                "reason": "settlement_alignment_unverified_fast"
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false,
+                "book_spread": 0.03,
+                "book_pressure": -0.25,
+                "book_bid_depth": 120.5,
+                "book_ask_depth": 90.25
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(diag.ok, "{:?}", diag.warnings);
+        assert_eq!(diag.signals.skips, 3);
+        assert_eq!(
+            diag.signals.skip_reasons.get("low_edge_fast").copied(),
+            Some(2)
+        );
+        assert_eq!(
+            diag.signals
+                .skip_reasons
+                .get("settlement_alignment_unverified_fast")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(diag.signals.evals_with_book_spread, 1);
+        assert_eq!(diag.signals.evals_with_book_depth, 1);
+        assert_eq!(diag.signals.max_book_spread, Some(0.03));
+        assert_eq!(diag.signals.max_book_bid_depth, Some(120.5));
+        assert_eq!(diag.signals.max_book_ask_depth, Some(90.25));
+        assert_eq!(diag.signals.max_abs_book_pressure, Some(0.25));
+        assert!(!diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("CLOB feed health")));
     }
 
     #[test]
