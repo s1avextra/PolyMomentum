@@ -5,13 +5,14 @@
 //! For binary markets:
 //!   payoutDenominator(cid) == 0 → not resolved
 //!   payoutNumerators(cid, 0) > num[1] → outcome 0 (Up) won
-//!   num0 == num1 → tie
+//!   num0 == num1 > 0, and num0 + num1 == denominator → tie
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde_json::json;
 
 pub const CTF_ADDRESS: &str = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
+const DEFAULT_POLYGON_RPC_URL: &str = "https://polygon-rpc.com";
 const PAYOUT_DENOMINATOR: &str = "0xdd34de67";
 const PAYOUT_NUMERATORS: &str = "0x0504c814";
 
@@ -35,7 +36,7 @@ impl Resolution {
 }
 
 pub struct CtfReader {
-    rpc_url: String,
+    rpc_urls: Vec<String>,
     http: Client,
 }
 
@@ -45,20 +46,32 @@ impl CtfReader {
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("client");
-        Self { rpc_url: rpc_url.into(), http }
+        let rpc_urls = rpc_urls(rpc_url.into());
+        Self { rpc_urls, http }
     }
 
     async fn eth_call(&self, data: &str) -> Result<u128> {
+        let mut last_err = None;
+        for rpc_url in &self.rpc_urls {
+            match self.eth_call_one(rpc_url, data).await {
+                Ok(value) => return Ok(value),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("no Polygon RPC URLs configured")))
+    }
+
+    async fn eth_call_one(&self, rpc_url: &str, data: &str) -> Result<u128> {
         let body = json!({
             "jsonrpc": "2.0",
             "method": "eth_call",
             "params": [{"to": CTF_ADDRESS, "data": data}, "latest"],
             "id": 1,
         });
-        let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+        let resp = self.http.post(rpc_url).json(&body).send().await?;
         let json: serde_json::Value = resp.json().await.context("decode json-rpc")?;
         if let Some(err) = json.get("error") {
-            return Err(anyhow!("CTF eth_call error: {err}"));
+            return Err(anyhow!("CTF eth_call error from {rpc_url}: {err}"));
         }
         let result = json.get("result").and_then(|v| v.as_str()).unwrap_or("0x0");
         let trimmed = result.trim_start_matches("0x");
@@ -93,13 +106,77 @@ impl CtfReader {
         );
         let num0 = self.eth_call(&num0_call).await?;
         let num1 = self.eth_call(&num1_call).await?;
-        let res = if num0 == num1 {
-            Resolution::Tie
-        } else if num0 > num1 {
-            Resolution::Up
-        } else {
-            Resolution::Down
-        };
+        let res = classify_binary_payout(denom, num0, num1);
         Ok((res, [num0, num1]))
+    }
+}
+
+fn rpc_urls(raw: String) -> Vec<String> {
+    let mut out: Vec<String> = raw
+        .split([',', ';', ' ', '\n', '\t'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if !out.iter().any(|url| url == DEFAULT_POLYGON_RPC_URL) {
+        out.push(DEFAULT_POLYGON_RPC_URL.to_string());
+    }
+    out
+}
+
+fn classify_binary_payout(denom: u128, num0: u128, num1: u128) -> Resolution {
+    if denom == 0 {
+        return Resolution::NotResolved;
+    }
+    let Some(total) = num0.checked_add(num1) else {
+        return Resolution::NotResolved;
+    };
+    if total != denom {
+        return Resolution::NotResolved;
+    }
+    if num0 == num1 {
+        Resolution::Tie
+    } else if num0 > num1 {
+        Resolution::Up
+    } else {
+        Resolution::Down
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_zero_payout_is_not_resolved_even_with_nonzero_denominator() {
+        assert_eq!(classify_binary_payout(1, 0, 0), Resolution::NotResolved);
+    }
+
+    #[test]
+    fn payout_vector_must_sum_to_denominator() {
+        assert_eq!(classify_binary_payout(2, 1, 0), Resolution::NotResolved);
+    }
+
+    #[test]
+    fn equal_nonzero_payouts_are_tie_when_complete() {
+        assert_eq!(classify_binary_payout(2, 1, 1), Resolution::Tie);
+    }
+
+    #[test]
+    fn binary_payouts_pick_winner() {
+        assert_eq!(classify_binary_payout(1, 1, 0), Resolution::Up);
+        assert_eq!(classify_binary_payout(1, 0, 1), Resolution::Down);
+    }
+
+    #[test]
+    fn ctf_reader_adds_public_read_only_fallback() {
+        let reader = CtfReader::new("https://example.invalid");
+        assert_eq!(
+            reader.rpc_urls,
+            vec![
+                "https://example.invalid".to_string(),
+                DEFAULT_POLYGON_RPC_URL.to_string()
+            ]
+        );
     }
 }

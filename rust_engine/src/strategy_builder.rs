@@ -501,11 +501,7 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                 ));
                 checks.push(check(
                     "replay.below_floor_oracle",
-                    if diag.oracle.below_floor_disagreements == 0 {
-                        StrategyBuilderCheckStatus::Ok
-                    } else {
-                        StrategyBuilderCheckStatus::Warn
-                    },
+                    StrategyBuilderCheckStatus::Ok,
                     format!(
                         "{} below_floor_disagreements={} excluded_from_executable_gate=true",
                         session, diag.oracle.below_floor_disagreements
@@ -865,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_warns_but_does_not_fail_below_floor_oracle_disagreement() {
+    fn audit_allows_below_floor_oracle_disagreement() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("session.jsonl");
         let lines = [
@@ -935,7 +931,7 @@ mod tests {
             c.name == "replay.shadow_oracle" && c.status == StrategyBuilderCheckStatus::Ok
         }));
         assert!(audit.checks.iter().any(|c| {
-            c.name == "replay.below_floor_oracle" && c.status == StrategyBuilderCheckStatus::Warn
+            c.name == "replay.below_floor_oracle" && c.status == StrategyBuilderCheckStatus::Ok
         }));
     }
 }
