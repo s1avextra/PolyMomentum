@@ -12,7 +12,12 @@ use reqwest::Client;
 use serde_json::json;
 
 pub const CTF_ADDRESS: &str = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
-const DEFAULT_POLYGON_RPC_URL: &str = "https://polygon-rpc.com";
+const DEFAULT_POLYGON_RPC_URL: &str = "https://polygon-bor-rpc.publicnode.com";
+const FALLBACK_POLYGON_RPC_URLS: &[&str] = &[
+    DEFAULT_POLYGON_RPC_URL,
+    "https://polygon.drpc.org",
+    "https://polygon.api.onfinality.io/public",
+];
 const PAYOUT_DENOMINATOR: &str = "0xdd34de67";
 const PAYOUT_NUMERATORS: &str = "0x0504c814";
 
@@ -118,8 +123,10 @@ fn rpc_urls(raw: String) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect();
-    if !out.iter().any(|url| url == DEFAULT_POLYGON_RPC_URL) {
-        out.push(DEFAULT_POLYGON_RPC_URL.to_string());
+    for fallback in FALLBACK_POLYGON_RPC_URLS {
+        if !out.iter().any(|url| url == fallback) {
+            out.push((*fallback).to_string());
+        }
     }
     out
 }
@@ -175,7 +182,9 @@ mod tests {
             reader.rpc_urls,
             vec![
                 "https://example.invalid".to_string(),
-                DEFAULT_POLYGON_RPC_URL.to_string()
+                "https://polygon-bor-rpc.publicnode.com".to_string(),
+                "https://polygon.drpc.org".to_string(),
+                "https://polygon.api.onfinality.io/public".to_string(),
             ]
         );
     }
