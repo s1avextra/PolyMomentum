@@ -27,11 +27,13 @@ shared PMXT parquet/cache files.
   sessions it can load the referenced promotion artifact, apply settlement
   floor fields, and account for the settlement-shadow gate when
   `CANDLE_SETTLEMENT_ALIGNMENT_READY=false`.
-- Current VPS replay proof: the copied VPS session
+- Replay proof before deploy: the copied VPS session
   `session_20260515_145845.jsonl` validates locally with the new code at
   `total=71573 mismatches=0 (0.00%)` after mapping the promotion artifact path
   to the copied local artifact. The previous soak failure was validator drift,
   not evidence of live decision nondeterminism.
+- Replay proof after deploy: the same long VPS session validates on the VPS at
+  `total=72309 mismatches=0 (0.00%)` with the deployed `327a579` binary.
 
 ## Data cleanup
 
@@ -55,37 +57,38 @@ Read-only check on the VPS showed:
 - Current root filesystem around 88% used after prior cleanup, still high but
   not an emergency. Further cleanup should stay coordinated through
   `/opt/shared/cross_bot_notes/`.
-- Latest deployed binary is still `ac85da9`; the replay-validator fix in this
-  audit needs a Linux artifact deploy before the VPS soak report can turn green
-  on the same session.
+- Latest deployed binary is now `327a579144bc850bce21f8951c0556f3ec7f8885`.
+  The immediate post-deploy soak report
+  `/opt/polymomentum/logs/soak/soak_20260516T040544Z.json` is `ok=true` in
+  paper mode. It had only a newborn session (`total=0` replay evaluations), so
+  the long-session validator proof above is the meaningful replay check.
 - Wallet remains not live-ready: observed pUSD, allowances, and POL were zero
   in the latest soak report.
 
 ## Grade
 
-Current state after this audit: **A-** locally, **B+/A-** on the VPS until the
-new validator/runtime-strategy logging is deployed and a fresh soak report is
-generated.
+Current state after this audit and deploy: **A** for code/replay plumbing,
+**A-** operationally. The remaining gaps are not code hygiene problems: they
+are settlement-alignment sample size, wallet funding/allowances, and shared VPS
+disk headroom.
 
 A+ requires all of these at the same time:
 
-1. New Linux artifact deployed in paper mode.
-2. Fresh soak report with diagnostics `ok=true`, replay exit `0`, peer services
+1. Fresh soak report with diagnostics `ok=true`, replay exit `0`, peer services
    active, and no unexpected resource contention.
-3. Settlement-shadow sample large enough to flip
+2. Settlement-shadow sample large enough to flip
    `CANDLE_SETTLEMENT_ALIGNMENT_READY=true` with zero actionable oracle drift.
-4. Wallet live preflight satisfied with pUSD, CTF Exchange V2 allowances, and
+3. Wallet live preflight satisfied with pUSD, CTF Exchange V2 allowances, and
    POL gas.
-5. Disk pressure reduced or explicitly accepted through cross-bot orchestration.
+4. Disk pressure reduced or explicitly accepted through cross-bot orchestration.
 
 ## Next production loop
 
-1. Commit and push this branch so CI can produce the Linux artifact.
-2. Deploy that artifact to the VPS in paper mode only.
-3. Run `soak-report.sh` immediately and confirm replay parity is `0` on the
-   existing session, then again after fresh data accumulates.
-4. Continue paper until enough resolved shadow samples exist for the settlement
+1. Let the freshly deployed paper mode collect a nonzero post-deploy sample.
+2. Run `soak-report.sh` again and confirm replay parity is still `0` on fresh
+   evaluations, not only on the pre-deploy long session.
+3. Continue paper until enough resolved shadow samples exist for the settlement
    alignment gate.
-5. Run CPU-heavy backtest/sweep work on the dev machine, not the VPS, exporting
+4. Run CPU-heavy backtest/sweep work on the dev machine, not the VPS, exporting
    only reports/artifacts needed for promotion.
-6. Convert/fund to pUSD and set allowances before any live preflight.
+5. Convert/fund to pUSD and set allowances before any live preflight.
