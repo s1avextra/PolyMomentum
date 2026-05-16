@@ -11,6 +11,8 @@ This is a **one-time** setup needed only for **live mode**. Paper mode and the `
 | `POLY_API_SECRET` | Base64 HMAC signing key | Signing CLOB request headers |
 | `POLY_API_PASSPHRASE` | Random string | Additional auth factor |
 | `CLOB_V2_READY` | Explicit live-order guard | Must stay `0` until the CLOB V2 order path is verified |
+| `POLYMOMENTUM_LIVE_RECONCILIATION_READY` | Explicit reconciliation guard | Must stay `0` until accepted orders reconcile from CLOB user-channel/REST evidence |
+| `CANDLE_SETTLEMENT_ALIGNMENT_READY` | Explicit settlement guard | Must stay `false` until paper/replay oracle checks agree |
 
 The API key, secret, and passphrase are **derived from your private key**. Polymarket's CLOB exposes a `POST /auth/api-key` endpoint that returns deterministic creds tied to a wallet — running the derivation twice yields the same values.
 
@@ -71,14 +73,19 @@ PRIVATE_KEY=0x...
 POLY_API_KEY=...
 POLY_API_SECRET=...
 POLY_API_PASSPHRASE=...
+POLY_BASE_URL=https://clob.polymarket.com
+POLY_GAMMA_URL=https://gamma-api.polymarket.com
 POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
 ALERT_REQUIRED=1
 VENUE=paper_only
 OPERATOR_COUNTRY=
 POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
 POLYMARKET_US_API_ENABLED=0
 CLOB_V2_READY=0
+POLYMOMENTUM_LIVE_RECONCILIATION_READY=0
+CANDLE_SETTLEMENT_ALIGNMENT_READY=false
 ```
 
 Verify the bot can read your wallet and the on-chain view of an old market:
@@ -92,20 +99,25 @@ Verify the bot can read your wallet and the on-chain view of an old market:
 
 When you're ready (paper validated, venue/account compliance cleared, CLOB V2
 order signing verified, pUSD/allowances ready, $1-sized stake), do not edit the
-unit with `sed`. For the Dublin VPS and international CLOB, configure the venue
-env first:
+unit with `sed`. For the international CLOB, configure the venue env first.
+`OPERATOR_COUNTRY` must reflect the approved operator/account jurisdiction, not
+the VPS location:
 
 ```bash
 VENUE=polymarket_international
-OPERATOR_COUNTRY=IE
+OPERATOR_COUNTRY=<approved_non_us_operator_country>
 POLYMOMENTUM_VENUE_COMPLIANCE_OK=1
 POLYMARKET_US_API_ENABLED=0
 CLOB_V2_READY=1
+POLYMOMENTUM_LIVE_RECONCILIATION_READY=1
+CANDLE_SETTLEMENT_ALIGNMENT_READY=true
 ```
 
 Do not set `CLOB_V2_READY=1` until the code path has migrated away from V1 raw
-order signing and live order reconciliation has been verified with a
-minimum-size canary.
+order signing. Do not set `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1` until the
+user-channel/REST reconciliation path has been verified. Do not set
+`CANDLE_SETTLEMENT_ALIGNMENT_READY=true` until replay and paper settlement-shadow
+checks agree on resolved candidates.
 
 Then deploy through the guarded path:
 

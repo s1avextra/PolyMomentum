@@ -369,7 +369,7 @@ impl Pipeline {
         let risk = RiskManager::open(&settings.state_db_path, risk_cfg).await?;
 
         let monitor = Arc::new(SessionMonitor::open(&settings.session_log_dir)?);
-        let alerter = Alerter::new(std::env::var("SLACK_WEBHOOK_URL").ok());
+        let alerter = Alerter::from_env();
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
         let breaker_cfg = BreakerConfig {

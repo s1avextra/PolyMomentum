@@ -17,11 +17,25 @@ pub struct Alerter {
 
 impl Alerter {
     pub fn new(webhook: Option<String>) -> Self {
+        let webhook = webhook.and_then(|url| {
+            let trimmed = url.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
         let http = Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .expect("client");
         Self { webhook, http }
+    }
+
+    pub fn from_env() -> Self {
+        let webhook =
+            std::env::var("SLACK_WEBHOOK_URL").or_else(|_| std::env::var("ALERT_WEBHOOK_URL"));
+        Self::new(webhook.ok())
     }
 
     pub fn enabled(&self) -> bool {
@@ -56,5 +70,21 @@ impl Alerter {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Alerter;
+
+    #[test]
+    fn disabled_without_webhook() {
+        assert!(!Alerter::new(None).enabled());
+        assert!(!Alerter::new(Some("   ".to_string())).enabled());
+    }
+
+    #[test]
+    fn enabled_with_trimmed_webhook() {
+        assert!(Alerter::new(Some(" https://example.com/hook ".to_string())).enabled());
     }
 }

@@ -40,9 +40,12 @@ POLY_API_SECRET=
 POLY_API_PASSPHRASE=
 PRIVATE_KEY=
 POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
+POLY_BASE_URL=https://clob.polymarket.com
+POLY_GAMMA_URL=https://gamma-api.polymarket.com
 
 # Slack alerter — REQUIRED in live mode (set ALERT_REQUIRED=1 to fail fast)
 SLACK_WEBHOOK_URL=
+ALERT_WEBHOOK_URL=
 ALERT_REQUIRED=1
 
 # Venue safety gate. paper_only is the only default that can start without
@@ -53,6 +56,7 @@ POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
 POLYMARKET_US_API_ENABLED=0
 CLOB_V2_READY=0
 POLYMOMENTUM_LIVE_RECONCILIATION_READY=0
+CANDLE_SETTLEMENT_ALIGNMENT_READY=false
 
 # Logging
 RUST_LOG=info
