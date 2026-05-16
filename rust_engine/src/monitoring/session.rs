@@ -116,11 +116,15 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_runtime_strategy(
         &self,
         source: &str,
         strategy: &crate::strategy::spec::StrategySpec,
         zone_config: &crate::strategy::decision::ZoneConfig,
+        min_confidence: f64,
+        min_edge: f64,
+        skip_dead_zone: bool,
         settlement_alignment_ready: bool,
     ) {
         self.write_event(
@@ -129,6 +133,10 @@ impl SessionMonitor {
             json!({
                 "source": source,
                 "strategy": strategy,
+                "zone_config": zone_config,
+                "min_confidence": min_confidence,
+                "min_edge": min_edge,
+                "skip_dead_zone": skip_dead_zone,
                 "settlement_alignment_ready": settlement_alignment_ready,
                 "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
                 "settlement_guard_minutes": zone_config.settlement_guard_minutes,
@@ -207,6 +215,7 @@ impl SessionMonitor {
         v
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_resolution(
         &self,
         contract_id: &str,
@@ -257,6 +266,7 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_oracle_resolution(
         &self,
         contract_id: &str,
@@ -286,6 +296,7 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_oracle_correction(
         &self,
         contract_id: &str,
@@ -314,6 +325,7 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_risk_state(
         &self,
         bankroll: f64,
@@ -341,6 +353,7 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_breaker_state(
         &self,
         state: &str,

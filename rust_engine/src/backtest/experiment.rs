@@ -187,10 +187,7 @@ impl ExperimentReport {
             .map(|h| h.to_rfc3339())
             .unwrap_or_default();
         let end = cfg.hours.last().map(|h| h.to_rfc3339()).unwrap_or_default();
-        let mut variants: Vec<VariantReport> = runs
-            .iter()
-            .map(|run| VariantReport::from_run(run))
-            .collect();
+        let mut variants: Vec<VariantReport> = runs.iter().map(VariantReport::from_run).collect();
         variants.sort_by(|a, b| {
             b.total_pnl
                 .partial_cmp(&a.total_pnl)

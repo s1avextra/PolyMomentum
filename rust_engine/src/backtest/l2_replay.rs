@@ -27,7 +27,6 @@ impl Default for StaticLatencyConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct TokenBook {
-    pub token_id: String,
     pub bids: BTreeMap<u64, f64>, // price * 1e9 → size, sorted ascending
     pub asks: BTreeMap<u64, f64>,
     pub best_bid: f64,
@@ -40,10 +39,6 @@ fn key(p: f64) -> u64 {
 }
 
 impl TokenBook {
-    pub fn new(token_id: impl Into<String>) -> Self {
-        Self { token_id: token_id.into(), ..Default::default() }
-    }
-
     pub fn apply_snapshot(&mut self, snap: &crate::backtest::pmxt::BookSnapshot) {
         self.bids.clear();
         self.asks.clear();
@@ -174,7 +169,7 @@ pub enum FillModel {
     /// Maker fills use `maker_fee_rate` from the order; taker fallbacks use
     /// `fee_rate`. fill_prob is calibrated from live data — Polymarket
     /// candle 3s timeout was ~65% historically.
-    Maker(Maker),
+    Maker(Box<Maker>),
     /// Touch fill, no slippage. Sanity baseline only — not realistic.
     Perfect(Perfect),
 }
@@ -255,7 +250,7 @@ impl L2BacktestEngine {
                 let book = self
                     .books
                     .entry(token_id.to_string())
-                    .or_insert_with(|| TokenBook::new(token_id));
+                    .or_default();
                 match &event.body {
                     L2EventBody::BookSnapshot(s) => book.apply_snapshot(s),
                     L2EventBody::PriceChange(c) => book.apply_change(c),
@@ -335,7 +330,7 @@ impl L2BacktestEngine {
                 continue;
             }
 
-            let side = match Side::from_str(&order.side) {
+            let side = match Side::parse(&order.side) {
                 Some(s) => s,
                 None => {
                     self.fills.push(BacktestFill {

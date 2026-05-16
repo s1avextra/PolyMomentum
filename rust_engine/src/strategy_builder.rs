@@ -4,7 +4,7 @@
 //! stages explicit and reproducible: cached PMXT harness sweep, aggregate
 //! promotion, cached live-replay parity, and session diagnostics.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
@@ -767,7 +767,7 @@ fn shell_command(args: &[String]) -> String {
         .join(" ")
 }
 
-fn shell_quote_path(path: &PathBuf) -> String {
+fn shell_quote_path(path: &Path) -> String {
     shell_quote(&path.display().to_string())
 }
 

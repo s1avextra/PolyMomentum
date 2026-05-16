@@ -525,6 +525,9 @@ impl Pipeline {
             &self.runtime_strategy.source,
             &self.runtime_strategy.strategy_spec,
             &self.runtime_strategy.zone_config,
+            self.runtime_strategy.min_confidence,
+            self.runtime_strategy.min_edge,
+            self.runtime_strategy.skip_dead_zone,
             self.settings.candle_settlement_alignment_ready,
         );
         tracing::info!(
@@ -1346,7 +1349,7 @@ impl Pipeline {
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
                     token_id.clone(),
-                    &decision,
+                    decision,
                     serde_json::json!({
                         "mode": self.mode.as_str(),
                         "zone": decision.zone.clone(),
@@ -1477,7 +1480,7 @@ impl Pipeline {
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
                     token_id.clone(),
-                    &decision,
+                    decision,
                     serde_json::json!({
                         "mode": self.mode.as_str(),
                         "zone": decision.zone.clone(),

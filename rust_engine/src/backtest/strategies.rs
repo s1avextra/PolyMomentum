@@ -62,12 +62,14 @@ impl StrategyVariant {
     }
 
     pub fn terminal_only() -> Self {
-        let mut cfg = ZoneConfig::default();
-        cfg.early_min_confidence = 1.1;
-        cfg.early_min_z = 100.0;
-        cfg.late_min_confidence = 1.1;
-        cfg.late_min_z = 100.0;
-        cfg.primary_min_z = 100.0;
+        let cfg = ZoneConfig {
+            early_min_confidence: 1.1,
+            early_min_z: 100.0,
+            late_min_confidence: 1.1,
+            late_min_z: 100.0,
+            primary_min_z: 100.0,
+            ..ZoneConfig::default()
+        };
         Self {
             name: "terminal_only".into(),
             zone_config: cfg,
@@ -76,16 +78,18 @@ impl StrategyVariant {
     }
 
     pub fn aggressive_terminal() -> Self {
-        let mut cfg = ZoneConfig::default();
-        cfg.early_min_confidence = 1.1;
-        cfg.early_min_z = 100.0;
-        cfg.late_min_confidence = 1.1;
-        cfg.late_min_z = 100.0;
-        cfg.primary_min_z = 100.0;
-        cfg.terminal_min_confidence = 0.50;
-        cfg.terminal_min_z = 0.20;
-        cfg.terminal_min_edge = 0.02;
-        cfg.min_ev_buffer = 0.03;
+        let cfg = ZoneConfig {
+            early_min_confidence: 1.1,
+            early_min_z: 100.0,
+            late_min_confidence: 1.1,
+            late_min_z: 100.0,
+            primary_min_z: 100.0,
+            terminal_min_confidence: 0.50,
+            terminal_min_z: 0.20,
+            terminal_min_edge: 0.02,
+            min_ev_buffer: 0.03,
+            ..ZoneConfig::default()
+        };
         Self {
             name: "aggressive_terminal".into(),
             zone_config: cfg,
@@ -94,16 +98,18 @@ impl StrategyVariant {
     }
 
     pub fn conservative_terminal() -> Self {
-        let mut cfg = ZoneConfig::default();
-        cfg.early_min_confidence = 1.1;
-        cfg.early_min_z = 100.0;
-        cfg.late_min_confidence = 1.1;
-        cfg.late_min_z = 100.0;
-        cfg.primary_min_z = 100.0;
-        cfg.terminal_min_confidence = 0.65;
-        cfg.terminal_min_z = 0.50;
-        cfg.terminal_min_edge = 0.07;
-        cfg.min_ev_buffer = 0.07;
+        let cfg = ZoneConfig {
+            early_min_confidence: 1.1,
+            early_min_z: 100.0,
+            late_min_confidence: 1.1,
+            late_min_z: 100.0,
+            primary_min_z: 100.0,
+            terminal_min_confidence: 0.65,
+            terminal_min_z: 0.50,
+            terminal_min_edge: 0.07,
+            min_ev_buffer: 0.07,
+            ..ZoneConfig::default()
+        };
         Self {
             name: "conservative_terminal".into(),
             zone_config: cfg,
@@ -123,18 +129,20 @@ impl StrategyVariant {
     /// verify the harness wiring + resolver. Don't use this for production
     /// numbers; it'll over-fire on noise.
     pub fn loose_smoke() -> Self {
-        let mut cfg = ZoneConfig::default();
-        cfg.early_min_confidence = 0.15;
-        cfg.early_min_z = 0.10;
-        cfg.early_min_edge = 0.0;
-        cfg.late_min_confidence = 0.15;
-        cfg.late_min_z = 0.10;
-        cfg.late_min_edge = 0.0;
-        cfg.terminal_min_confidence = 0.15;
-        cfg.terminal_min_z = 0.10;
-        cfg.terminal_min_edge = 0.0;
-        cfg.primary_min_z = 0.10;
-        cfg.min_ev_buffer = -1.0;
+        let cfg = ZoneConfig {
+            early_min_confidence: 0.15,
+            early_min_z: 0.10,
+            early_min_edge: 0.0,
+            late_min_confidence: 0.15,
+            late_min_z: 0.10,
+            late_min_edge: 0.0,
+            terminal_min_confidence: 0.15,
+            terminal_min_z: 0.10,
+            terminal_min_edge: 0.0,
+            primary_min_z: 0.10,
+            min_ev_buffer: -1.0,
+            ..ZoneConfig::default()
+        };
         Self {
             name: "loose_smoke".into(),
             zone_config: cfg,

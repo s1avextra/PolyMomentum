@@ -101,14 +101,8 @@ impl CtfReader {
             return Ok((Resolution::NotResolved, [0, 0]));
         }
 
-        let num0_call = format!(
-            "{PAYOUT_NUMERATORS}{cid}{}",
-            "0".repeat(64),
-        );
-        let num1_call = format!(
-            "{PAYOUT_NUMERATORS}{cid}{}",
-            format!("{:0>64}", "1"),
-        );
+        let num0_call = format!("{PAYOUT_NUMERATORS}{cid}{:0>64}", "0");
+        let num1_call = format!("{PAYOUT_NUMERATORS}{cid}{:0>64}", "1");
         let num0 = self.eth_call(&num0_call).await?;
         let num1 = self.eth_call(&num1_call).await?;
         let res = classify_binary_payout(denom, num0, num1);

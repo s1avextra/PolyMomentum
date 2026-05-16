@@ -38,6 +38,7 @@ pub struct SweepGrid {
 }
 
 impl SweepGrid {
+    #[cfg(test)]
     pub fn small_default(base: StrategyVariant) -> Self {
         let settlement_min_abs_move_usd = base.zone_config.settlement_min_abs_move_usd;
         let settlement_guard_minutes = base.zone_config.settlement_guard_minutes;
@@ -81,21 +82,23 @@ impl SweepGrid {
                             for &guard in &self.settlement_guard_minutes {
                                 for &sigma in &self.settlement_sigma_buffer {
                                     for &maker in &maker_sides {
-                                        let mut cfg = ZoneConfig::default();
-                                        cfg.early_min_confidence = conf;
-                                        cfg.late_min_confidence = conf;
-                                        cfg.terminal_min_confidence = conf;
-                                        cfg.early_min_z = z;
-                                        cfg.primary_min_z = z;
-                                        cfg.late_min_z = z;
-                                        cfg.terminal_min_z = z;
-                                        cfg.early_min_edge = edge;
-                                        cfg.late_min_edge = edge;
-                                        cfg.terminal_min_edge = edge;
-                                        cfg.min_ev_buffer = ev;
-                                        cfg.settlement_min_abs_move_usd = floor;
-                                        cfg.settlement_guard_minutes = guard;
-                                        cfg.settlement_sigma_buffer = sigma;
+                                        let cfg = ZoneConfig {
+                                            early_min_confidence: conf,
+                                            late_min_confidence: conf,
+                                            terminal_min_confidence: conf,
+                                            early_min_z: z,
+                                            primary_min_z: z,
+                                            late_min_z: z,
+                                            terminal_min_z: z,
+                                            early_min_edge: edge,
+                                            late_min_edge: edge,
+                                            terminal_min_edge: edge,
+                                            min_ev_buffer: ev,
+                                            settlement_min_abs_move_usd: floor,
+                                            settlement_guard_minutes: guard,
+                                            settlement_sigma_buffer: sigma,
+                                            ..ZoneConfig::default()
+                                        };
                                         let label = format!(
                                             "c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_sf{:.0}_sg{:.1}_ss{:.2}_{}",
                                             conf,

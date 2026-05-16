@@ -24,12 +24,6 @@ pub struct ResolvedTrade {
     pub pnl_after_fee: f64,
 }
 
-impl ResolvedTrade {
-    pub fn predicted_direction(&self) -> &str {
-        &self.decision.direction
-    }
-}
-
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BacktestResults {
     pub trades: Vec<ResolvedTrade>,

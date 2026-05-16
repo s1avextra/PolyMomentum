@@ -109,21 +109,18 @@ impl PMXTv2Loader {
     }
 
     /// Pick the cache dir from env (`PMXT_V2_CACHE_DIR`), else the shared
-    /// multi-tenant dir if it exists, else the project-local fallback.
-    pub fn from_env() -> Self {
-        let dir = std::env::var("PMXT_V2_CACHE_DIR")
+    /// multi-tenant VPS cache if it exists, else the project-local fallback.
+    pub fn default_cache_dir() -> PathBuf {
+        std::env::var("PMXT_V2_CACHE_DIR")
+            .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                if Path::new(SHARED_CACHE_DIR).exists() {
-                    SHARED_CACHE_DIR.into()
+                let shared = PathBuf::from(SHARED_CACHE_DIR);
+                if shared.exists() {
+                    shared
                 } else {
-                    DEFAULT_CACHE_DIR.into()
+                    PathBuf::from(DEFAULT_CACHE_DIR)
                 }
-            });
-        Self::new(dir)
-    }
-
-    pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
+            })
     }
 
     pub fn cache_path_for_hour(&self, hour: DateTime<Utc>) -> PathBuf {
@@ -179,16 +176,6 @@ impl PMXTv2Loader {
             anyhow::bail!("PMXT v2 hour {} not cached at {}", hour, path.display());
         }
         read_parquet(&path, condition_ids)
-    }
-
-    /// Convenience: ensure the file is downloaded, then read it.
-    pub async fn load_hour(
-        &self,
-        hour: DateTime<Utc>,
-        condition_ids: Option<&HashSet<String>>,
-    ) -> Result<Vec<L2Event>> {
-        self.download_hour(hour, false).await?;
-        self.load_cached_hour(hour, condition_ids)
     }
 
     /// Sidecar path for a `(hour, cid_set)` event cache. Filenames are
@@ -346,9 +333,7 @@ fn read_parquet(path: &Path, condition_ids: Option<&HashSet<String>>) -> Result<
                     }
                 }
             } else {
-                for _ in 0..n {
-                    keep.push(false);
-                }
+                keep.resize(n, false);
             }
             Ok(BooleanArray::from(keep))
         });

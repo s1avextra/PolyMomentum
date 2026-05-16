@@ -2,7 +2,6 @@
 //!
 //! Models:
 //! - [`OneTickTaker`]   — touch + 1 tick adverse (default for market orders)
-//! - [`BookWalkTaker`]  — walks real L2 depth, falls back to one-tick adverse
 //! - [`Maker`]          — probabilistic post-at-touch with taker fallback
 //! - [`Perfect`]        — touch fill, no slippage (sanity baseline)
 //!
@@ -56,7 +55,7 @@ pub enum Side {
 }
 
 impl Side {
-    pub fn from_str(s: &str) -> Option<Side> {
+    pub fn parse(s: &str) -> Option<Side> {
         match s.to_lowercase().as_str() {
             "buy" | "b" => Some(Side::Buy),
             "sell" | "s" => Some(Side::Sell),
@@ -150,17 +149,20 @@ impl OneTickTaker {
 
 /// Walks real L2 depth (bid/ask vectors). If size exceeds depth, fills the
 /// remainder at one-tick adverse from the last known level.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct BookWalkTaker {
     pub tick_size: f64,
 }
 
+#[cfg(test)]
 impl Default for BookWalkTaker {
     fn default() -> Self {
         Self { tick_size: DEFAULT_TICK }
     }
 }
 
+#[cfg(test)]
 impl BookWalkTaker {
     /// `bids` must be sorted descending by price, `asks` ascending.
     pub fn fill(

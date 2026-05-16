@@ -277,7 +277,7 @@ enum Command {
         /// Bankroll used to size hypothetical trades.
         #[arg(long, default_value_t = 100.0)]
         bankroll: f64,
-        /// PMXT v2 cache directory (otherwise pulled from PMXT_V2_CACHE_DIR).
+        /// PMXT v2 cache directory (otherwise env, shared VPS cache, then local fallback).
         #[arg(long)]
         cache_dir: Option<String>,
         /// BTC kline CSV (Binance format) used for the tape. If omitted, the
@@ -1036,17 +1036,12 @@ async fn cmd_live_replay(
     let mut cur = start_dt;
     while cur <= end_dt {
         hours.push(cur);
-        cur = cur + ChronoDuration::hours(1);
+        cur += ChronoDuration::hours(1);
     }
 
     let cache_dir_path = cache_dir
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(
-                std::env::var("PMXT_V2_CACHE_DIR")
-                    .unwrap_or_else(|_| backtest::pmxt::DEFAULT_CACHE_DIR.to_string()),
-            )
-        });
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
     for &h in &hours {
         if allow_download {
@@ -1606,8 +1601,15 @@ async fn cmd_validate_replay(path: &str) {
     let reader = std::io::BufReader::new(f);
     let mut total = 0u64;
     let mut mismatches = 0u64;
+    let mut validation_cfg = ReplayValidationConfig::default();
     for line in reader.lines().map_while(|l| l.ok()) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if v.get("cat").and_then(|x| x.as_str()) == Some("system")
+            && v.get("type").and_then(|x| x.as_str()) == Some("runtime_strategy")
+        {
+            validation_cfg.apply_runtime_strategy_event(&v);
+            continue;
+        }
         if v.get("cat").and_then(|x| x.as_str()) != Some("signal") {
             continue;
         }
@@ -1630,7 +1632,6 @@ async fn cmd_validate_replay(path: &str) {
             z_score: f64opt(&v, "z").unwrap_or(0.0),
             reversion_count: 0,
         };
-        let cfg = strategy::decision::ZoneConfig::default();
         let res = strategy::decision::decide_candle_trade(
             &signal,
             signal.minutes_elapsed,
@@ -1641,19 +1642,21 @@ async fn cmd_validate_replay(path: &str) {
             signal.current_price,
             signal.open_price,
             f64opt(&v, "implied_vol").unwrap_or(0.5),
-            strategy::decision::DEFAULT_MIN_CONFIDENCE,
-            strategy::decision::DEFAULT_MIN_EDGE,
-            true,
-            &cfg,
+            validation_cfg.min_confidence,
+            validation_cfg.min_edge,
+            validation_cfg.skip_dead_zone,
+            &validation_cfg.zone_config,
             f64opt(&v, "cross_boost").unwrap_or(0.0),
         );
         let traded = matches!(res, strategy::decision::DecisionResult::Trade(_));
+        let expected_logged_decision_trade =
+            traded && validation_cfg.settlement_alignment_ready;
         let logged_decision_trade = v
             .get("decision_trade")
             .and_then(|x| x.as_bool())
             .or_else(|| v.get("traded").and_then(|x| x.as_bool()))
             .unwrap_or(false);
-        if traded != logged_decision_trade {
+        if expected_logged_decision_trade != logged_decision_trade {
             mismatches += 1;
         }
     }
@@ -1666,6 +1669,91 @@ async fn cmd_validate_replay(path: &str) {
     if mismatches > 0 {
         std::process::exit(1);
     }
+}
+
+#[derive(Debug, Clone)]
+struct ReplayValidationConfig {
+    zone_config: strategy::decision::ZoneConfig,
+    min_confidence: f64,
+    min_edge: f64,
+    skip_dead_zone: bool,
+    settlement_alignment_ready: bool,
+}
+
+impl Default for ReplayValidationConfig {
+    fn default() -> Self {
+        Self {
+            zone_config: strategy::decision::ZoneConfig::default(),
+            min_confidence: strategy::decision::DEFAULT_MIN_CONFIDENCE,
+            min_edge: strategy::decision::DEFAULT_MIN_EDGE,
+            skip_dead_zone: true,
+            settlement_alignment_ready: true,
+        }
+    }
+}
+
+impl ReplayValidationConfig {
+    fn apply_runtime_strategy_event(&mut self, v: &serde_json::Value) {
+        if let Some(source) = v.get("source").and_then(|x| x.as_str()) {
+            if let Some(path) = promotion_path_from_runtime_source(source) {
+                if let Some(variant) = load_promotion_variant_for_replay(path) {
+                    self.apply_variant(variant);
+                }
+            }
+        }
+        if let Some(zone_config) = v.get("zone_config") {
+            if let Ok(cfg) =
+                serde_json::from_value::<strategy::decision::ZoneConfig>(zone_config.clone())
+            {
+                self.zone_config = cfg;
+            }
+        }
+        if let Some(vv) = f64opt(v, "settlement_cutoff_minutes") {
+            self.zone_config.settlement_cutoff_minutes = vv;
+        }
+        if let Some(vv) = f64opt(v, "settlement_guard_minutes") {
+            self.zone_config.settlement_guard_minutes = vv;
+        }
+        if let Some(vv) = f64opt(v, "settlement_min_abs_move_usd") {
+            self.zone_config.settlement_min_abs_move_usd = vv;
+        }
+        if let Some(vv) = f64opt(v, "settlement_sigma_buffer") {
+            self.zone_config.settlement_sigma_buffer = vv;
+        }
+        if let Some(vv) = f64opt(v, "min_confidence") {
+            self.min_confidence = vv;
+        }
+        if let Some(vv) = f64opt(v, "min_edge") {
+            self.min_edge = vv;
+        }
+        if let Some(vv) = v.get("skip_dead_zone").and_then(|x| x.as_bool()) {
+            self.skip_dead_zone = vv;
+        }
+        if let Some(vv) = v
+            .get("settlement_alignment_ready")
+            .and_then(|x| x.as_bool())
+        {
+            self.settlement_alignment_ready = vv;
+        }
+    }
+
+    fn apply_variant(&mut self, variant: backtest::strategies::StrategyVariant) {
+        self.zone_config = variant.zone_config;
+        self.min_confidence = variant.min_confidence;
+        self.min_edge = variant.min_edge;
+        self.skip_dead_zone = variant.skip_dead_zone;
+    }
+}
+
+fn promotion_path_from_runtime_source(source: &str) -> Option<&str> {
+    let rest = source.strip_prefix("promotion:")?;
+    Some(rest.split('+').next().unwrap_or(rest))
+}
+
+fn load_promotion_variant_for_replay(path: &str) -> Option<backtest::strategies::StrategyVariant> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let artifact: backtest::experiment::PromotionArtifact = serde_json::from_str(&text).ok()?;
+    serde_json::from_value(artifact.strategy_params).ok()
 }
 
 async fn cmd_distill(
@@ -1720,7 +1808,7 @@ async fn cmd_distill(
             eprintln!("read --candle-cids {p}: {e}");
             std::process::exit(1);
         });
-        text.split(|c| c == ',' || c == '\n' || c == ' ')
+        text.split([',', '\n', ' '])
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
@@ -1796,7 +1884,7 @@ async fn cmd_pmxt_download(start: &str, end: Option<&str>, cache_dir: Option<&st
     };
     let path = cache_dir
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(backtest::pmxt::DEFAULT_CACHE_DIR));
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&path);
     let mut cur = s;
     while cur <= e {
@@ -1804,7 +1892,7 @@ async fn cmd_pmxt_download(start: &str, end: Option<&str>, cache_dir: Option<&st
             eprintln!("download {} failed: {err}", cur);
             std::process::exit(1);
         }
-        cur = cur + ChronoDuration::hours(1);
+        cur += ChronoDuration::hours(1);
     }
     println!("downloaded into {}", path.display());
 }
@@ -1820,12 +1908,7 @@ async fn cmd_pmxt_info(hour: &str, cache_dir: Option<&str>, sample: usize) {
     };
     let path = cache_dir
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(
-                std::env::var("PMXT_V2_CACHE_DIR")
-                    .unwrap_or_else(|_| backtest::pmxt::DEFAULT_CACHE_DIR.to_string()),
-            )
-        });
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&path);
     if !loader.is_cached(dt) {
         eprintln!("not cached — run `harness` once or `download` first");
@@ -1899,7 +1982,7 @@ async fn cmd_harness_sweep(
     let mut cur = start_dt;
     while cur <= end_dt {
         hours.push(cur);
-        cur = cur + ChronoDuration::hours(1);
+        cur += ChronoDuration::hours(1);
     }
 
     // Build the variant grid.
@@ -1924,12 +2007,7 @@ async fn cmd_harness_sweep(
     // Universe + tape (same as cmd_harness)
     let cache_dir_path = cache_dir
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(
-                std::env::var("PMXT_V2_CACHE_DIR")
-                    .unwrap_or_else(|_| backtest::pmxt::DEFAULT_CACHE_DIR.to_string()),
-            )
-        });
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
     for &h in &hours {
         eprintln!("pmxt: ensuring archive hour {h}");
@@ -2178,7 +2256,7 @@ async fn cmd_harness(
     let one_hour = ChronoDuration::hours(1);
     while cur <= end_dt {
         hours.push(cur);
-        cur = cur + one_hour;
+        cur += one_hour;
     }
 
     // 1. Discover candle universe directly from the parquet's distinct
@@ -2186,12 +2264,7 @@ async fn cmd_harness(
     //    Gamma's "active" feed only reflects the present.
     let cache_dir_path = cache_dir
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(
-                std::env::var("PMXT_V2_CACHE_DIR")
-                    .unwrap_or_else(|_| backtest::pmxt::DEFAULT_CACHE_DIR.to_string()),
-            )
-        });
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
     for &h in &hours {
         eprintln!("pmxt: ensuring archive hour {h}");
@@ -2441,8 +2514,7 @@ async fn cmd_harness(
                 println!("Experiment report: {path}");
             }
             println!(
-                "\nHarness — {start}{} → {end} bankroll=${bankroll:.0} latency={latency_ms}ms variants={}\n",
-                if end.is_some() { "" } else { "" },
+                "\nHarness — {start} → {end} bankroll=${bankroll:.0} latency={latency_ms}ms variants={}\n",
                 runs.len(),
                 start = start,
                 end = end.unwrap_or(start),
@@ -2497,4 +2569,46 @@ fn cmd_sweep(sessions: &[String], bankroll: f64, min_trades: u64, show_zones: bo
 
 fn f64opt(v: &serde_json::Value, key: &str) -> Option<f64> {
     v.get(key).and_then(|x| x.as_f64())
+}
+
+#[cfg(test)]
+mod replay_validation_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_event_updates_validation_config_from_inline_strategy() {
+        let zone = strategy::decision::ZoneConfig {
+            min_ev_buffer: 0.12,
+            settlement_min_abs_move_usd: 25.0,
+            ..strategy::decision::ZoneConfig::default()
+        };
+        let event = serde_json::json!({
+            "cat": "system",
+            "type": "runtime_strategy",
+            "zone_config": zone,
+            "min_confidence": 0.42,
+            "min_edge": 0.03,
+            "skip_dead_zone": false,
+            "settlement_alignment_ready": false
+        });
+        let mut cfg = ReplayValidationConfig::default();
+
+        cfg.apply_runtime_strategy_event(&event);
+
+        assert_eq!(cfg.zone_config.min_ev_buffer, 0.12);
+        assert_eq!(cfg.zone_config.settlement_min_abs_move_usd, 25.0);
+        assert_eq!(cfg.min_confidence, 0.42);
+        assert_eq!(cfg.min_edge, 0.03);
+        assert!(!cfg.skip_dead_zone);
+        assert!(!cfg.settlement_alignment_ready);
+    }
+
+    #[test]
+    fn promotion_source_path_ignores_suffix_flags() {
+        assert_eq!(
+            promotion_path_from_runtime_source("promotion:/tmp/promotion.json+settlement_floor"),
+            Some("/tmp/promotion.json")
+        );
+        assert_eq!(promotion_path_from_runtime_source("settings"), None);
+    }
 }

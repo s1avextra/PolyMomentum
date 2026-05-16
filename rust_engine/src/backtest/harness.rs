@@ -39,19 +39,6 @@ pub struct CandleUniverse {
 }
 
 impl CandleUniverse {
-    pub fn token_set(&self) -> HashSet<String> {
-        let mut s = HashSet::new();
-        for c in &self.contracts {
-            if !c.up_token_id.is_empty() {
-                s.insert(c.up_token_id.clone());
-            }
-            if !c.down_token_id.is_empty() {
-                s.insert(c.down_token_id.clone());
-            }
-        }
-        s
-    }
-
     pub fn condition_id_set(&self) -> HashSet<String> {
         self.contracts
             .iter()
@@ -850,11 +837,11 @@ fn load_existing_checkpoints(
 /// Perfect / BookWalk are reserved for future variants.
 pub(crate) fn build_fill_model(v: &StrategyVariant) -> FillModel {
     if v.prefer_maker {
-        FillModel::Maker(Maker::new(
+        FillModel::Maker(Box::new(Maker::new(
             v.maker_fill_prob,
             crate::backtest::fill_model::DEFAULT_TICK,
             v.maker_seed,
-        ))
+        )))
     } else if v.use_perfect_fill {
         FillModel::Perfect(Perfect)
     } else {

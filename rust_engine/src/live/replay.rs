@@ -106,7 +106,7 @@ impl ReplayStrategy {
         let zone_config = ZoneConfig::from_settings(settings);
         let mut variant = StrategyVariant::baseline();
         variant.name = "settings_live_replay".to_string();
-        variant.zone_config = zone_config.clone();
+        variant.zone_config = zone_config;
         variant.skip_dead_zone = settings.candle_skip_dead_zone;
         variant.min_confidence = DEFAULT_MIN_CONFIDENCE;
         variant.min_edge = DEFAULT_MIN_EDGE;
@@ -156,9 +156,15 @@ pub struct LiveReplayReport {
     pub contracts: usize,
     pub events_loaded: usize,
     pub events_processed: u64,
+    pub tokens_tracked: u64,
     pub orders_submitted: usize,
+    pub fills_total: u64,
     pub fills_success: usize,
     pub fills_failed: usize,
+    pub total_cost: f64,
+    pub total_fees: f64,
+    pub avg_slippage: f64,
+    pub avg_book_age_ms: f64,
     pub resolutions: usize,
     pub shadow_resolutions: usize,
     pub total_pnl: f64,
@@ -180,6 +186,9 @@ pub async fn run_live_replay(
         &cfg.strategy.source,
         &cfg.strategy.strategy_spec,
         &cfg.strategy.variant.zone_config,
+        cfg.strategy.variant.min_confidence,
+        cfg.strategy.variant.min_edge,
+        cfg.strategy.variant.skip_dead_zone,
         settings.candle_settlement_alignment_ready,
     );
 
@@ -233,9 +242,15 @@ pub async fn run_live_replay(
         contracts: cfg.universe.contracts.len(),
         events_loaded,
         events_processed: summary.events_processed,
+        tokens_tracked: summary.tokens_tracked,
         orders_submitted: strategy.orders_submitted,
+        fills_total: summary.fills_total,
         fills_success: summary.fills_success as usize,
         fills_failed: summary.fills_failed as usize,
+        total_cost: summary.total_cost,
+        total_fees: summary.total_fees,
+        avg_slippage: summary.avg_slippage,
+        avg_book_age_ms: summary.avg_book_age_ms,
         resolutions: lifecycle.resolutions,
         shadow_resolutions: lifecycle.shadow_resolutions,
         total_pnl: lifecycle.realized_pnl,
@@ -531,6 +546,7 @@ impl LiveReplayStrategy {
             .unwrap_or(fallback)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_skip(
         &self,
         timestamp_s: f64,
@@ -763,6 +779,7 @@ impl Strategy for LiveReplayStrategy {
 }
 
 impl LiveReplayStrategy {
+    #[allow(clippy::too_many_arguments)]
     fn build_order(
         &mut self,
         timestamp_s: f64,

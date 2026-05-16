@@ -28,12 +28,14 @@ pub fn baseline() -> Strategy {
 /// Disable early/primary/late zones via unreachable thresholds. Only terminal
 /// (≥95% elapsed) zone trades fire.
 pub fn terminal_only() -> Strategy {
-    let mut cfg = ZoneConfig::default();
-    cfg.early_min_confidence = 1.1; // unreachable
-    cfg.early_min_z = 100.0;
-    cfg.late_min_confidence = 1.1;
-    cfg.late_min_z = 100.0;
-    cfg.primary_min_z = 100.0;
+    let cfg = ZoneConfig {
+        early_min_confidence: 1.1, // unreachable
+        early_min_z: 100.0,
+        late_min_confidence: 1.1,
+        late_min_z: 100.0,
+        primary_min_z: 100.0,
+        ..ZoneConfig::default()
+    };
     Strategy {
         name: "terminal_only".into(),
         zone_config: cfg,
@@ -46,16 +48,18 @@ pub fn terminal_only() -> Strategy {
 
 /// Looser terminal entry — wider eligibility, see if the extra trades hold up.
 pub fn aggressive_terminal() -> Strategy {
-    let mut cfg = ZoneConfig::default();
-    cfg.early_min_confidence = 1.1;
-    cfg.early_min_z = 100.0;
-    cfg.late_min_confidence = 1.1;
-    cfg.late_min_z = 100.0;
-    cfg.primary_min_z = 100.0;
-    cfg.terminal_min_confidence = 0.50;
-    cfg.terminal_min_z = 0.20;
-    cfg.terminal_min_edge = 0.02;
-    cfg.min_ev_buffer = 0.03;
+    let cfg = ZoneConfig {
+        early_min_confidence: 1.1,
+        early_min_z: 100.0,
+        late_min_confidence: 1.1,
+        late_min_z: 100.0,
+        primary_min_z: 100.0,
+        terminal_min_confidence: 0.50,
+        terminal_min_z: 0.20,
+        terminal_min_edge: 0.02,
+        min_ev_buffer: 0.03,
+        ..ZoneConfig::default()
+    };
     Strategy {
         name: "aggressive_terminal".into(),
         zone_config: cfg,
@@ -68,16 +72,18 @@ pub fn aggressive_terminal() -> Strategy {
 
 /// Tighter terminal — require strong agreement before firing.
 pub fn conservative_terminal() -> Strategy {
-    let mut cfg = ZoneConfig::default();
-    cfg.early_min_confidence = 1.1;
-    cfg.early_min_z = 100.0;
-    cfg.late_min_confidence = 1.1;
-    cfg.late_min_z = 100.0;
-    cfg.primary_min_z = 100.0;
-    cfg.terminal_min_confidence = 0.65;
-    cfg.terminal_min_z = 0.50;
-    cfg.terminal_min_edge = 0.07;
-    cfg.min_ev_buffer = 0.07;
+    let cfg = ZoneConfig {
+        early_min_confidence: 1.1,
+        early_min_z: 100.0,
+        late_min_confidence: 1.1,
+        late_min_z: 100.0,
+        primary_min_z: 100.0,
+        terminal_min_confidence: 0.65,
+        terminal_min_z: 0.50,
+        terminal_min_edge: 0.07,
+        min_ev_buffer: 0.07,
+        ..ZoneConfig::default()
+    };
     Strategy {
         name: "conservative_terminal".into(),
         zone_config: cfg,
@@ -103,8 +109,10 @@ pub fn no_dead_zone() -> Strategy {
 /// Disable the entry-price EV filter — see how many of those rejected trades
 /// would actually have lost money.
 pub fn ev_off() -> Strategy {
-    let mut cfg = ZoneConfig::default();
-    cfg.min_ev_buffer = -1.0;
+    let cfg = ZoneConfig {
+        min_ev_buffer: -1.0,
+        ..ZoneConfig::default()
+    };
     Strategy {
         name: "ev_off".into(),
         zone_config: cfg,
@@ -117,8 +125,10 @@ pub fn ev_off() -> Strategy {
 
 /// Tighter EV filter — require larger expected-value buffer.
 pub fn ev_strict() -> Strategy {
-    let mut cfg = ZoneConfig::default();
-    cfg.min_ev_buffer = 0.10;
+    let cfg = ZoneConfig {
+        min_ev_buffer: 0.10,
+        ..ZoneConfig::default()
+    };
     Strategy {
         name: "ev_strict".into(),
         zone_config: cfg,

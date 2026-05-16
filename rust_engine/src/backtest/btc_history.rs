@@ -32,13 +32,6 @@ impl BTCHistory {
         self.timestamps_ms.len()
     }
 
-    pub fn time_span_seconds(&self) -> f64 {
-        if self.timestamps_ms.len() < 2 {
-            return 0.0;
-        }
-        (self.timestamps_ms.last().unwrap() - self.timestamps_ms.first().unwrap()) as f64 / 1000.0
-    }
-
     pub fn first_timestamp_ms(&self) -> i64 {
         self.timestamps_ms.first().copied().unwrap_or(0)
     }
@@ -263,6 +256,7 @@ impl BTCHistory {
 
     /// (open, high, low, close) over `[start_ms, end_ms]`. Returns zeros if
     /// the window has no ticks.
+    #[cfg(test)]
     pub fn range_at(&self, start_ms: i64, end_ms: i64) -> (f64, f64, f64, f64) {
         let lo = self
             .timestamps_ms

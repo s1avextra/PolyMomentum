@@ -385,9 +385,11 @@ mod tests {
 
     #[test]
     fn applies_price_change_inserts_and_removes() {
-        let mut s = TokenBookState::default();
-        s.bids = vec![BookLevel { price: 0.50, size: 100.0 }];
-        s.asks = vec![BookLevel { price: 0.52, size: 50.0 }];
+        let mut s = TokenBookState {
+            bids: vec![BookLevel { price: 0.50, size: 100.0 }],
+            asks: vec![BookLevel { price: 0.52, size: 50.0 }],
+            ..TokenBookState::default()
+        };
         let changes = vec![
             ChangeEntry {
                 asset_id: None,

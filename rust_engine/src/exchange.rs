@@ -319,7 +319,9 @@ pub async fn fetch_deribit_iv() -> Option<f64> {
         if strike <= 0.0 { continue; }
 
         let ratio = strike / btc_price;
-        if ratio < 0.95 || ratio > 1.05 { continue; }
+        if !(0.95..=1.05).contains(&ratio) {
+            continue;
+        }
 
         ivs.push(iv / 100.0); // Deribit reports as percentage
     }

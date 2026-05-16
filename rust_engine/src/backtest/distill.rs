@@ -164,9 +164,7 @@ pub fn distill_parquet_to_jsonl(
                 }
             }
         } else {
-            for _ in 0..n {
-                keep.push(false);
-            }
+            keep.resize(n, false);
         }
         Ok(BooleanArray::from(keep))
     });

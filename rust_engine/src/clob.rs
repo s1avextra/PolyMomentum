@@ -329,6 +329,7 @@ impl ClobClient {
     }
 
     /// Internal: build, sign, and submit an order.
+    #[allow(clippy::too_many_arguments)]
     async fn place_order_internal(
         &mut self,
         token_id: &str,

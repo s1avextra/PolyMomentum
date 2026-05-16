@@ -399,7 +399,7 @@ mod tests {
         // Must not be all zeros (would indicate overflow/truncation)
         assert!(bytes.iter().any(|&b| b != 0), "token_id encoded as all zeros!");
         // Re-encode back to decimal and verify round-trip
-        let mut val = vec![0u8; 32];
+        let mut val = [0u8; 32];
         val.copy_from_slice(&bytes);
         // Simple verification: the last byte should be the low digit
         // 71321...3 → last digit 3, but packed as binary not BCD
