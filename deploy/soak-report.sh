@@ -75,7 +75,10 @@ capture_text() {
         '{exit_code:$exit_code, output:.}' <"$raw" >"$out"
 }
 
-LATEST_SESSION="$(find "$SESSION_DIR" -maxdepth 1 -type f -name 'session_*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+LATEST_SESSION="$(
+    find "$SESSION_DIR" -maxdepth 1 -type f -name 'session_*.jsonl' -printf '%T@\t%p\n' 2>/dev/null |
+        awk -F '\t' 'BEGIN { max = -1; path = "" } $1 + 0 > max { max = $1 + 0; path = $2 } END { print path }'
+)"
 
 PREFLIGHT_ARGS=(preflight --mode "$MODE")
 if [ "$MODE" = "live" ]; then
