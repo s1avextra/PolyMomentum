@@ -4,7 +4,7 @@ Scope: PolyMomentum on the Dublin VPS. No secrets are recorded here.
 
 ## Status
 
-- Running release: `7e5861e52a2a2eda241a59fc39809605d4f58e51`.
+- Running release: `b89558ba3e60188e7e7556f2b373c863db5dfcb9`.
 - Mode: `paper`.
 - Venue: `paper_only`.
 - Settlement alignment: promoted to `CANDLE_SETTLEMENT_ALIGNMENT_READY=true`
@@ -40,16 +40,38 @@ requires pUSD `>=1.00` and both CLOB V2 pUSD allowances `>=1.00`.
   - `validate-replay: total=211 mismatches=0`
   - peer services active
 - Latest manual soak report:
-  `/opt/polymomentum/logs/soak/soak_20260517T040527Z.json`
+  `/opt/polymomentum/logs/soak/soak_20260517T051309Z.json`
   - `ok=true`
-  - `warnings=[]`
+  - `orders.placed=1`
+  - `orders.filled=1`
+  - `orders.rejected=0`
+  - `resolutions.resolved=1`
+  - `resolutions.wins=1`
+  - `resolutions.total_pnl=5.8366`
+  - `orders.max_submit_latency_ms=0.0`
+  - `system.avg_cycle_ms=0.8999`
+  - `system.max_cycle_ms=8.942`
+  - `system.max_price_staleness_ms=960.0`
   - `replay_exit=0`
   - peers active
+- Fresh release lifecycle evidence:
+  - session: `/opt/polymomentum/logs/sessions/session_20260517_045409.jsonl`
+  - decision: `2026-05-17T05:07:33.337082386Z`
+  - paper order placed/acked: `2026-05-17T05:07:33.337322950Z`
+  - paper order filled: `2026-05-17T05:07:33.337343454Z`
+  - resolution: `2026-05-17T05:10:00.295677900Z`
+  - `validate-replay: total=1262 mismatches=0`
+- Configured live dry preflight:
+  - credentials present
+  - alerting configured
+  - settlement alignment ready
+  - still blocked by `VENUE=paper_only`, `CLOB_V2_READY=0`,
+    `POLYMOMENTUM_LIVE_RECONCILIATION_READY=0`, and wallet readiness.
 
 ## Next Gate
 
-Keep paper running with settlement alignment enabled until it records actual
-paper order lifecycle events. Do not enable live until:
+Keep paper running with settlement alignment enabled and do not enable live
+until:
 
 1. pUSD and both pUSD allowances are at least `1.00`.
 2. Operator/account compliance for the selected venue is explicitly confirmed.
