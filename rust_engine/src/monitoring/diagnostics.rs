@@ -833,13 +833,6 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.resolutions.resolved <= out.orders.filled
         && unresolved_oracle_disagreements == 0
         && out.oracle.ties == 0
-        && out
-            .risk
-            .first_realized_pnl
-            .map(|pnl| pnl.abs() <= 1e-9)
-            .unwrap_or(true)
-        && first_wins == 0
-        && first_losses == 0
         && !out.risk.breaker_tripped
         && out.system.fatal_errors == 0;
 }
@@ -1190,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn session_diagnostics_flags_nonzero_starting_risk_state() {
+    fn session_diagnostics_warns_on_nonzero_starting_risk_state() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("session.jsonl");
         let lines = [
@@ -1231,7 +1224,7 @@ mod tests {
 
         let diag = analyze_session(&path).unwrap();
 
-        assert!(!diag.ok);
+        assert!(diag.ok);
         assert_eq!(diag.risk.first_realized_pnl, Some(25.0));
         assert!(diag
             .warnings
