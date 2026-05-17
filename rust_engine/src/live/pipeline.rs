@@ -1475,7 +1475,7 @@ impl Pipeline {
                 // for legacy metadata that does not include minimum_tick_size.
                 let tick = contract.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
                 let limit_price = ((market_price / tick).round() * tick).clamp(tick, 1.0 - tick);
-                let shares = (position / limit_price).round().max(1.0);
+                let shares = ((position / limit_price) * 100.0).floor() / 100.0;
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
                 if shares < min_order_size {
                     tracing::warn!(
@@ -1488,7 +1488,9 @@ impl Pipeline {
                     return Ok(());
                 }
                 let zone = decision.zone.as_str();
-                let prefer_maker = self.runtime_strategy.prefer_maker && zone != "terminal";
+                let prefer_maker = self.settings.live_allow_maker_orders
+                    && self.runtime_strategy.prefer_maker
+                    && zone != "terminal";
                 let neg_risk = contract.market.neg_risk;
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
@@ -1515,6 +1517,14 @@ impl Pipeline {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
+                if !self
+                    .traded
+                    .lock()
+                    .await
+                    .insert(contract.market.condition_id.clone())
+                {
+                    return Ok(());
+                }
                 {
                     let mut orders = self.order_manager.lock().await;
                     orders

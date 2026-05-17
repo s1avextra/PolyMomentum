@@ -1018,9 +1018,10 @@ fn live_required_wallet_usd(
     settings: &config::Settings,
     balances: &data::wallet::WalletBalances,
 ) -> f64 {
-    live_configured_order_budget_usd(settings, balances)
+    let raw_required = live_configured_order_budget_usd(settings, balances)
         .max(live_min_order_budget_usd(settings))
-        .max(1.0)
+        .max(1.0);
+    raw_required * settings.live_order_budget_buffer.max(1.0)
 }
 
 fn live_wallet_covers_budget(balances: &data::wallet::WalletBalances, required_usd: f64) -> bool {
@@ -2722,7 +2723,7 @@ mod replay_validation_tests {
 
         let balances = wallet_balances(100.0, 100.0, 100.0);
 
-        assert_eq!(live_required_wallet_usd(&settings, &balances), 20.0);
+        assert_eq!(live_required_wallet_usd(&settings, &balances), 22.0);
     }
 
     #[test]
@@ -2742,7 +2743,7 @@ mod replay_validation_tests {
 
         assert_eq!(configured, 1.0);
         assert_eq!(floor, 4.5);
-        assert_eq!(live_required_wallet_usd(&settings, &balances), 4.5);
+        assert_eq!(live_required_wallet_usd(&settings, &balances), 4.95);
         assert!(!live_wallet_covers_budget(
             &balances,
             live_required_wallet_usd(&settings, &balances)
@@ -2763,7 +2764,7 @@ mod replay_validation_tests {
         let balances = wallet_balances(1.0, 1.0, 1.0);
         let required = live_required_wallet_usd(&settings, &balances);
 
-        assert_eq!(required, 20.0);
+        assert_eq!(required, 22.0);
         assert!(!live_wallet_covers_budget(&balances, required));
     }
 }

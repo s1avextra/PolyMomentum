@@ -91,6 +91,8 @@ pub struct Settings {
     pub clob_v2_ready: bool,
     pub live_reconciliation_ready: bool,
     pub live_min_order_size_shares: f64,
+    pub live_order_budget_buffer: f64,
+    pub live_allow_maker_orders: bool,
 
     pub private_key: String,
     pub polygon_rpc_url: String,
@@ -207,6 +209,8 @@ impl Settings {
             clob_v2_ready: env_bool("CLOB_V2_READY", false),
             live_reconciliation_ready: env_bool("POLYMOMENTUM_LIVE_RECONCILIATION_READY", false),
             live_min_order_size_shares: env_f64("LIVE_MIN_ORDER_SIZE_SHARES", 5.0),
+            live_order_budget_buffer: env_f64("LIVE_ORDER_BUDGET_BUFFER", 1.10),
+            live_allow_maker_orders: env_bool("LIVE_ALLOW_MAKER_ORDERS", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
             polygon_rpc_url: env_str(

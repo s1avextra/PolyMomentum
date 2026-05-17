@@ -74,13 +74,20 @@ requires pUSD `>=1.00` and both CLOB V2 pUSD allowances `>=1.00`.
   - with the current `BANKROLL_USD=100`, `CANDLE_POSITION_PCT=0.10`,
     `CANDLE_VOL_EXTREME_MULTIPLIER=2.0`, and
     `MAX_POSITION_PER_MARKET_USD=20`, the live wallet budget requirement is
-    `$20.00`.
+    `$22.00` after the default `LIVE_ORDER_BUDGET_BUFFER=1.10`.
   - a literal `$1` canary is below the practical CLOB minimum-size floor for
     many candle prices and should not be used as the first real order.
   - for a deliberate minimum-size canary, use approximately
     `BANKROLL_USD=45`, `MAX_POSITION_PER_MARKET_USD=5`, and pUSD/allowances
-    `>=5.00`; this keeps the first order capped near `$5` while still allowing
-    at least 5 shares at prices up to `0.90`.
+    `>=5.50`; this keeps the first order capped near `$5` plus buffer while
+    still allowing at least 5 shares at prices up to `0.90`.
+- Canary order-style guard:
+  - the promoted strategy currently has `prefer_maker=true`.
+  - live now ignores maker preference unless `LIVE_ALLOW_MAKER_ORDERS=1` is set,
+    so the first canary uses FOK/taker semantics instead of post-only GTC.
+  - live share sizing rounds down to avoid spending above the configured cap.
+  - once a live condition id is attempted, it is marked consumed locally before
+    REST placement to prevent duplicate-slot storms on slow ACK/reject paths.
 
 ## Next Gate
 
