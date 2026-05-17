@@ -98,10 +98,10 @@ bash deploy/deploy.sh user@vps --enable-service --mode paper
 ssh vps 'journalctl -u polymomentum-engine -f'
 
 # Kill switch
-ssh vps 'touch /tmp/polymomentum/KILL'
+ssh vps 'sudo touch /opt/polymomentum/KILL'
 
 # Resume after kill switch / breaker trip
-ssh vps 'rm -f /tmp/polymomentum/KILL && \
+ssh vps 'sudo rm -f /opt/polymomentum/KILL && \
          sqlite3 /opt/polymomentum/logs/candle/state.db \
                  "DELETE FROM meta WHERE key=\"candle_breaker_tripped\"" && \
          sudo systemctl restart polymomentum-engine'

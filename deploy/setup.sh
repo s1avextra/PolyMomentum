@@ -5,7 +5,6 @@ set -euo pipefail
 APP_DIR="/opt/polymomentum"
 ENV_DIR="/etc/polymomentum"
 ENV_FILE="$ENV_DIR/env"
-KILL_DIR="/tmp/polymomentum"
 
 echo "=== PolyMomentum VPS Setup (Rust-only) ==="
 
@@ -20,13 +19,12 @@ command -v cargo &>/dev/null || (
     source "$HOME/.cargo/env"
 )
 
-# 3. Service user, app dirs, kill-switch dir.
+# 3. Service user and app dirs.
 id polymomentum &>/dev/null || useradd -r -s /bin/false -d "$APP_DIR" polymomentum
 mkdir -p \
     "$APP_DIR/logs/"{candle,sessions} \
-    "$APP_DIR/data" \
-    "$KILL_DIR"
-chown -R polymomentum:polymomentum "$APP_DIR" "$KILL_DIR"
+    "$APP_DIR/data"
+chown -R polymomentum:polymomentum "$APP_DIR"
 
 # 4. Secrets directory — outside the deploy tree.
 mkdir -p "$ENV_DIR"
@@ -63,7 +61,7 @@ RUST_LOG=info
 BANKROLL_USD=100
 
 # Operational kill switch (touch this file from any shell to halt trading)
-KILL_SWITCH_PATH=/tmp/polymomentum/KILL
+KILL_SWITCH_PATH=/opt/polymomentum/KILL
 ENVEOF
     chmod 640 "$ENV_FILE"
     chown root:polymomentum "$ENV_FILE"

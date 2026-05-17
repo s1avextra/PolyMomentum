@@ -5,6 +5,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/polymomentum/env
+Environment=KILL_FILE=/opt/polymomentum/KILL
 ExecStart=/opt/polymomentum/healthcheck.sh
 StandardOutput=journal
 StandardError=journal

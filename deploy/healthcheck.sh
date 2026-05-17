@@ -6,7 +6,7 @@ set -uo pipefail
 APP_DIR="${POLYMOMENTUM_DIR:-/opt/polymomentum}"
 SERVICE="${POLYMOMENTUM_SERVICE:-polymomentum-engine}"
 WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"
-KILL_FILE="${KILL_FILE:-/tmp/polymomentum/KILL}"
+KILL_FILE="${KILL_FILE:-${KILL_SWITCH_PATH:-/opt/polymomentum/KILL}}"
 STATE_DB="${STATE_DB:-$APP_DIR/logs/candle/state.db}"
 INACTIVE_HOURS="${INACTIVE_HOURS:-2}"
 LOGS_LIMIT_MB="${LOGS_LIMIT_MB:-2048}"

@@ -90,6 +90,10 @@ fi
 
 echo "=== Copying binary to $VPS ==="
 ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data"
+ssh "$VPS" "if [ -f /tmp/polymomentum/KILL ]; then sudo touch $APP_DIR/KILL; fi; \
+    if sudo test -f /etc/polymomentum/env; then \
+        sudo sed -i 's|^KILL_SWITCH_PATH=/tmp/polymomentum/KILL$|KILL_SWITCH_PATH=$APP_DIR/KILL|' /etc/polymomentum/env; \
+    fi"
 scp_copy "$BIN" "$VPS:$APP_DIR/polymomentum-engine.new"
 ssh "$VPS" "chown polymomentum:polymomentum $APP_DIR/polymomentum-engine.new && \
     chmod 0755 $APP_DIR/polymomentum-engine.new && \
@@ -135,7 +139,7 @@ if $ENABLE; then
 
     echo "=== Running remote preflight ==="
     PREFLIGHT_ACK="$([ "$MODE" = "live" ] && echo --i-understand-live || true)"
-    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK'"
+    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$APP_DIR/KILL; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK'"
 
     echo "=== Enabling service ==="
     ssh "$VPS" "sudo systemctl enable polymomentum-engine && sudo systemctl restart polymomentum-engine"

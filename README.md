@@ -70,9 +70,9 @@ ssh vps 'journalctl -u polymomentum-engine -f -n 5 | grep candle.cycle'
 ssh vps 'journalctl -u polymomentum-engine | grep -E "candle.trade|candle.resolved"'
 
 # Kill switch (halts trading within ~100ms)
-ssh vps 'touch /tmp/polymomentum/KILL'
+ssh vps 'sudo touch /opt/polymomentum/KILL'
 # resume:
-ssh vps 'rm /tmp/polymomentum/KILL && \
+ssh vps 'sudo rm /opt/polymomentum/KILL && \
          sqlite3 /opt/polymomentum/logs/candle/state.db \
                  "DELETE FROM meta WHERE key=\"candle_breaker_tripped\"" && \
          systemctl restart polymomentum-engine'
