@@ -895,6 +895,7 @@ impl LiveReplayStrategy {
             book_ask_depth: 0.0,
             book_bid_depth: 0.0,
             balance_usd: self.bankroll_usd,
+            submit_latency_ms: Some(0.0),
         });
 
         BacktestOrder {

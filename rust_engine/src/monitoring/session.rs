@@ -28,6 +28,8 @@ struct Counters {
     signal_skip_count: u64,
     skip_reasons: std::collections::HashMap<String, u64>,
     price_gaps: Vec<f64>,
+    price_staleness_ms: Vec<f64>,
+    cycle_ms: Vec<f64>,
     fill_times: Vec<f64>,
     api_latencies: Vec<f64>,
     errors: Vec<Value>,
@@ -398,6 +400,9 @@ impl SessionMonitor {
         sources: &std::collections::HashMap<String, f64>,
     ) {
         let mut c = self.counters.lock().unwrap();
+        if staleness_ms.is_finite() {
+            c.price_staleness_ms.push(staleness_ms.max(0.0));
+        }
         if sources.len() >= 2 {
             let mut prices: Vec<f64> = sources.values().copied().collect();
             prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -419,6 +424,21 @@ impl SessionMonitor {
                 "spread": round_n(spread, 2),
                 "staleness_ms": round_n(staleness_ms, 1),
                 "source_prices": rounded,
+            }),
+        );
+    }
+
+    pub fn record_cycle(&self, cycle: u64, cycle_ms: f64, contracts: usize) {
+        if cycle_ms.is_finite() {
+            self.counters.lock().unwrap().cycle_ms.push(cycle_ms.max(0.0));
+        }
+        self.write_event(
+            "system",
+            "cycle",
+            json!({
+                "cycle": cycle,
+                "cycle_ms": round_n(cycle_ms, 3),
+                "contracts": contracts,
             }),
         );
     }
@@ -475,6 +495,22 @@ impl SessionMonitor {
         } else {
             c.api_latencies.iter().sum::<f64>() / c.api_latencies.len() as f64
         };
+        let avg_cycle_ms = if c.cycle_ms.is_empty() {
+            0.0
+        } else {
+            c.cycle_ms.iter().sum::<f64>() / c.cycle_ms.len() as f64
+        };
+        let max_cycle_ms = c.cycle_ms.iter().cloned().fold(0.0_f64, f64::max);
+        let avg_staleness_ms = if c.price_staleness_ms.is_empty() {
+            0.0
+        } else {
+            c.price_staleness_ms.iter().sum::<f64>() / c.price_staleness_ms.len() as f64
+        };
+        let max_staleness_ms = c
+            .price_staleness_ms
+            .iter()
+            .cloned()
+            .fold(0.0_f64, f64::max);
         let avg_gap = if c.price_gaps.is_empty() {
             0.0
         } else {
@@ -509,10 +545,14 @@ impl SessionMonitor {
             "price_feed": {
                 "avg_cross_exchange_gap": round_n(avg_gap, 2),
                 "max_cross_exchange_gap": round_n(max_gap, 2),
+                "avg_staleness_ms": round_n(avg_staleness_ms, 1),
+                "max_staleness_ms": round_n(max_staleness_ms, 1),
                 "source_dropouts": c.source_dropouts,
             },
             "system": {
                 "avg_api_latency_ms": round_n(avg_latency, 1),
+                "avg_cycle_ms": round_n(avg_cycle_ms, 2),
+                "max_cycle_ms": round_n(max_cycle_ms, 2),
                 "total_errors": c.errors.len(),
             },
         })
@@ -535,6 +575,7 @@ pub struct OrderPlaced {
     pub book_ask_depth: f64,
     pub book_bid_depth: f64,
     pub balance_usd: f64,
+    pub submit_latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

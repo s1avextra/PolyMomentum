@@ -1269,6 +1269,7 @@ impl Pipeline {
             let cycle_ms = cycle_start.elapsed().as_secs_f64() * 1000.0;
             let cycle = *self.cycle_count.lock().await;
             if cycle % 30 == 0 {
+                self.monitor.record_cycle(cycle, cycle_ms, contracts.len());
                 let top = self.monitor.top_skip_reasons(5);
                 tracing::info!(
                     cycle,
@@ -1410,6 +1411,7 @@ impl Pipeline {
                     book_ask_depth: 0.0,
                     book_bid_depth: 0.0,
                     balance_usd: bankroll,
+                    submit_latency_ms: Some(0.0),
                 });
                 self.monitor.record_order_filled(&crate::monitoring::session::OrderFilled {
                     intent_id: intent.intent_id,
@@ -1567,6 +1569,7 @@ impl Pipeline {
                             book_ask_depth: 0.0,
                             book_bid_depth: 0.0,
                             balance_usd: self.risk.effective_bankroll().await,
+                            submit_latency_ms: Some(submit_latency_s * 1000.0),
                         });
                         tracing::info!(
                             order_id = short_cid(&order_id),

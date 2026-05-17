@@ -71,6 +71,9 @@ pub struct OrderDiagnostics {
     pub rejected: u64,
     pub missing_intent_id: u64,
     pub placed_missing_state: u64,
+    pub submit_latency_samples: u64,
+    pub avg_submit_latency_ms: Option<f64>,
+    pub max_submit_latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -142,6 +145,12 @@ pub struct SystemDiagnostics {
     pub settlement_guard_minutes: Option<f64>,
     pub settlement_min_abs_move_usd: Option<f64>,
     pub settlement_sigma_buffer: Option<f64>,
+    pub cycle_samples: u64,
+    pub avg_cycle_ms: Option<f64>,
+    pub max_cycle_ms: Option<f64>,
+    pub price_snapshots: u64,
+    pub avg_price_staleness_ms: Option<f64>,
+    pub max_price_staleness_ms: Option<f64>,
 }
 
 pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
@@ -189,7 +198,9 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
         match (cat, ty) {
             ("system", "release_manifest") => record_release_manifest(&mut out, &v),
             ("system", "runtime_strategy") => record_runtime_strategy(&mut out, &v),
+            ("system", "cycle") => record_system_cycle(&mut out, &v),
             ("system", "error") => record_system_error(&mut out, &v),
+            ("price", "snapshot") => record_price_snapshot(&mut out, &v),
             ("signal", "evaluation") => record_signal_evaluation(&mut out, &v),
             ("signal", "skip") => record_signal_skip(&mut out, &v),
             ("order", "placed") => record_order_placed(&mut out, &v),
@@ -412,6 +423,15 @@ fn record_order_placed(out: &mut SessionDiagnostics, v: &Value) {
     if missing_string(v, "state") {
         out.orders.placed_missing_state += 1;
     }
+    if let Some(latency_ms) = finite_f64(v, "submit_latency_ms") {
+        out.orders.submit_latency_samples += 1;
+        update_avg(
+            &mut out.orders.avg_submit_latency_ms,
+            out.orders.submit_latency_samples,
+            latency_ms.max(0.0),
+        );
+        update_max(&mut out.orders.max_submit_latency_ms, latency_ms.max(0.0));
+    }
 }
 
 fn record_order_filled(out: &mut SessionDiagnostics, v: &Value) {
@@ -601,6 +621,43 @@ fn finite_f64(v: &Value, key: &str) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+fn update_avg(avg: &mut Option<f64>, samples: u64, value: f64) {
+    if samples == 0 {
+        return;
+    }
+    *avg = Some(match *avg {
+        Some(current) => current + (value - current) / samples as f64,
+        None => value,
+    });
+}
+
+fn record_system_cycle(out: &mut SessionDiagnostics, v: &Value) {
+    if let Some(cycle_ms) = finite_f64(v, "cycle_ms") {
+        out.system.cycle_samples += 1;
+        update_avg(
+            &mut out.system.avg_cycle_ms,
+            out.system.cycle_samples,
+            cycle_ms.max(0.0),
+        );
+        update_max(&mut out.system.max_cycle_ms, cycle_ms.max(0.0));
+    }
+}
+
+fn record_price_snapshot(out: &mut SessionDiagnostics, v: &Value) {
+    out.system.price_snapshots += 1;
+    if let Some(staleness_ms) = finite_f64(v, "staleness_ms") {
+        update_avg(
+            &mut out.system.avg_price_staleness_ms,
+            out.system.price_snapshots,
+            staleness_ms.max(0.0),
+        );
+        update_max(
+            &mut out.system.max_price_staleness_ms,
+            staleness_ms.max(0.0),
+        );
+    }
+}
+
 fn finalize(out: &mut SessionDiagnostics) {
     if !out.release_manifest_seen {
         out.warnings
@@ -742,6 +799,30 @@ fn finalize(out: &mut SessionDiagnostics) {
                 .to_string(),
         );
     }
+    if let Some(max_cycle_ms) = out.system.max_cycle_ms {
+        if max_cycle_ms > 100.0 {
+            out.warnings.push(format!(
+                "max decision-cycle latency {:.1}ms exceeds 100ms loop budget",
+                max_cycle_ms
+            ));
+        }
+    }
+    if let Some(max_staleness_ms) = out.system.max_price_staleness_ms {
+        if max_staleness_ms > 2000.0 {
+            out.warnings.push(format!(
+                "max price-feed staleness {:.1}ms exceeds 2000ms threshold",
+                max_staleness_ms
+            ));
+        }
+    }
+    if let Some(max_submit_latency_ms) = out.orders.max_submit_latency_ms {
+        if max_submit_latency_ms > 1000.0 {
+            out.warnings.push(format!(
+                "max order-submit latency {:.1}ms exceeds 1000ms threshold",
+                max_submit_latency_ms
+            ));
+        }
+    }
 
     out.ok = out.release_manifest_seen
         && out.malformed_lines == 0
@@ -820,10 +901,22 @@ mod tests {
                 "traded": false
             }),
             serde_json::json!({
+                "cat": "system",
+                "type": "cycle",
+                "cycle_ms": 7.5,
+                "contracts": 42
+            }),
+            serde_json::json!({
+                "cat": "price",
+                "type": "snapshot",
+                "staleness_ms": 123.4
+            }),
+            serde_json::json!({
                 "cat": "order",
                 "type": "placed",
                 "intent_id": "intent_1",
-                "state": "acked"
+                "state": "acked",
+                "submit_latency_ms": 12.5
             }),
             serde_json::json!({
                 "cat": "order",
@@ -851,6 +944,9 @@ mod tests {
         assert_eq!(diag.system.settlement_guard_minutes, Some(5.0));
         assert_eq!(diag.system.settlement_alignment_ready, Some(false));
         assert_eq!(diag.orders.placed, 1);
+        assert_eq!(diag.orders.max_submit_latency_ms, Some(12.5));
+        assert_eq!(diag.system.max_cycle_ms, Some(7.5));
+        assert_eq!(diag.system.max_price_staleness_ms, Some(123.4));
         assert_eq!(diag.signals.decision_trades, 1);
     }
 
