@@ -945,16 +945,20 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
     }
     match data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key) {
         Ok(reader) => match reader.fetch_balances().await {
-            Ok(balances) if balances.live_ready() => release::PreflightCheck {
-                name: "live_wallet",
-                status: release::CheckStatus::Ok,
-                detail: balances.live_ready_detail(),
-            },
-            Ok(balances) => release::PreflightCheck {
-                name: "live_wallet",
-                status: release::CheckStatus::Fail,
-                detail: balances.live_ready_detail(),
-            },
+            Ok(balances) => {
+                let required = live_required_wallet_usd(settings, &balances);
+                let budget_ready = live_wallet_covers_budget(&balances, required);
+                let status = if balances.live_ready() && budget_ready {
+                    release::CheckStatus::Ok
+                } else {
+                    release::CheckStatus::Fail
+                };
+                release::PreflightCheck {
+                    name: "live_wallet",
+                    status,
+                    detail: live_wallet_preflight_detail(&balances, required),
+                }
+            }
             Err(e) => release::PreflightCheck {
                 name: "live_wallet",
                 status: release::CheckStatus::Fail,
@@ -967,6 +971,57 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
             detail: format!("wallet init failed: {e}"),
         },
     }
+}
+
+fn live_required_wallet_usd(
+    settings: &config::Settings,
+    balances: &data::wallet::WalletBalances,
+) -> f64 {
+    let bankroll = if settings.bankroll_usd > 0.0 {
+        settings.bankroll_usd
+    } else {
+        balances.pusd
+    };
+    if bankroll <= 0.0 {
+        return 1.0;
+    }
+
+    let vol_multiplier = settings
+        .candle_vol_high_multiplier
+        .max(settings.candle_vol_extreme_multiplier)
+        .max(1.0);
+    let mut position = bankroll * settings.candle_position_pct.max(0.0) * vol_multiplier;
+    if settings.max_position_per_market_usd > 0.0 {
+        position = position.min(settings.max_position_per_market_usd);
+    }
+    position = position.min(bankroll);
+    if 0.0 < position && position < 1.0 && bankroll >= 1.0 {
+        position = 1.0;
+    }
+    position.max(1.0)
+}
+
+fn live_wallet_covers_budget(balances: &data::wallet::WalletBalances, required_usd: f64) -> bool {
+    let required = required_usd.max(1.0);
+    let eps = 1e-9;
+    balances.pusd + eps >= required
+        && balances.pusd_allowance_exchange + eps >= required
+        && balances.pusd_allowance_neg_risk_exchange + eps >= required
+        && balances.pol >= 0.01
+}
+
+fn live_wallet_preflight_detail(
+    balances: &data::wallet::WalletBalances,
+    required_usd: f64,
+) -> String {
+    let base = balances.live_ready_detail();
+    let budget_ready = live_wallet_covers_budget(balances, required_usd);
+    format!(
+        "{}; configured live order budget {}: requires pUSD and both CTF Exchange V2 allowances >= ${:.2}",
+        base,
+        if budget_ready { "ok" } else { "not ready" },
+        required_usd.max(1.0)
+    )
 }
 
 fn install_signal_handlers(stop: std::sync::Arc<tokio::sync::Notify>) {
@@ -2610,5 +2665,64 @@ mod replay_validation_tests {
             Some("/tmp/promotion.json")
         );
         assert_eq!(promotion_path_from_runtime_source("settings"), None);
+    }
+
+    fn wallet_balances(
+        pusd: f64,
+        exchange_allowance: f64,
+        neg_risk_allowance: f64,
+    ) -> data::wallet::WalletBalances {
+        data::wallet::WalletBalances {
+            address: "0x0000000000000000000000000000000000000000".to_string(),
+            pusd,
+            pusd_allowance_exchange: exchange_allowance,
+            pusd_allowance_neg_risk_exchange: neg_risk_allowance,
+            pol: 1.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn live_required_wallet_usd_uses_worst_case_first_order() {
+        let mut settings = config::Settings::from_env();
+        settings.bankroll_usd = 100.0;
+        settings.candle_position_pct = 0.10;
+        settings.candle_vol_high_multiplier = 1.5;
+        settings.candle_vol_extreme_multiplier = 2.0;
+        settings.max_position_per_market_usd = 20.0;
+
+        let balances = wallet_balances(100.0, 100.0, 100.0);
+
+        assert_eq!(live_required_wallet_usd(&settings, &balances), 20.0);
+    }
+
+    #[test]
+    fn live_required_wallet_usd_bumps_small_canary_to_one_dollar() {
+        let mut settings = config::Settings::from_env();
+        settings.bankroll_usd = 1.0;
+        settings.candle_position_pct = 0.10;
+        settings.candle_vol_high_multiplier = 1.0;
+        settings.candle_vol_extreme_multiplier = 1.0;
+        settings.max_position_per_market_usd = 1.0;
+
+        let balances = wallet_balances(1.0, 1.0, 1.0);
+
+        assert_eq!(live_required_wallet_usd(&settings, &balances), 1.0);
+    }
+
+    #[test]
+    fn live_wallet_budget_blocks_underfunded_configured_bankroll() {
+        let mut settings = config::Settings::from_env();
+        settings.bankroll_usd = 100.0;
+        settings.candle_position_pct = 0.10;
+        settings.candle_vol_high_multiplier = 1.5;
+        settings.candle_vol_extreme_multiplier = 2.0;
+        settings.max_position_per_market_usd = 20.0;
+
+        let balances = wallet_balances(1.0, 1.0, 1.0);
+        let required = live_required_wallet_usd(&settings, &balances);
+
+        assert_eq!(required, 20.0);
+        assert!(!live_wallet_covers_budget(&balances, required));
     }
 }
