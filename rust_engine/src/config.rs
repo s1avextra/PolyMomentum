@@ -90,6 +90,7 @@ pub struct Settings {
     pub polymarket_us_api_enabled: bool,
     pub clob_v2_ready: bool,
     pub live_reconciliation_ready: bool,
+    pub live_min_order_size_shares: f64,
 
     pub private_key: String,
     pub polygon_rpc_url: String,
@@ -205,6 +206,7 @@ impl Settings {
             polymarket_us_api_enabled: env_bool("POLYMARKET_US_API_ENABLED", false),
             clob_v2_ready: env_bool("CLOB_V2_READY", false),
             live_reconciliation_ready: env_bool("POLYMOMENTUM_LIVE_RECONCILIATION_READY", false),
+            live_min_order_size_shares: env_f64("LIVE_MIN_ORDER_SIZE_SHARES", 5.0),
 
             private_key: env_str("PRIVATE_KEY", ""),
             polygon_rpc_url: env_str(

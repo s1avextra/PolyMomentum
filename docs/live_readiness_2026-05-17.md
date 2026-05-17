@@ -69,13 +69,18 @@ requires pUSD `>=1.00` and both CLOB V2 pUSD allowances `>=1.00`.
     `POLYMOMENTUM_LIVE_RECONCILIATION_READY=0`, and wallet readiness.
 - Pre-canary sizing guard:
   - live wallet preflight now requires pUSD and both V2 allowances to cover the
-    configured worst-case first live order, not just the old `$1.00` floor.
+    configured worst-case first live order and the configured minimum order-size
+    floor, not just the old `$1.00` floor.
   - with the current `BANKROLL_USD=100`, `CANDLE_POSITION_PCT=0.10`,
     `CANDLE_VOL_EXTREME_MULTIPLIER=2.0`, and
     `MAX_POSITION_PER_MARKET_USD=20`, the live wallet budget requirement is
     `$20.00`.
-  - for a deliberate `$1` canary, set `BANKROLL_USD=1` and
-    `MAX_POSITION_PER_MARKET_USD=1` before the live preflight/deploy.
+  - a literal `$1` canary is below the practical CLOB minimum-size floor for
+    many candle prices and should not be used as the first real order.
+  - for a deliberate minimum-size canary, use approximately
+    `BANKROLL_USD=45`, `MAX_POSITION_PER_MARKET_USD=5`, and pUSD/allowances
+    `>=5.00`; this keeps the first order capped near `$5` while still allowing
+    at least 5 shares at prices up to `0.90`.
 
 ## Next Gate
 

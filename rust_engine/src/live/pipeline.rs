@@ -1476,6 +1476,17 @@ impl Pipeline {
                 let tick = contract.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
                 let limit_price = ((market_price / tick).round() * tick).clamp(tick, 1.0 - tick);
                 let shares = (position / limit_price).round().max(1.0);
+                let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
+                if shares < min_order_size {
+                    tracing::warn!(
+                        shares,
+                        min_order_size,
+                        limit_price,
+                        position,
+                        "live order skipped: below configured minimum order size"
+                    );
+                    return Ok(());
+                }
                 let zone = decision.zone.as_str();
                 let prefer_maker = self.runtime_strategy.prefer_maker && zone != "terminal";
                 let neg_risk = contract.market.neg_risk;
