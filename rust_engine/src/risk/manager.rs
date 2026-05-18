@@ -187,6 +187,12 @@ impl RiskManager {
         Ok(())
     }
 
+    pub async fn delete_meta(&self, key: &str) -> Result<()> {
+        let conn = self.db.lock().await;
+        conn.execute("DELETE FROM meta WHERE key=?", params![key])?;
+        Ok(())
+    }
+
     pub async fn save_paper_positions(&self, positions: &[(String, Value)]) -> Result<()> {
         let conn = self.db.lock().await;
         conn.execute_batch("BEGIN; DELETE FROM paper_positions;")?;

@@ -59,6 +59,7 @@ CANDLE_SETTLEMENT_ALIGNMENT_READY=false
 # Logging
 RUST_LOG=info
 BANKROLL_USD=100
+CANDLE_PAPER_BREAKER_RESET_ON_START=0
 
 # Operational kill switch (touch this file from any shell to halt trading)
 KILL_SWITCH_PATH=/opt/polymomentum/KILL

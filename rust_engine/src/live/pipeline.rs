@@ -379,11 +379,11 @@ impl Pipeline {
         };
 
         // Restore breaker + paper positions + oracle pending
-        let breaker_tripped = matches!(
+        let mut breaker_tripped = matches!(
             risk.get_meta("candle_breaker_tripped").await?.as_deref(),
             Some("1")
         );
-        let breaker_state = match risk.get_meta("candle_breaker_state").await? {
+        let mut breaker_state = match risk.get_meta("candle_breaker_state").await? {
             Some(raw) => match serde_json::from_str::<BreakerState>(&raw) {
                 Ok(state) => state,
                 Err(e) => {
@@ -410,6 +410,43 @@ impl Pipeline {
         }
         if !oracle_pending.is_empty() {
             tracing::info!(n = oracle_pending.len(), "restored oracle-pending");
+        }
+        if should_reset_paper_breaker_on_start(
+            mode,
+            settings.candle_paper_breaker_reset_on_start,
+            breaker_tripped,
+            breaker_state,
+            paper_positions.is_empty(),
+            oracle_pending.is_empty(),
+        ) {
+            tracing::warn!(
+                wins = breaker_state.wins,
+                losses = breaker_state.losses,
+                pnl = breaker_state.realized_pnl,
+                "resetting paper breaker state on startup"
+            );
+            if let Err(e) = risk.delete_meta("candle_breaker_tripped").await {
+                tracing::warn!(error = %e, "delete candle breaker flag failed");
+            }
+            if let Err(e) = risk.delete_meta("candle_breaker_state").await {
+                tracing::warn!(error = %e, "delete candle breaker state failed");
+            }
+            breaker_tripped = false;
+            breaker_state = BreakerState::default();
+            monitor.record_breaker_state(
+                "paper_reset_on_start",
+                "configured_session_reset",
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            );
         }
         let restored_open_exposure: f64 = paper_positions
             .values()
@@ -2199,6 +2236,21 @@ fn spawn_exchange_feeds(state: Arc<RwLock<PriceState>>) {
     }
 }
 
+fn should_reset_paper_breaker_on_start(
+    mode: Mode,
+    enabled: bool,
+    breaker_tripped: bool,
+    breaker_state: BreakerState,
+    paper_positions_empty: bool,
+    oracle_pending_empty: bool,
+) -> bool {
+    matches!(mode, Mode::Paper)
+        && enabled
+        && paper_positions_empty
+        && oracle_pending_empty
+        && (breaker_tripped || breaker_state.wins + breaker_state.losses > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2256,6 +2308,53 @@ mod tests {
         assert_eq!(runtime.min_confidence, variant.min_confidence);
         assert_eq!(runtime.min_edge, variant.min_edge);
         assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
+    }
+
+    #[test]
+    fn paper_breaker_reset_on_start_is_paper_only_and_requires_no_open_state() {
+        let mut state = BreakerState::default();
+        state.record_resolution(false, -5.0);
+
+        assert!(should_reset_paper_breaker_on_start(
+            Mode::Paper,
+            true,
+            true,
+            state,
+            true,
+            true
+        ));
+        assert!(!should_reset_paper_breaker_on_start(
+            Mode::Live,
+            true,
+            true,
+            state,
+            true,
+            true
+        ));
+        assert!(!should_reset_paper_breaker_on_start(
+            Mode::Paper,
+            true,
+            true,
+            state,
+            false,
+            true
+        ));
+        assert!(!should_reset_paper_breaker_on_start(
+            Mode::Paper,
+            true,
+            true,
+            state,
+            true,
+            false
+        ));
+        assert!(!should_reset_paper_breaker_on_start(
+            Mode::Paper,
+            false,
+            true,
+            state,
+            true,
+            true
+        ));
     }
 
     #[test]

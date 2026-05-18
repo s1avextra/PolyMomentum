@@ -144,6 +144,7 @@ pub struct Settings {
     pub candle_breaker_min_trades: i64,
     pub candle_breaker_min_win_rate: f64,
     pub candle_breaker_max_drawdown_pct: f64,
+    pub candle_paper_breaker_reset_on_start: bool,
 
     pub kill_switch_path: String,
     pub alert_required: bool,
@@ -265,6 +266,7 @@ impl Settings {
             candle_breaker_min_trades: env_i64("CANDLE_BREAKER_MIN_TRADES", 20),
             candle_breaker_min_win_rate: env_f64("CANDLE_BREAKER_MIN_WIN_RATE", 0.65),
             candle_breaker_max_drawdown_pct: env_f64("CANDLE_BREAKER_MAX_DRAWDOWN_PCT", 0.30),
+            candle_paper_breaker_reset_on_start: env_bool("CANDLE_PAPER_BREAKER_RESET_ON_START", false),
 
             kill_switch_path: env_str("KILL_SWITCH_PATH", "/tmp/polymomentum/KILL"),
             alert_required: env_bool("ALERT_REQUIRED", false),
