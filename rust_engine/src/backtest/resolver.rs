@@ -28,9 +28,58 @@ pub struct ResolvedTrade {
 pub struct BacktestResults {
     pub trades: Vec<ResolvedTrade>,
     pub unresolved_fills: Vec<BacktestFill>,
+    #[serde(default)]
+    pub execution_attempts: usize,
+    #[serde(default)]
+    pub fills_success: usize,
+    #[serde(default)]
+    pub fills_failed: usize,
+    #[serde(default)]
+    pub reject_reasons: BTreeMap<String, usize>,
 }
 
 impl BacktestResults {
+    pub fn from_fills(fills: &[BacktestFill]) -> Self {
+        let execution_attempts = fills.len();
+        let fills_success = fills.iter().filter(|f| f.success).count();
+        let fills_failed = execution_attempts.saturating_sub(fills_success);
+        let mut reject_reasons = BTreeMap::new();
+        for fill in fills.iter().filter(|f| !f.success) {
+            let reason = if fill.reason.trim().is_empty() {
+                "unknown".to_string()
+            } else {
+                fill.reason.clone()
+            };
+            *reject_reasons.entry(reason).or_insert(0) += 1;
+        }
+        Self {
+            execution_attempts,
+            fills_success,
+            fills_failed,
+            reject_reasons,
+            ..Self::default()
+        }
+    }
+
+    pub fn merge_from(&mut self, other: Self) {
+        self.trades.extend(other.trades);
+        self.unresolved_fills.extend(other.unresolved_fills);
+        self.execution_attempts += other.execution_attempts;
+        self.fills_success += other.fills_success;
+        self.fills_failed += other.fills_failed;
+        for (reason, count) in other.reject_reasons {
+            *self.reject_reasons.entry(reason).or_insert(0) += count;
+        }
+    }
+
+    pub fn fill_rate(&self) -> f64 {
+        if self.execution_attempts == 0 {
+            0.0
+        } else {
+            self.fills_success as f64 / self.execution_attempts as f64
+        }
+    }
+
     pub fn n_trades(&self) -> usize {
         self.trades.len()
     }
@@ -143,7 +192,7 @@ pub fn resolve_fills(
         .map(|w| (w.condition_id.clone(), w))
         .collect();
 
-    let mut results = BacktestResults::default();
+    let mut results = BacktestResults::from_fills(fills);
     for (fill, decision) in fills.iter().zip(decisions) {
         if !fill.success {
             results.unresolved_fills.push(fill.clone());

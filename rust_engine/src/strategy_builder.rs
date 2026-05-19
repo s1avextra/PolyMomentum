@@ -394,6 +394,7 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         && wilson >= input.min_wilson_win_rate_lower
                         && best.total_pnl >= per_report_min_pnl
                         && best.unresolved_fills == 0
+                        && best.fills_failed == 0
                     {
                         StrategyBuilderCheckStatus::Ok
                     } else {
@@ -403,9 +404,12 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         "report.best_variant",
                         status,
                         format!(
-                            "{} trades={} win_rate={:.3} wilson95={:.3} pnl={:.2} unresolved={} per_report_gates[min_trades={}, min_pnl={:.2}]",
+                            "{} trades={} attempts={} fill_rate={:.3} failed={} win_rate={:.3} wilson95={:.3} pnl={:.2} unresolved={} per_report_gates[min_trades={}, min_pnl={:.2}]",
                             report_path,
                             best.trades,
+                            best.execution_attempts,
+                            best.fill_rate,
+                            best.fills_failed,
                             best.win_rate,
                             wilson,
                             best.total_pnl,

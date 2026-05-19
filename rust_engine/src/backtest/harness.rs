@@ -554,9 +554,8 @@ pub async fn run_harness(
             .with_context(|| format!("create checkpoint dir {}", dir.display()))?;
         let loaded = load_existing_checkpoints(dir, variants)?;
         for (h, per_variant) in loaded {
-            for (acc, hour_res) in variant_state.iter_mut().zip(per_variant) {
-                acc.trades.extend(hour_res.trades);
-                acc.unresolved_fills.extend(hour_res.unresolved_fills);
+            for (acc, hour_res) in variant_state.iter_mut().zip(per_variant.into_iter()) {
+                acc.merge_from(hour_res);
             }
             hours_done.insert(h);
         }
@@ -714,9 +713,8 @@ pub async fn run_harness(
 
         // Merge sequentially. Index-aligned with `variants`, so this preserves
         // the input order regardless of thread count.
-        for (acc, hour_res) in variant_state.iter_mut().zip(per_variant) {
-            acc.trades.extend(hour_res.trades);
-            acc.unresolved_fills.extend(hour_res.unresolved_fills);
+        for (acc, hour_res) in variant_state.iter_mut().zip(per_variant.into_iter()) {
+            acc.merge_from(hour_res);
         }
         hours_done.insert(h);
         let replay_ms = replay_t0.elapsed().as_millis() as u64;
@@ -887,11 +885,11 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
     let mut out = String::new();
     writeln!(
         &mut out,
-        "{:<24} {:>7} {:>7} {:>7} {:>7} {:>9} {:>11} {:>9}",
-        "variant", "trades", "wins", "losses", "WR%", "PnL", "PnL/trade", "fees"
+        "{:<24} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>9} {:>11} {:>9}",
+        "variant", "trades", "att", "fill%", "fails", "wins", "losses", "PnL", "PnL/trade", "fees"
     )
     .unwrap();
-    writeln!(&mut out, "{}", "─".repeat(86)).unwrap();
+    writeln!(&mut out, "{}", "─".repeat(110)).unwrap();
     let mut sorted = runs.to_vec();
     sorted.sort_by(|a, b| {
         b.results
@@ -902,12 +900,14 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
     for r in &sorted {
         writeln!(
             &mut out,
-            "{:<24} {:>7} {:>7} {:>7} {:>6.1}% {:>+8.2} {:>+10.3} {:>9.4}",
+            "{:<24} {:>7} {:>7} {:>6.1}% {:>7} {:>7} {:>7} {:>+8.2} {:>+10.3} {:>9.4}",
             r.variant.name,
             r.results.n_trades(),
+            r.results.execution_attempts,
+            100.0 * r.results.fill_rate(),
+            r.results.fills_failed,
             r.results.n_wins(),
             r.results.n_losses(),
-            100.0 * r.results.win_rate(),
             r.results.total_pnl(),
             r.results.avg_pnl(),
             r.results.total_fees(),

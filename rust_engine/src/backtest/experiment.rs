@@ -36,6 +36,16 @@ pub struct VariantReport {
     pub wins: usize,
     pub losses: usize,
     pub unresolved_fills: usize,
+    #[serde(default)]
+    pub execution_attempts: usize,
+    #[serde(default)]
+    pub fills_success: usize,
+    #[serde(default)]
+    pub fills_failed: usize,
+    #[serde(default)]
+    pub fill_rate: f64,
+    #[serde(default)]
+    pub reject_reasons: BTreeMap<String, usize>,
     pub win_rate: f64,
     pub total_pnl: f64,
     pub avg_pnl: f64,
@@ -71,6 +81,8 @@ pub struct PromotionGate {
     pub min_sharpe_like: f64,
     #[serde(default)]
     pub max_unresolved_fills: usize,
+    #[serde(default)]
+    pub max_failed_fills: usize,
     #[serde(default = "default_max_zone_trade_share")]
     pub max_zone_trade_share: f64,
     #[serde(default = "default_require_complete_data")]
@@ -102,6 +114,7 @@ impl Default for PromotionGate {
             min_total_pnl: 0.0,
             min_sharpe_like: 0.0,
             max_unresolved_fills: 0,
+            max_failed_fills: 0,
             max_zone_trade_share: default_max_zone_trade_share(),
             require_complete_data: default_require_complete_data(),
         }
@@ -244,6 +257,11 @@ impl VariantReport {
             wins: run.results.n_wins(),
             losses: run.results.n_losses(),
             unresolved_fills: run.results.unresolved_fills.len(),
+            execution_attempts: run.results.execution_attempts,
+            fills_success: run.results.fills_success,
+            fills_failed: run.results.fills_failed,
+            fill_rate: run.results.fill_rate(),
+            reject_reasons: run.results.reject_reasons.clone(),
             win_rate: run.results.win_rate(),
             total_pnl: run.results.total_pnl(),
             avg_pnl: run.results.avg_pnl(),
@@ -295,6 +313,12 @@ impl PromotionArtifact {
             risk_notes.push(format!(
                 "selected variant has {} unresolved fills",
                 selected.unresolved_fills
+            ));
+        }
+        if selected.fills_failed > 0 {
+            risk_notes.push(format!(
+                "selected variant has {} failed execution attempts: {:?}",
+                selected.fills_failed, selected.reject_reasons
             ));
         }
         let (dominant_zone, dominant_zone_trade_share) = dominant_zone_share(selected);
@@ -487,6 +511,15 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
     let wins: usize = group.iter().map(|v| v.wins).sum();
     let losses: usize = group.iter().map(|v| v.losses).sum();
     let unresolved_fills: usize = group.iter().map(|v| v.unresolved_fills).sum();
+    let execution_attempts: usize = group.iter().map(|v| v.execution_attempts).sum();
+    let fills_success: usize = group.iter().map(|v| v.fills_success).sum();
+    let fills_failed: usize = group.iter().map(|v| v.fills_failed).sum();
+    let mut reject_reasons: BTreeMap<String, usize> = BTreeMap::new();
+    for variant in group {
+        for (reason, count) in &variant.reject_reasons {
+            *reject_reasons.entry(reason.clone()).or_insert(0) += count;
+        }
+    }
     let total_pnl: f64 = group.iter().map(|v| v.total_pnl).sum();
     let total_fees: f64 = group.iter().map(|v| v.total_fees).sum();
     let mut by_zone: BTreeMap<String, ZoneReport> = BTreeMap::new();
@@ -520,6 +553,15 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
         wins,
         losses,
         unresolved_fills,
+        execution_attempts,
+        fills_success,
+        fills_failed,
+        fill_rate: if execution_attempts == 0 {
+            0.0
+        } else {
+            fills_success as f64 / execution_attempts as f64
+        },
+        reject_reasons,
         win_rate: if wins + losses == 0 {
             0.0
         } else {
@@ -721,6 +763,12 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
         reasons.push(format!(
             "unresolved_fills {} above maximum {}",
             selected.unresolved_fills, gate.max_unresolved_fills
+        ));
+    }
+    if selected.fills_failed > gate.max_failed_fills {
+        reasons.push(format!(
+            "fills_failed {} above maximum {} ({:?})",
+            selected.fills_failed, gate.max_failed_fills, selected.reject_reasons
         ));
     }
     if selected.trades > 0 && gate.max_zone_trade_share < 1.0 {
@@ -1046,6 +1094,11 @@ mod tests {
             wins: 20,
             losses: 10,
             unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1070,6 +1123,11 @@ mod tests {
             wins: 3,
             losses: 2,
             unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
             win_rate: 0.60,
             total_pnl: 1.0,
             avg_pnl: 0.20,
@@ -1094,6 +1152,11 @@ mod tests {
             wins: 20,
             losses: 10,
             unresolved_fills: 1,
+            execution_attempts: 1,
+            fills_success: 0,
+            fills_failed: 1,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::from([("maker_unfilled".to_string(), 1)]),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1118,6 +1181,11 @@ mod tests {
             wins: 20,
             losses: 10,
             unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1142,6 +1210,11 @@ mod tests {
             wins: 30,
             losses: 0,
             unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
             win_rate: 1.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1166,6 +1239,11 @@ mod tests {
             wins: 20,
             losses: 10,
             unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
             win_rate: 20.0 / 30.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1199,6 +1277,11 @@ mod tests {
                 wins: 20,
                 losses: 10,
                 unresolved_fills: 0,
+                execution_attempts: 0,
+                fills_success: 0,
+                fills_failed: 0,
+                fill_rate: 0.0,
+                reject_reasons: BTreeMap::new(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: consistent_pnl,
                 avg_pnl: consistent_pnl / 30.0,
@@ -1213,6 +1296,11 @@ mod tests {
                 wins: 20,
                 losses: 10,
                 unresolved_fills: 0,
+                execution_attempts: 0,
+                fills_success: 0,
+                fills_failed: 0,
+                fill_rate: 0.0,
+                reject_reasons: BTreeMap::new(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: if i == 0 { 100.0 } else { -10.0 },
                 avg_pnl: 0.0,
@@ -1257,6 +1345,11 @@ mod tests {
                 wins: 28,
                 losses: 12,
                 unresolved_fills: 0,
+                execution_attempts: 0,
+                fills_success: 0,
+                fills_failed: 0,
+                fill_rate: 0.0,
+                reject_reasons: BTreeMap::new(),
                 win_rate: 0.7,
                 total_pnl: fragile_pnl,
                 avg_pnl: fragile_pnl / 40.0,
@@ -1271,6 +1364,11 @@ mod tests {
                 wins: 28,
                 losses: 12,
                 unresolved_fills: 0,
+                execution_attempts: 0,
+                fills_success: 0,
+                fills_failed: 0,
+                fill_rate: 0.0,
+                reject_reasons: BTreeMap::new(),
                 win_rate: 0.7,
                 total_pnl: robust_pnl,
                 avg_pnl: robust_pnl / 40.0,

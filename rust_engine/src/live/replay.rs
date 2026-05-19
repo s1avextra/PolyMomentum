@@ -882,6 +882,27 @@ impl Strategy for LiveReplayStrategy {
             );
             return Vec::new();
         }
+        if variant.prefer_maker
+            && resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+                .is_none()
+        {
+            self.record_skip(
+                timestamp_s,
+                &contract,
+                &signal,
+                up_price,
+                down_price,
+                implied_vol,
+                &micro,
+                decision.zone,
+                "maker_invalid_book".to_string(),
+                format!("bid={:.4} ask={:.4}", micro.best_bid, micro.best_ask),
+                true,
+                decision.fair_value,
+                decision.edge,
+            );
+            return Vec::new();
+        }
 
         let order = self.build_order(
             timestamp_s,
@@ -918,9 +939,7 @@ impl LiveReplayStrategy {
         let position = (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
         let (order_type, limit_price, sizing_price) = if variant.prefer_maker {
             let lp = resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
-                .unwrap_or_else(|| {
-                    (decision.market_price - DEFAULT_TICK).clamp(DEFAULT_TICK, 1.0 - DEFAULT_TICK)
-                });
+                .expect("maker book preflight should run before build_order");
             ("limit", Some(lp), lp)
         } else {
             ("market", None, decision.market_price)
