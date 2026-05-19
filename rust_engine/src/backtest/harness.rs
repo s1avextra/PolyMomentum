@@ -20,7 +20,9 @@ use chrono::{DateTime, Utc};
 use rayon::prelude::*;
 
 use crate::backtest::btc_history::BTCHistory;
-use crate::backtest::fill_model::{Maker, OneTickTaker, Perfect};
+use crate::backtest::fill_model::{
+    resting_limit_price, Maker, OneTickTaker, Perfect, Side, DEFAULT_TICK,
+};
 use crate::backtest::l2_replay::{
     BacktestOrder, FillModel, L2BacktestEngine, StaticLatencyConfig, Strategy, TokenBook,
 };
@@ -85,8 +87,13 @@ impl CandleUniverse {
                     .ok()
                     .map(|d| d.timestamp() as f64)
                     .unwrap_or(0.0);
-                let window_minutes = crate::live::window::estimate_window_minutes(&c.window_description);
-                let window_minutes = if window_minutes > 0.0 { window_minutes } else { 60.0 };
+                let window_minutes =
+                    crate::live::window::estimate_window_minutes(&c.window_description);
+                let window_minutes = if window_minutes > 0.0 {
+                    window_minutes
+                } else {
+                    60.0
+                };
                 CandleWindow {
                     condition_id: c.market.condition_id.clone(),
                     open_ts_s: close - window_minutes * 60.0,
@@ -202,7 +209,10 @@ impl CandleBacktestStrategy {
             "candle_momentum",
             "1",
             &variant,
-            format!("position_pct={:.4};max_per_market_usd={:.2}", variant.position_pct, variant.max_per_market_usd),
+            format!(
+                "position_pct={:.4};max_per_market_usd={:.2}",
+                variant.position_pct, variant.max_per_market_usd
+            ),
         );
         Self {
             variant,
@@ -330,7 +340,9 @@ impl Strategy for CandleBacktestStrategy {
         let up_price = self.fresh_ask(&contract.up_token_id, timestamp_s, contract.up_price);
         let down_price = self.fresh_ask(&contract.down_token_id, timestamp_s, contract.down_price);
 
-        let implied_vol = self.btc_history.realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
+        let implied_vol = self
+            .btc_history
+            .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
         let res = decide_candle_trade(
             &signal,
             minutes_elapsed,
@@ -369,15 +381,32 @@ impl Strategy for CandleBacktestStrategy {
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
-        self.traded.insert(cid.to_string());
-        self.decisions.push(decision.clone());
-
-        let position = (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
+        let position =
+            (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
         let market_price = decision.market_price;
         if market_price <= 0.0 {
             return Vec::new();
         }
-        let size = (position / market_price).round().max(1.0);
+        let (order_type, limit_price, sizing_price) = if self.variant.prefer_maker {
+            let Some(lp) =
+                resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+            else {
+                self.skipped_decision += 1;
+                let key = format!("maker_invalid_book_{}", decision.zone);
+                *self.skip_reasons.entry(key).or_insert(0) += 1;
+                return Vec::new();
+            };
+            ("limit", Some(lp), lp)
+        } else {
+            ("market", None, market_price)
+        };
+        if sizing_price <= 0.0 {
+            return Vec::new();
+        }
+        self.traded.insert(cid.to_string());
+        self.decisions.push(decision.clone());
+
+        let size = (position / sizing_price).round().max(1.0);
         let signal_contract = Signal::from_candle_decision(
             cid.to_string(),
             traded_token.to_string(),
@@ -394,8 +423,8 @@ impl Strategy for CandleBacktestStrategy {
             self.strategy_spec.clone(),
             &signal_contract,
             "buy",
-            "market",
-            None,
+            order_type,
+            limit_price,
             size,
             "candle_momentum_decision",
             format!("{cid}:{timestamp_s:.6}:{traded_token}"),
@@ -408,8 +437,8 @@ impl Strategy for CandleBacktestStrategy {
             token_id: traded_token.to_string(),
             side: "buy".into(),
             size,
-            order_type: "market".into(),
-            limit_price: None,
+            order_type: order_type.into(),
+            limit_price,
             fee_rate: self.variant.default_fee_rate,
             maker_fee_rate: self.variant.maker_fee_rate,
         }]
@@ -513,14 +542,16 @@ pub async fn run_harness(
 
     // Per-variant accumulator (merged sequentially after each hour's parallel
     // block). Index-aligned with `variants`.
-    let mut variant_state: Vec<BacktestResults> =
-        (0..variants.len()).map(|_| BacktestResults::default()).collect();
+    let mut variant_state: Vec<BacktestResults> = (0..variants.len())
+        .map(|_| BacktestResults::default())
+        .collect();
 
     // Load any existing per-hour checkpoints. Hours found on disk skip the
     // replay; their per-variant results are merged into `variant_state`.
     let mut hours_done: HashSet<DateTime<Utc>> = HashSet::new();
     if let Some(dir) = &cfg.checkpoint_dir {
-        std::fs::create_dir_all(dir).with_context(|| format!("create checkpoint dir {}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create checkpoint dir {}", dir.display()))?;
         let loaded = load_existing_checkpoints(dir, variants)?;
         for (h, per_variant) in loaded {
             for (acc, hour_res) in variant_state.iter_mut().zip(per_variant) {
@@ -800,7 +831,9 @@ fn load_existing_checkpoints(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
         if !name.ends_with(".json") || name.contains(".tmp.") {
             continue;
         }
@@ -833,7 +866,7 @@ fn load_existing_checkpoints(
 }
 
 /// Build the engine's fill model from a strategy variant. `prefer_maker` →
-/// probabilistic Maker (with taker fallback); otherwise OneTickTaker.
+/// post-only-style probabilistic Maker; otherwise OneTickTaker.
 /// Perfect / BookWalk are reserved for future variants.
 pub(crate) fn build_fill_model(v: &StrategyVariant) -> FillModel {
     if v.prefer_maker {
@@ -860,7 +893,12 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
     .unwrap();
     writeln!(&mut out, "{}", "─".repeat(86)).unwrap();
     let mut sorted = runs.to_vec();
-    sorted.sort_by(|a, b| b.results.total_pnl().partial_cmp(&a.results.total_pnl()).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.results
+            .total_pnl()
+            .partial_cmp(&a.results.total_pnl())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     for r in &sorted {
         writeln!(
             &mut out,
@@ -883,7 +921,12 @@ pub fn render_zone_breakdown(runs: &[HarnessRun]) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let mut sorted = runs.to_vec();
-    sorted.sort_by(|a, b| b.results.total_pnl().partial_cmp(&a.results.total_pnl()).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.results
+            .total_pnl()
+            .partial_cmp(&a.results.total_pnl())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     for r in &sorted {
         let zones = r.results.by_zone();
         if zones.is_empty() {
@@ -931,8 +974,16 @@ mod tests {
                 question: "BTC Up or Down - test".into(),
                 end_date: "2026-04-26T08:30:00Z".into(),
                 outcomes: vec![
-                    Outcome { name: "Up".into(), price: 0.5, token_id: "1".into() },
-                    Outcome { name: "Down".into(), price: 0.5, token_id: "2".into() },
+                    Outcome {
+                        name: "Up".into(),
+                        price: 0.5,
+                        token_id: "1".into(),
+                    },
+                    Outcome {
+                        name: "Down".into(),
+                        price: 0.5,
+                        token_id: "2".into(),
+                    },
                 ],
                 ..Default::default()
             },
@@ -947,7 +998,9 @@ mod tests {
             volume: 0.0,
             liquidity: 0.0,
         };
-        let universe = CandleUniverse { contracts: vec![contract] };
+        let universe = CandleUniverse {
+            contracts: vec![contract],
+        };
 
         let mut btc = BTCHistory::default();
         // 60 evenly spaced 1-second ticks around the synthetic window.
@@ -964,8 +1017,8 @@ mod tests {
         ];
 
         let cfg = HarnessConfig {
-            hours: vec![],  // empty hours -> the loop is a no-op, but the parallel
-                            // setup code still runs (pool build, universe prep).
+            hours: vec![], // empty hours -> the loop is a no-op, but the parallel
+            // setup code still runs (pool build, universe prep).
             universe,
             btc_history: Arc::new(btc),
             bankroll_usd: 100.0,
@@ -1026,10 +1079,7 @@ mod tests {
     #[test]
     fn checkpoint_roundtrip_atomic() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let variants = vec![
-            StrategyVariant::baseline(),
-            StrategyVariant::loose_smoke(),
-        ];
+        let variants = vec![StrategyVariant::baseline(), StrategyVariant::loose_smoke()];
         let per_variant = vec![BacktestResults::default(), BacktestResults::default()];
         let h = chrono::DateTime::parse_from_rfc3339("2026-04-23T05:00:00Z")
             .unwrap()
@@ -1044,7 +1094,10 @@ mod tests {
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
-        assert!(leftovers.is_empty(), "no .tmp file should remain after rename");
+        assert!(
+            leftovers.is_empty(),
+            "no .tmp file should remain after rename"
+        );
 
         // Reload and verify hour is present
         let loaded = load_existing_checkpoints(tmp.path(), &variants).unwrap();
@@ -1103,6 +1156,9 @@ mod tests {
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
             .collect();
-        assert!(json_files.is_empty(), "PAUSE before any work → no checkpoint files");
+        assert!(
+            json_files.is_empty(),
+            "PAUSE before any work → no checkpoint files"
+        );
     }
 }

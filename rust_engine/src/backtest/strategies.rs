@@ -20,11 +20,10 @@ pub struct StrategyVariant {
     pub position_pct: f64,
     /// Hard cap on position size (USD).
     pub max_per_market_usd: f64,
-    /// Use maker-first fill model instead of one-tick taker.
+    /// Use resting maker limit orders instead of one-tick taker.
     pub prefer_maker: bool,
-    /// Probability that a maker order fills before the market moves.
-    /// Calibrated from live Polymarket (3s timeout ≈ 65%); ignored unless
-    /// `prefer_maker` is true.
+    /// Probability that a resting maker order fills before cancel/market move;
+    /// ignored unless `prefer_maker` is true.
     pub maker_fill_prob: f64,
     /// Optional RNG seed for reproducible maker fills. None → entropy.
     pub maker_seed: Option<u64>,
@@ -161,10 +160,8 @@ impl StrategyVariant {
         }
     }
 
-    /// Same loose gates as `loose_smoke` but uses the realistic Maker fill
-    /// model (post-at-touch with `maker_fill_prob` ≈ 65%, taker fallback at
-    /// one-tick adverse + 7.2% taker fee). Meant to test whether maker
-    /// economics turn the strategy edge positive vs taker-only.
+    /// Same loose gates as `loose_smoke` but uses resting maker limits. Meant
+    /// to test whether maker economics survive realistic non-fill risk.
     pub fn loose_maker() -> Self {
         Self {
             name: "loose_maker".into(),

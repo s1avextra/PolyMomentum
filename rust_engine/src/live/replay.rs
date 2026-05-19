@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::backtest::btc_history::BTCHistory;
+use crate::backtest::fill_model::{resting_limit_price, Side, DEFAULT_TICK};
 use crate::backtest::harness::{build_fill_model, CandleUniverse};
 use crate::backtest::l2_replay::{
     BacktestOrder, L2BacktestEngine, StaticLatencyConfig, Strategy, TokenBook,
@@ -915,7 +916,16 @@ impl LiveReplayStrategy {
     ) -> BacktestOrder {
         let variant = &self.replay_strategy.variant;
         let position = (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
-        let size = (position / decision.market_price).round().max(1.0);
+        let (order_type, limit_price, sizing_price) = if variant.prefer_maker {
+            let lp = resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+                .unwrap_or_else(|| {
+                    (decision.market_price - DEFAULT_TICK).clamp(DEFAULT_TICK, 1.0 - DEFAULT_TICK)
+                });
+            ("limit", Some(lp), lp)
+        } else {
+            ("market", None, decision.market_price)
+        };
+        let size = (position / sizing_price).round().max(1.0);
         let order_signal = Signal::from_candle_decision(
             contract.market.condition_id.clone(),
             traded_token.to_string(),
@@ -927,12 +937,6 @@ impl LiveReplayStrategy {
                 "timestamp_s": timestamp_s,
             }),
         );
-        let order_type = if variant.prefer_maker {
-            "limit"
-        } else {
-            "market"
-        };
-        let limit_price = variant.prefer_maker.then_some(decision.market_price);
         let intent = OrderIntent::deterministic(
             self.replay_strategy.strategy_spec.clone(),
             &order_signal,
@@ -1007,14 +1011,14 @@ impl LiveReplayStrategy {
             token_id: short_cid(traded_token),
             side: "BUY".to_string(),
             state: "submitted".to_string(),
-            price: decision.market_price,
+            price: sizing_price,
             live_price: decision.market_price,
             size,
-            order_value: decision.market_price * size,
+            order_value: sizing_price * size,
             order_id,
-            book_best_ask: decision.market_price,
-            book_ask_depth: 0.0,
-            book_bid_depth: 0.0,
+            book_best_ask: micro.best_ask,
+            book_ask_depth: micro.ask_depth,
+            book_bid_depth: micro.bid_depth,
             balance_usd: self.bankroll_usd,
             submit_latency_ms: Some(0.0),
         });

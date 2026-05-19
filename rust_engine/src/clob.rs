@@ -41,9 +41,11 @@ pub struct ClobClient {
 #[derive(Debug, Serialize)]
 struct SignedOrderRequest {
     order: OrderPayload,
-    owner: String,        // API key owner in the CLOB V2 wire body
+    owner: String, // API key owner in the CLOB V2 wire body
     #[serde(rename = "orderType")]
-    order_type: String,   // "GTC" or "FOK"
+    order_type: String, // "GTC" or "FOK"
+    #[serde(rename = "postOnly", skip_serializing_if = "Option::is_none")]
+    post_only: Option<bool>,
     #[serde(rename = "deferExec")]
     defer_exec: bool,
 }
@@ -75,15 +77,14 @@ pub struct OrderResponse {
     pub order_id: Option<String>,
     pub id: Option<String>,
     pub error: Option<String>,
+    #[serde(rename = "errorMsg")]
+    pub error_msg: Option<String>,
+    pub success: Option<bool>,
+    pub status: Option<String>,
 }
 
 impl ClobClient {
-    pub fn new(
-        base_url: &str,
-        api_key: &str,
-        api_secret: &str,
-        api_passphrase: &str,
-    ) -> Self {
+    pub fn new(base_url: &str, api_key: &str, api_secret: &str, api_passphrase: &str) -> Self {
         // Build client with connection pooling and HTTP/2
         let client = Client::builder()
             .pool_max_idle_per_host(5)
@@ -206,7 +207,10 @@ impl ClobClient {
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let resp = req.send().await.map_err(|e| format!("Request failed: {e}"))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -224,9 +228,14 @@ impl ClobClient {
             req = req.header(k.as_str(), v.as_str());
         }
         if !body.is_empty() {
-            req = req.header("Content-Type", "application/json").body(body.to_string());
+            req = req
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
         }
-        let resp = req.send().await.map_err(|e| format!("Request failed: {e}"))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -247,7 +256,8 @@ impl ClobClient {
 
     /// Public order book by outcome token ID.
     pub async fn get_book(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/book", &[("token_id", token_id)]).await
+        self.get_public_json("/book", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_price(&self, token_id: &str, side: &str) -> Result<Value, String> {
@@ -256,23 +266,28 @@ impl ClobClient {
     }
 
     pub async fn get_midpoint(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/midpoint", &[("token_id", token_id)]).await
+        self.get_public_json("/midpoint", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_spread(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/spread", &[("token_id", token_id)]).await
+        self.get_public_json("/spread", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_tick_size(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/tick-size", &[("token_id", token_id)]).await
+        self.get_public_json("/tick-size", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_fee_rate_bps(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/fee-rate", &[("token_id", token_id)]).await
+        self.get_public_json("/fee-rate", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_neg_risk(&self, token_id: &str) -> Result<Value, String> {
-        self.get_public_json("/neg-risk", &[("token_id", token_id)]).await
+        self.get_public_json("/neg-risk", &[("token_id", token_id)])
+            .await
     }
 
     pub async fn get_market(&self, condition_id: &str) -> Result<Value, String> {
@@ -287,7 +302,8 @@ impl ClobClient {
 
     /// Authenticated single-order status for reconciliation fallback.
     pub async fn get_order(&self, order_id: &str) -> Result<Value, String> {
-        self.get_private_json(&format!("/order/{order_id}"), &[]).await
+        self.get_private_json(&format!("/order/{order_id}"), &[])
+            .await
     }
 
     /// Authenticated user trades for reconciliation. Does not place orders.
@@ -310,8 +326,10 @@ impl ClobClient {
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(token_id, price, size, side, "GTC", neg_risk, tick_size)
-            .await
+        self.place_order_internal(
+            token_id, price, size, side, "GTC", true, neg_risk, tick_size,
+        )
+        .await
     }
 
     /// Place a FOK taker order (crosses the spread immediately).
@@ -324,8 +342,10 @@ impl ClobClient {
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(token_id, price, size, side, "FOK", neg_risk, tick_size)
-            .await
+        self.place_order_internal(
+            token_id, price, size, side, "FOK", false, neg_risk, tick_size,
+        )
+        .await
     }
 
     /// Internal: build, sign, and submit an order.
@@ -337,6 +357,7 @@ impl ClobClient {
         size: f64,
         side: &str,
         order_type: &str, // "GTC" or "FOK"
+        post_only: bool,
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
@@ -373,6 +394,7 @@ impl ClobClient {
             },
             owner: self.api_key.clone(),
             order_type: order_type.to_string(),
+            post_only: Some(post_only),
             defer_exec: false,
         };
 
@@ -404,13 +426,25 @@ impl ClobClient {
 
                 match serde_json::from_str::<OrderResponse>(&body) {
                     Ok(order_resp) => {
-                        if let Some(err) = order_resp.error {
+                        if let Some(err) = order_resp.error.filter(|e| !e.trim().is_empty()) {
                             return Err(err);
                         }
-                        let oid = order_resp
-                            .order_id
-                            .or(order_resp.id)
-                            .unwrap_or_default();
+                        if let Some(err) = order_resp.error_msg.filter(|e| !e.trim().is_empty()) {
+                            return Err(err);
+                        }
+                        if matches!(order_resp.success, Some(false)) {
+                            return Err(format!(
+                                "CLOB rejected order: status={}",
+                                order_resp.status.unwrap_or_else(|| "unknown".to_string())
+                            ));
+                        }
+                        let oid = order_resp.order_id.or(order_resp.id).unwrap_or_default();
+                        if oid.is_empty() {
+                            return Err(format!(
+                                "CLOB response missing order id: status={}",
+                                order_resp.status.unwrap_or_else(|| "unknown".to_string())
+                            ));
+                        }
                         eprintln!(
                             "Order {} placed in {}µs (sign: {}µs): {} {} {:.1}@{:.4} id={}",
                             order_type,
@@ -495,5 +529,36 @@ mod tests {
             path_with_query("/trades", &[("market", ""), ("after", "123")]),
             "/trades?after=123"
         );
+    }
+
+    #[test]
+    fn signed_order_request_serializes_post_only_flag() {
+        let req = SignedOrderRequest {
+            order: OrderPayload {
+                salt: "1".to_string(),
+                maker: "0x0000000000000000000000000000000000000001".to_string(),
+                signer: "0x0000000000000000000000000000000000000001".to_string(),
+                token_id: "123".to_string(),
+                maker_amount: "1000000".to_string(),
+                taker_amount: "2000000".to_string(),
+                expiration: "0".to_string(),
+                side: "BUY".to_string(),
+                signature_type: 0,
+                timestamp: "1770000000000".to_string(),
+                metadata: "0x".to_string(),
+                builder: "0x".to_string(),
+                signature: "0xabc".to_string(),
+            },
+            owner: "owner".to_string(),
+            order_type: "GTC".to_string(),
+            post_only: Some(true),
+            defer_exec: false,
+        };
+
+        let body = serde_json::to_string(&req).unwrap();
+
+        assert!(body.contains("\"orderType\":\"GTC\""));
+        assert!(body.contains("\"postOnly\":true"));
+        assert!(body.contains("\"deferExec\":false"));
     }
 }

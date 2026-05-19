@@ -22,6 +22,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
+use crate::backtest::fill_model::{resting_limit_price, round_price_to_tick, Side};
 use crate::backtest::strategies::StrategyVariant;
 use crate::clob::{create_shared_client, SharedClobClient};
 use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
@@ -1369,7 +1370,8 @@ impl Pipeline {
                             skip_reason: None,
                             skip_detail: None,
                         });
-                        if let Err(e) = self.execute_trade(c, &signal, &decision, &ps).await {
+                        if let Err(e) = self.execute_trade(c, &signal, &decision, &ps, &micro).await
+                        {
                             tracing::warn!(error = %e, "execute_trade failed");
                             self.monitor
                                 .record_error("execute_trade", &e.to_string(), true);
@@ -1406,6 +1408,7 @@ impl Pipeline {
         signal: &crate::strategy::momentum::MomentumSignal,
         decision: &crate::strategy::decision::CandleDecision,
         ps: &PriceState,
+        micro: &BookMicrostructure,
     ) -> Result<()> {
         let bankroll = self.risk.effective_bankroll().await;
         let mut position = bankroll * self.runtime_strategy.position_pct;
@@ -1604,7 +1607,25 @@ impl Pipeline {
                     .minimum_tick_size
                     .unwrap_or(0.01)
                     .max(0.0001);
-                let limit_price = ((market_price / tick).round() * tick).clamp(tick, 1.0 - tick);
+                let zone = decision.zone.as_str();
+                let prefer_maker = self.settings.live_allow_maker_orders
+                    && self.runtime_strategy.prefer_maker
+                    && zone != "terminal";
+                let limit_price = if prefer_maker {
+                    let Some(price) =
+                        resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, tick)
+                    else {
+                        tracing::warn!(
+                            best_bid = micro.best_bid,
+                            best_ask = micro.best_ask,
+                            "live maker order skipped: invalid visible book"
+                        );
+                        return Ok(());
+                    };
+                    price
+                } else {
+                    round_price_to_tick(market_price, tick)
+                };
                 let shares = ((position / limit_price) * 100.0).floor() / 100.0;
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
                 if shares < min_order_size {
@@ -1617,10 +1638,6 @@ impl Pipeline {
                     );
                     return Ok(());
                 }
-                let zone = decision.zone.as_str();
-                let prefer_maker = self.settings.live_allow_maker_orders
-                    && self.runtime_strategy.prefer_maker
-                    && zone != "terminal";
                 let neg_risk = contract.market.neg_risk;
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
@@ -1671,20 +1688,10 @@ impl Pipeline {
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
                 let result = if prefer_maker {
-                    let maker = clob
-                        .write()
+                    clob.write()
                         .await
                         .place_maker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
-                        .await;
-                    if maker.is_err() {
-                        tracing::warn!("CLOB maker rejected; taker fallback");
-                        clob.write()
-                            .await
-                            .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
-                            .await
-                    } else {
-                        maker
-                    }
+                        .await
                 } else {
                     clob.write()
                         .await
@@ -1724,9 +1731,9 @@ impl Pipeline {
                                 size: shares,
                                 order_value,
                                 order_id: short_cid(&order_id),
-                                book_best_ask: market_price,
-                                book_ask_depth: 0.0,
-                                book_bid_depth: 0.0,
+                                book_best_ask: micro.best_ask,
+                                book_ask_depth: micro.ask_depth,
+                                book_bid_depth: micro.bid_depth,
                                 balance_usd: self.risk.effective_bankroll().await,
                                 submit_latency_ms: Some(submit_latency_s * 1000.0),
                             },

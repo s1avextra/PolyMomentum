@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::backtest::fill_model::{FillReason, FillResult, Maker, OneTickTaker, OrderType, Perfect, Side};
+use crate::backtest::fill_model::{
+    FillReason, FillResult, Maker, OneTickTaker, OrderType, Perfect, Side,
+};
 use crate::backtest::pmxt::{L2Event, L2EventBody};
 use crate::execution::fees::polymarket_fee;
 
@@ -64,13 +66,21 @@ impl TokenBook {
         self.best_ask = if snap.best_ask > 0.0 {
             snap.best_ask
         } else {
-            self.asks.keys().next().map(|k| *k as f64 / 1e9).unwrap_or(0.0)
+            self.asks
+                .keys()
+                .next()
+                .map(|k| *k as f64 / 1e9)
+                .unwrap_or(0.0)
         };
         self.last_update_ts_s = snap.timestamp_s;
     }
 
     pub fn apply_change(&mut self, chg: &crate::backtest::pmxt::PriceChange) {
-        let side = if chg.change_side.is_empty() { &chg.side } else { &chg.change_side };
+        let side = if chg.change_side.is_empty() {
+            &chg.side
+        } else {
+            &chg.change_side
+        };
         let book = if side.eq_ignore_ascii_case("buy") || side.eq_ignore_ascii_case("b") {
             &mut self.bids
         } else {
@@ -106,11 +116,18 @@ impl TokenBook {
     }
 
     pub fn ask_levels(&self) -> Vec<(f64, f64)> {
-        self.asks.iter().map(|(k, s)| (*k as f64 / 1e9, *s)).collect()
+        self.asks
+            .iter()
+            .map(|(k, s)| (*k as f64 / 1e9, *s))
+            .collect()
     }
 
     pub fn bid_levels(&self) -> Vec<(f64, f64)> {
-        self.bids.iter().rev().map(|(k, s)| (*k as f64 / 1e9, *s)).collect()
+        self.bids
+            .iter()
+            .rev()
+            .map(|(k, s)| (*k as f64 / 1e9, *s))
+            .collect()
     }
 }
 
@@ -164,11 +181,10 @@ pub trait Strategy {
 pub enum FillModel {
     /// Touch + 1 tick adverse. Default taker behavior.
     OneTickTaker(OneTickTaker),
-    /// Probabilistic maker: with `fill_prob` we post inside the spread
-    /// (1-tick improvement, 0% fee); else fall through to one-tick taker.
-    /// Maker fills use `maker_fee_rate` from the order; taker fallbacks use
-    /// `fee_rate`. fill_prob is calibrated from live data — Polymarket
-    /// candle 3s timeout was ~65% historically.
+    /// Probabilistic post-only-style maker. Limit orders must rest, crossing
+    /// limits reject, and unfilled maker quotes do not auto-fallback to taker.
+    /// Maker fills use `maker_fee_rate`; explicit market orders still use
+    /// taker fallback semantics and `fee_rate`.
     Maker(Box<Maker>),
     /// Touch fill, no slippage. Sanity baseline only — not realistic.
     Perfect(Perfect),
@@ -192,7 +208,14 @@ impl FillModel {
                 order_type,
                 limit_price,
             ),
-            FillModel::Maker(m) => m.fill(side, size, book.best_bid, book.best_ask),
+            FillModel::Maker(m) => m.fill(
+                side,
+                size,
+                book.best_bid,
+                book.best_ask,
+                order_type,
+                limit_price,
+            ),
             FillModel::Perfect(m) => m.fill(side, size, book.best_bid, book.best_ask),
         }
     }
@@ -247,10 +270,7 @@ impl L2BacktestEngine {
             self.flush_pending_orders(event.timestamp_s);
 
             let mid = {
-                let book = self
-                    .books
-                    .entry(token_id.to_string())
-                    .or_default();
+                let book = self.books.entry(token_id.to_string()).or_default();
                 match &event.body {
                     L2EventBody::BookSnapshot(s) => book.apply_snapshot(s),
                     L2EventBody::PriceChange(c) => book.apply_change(c),
@@ -352,13 +372,9 @@ impl L2BacktestEngine {
                 "limit" => OrderType::Limit,
                 _ => OrderType::Market,
             };
-            let result: FillResult = self.fill_model.fill(
-                side,
-                order.size,
-                &book,
-                order_type,
-                order.limit_price,
-            );
+            let result: FillResult =
+                self.fill_model
+                    .fill(side, order.size, &book, order_type, order.limit_price);
             let book_age_ms = ((fill_ts - book.last_update_ts_s) * 1000.0).max(0.0);
             if !result.success {
                 self.fills.push(BacktestFill {
@@ -441,6 +457,7 @@ pub struct Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backtest::fill_model::{Maker, DEFAULT_TICK};
     use crate::backtest::pmxt::{BookSnapshot, L2Level};
 
     struct NoopStrategy;
@@ -466,15 +483,24 @@ mod tests {
                 best_bid: bid,
                 best_ask: ask,
                 timestamp_s: ts,
-                bids: vec![L2Level { price: bid, size: 100.0 }],
-                asks: vec![L2Level { price: ask, size: 100.0 }],
+                bids: vec![L2Level {
+                    price: bid,
+                    size: 100.0,
+                }],
+                asks: vec![L2Level {
+                    price: ask,
+                    size: 100.0,
+                }],
             }),
         }
     }
 
     #[test]
     fn empty_replay_produces_no_fills() {
-        let mut e = L2BacktestEngine::new(FillModel::OneTickTaker(OneTickTaker::default()), StaticLatencyConfig::default());
+        let mut e = L2BacktestEngine::new(
+            FillModel::OneTickTaker(OneTickTaker::default()),
+            StaticLatencyConfig::default(),
+        );
         let mut s = NoopStrategy;
         e.replay(std::iter::empty::<L2Event>(), &mut s, 0.072);
         assert_eq!(e.fills.len(), 0);
@@ -482,7 +508,10 @@ mod tests {
 
     #[test]
     fn book_snapshot_updates_top_of_book() {
-        let mut e = L2BacktestEngine::new(FillModel::OneTickTaker(OneTickTaker::default()), StaticLatencyConfig::default());
+        let mut e = L2BacktestEngine::new(
+            FillModel::OneTickTaker(OneTickTaker::default()),
+            StaticLatencyConfig::default(),
+        );
         let mut s = NoopStrategy;
         e.replay(vec![snap_event("t", 1.0, 0.50, 0.52)], &mut s, 0.072);
         let book = e.books.get("t").unwrap();
@@ -522,7 +551,10 @@ mod tests {
 
     #[test]
     fn order_fires_after_latency_window() {
-        let mut e = L2BacktestEngine::new(FillModel::OneTickTaker(OneTickTaker::default()), StaticLatencyConfig { insert_ms: 50 });
+        let mut e = L2BacktestEngine::new(
+            FillModel::OneTickTaker(OneTickTaker::default()),
+            StaticLatencyConfig { insert_ms: 50 },
+        );
         let mut s = OneShotBuy { fired: false };
         let events = vec![
             snap_event("t", 1.0, 0.50, 0.52),  // strategy fires here (ts=1.0)
@@ -535,5 +567,55 @@ mod tests {
         assert!(f.success);
         assert!((f.fill_price - 0.53).abs() < 1e-9); // best_ask 0.52 + 1 tick = 0.53
         assert!((f.fill_timestamp_s - 1.05).abs() < 1e-9);
+    }
+
+    struct OneShotMakerBuy {
+        fired: bool,
+    }
+    impl Strategy for OneShotMakerBuy {
+        fn on_event(
+            &mut self,
+            ts: f64,
+            tok: &str,
+            book: &TokenBook,
+            _h: &BTreeMap<String, Vec<(f64, f64)>>,
+        ) -> Vec<BacktestOrder> {
+            if self.fired || book.best_ask <= 0.0 {
+                return Vec::new();
+            }
+            self.fired = true;
+            vec![BacktestOrder {
+                intent_id: "maker-intent".into(),
+                timestamp_s: ts,
+                condition_id: "c".into(),
+                token_id: tok.into(),
+                side: "buy".into(),
+                size: 10.0,
+                order_type: "limit".into(),
+                limit_price: Some(book.best_ask - DEFAULT_TICK),
+                fee_rate: 0.072,
+                maker_fee_rate: 0.0,
+            }]
+        }
+    }
+
+    #[test]
+    fn maker_limit_rejects_if_quote_crosses_during_latency() {
+        let mut e = L2BacktestEngine::new(
+            FillModel::Maker(Box::new(Maker::new(1.0, DEFAULT_TICK, Some(42)))),
+            StaticLatencyConfig { insert_ms: 50 },
+        );
+        let mut s = OneShotMakerBuy { fired: false };
+        let events = vec![
+            snap_event("t", 1.0, 0.50, 0.52),
+            snap_event("t", 1.04, 0.50, 0.51),
+            snap_event("t", 1.10, 0.50, 0.51),
+        ];
+        e.replay(events, &mut s, 0.072);
+
+        assert_eq!(e.fills.len(), 1);
+        let f = &e.fills[0];
+        assert!(!f.success);
+        assert_eq!(f.reason, "post_only_cross");
     }
 }

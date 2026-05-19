@@ -2,7 +2,7 @@
 //!
 //! Models:
 //! - [`OneTickTaker`]   — touch + 1 tick adverse (default for market orders)
-//! - [`Maker`]          — probabilistic post-at-touch with taker fallback
+//! - [`Maker`]          — probabilistic resting limit fill, no auto-fallback
 //! - [`Perfect`]        — touch fill, no slippage (sanity baseline)
 //!
 //! All return `FillResult` with `success=false` and a `reason` when the
@@ -32,6 +32,8 @@ pub enum FillReason {
     LimitMissingPrice,
     MakerFill,
     TakerFallback,
+    PostOnlyCross,
+    MakerUnfilled,
 }
 
 impl FillReason {
@@ -44,6 +46,8 @@ impl FillReason {
             FillReason::LimitMissingPrice => "limit price required",
             FillReason::MakerFill => "maker_fill",
             FillReason::TakerFallback => "taker_fallback",
+            FillReason::PostOnlyCross => "post_only_cross",
+            FillReason::MakerUnfilled => "maker_unfilled",
         }
     }
 }
@@ -85,6 +89,28 @@ fn one_tick_adverse_price(side: Side, best_bid: f64, best_ask: f64, tick_size: f
     p.clamp(tick_size, 1.0 - tick_size)
 }
 
+pub fn round_price_to_tick(price: f64, tick_size: f64) -> f64 {
+    let tick = tick_size.max(0.0001);
+    ((price / tick).round() * tick).clamp(tick, 1.0 - tick)
+}
+
+pub fn resting_limit_price(
+    side: Side,
+    best_bid: f64,
+    best_ask: f64,
+    tick_size: f64,
+) -> Option<f64> {
+    if best_bid <= 0.0 || best_ask <= 0.0 || best_bid >= best_ask {
+        return None;
+    }
+    let tick = tick_size.max(0.0001);
+    let price = match side {
+        Side::Buy => best_ask - tick,
+        Side::Sell => best_bid + tick,
+    };
+    Some(round_price_to_tick(price, tick))
+}
+
 /// Synthetic-book taker fill model. Market orders pay touch + 1 tick adverse;
 /// limit orders that cross fill at touch.
 #[derive(Debug, Clone, Copy)]
@@ -94,7 +120,9 @@ pub struct OneTickTaker {
 
 impl Default for OneTickTaker {
     fn default() -> Self {
-        Self { tick_size: DEFAULT_TICK }
+        Self {
+            tick_size: DEFAULT_TICK,
+        }
     }
 }
 
@@ -158,7 +186,9 @@ pub struct BookWalkTaker {
 #[cfg(test)]
 impl Default for BookWalkTaker {
     fn default() -> Self {
-        Self { tick_size: DEFAULT_TICK }
+        Self {
+            tick_size: DEFAULT_TICK,
+        }
     }
 }
 
@@ -216,8 +246,8 @@ impl BookWalkTaker {
     }
 }
 
-/// Maker-first probabilistic fill. With `fill_prob` we post inside the spread
-/// (touch ∓ 1 tick) at 0% fee; otherwise we cross with one-tick adverse.
+/// Post-only-style maker fill. Limit orders must rest; if they would cross
+/// the visible touch they reject instead of silently becoming takers.
 pub struct Maker {
     pub fill_prob: f64,
     pub tick_size: f64,
@@ -230,7 +260,11 @@ impl Maker {
             Some(s) => StdRng::seed_from_u64(s),
             None => StdRng::from_entropy(),
         };
-        Self { fill_prob, tick_size, rng }
+        Self {
+            fill_prob,
+            tick_size,
+            rng,
+        }
     }
 
     pub fn fill(
@@ -239,6 +273,8 @@ impl Maker {
         size: f64,
         best_bid: f64,
         best_ask: f64,
+        order_type: OrderType,
+        limit_price: Option<f64>,
     ) -> FillResult {
         if size <= 0.0 {
             return failed(FillReason::Empty);
@@ -247,27 +283,7 @@ impl Maker {
             return failed(FillReason::Invalid);
         }
 
-        if self.rng.gen::<f64>() < self.fill_prob {
-            // Maker fill at improvement vs touch.
-            let fill_price = match side {
-                Side::Buy => (best_ask - self.tick_size).max(self.tick_size),
-                Side::Sell => (best_bid + self.tick_size).min(1.0 - self.tick_size),
-            };
-            let touch = match side {
-                Side::Buy => best_ask,
-                Side::Sell => best_bid,
-            };
-            let improvement = (touch - fill_price).abs();
-            FillResult {
-                filled_size: size,
-                fill_price,
-                fill_cost: fill_price * size * side.cost_sign(),
-                slippage_per_share: -improvement, // negative = improvement
-                success: true,
-                reason: FillReason::MakerFill,
-            }
-        } else {
-            // Taker fallback.
+        if matches!(order_type, OrderType::Market) {
             let fill_price = one_tick_adverse_price(side, best_bid, best_ask, self.tick_size);
             let touch = match side {
                 Side::Buy => best_ask,
@@ -280,6 +296,36 @@ impl Maker {
                 slippage_per_share: (fill_price - touch).abs(),
                 success: true,
                 reason: FillReason::TakerFallback,
+            }
+        } else {
+            let Some(lp) = limit_price else {
+                return failed(FillReason::LimitMissingPrice);
+            };
+            let eps = 1e-9;
+            match side {
+                Side::Buy if lp >= best_ask - eps => return failed(FillReason::PostOnlyCross),
+                Side::Sell if lp <= best_bid + eps => return failed(FillReason::PostOnlyCross),
+                Side::Buy if lp + eps < best_bid => return failed(FillReason::MakerUnfilled),
+                Side::Sell if lp - eps > best_ask => return failed(FillReason::MakerUnfilled),
+                _ => {}
+            }
+
+            if self.rng.gen::<f64>() >= self.fill_prob {
+                return failed(FillReason::MakerUnfilled);
+            }
+
+            let touch = match side {
+                Side::Buy => best_ask,
+                Side::Sell => best_bid,
+            };
+            let improvement = (touch - lp).abs();
+            FillResult {
+                filled_size: size,
+                fill_price: lp,
+                fill_cost: lp * size * side.cost_sign(),
+                slippage_per_share: -improvement,
+                success: true,
+                reason: FillReason::MakerFill,
             }
         }
     }
@@ -383,9 +429,43 @@ mod tests {
     fn maker_with_seed_is_deterministic() {
         let mut a = Maker::new(0.65, DEFAULT_TICK, Some(42));
         let mut b = Maker::new(0.65, DEFAULT_TICK, Some(42));
-        let ra = a.fill(Side::Buy, 1.0, 0.50, 0.52);
-        let rb = b.fill(Side::Buy, 1.0, 0.50, 0.52);
+        let ra = a.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        let rb = b.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
         assert!((ra.fill_price - rb.fill_price).abs() < 1e-12);
         assert_eq!(ra.reason, rb.reason);
+    }
+
+    #[test]
+    fn maker_limit_crossing_rejects_post_only() {
+        let mut maker = Maker::new(1.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.52));
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::PostOnlyCross);
+    }
+
+    #[test]
+    fn maker_limit_fills_at_resting_limit_when_probability_hits() {
+        let mut maker = Maker::new(1.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        assert!(r.success);
+        assert_eq!(r.reason, FillReason::MakerFill);
+        assert!((r.fill_price - 0.51).abs() < 1e-9);
+        assert!(r.slippage_per_share < 0.0);
+    }
+
+    #[test]
+    fn maker_limit_can_remain_unfilled() {
+        let mut maker = Maker::new(0.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::MakerUnfilled);
+    }
+
+    #[test]
+    fn resting_limit_quotes_one_tick_inside_touch() {
+        let buy = resting_limit_price(Side::Buy, 0.50, 0.52, DEFAULT_TICK).unwrap();
+        let sell = resting_limit_price(Side::Sell, 0.50, 0.52, DEFAULT_TICK).unwrap();
+        assert!((buy - 0.51).abs() < 1e-9);
+        assert!((sell - 0.51).abs() < 1e-9);
     }
 }
