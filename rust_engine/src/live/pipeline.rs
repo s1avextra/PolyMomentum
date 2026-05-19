@@ -2239,7 +2239,7 @@ fn live_microstructure(
             size: l.size,
         })
         .collect();
-    BookMicrostructure::from_levels(&bids, &asks, 3)
+    BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
 }
 
 fn parse_end(s: &str) -> Result<DateTime<Utc>> {

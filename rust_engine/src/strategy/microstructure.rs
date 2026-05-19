@@ -103,6 +103,32 @@ impl BookMicrostructure {
         Self::from_top(best_bid, best_ask, bid_depth, ask_depth)
     }
 
+    pub fn from_levels_with_top(
+        best_bid: f64,
+        best_ask: f64,
+        bids: &[BookLevelView],
+        asks: &[BookLevelView],
+        depth_levels: usize,
+    ) -> Self {
+        if best_bid <= 0.0 || best_ask <= 0.0 || best_bid >= best_ask {
+            return Self::from_levels(bids, asks, depth_levels);
+        }
+
+        let bid_depth: f64 = bids
+            .iter()
+            .filter(|l| l.price <= best_bid + 1e-9)
+            .take(depth_levels)
+            .map(|l| l.size.max(0.0))
+            .sum();
+        let ask_depth: f64 = asks
+            .iter()
+            .filter(|l| l.price >= best_ask - 1e-9)
+            .take(depth_levels)
+            .map(|l| l.size.max(0.0))
+            .sum();
+        Self::from_top(best_bid, best_ask, bid_depth, ask_depth)
+    }
+
     pub fn from_top(best_bid: f64, best_ask: f64, bid_depth: f64, ask_depth: f64) -> Self {
         let spread = if best_bid > 0.0 && best_ask > 0.0 {
             (best_ask - best_bid).max(0.0)
@@ -205,6 +231,37 @@ mod tests {
         };
         let err = f.check_long_entry(&cfg).unwrap_err();
         assert_eq!(err.reason, "microstructure_weak_pressure");
+    }
+
+    #[test]
+    fn authoritative_top_filters_stale_crossed_levels() {
+        let bids = vec![
+            BookLevelView {
+                price: 0.74,
+                size: 100.0,
+            },
+            BookLevelView {
+                price: 0.58,
+                size: 45.0,
+            },
+        ];
+        let asks = vec![
+            BookLevelView {
+                price: 0.43,
+                size: 100.0,
+            },
+            BookLevelView {
+                price: 0.59,
+                size: 55.0,
+            },
+        ];
+        let f = BookMicrostructure::from_levels_with_top(0.58, 0.59, &bids, &asks, 3);
+
+        assert_eq!(f.best_bid, 0.58);
+        assert_eq!(f.best_ask, 0.59);
+        assert!((f.spread - 0.01).abs() < 1e-9);
+        assert_eq!(f.bid_depth, 45.0);
+        assert_eq!(f.ask_depth, 55.0);
     }
 
     #[test]

@@ -228,6 +228,12 @@ enum Command {
         /// Comma-separated EV buffers (negative disables the EV gate).
         #[arg(long, default_value = "-1.0,0.05")]
         ev_buffer: String,
+        /// Comma-separated minimum executable token prices.
+        #[arg(long, default_value = "0.10")]
+        min_price: String,
+        /// Comma-separated maximum executable token prices.
+        #[arg(long, default_value = "0.90")]
+        max_price: String,
         /// Comma-separated settlement floors in USD for the final-window guard.
         #[arg(long, default_value = "10.0")]
         settlement_floor: String,
@@ -753,6 +759,8 @@ async fn main() {
             z,
             edge,
             ev_buffer,
+            min_price,
+            max_price,
             settlement_floor,
             settlement_guard_minutes,
             settlement_sigma_buffer,
@@ -771,6 +779,8 @@ async fn main() {
             let zs = parse_csv_floats(&z);
             let edges = parse_csv_floats(&edge);
             let evs = parse_csv_floats(&ev_buffer);
+            let min_prices = parse_csv_floats(&min_price);
+            let max_prices = parse_csv_floats(&max_price);
             let settlement_floors = parse_csv_floats(&settlement_floor);
             let settlement_guards = parse_csv_floats(&settlement_guard_minutes);
             let settlement_sigmas = parse_csv_floats(&settlement_sigma_buffer);
@@ -789,6 +799,8 @@ async fn main() {
                 zs,
                 edges,
                 evs,
+                min_prices,
+                max_prices,
                 settlement_floors,
                 settlement_guards,
                 settlement_sigmas,
@@ -2139,6 +2151,8 @@ async fn cmd_harness_sweep(
     z: Vec<f64>,
     edge: Vec<f64>,
     ev_buffer: Vec<f64>,
+    min_price: Vec<f64>,
+    max_price: Vec<f64>,
     settlement_min_abs_move_usd: Vec<f64>,
     settlement_guard_minutes: Vec<f64>,
     settlement_sigma_buffer: Vec<f64>,
@@ -2186,6 +2200,8 @@ async fn cmd_harness_sweep(
         z,
         edge,
         ev_buffer,
+        min_price,
+        max_price,
         settlement_min_abs_move_usd,
         settlement_guard_minutes,
         settlement_sigma_buffer,

@@ -375,6 +375,7 @@ struct LiveReplayStrategy {
     shadow_positions: BTreeMap<String, ShadowReplayPosition>,
     lifecycle: ReplayLifecycle,
     last_tick_ts_s: f64,
+    last_skip_log_bucket: BTreeMap<String, i64>,
     orders_submitted: usize,
     settlement_alignment_ready: bool,
 }
@@ -434,6 +435,7 @@ impl LiveReplayStrategy {
             shadow_positions: BTreeMap::new(),
             lifecycle: ReplayLifecycle::default(),
             last_tick_ts_s: 0.0,
+            last_skip_log_bucket: BTreeMap::new(),
             orders_submitted: 0,
             settlement_alignment_ready,
         }
@@ -632,15 +634,32 @@ impl LiveReplayStrategy {
             .unwrap_or(fallback)
     }
 
+    fn microstructure_for_token(&self, token_id: &str, now_ts: f64) -> BookMicrostructure {
+        self.books
+            .get(token_id)
+            .filter(|b| now_ts - b.last_update_ts_s <= 30.0)
+            .map(replay_microstructure)
+            .unwrap_or_default()
+    }
+
+    fn top_microstructure_for_token(&self, token_id: &str, now_ts: f64) -> BookMicrostructure {
+        self.books
+            .get(token_id)
+            .filter(|b| now_ts - b.last_update_ts_s <= 30.0)
+            .map(|b| BookMicrostructure::from_top(b.best_bid, b.best_ask, 0.0, 0.0))
+            .unwrap_or_default()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn record_skip(
-        &self,
+        &mut self,
         timestamp_s: f64,
         contract: &CandleContract,
         signal: &crate::strategy::momentum::MomentumSignal,
         up_price: f64,
         down_price: f64,
         implied_vol: f64,
+        micro: &BookMicrostructure,
         zone: String,
         reason: String,
         detail: String,
@@ -648,6 +667,20 @@ impl LiveReplayStrategy {
         fair: f64,
         edge: f64,
     ) {
+        let bucket = timestamp_s.floor() as i64;
+        let throttle_key = format!(
+            "{}:{reason}:{zone}:{decision_trade}",
+            contract.market.condition_id
+        );
+        if self
+            .last_skip_log_bucket
+            .get(&throttle_key)
+            .is_some_and(|last| *last == bucket)
+        {
+            return;
+        }
+        self.last_skip_log_bucket.insert(throttle_key, bucket);
+
         let aggregate = format!("{reason}_{zone}");
         self.monitor
             .record_signal_skip(&contract.market.condition_id, &aggregate);
@@ -671,10 +704,10 @@ impl LiveReplayStrategy {
             cross_boost: 0.0,
             up_price,
             down_price,
-            book_spread: 0.0,
-            book_pressure: 0.0,
-            book_bid_depth: 0.0,
-            book_ask_depth: 0.0,
+            book_spread: micro.spread,
+            book_pressure: micro.pressure,
+            book_bid_depth: micro.bid_depth,
+            book_ask_depth: micro.ask_depth,
             zone,
             fair,
             edge,
@@ -751,6 +784,12 @@ impl Strategy for LiveReplayStrategy {
 
         let up_price = self.fresh_ask(&contract.up_token_id, timestamp_s, contract.up_price);
         let down_price = self.fresh_ask(&contract.down_token_id, timestamp_s, contract.down_price);
+        let signal_token = if signal.direction == "up" {
+            &contract.up_token_id
+        } else {
+            &contract.down_token_id
+        };
+        let signal_micro = self.top_microstructure_for_token(signal_token, timestamp_s);
         let implied_vol = self
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
@@ -780,6 +819,7 @@ impl Strategy for LiveReplayStrategy {
                     up_price,
                     down_price,
                     implied_vol,
+                    &signal_micro,
                     skip.zone,
                     skip.reason,
                     skip.detail,
@@ -798,6 +838,7 @@ impl Strategy for LiveReplayStrategy {
                 up_price,
                 down_price,
                 implied_vol,
+                &signal_micro,
                 decision.zone,
                 "settlement_alignment_unverified".to_string(),
                 "CANDLE_SETTLEMENT_ALIGNMENT_READY=false".to_string(),
@@ -821,14 +862,7 @@ impl Strategy for LiveReplayStrategy {
         } else {
             contract.down_token_id.clone()
         };
-        let Some(traded_book) = self
-            .books
-            .get(&traded_token)
-            .or_else(|| self.books.get(token_id))
-        else {
-            return Vec::new();
-        };
-        let micro = replay_microstructure(traded_book);
+        let micro = self.microstructure_for_token(&traded_token, timestamp_s);
         if let Err(skip) = micro.check_long_entry(&variant.microstructure) {
             self.record_skip(
                 timestamp_s,
@@ -837,6 +871,7 @@ impl Strategy for LiveReplayStrategy {
                 up_price,
                 down_price,
                 implied_vol,
+                &micro,
                 decision.zone,
                 skip.reason,
                 skip.detail,
@@ -1062,7 +1097,7 @@ fn replay_microstructure(book: &TokenBook) -> BookMicrostructure {
         .into_iter()
         .map(|(price, size)| BookLevelView { price, size })
         .collect();
-    BookMicrostructure::from_levels(&bids, &asks, 3)
+    BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
 }
 
 fn replay_order_id(intent_id: &str) -> String {

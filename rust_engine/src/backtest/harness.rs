@@ -161,6 +161,7 @@ pub struct CandleBacktestStrategy {
     variant: StrategyVariant,
     strategy_spec: StrategySpec,
     universe_by_token: BTreeMap<String, CandleRuntimeContract>,
+    books: BTreeMap<String, TokenBook>,
     momentum: MomentumDetector,
     bankroll_usd: f64,
     btc_history: Arc<BTCHistory>,
@@ -182,7 +183,6 @@ pub struct CandleBacktestStrategy {
     pub skipped_no_btc: u64,
     pub skipped_no_signal: u64,
     pub skipped_decision: u64,
-    pub skipped_wrong_side: u64,
     pub skipped_throttled: u64,
     pub skip_reasons: BTreeMap<String, u64>,
 }
@@ -208,6 +208,7 @@ impl CandleBacktestStrategy {
             variant,
             strategy_spec,
             universe_by_token: universe.runtime_by_token_id(),
+            books: BTreeMap::new(),
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
             btc_history,
@@ -222,10 +223,25 @@ impl CandleBacktestStrategy {
             skipped_no_btc: 0,
             skipped_no_signal: 0,
             skipped_decision: 0,
-            skipped_wrong_side: 0,
             skipped_throttled: 0,
             skip_reasons: BTreeMap::new(),
         }
+    }
+
+    fn fresh_ask(&self, token_id: &str, now_ts: f64, fallback: f64) -> f64 {
+        self.books
+            .get(token_id)
+            .filter(|b| now_ts - b.last_update_ts_s <= 30.0)
+            .and_then(|b| (b.best_ask > 0.0).then_some(b.best_ask))
+            .unwrap_or(fallback)
+    }
+
+    fn microstructure_for_token(&self, token_id: &str, now_ts: f64) -> BookMicrostructure {
+        self.books
+            .get(token_id)
+            .filter(|b| now_ts - b.last_update_ts_s <= 30.0)
+            .map(backtest_microstructure)
+            .unwrap_or_default()
     }
 }
 
@@ -242,6 +258,7 @@ impl Strategy for CandleBacktestStrategy {
         _history: &BTreeMap<String, Vec<(f64, f64)>>,
     ) -> Vec<BacktestOrder> {
         self.events_seen += 1;
+        self.books.insert(token_id.to_string(), book.clone());
         let Some(runtime) = self.universe_by_token.get(token_id) else {
             return Vec::new();
         };
@@ -310,21 +327,8 @@ impl Strategy for CandleBacktestStrategy {
             }
         };
 
-        // Use the live book's current best ask for the up/down side prices.
-        // This is conservative — the strategy entered on the same book the
-        // live runtime would see.
-        let up_price = if token_id == contract.up_token_id.as_str() {
-            book.best_ask
-        } else {
-            // up token's book hasn't ticked in this batch — fall back to
-            // 1 - down_best_ask.
-            (1.0 - book.best_ask).max(0.01)
-        };
-        let down_price = if token_id == contract.down_token_id.as_str() {
-            book.best_ask
-        } else {
-            (1.0 - book.best_ask).max(0.01)
-        };
+        let up_price = self.fresh_ask(&contract.up_token_id, timestamp_s, contract.up_price);
+        let down_price = self.fresh_ask(&contract.down_token_id, timestamp_s, contract.down_price);
 
         let implied_vol = self.btc_history.realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
         let res = decide_candle_trade(
@@ -358,11 +362,7 @@ impl Strategy for CandleBacktestStrategy {
         } else {
             contract.down_token_id.as_str()
         };
-        if traded_token != token_id {
-            self.skipped_wrong_side += 1;
-            return Vec::new();
-        }
-        let micro = backtest_microstructure(book);
+        let micro = self.microstructure_for_token(traded_token, timestamp_s);
         if let Err(skip) = micro.check_long_entry(&self.variant.microstructure) {
             self.skipped_decision += 1;
             let key = format!("{}_{}", skip.reason, decision.zone);
@@ -427,7 +427,7 @@ fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
         .into_iter()
         .map(|(price, size)| BookLevelView { price, size })
         .collect();
-    BookMicrostructure::from_levels(&bids, &asks, 3)
+    BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

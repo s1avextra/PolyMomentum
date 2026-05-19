@@ -28,6 +28,10 @@ pub struct SweepGrid {
     pub edge: Vec<f64>,
     /// EV-buffer values (negative disables the gate).
     pub ev_buffer: Vec<f64>,
+    /// Minimum executable token price.
+    pub min_price: Vec<f64>,
+    /// Maximum executable token price.
+    pub max_price: Vec<f64>,
     /// Settlement-basis floor applied inside the final guard window.
     pub settlement_min_abs_move_usd: Vec<f64>,
     /// Final-window duration where settlement-basis guard is active.
@@ -50,6 +54,8 @@ impl SweepGrid {
         let settlement_min_abs_move_usd = base.zone_config.settlement_min_abs_move_usd;
         let settlement_guard_minutes = base.zone_config.settlement_guard_minutes;
         let settlement_sigma_buffer = base.zone_config.settlement_sigma_buffer;
+        let min_price = base.zone_config.min_price;
+        let max_price = base.zone_config.max_price;
         let micro_max_spread = base.microstructure.max_spread;
         let micro_min_depth = base.microstructure.min_book_depth;
         let micro_min_pressure = base.microstructure.min_book_pressure;
@@ -59,6 +65,8 @@ impl SweepGrid {
             z: vec![0.20, 0.50, 1.00],
             edge: vec![0.00, 0.03, 0.07],
             ev_buffer: vec![-1.0, 0.05],
+            min_price: vec![min_price],
+            max_price: vec![max_price],
             settlement_min_abs_move_usd: vec![settlement_min_abs_move_usd],
             settlement_guard_minutes: vec![settlement_guard_minutes],
             settlement_sigma_buffer: vec![settlement_sigma_buffer],
@@ -82,6 +90,8 @@ impl SweepGrid {
                 * self.z.len()
                 * self.edge.len()
                 * self.ev_buffer.len()
+                * self.min_price.len()
+                * self.max_price.len()
                 * self.settlement_min_abs_move_usd.len()
                 * self.settlement_guard_minutes.len()
                 * self.settlement_sigma_buffer.len()
@@ -94,69 +104,91 @@ impl SweepGrid {
             for &z in &self.z {
                 for &edge in &self.edge {
                     for &ev in &self.ev_buffer {
-                        for &floor in &self.settlement_min_abs_move_usd {
-                            for &guard in &self.settlement_guard_minutes {
-                                for &sigma in &self.settlement_sigma_buffer {
-                                    for &micro_spread in &self.micro_max_spread {
-                                        for &micro_depth in &self.micro_min_depth {
-                                            for &micro_pressure in &self.micro_min_pressure {
-                                                for &maker in &maker_sides {
-                                                    let cfg = ZoneConfig {
-                                                        early_min_confidence: conf,
-                                                        late_min_confidence: conf,
-                                                        terminal_min_confidence: conf,
-                                                        early_min_z: z,
-                                                        primary_min_z: z,
-                                                        late_min_z: z,
-                                                        terminal_min_z: z,
-                                                        early_min_edge: edge,
-                                                        late_min_edge: edge,
-                                                        terminal_min_edge: edge,
-                                                        min_ev_buffer: ev,
-                                                        settlement_min_abs_move_usd: floor,
-                                                        settlement_guard_minutes: guard,
-                                                        settlement_sigma_buffer: sigma,
-                                                        ..ZoneConfig::default()
-                                                    };
-                                                    let microstructure = MicrostructureConfig {
-                                                        max_spread: micro_spread,
-                                                        min_book_depth: micro_depth,
-                                                        min_book_pressure: micro_pressure,
-                                                    };
-                                                    let label = format!(
-                                                        "c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
-                                                        conf,
-                                                        z,
-                                                        edge,
-                                                        ev,
-                                                        floor,
-                                                        guard,
-                                                        sigma,
-                                                        micro_spread,
-                                                        micro_depth,
-                                                        micro_pressure,
-                                                        if maker { "mk" } else { "tk" }
-                                                    );
-                                                    out.push(StrategyVariant {
-                                                        name: label,
-                                                        zone_config: cfg,
-                                                        skip_dead_zone: self.base.skip_dead_zone,
-                                                        min_confidence: conf,
-                                                        min_edge: edge,
-                                                        position_pct: self.base.position_pct,
-                                                        max_per_market_usd: self
-                                                            .base
-                                                            .max_per_market_usd,
-                                                        prefer_maker: maker,
-                                                        maker_fill_prob: self.base.maker_fill_prob,
-                                                        maker_seed: self.base.maker_seed,
-                                                        use_perfect_fill: false,
-                                                        default_fee_rate: self
-                                                            .base
-                                                            .default_fee_rate,
-                                                        maker_fee_rate: self.base.maker_fee_rate,
-                                                        microstructure,
-                                                    });
+                        for &min_price in &self.min_price {
+                            for &max_price in &self.max_price {
+                                if min_price > max_price {
+                                    continue;
+                                }
+                                for &floor in &self.settlement_min_abs_move_usd {
+                                    for &guard in &self.settlement_guard_minutes {
+                                        for &sigma in &self.settlement_sigma_buffer {
+                                            for &micro_spread in &self.micro_max_spread {
+                                                for &micro_depth in &self.micro_min_depth {
+                                                    for &micro_pressure in &self.micro_min_pressure
+                                                    {
+                                                        for &maker in &maker_sides {
+                                                            let cfg = ZoneConfig {
+                                                                early_min_confidence: conf,
+                                                                late_min_confidence: conf,
+                                                                terminal_min_confidence: conf,
+                                                                early_min_z: z,
+                                                                primary_min_z: z,
+                                                                late_min_z: z,
+                                                                terminal_min_z: z,
+                                                                early_min_edge: edge,
+                                                                late_min_edge: edge,
+                                                                terminal_min_edge: edge,
+                                                                min_price,
+                                                                max_price,
+                                                                min_ev_buffer: ev,
+                                                                settlement_min_abs_move_usd: floor,
+                                                                settlement_guard_minutes: guard,
+                                                                settlement_sigma_buffer: sigma,
+                                                                ..ZoneConfig::default()
+                                                            };
+                                                            let microstructure =
+                                                                MicrostructureConfig {
+                                                                    max_spread: micro_spread,
+                                                                    min_book_depth: micro_depth,
+                                                                    min_book_pressure:
+                                                                        micro_pressure,
+                                                                };
+                                                            let label = format!(
+                                                                "c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
+                                                                conf,
+                                                                z,
+                                                                edge,
+                                                                ev,
+                                                                min_price,
+                                                                max_price,
+                                                                floor,
+                                                                guard,
+                                                                sigma,
+                                                                micro_spread,
+                                                                micro_depth,
+                                                                micro_pressure,
+                                                                if maker { "mk" } else { "tk" }
+                                                            );
+                                                            out.push(StrategyVariant {
+                                                                name: label,
+                                                                zone_config: cfg,
+                                                                skip_dead_zone: self
+                                                                    .base
+                                                                    .skip_dead_zone,
+                                                                min_confidence: conf,
+                                                                min_edge: edge,
+                                                                position_pct: self
+                                                                    .base
+                                                                    .position_pct,
+                                                                max_per_market_usd: self
+                                                                    .base
+                                                                    .max_per_market_usd,
+                                                                prefer_maker: maker,
+                                                                maker_fill_prob: self
+                                                                    .base
+                                                                    .maker_fill_prob,
+                                                                maker_seed: self.base.maker_seed,
+                                                                use_perfect_fill: false,
+                                                                default_fee_rate: self
+                                                                    .base
+                                                                    .default_fee_rate,
+                                                                maker_fee_rate: self
+                                                                    .base
+                                                                    .maker_fee_rate,
+                                                                microstructure,
+                                                            });
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -207,5 +239,18 @@ mod tests {
         assert!(variants
             .iter()
             .any(|v| v.microstructure.min_book_pressure == 0.1));
+    }
+
+    #[test]
+    fn price_dimensions_apply_to_zone_config() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.min_price = vec![0.12];
+        grid.max_price = vec![0.75];
+        let variants = grid.variants();
+
+        assert!(variants.iter().all(|v| v.zone_config.min_price == 0.12));
+        assert!(variants.iter().all(|v| v.zone_config.max_price == 0.75));
+        assert!(variants.iter().any(|v| v.name.contains("_p0.12-0.75_")));
     }
 }
