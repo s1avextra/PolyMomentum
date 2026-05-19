@@ -30,6 +30,10 @@ pub struct EvaluationRow {
     pub open_price: f64,
     pub up_price: f64,
     pub down_price: f64,
+    pub book_spread: f64,
+    pub book_bid_depth: f64,
+    pub book_ask_depth: f64,
+    pub book_pressure: f64,
     pub implied_vol: f64,
     pub cross_boost: f64,
 }
@@ -39,7 +43,11 @@ impl EvaluationRow {
         Some(Self {
             ts_ms: v.get("ts_ms")?.as_i64()?,
             cid: v.get("cid")?.as_str()?.to_string(),
-            asset: v.get("asset").and_then(|x| x.as_str()).unwrap_or("BTC").to_string(),
+            asset: v
+                .get("asset")
+                .and_then(|x| x.as_str())
+                .unwrap_or("BTC")
+                .to_string(),
             direction: v.get("dir")?.as_str()?.to_string(),
             confidence: v.get("conf")?.as_f64()?,
             z_score: v.get("z")?.as_f64()?,
@@ -52,6 +60,19 @@ impl EvaluationRow {
             open_price: v.get("open").and_then(|x| x.as_f64()).unwrap_or(0.0),
             up_price: v.get("up_price").and_then(|x| x.as_f64()).unwrap_or(0.5),
             down_price: v.get("down_price").and_then(|x| x.as_f64()).unwrap_or(0.5),
+            book_spread: v.get("book_spread").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            book_bid_depth: v
+                .get("book_bid_depth")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
+            book_ask_depth: v
+                .get("book_ask_depth")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
+            book_pressure: v
+                .get("book_pressure")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
             implied_vol: v.get("implied_vol").and_then(|x| x.as_f64()).unwrap_or(0.5),
             cross_boost: v.get("cross_boost").and_then(|x| x.as_f64()).unwrap_or(0.0),
         })
@@ -95,8 +116,16 @@ impl ResolutionRow {
     pub fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
             cid: v.get("cid")?.as_str()?.to_string(),
-            predicted: v.get("predicted").and_then(|x| x.as_str()).unwrap_or("up").to_string(),
-            actual: v.get("actual").and_then(|x| x.as_str()).unwrap_or("up").to_string(),
+            predicted: v
+                .get("predicted")
+                .and_then(|x| x.as_str())
+                .unwrap_or("up")
+                .to_string(),
+            actual: v
+                .get("actual")
+                .and_then(|x| x.as_str())
+                .unwrap_or("up")
+                .to_string(),
             won: v.get("won").and_then(|x| x.as_bool()).unwrap_or(false),
             open_btc: v.get("open_btc").and_then(|x| x.as_f64()).unwrap_or(0.0),
             close_btc: v.get("close_btc").and_then(|x| x.as_f64()).unwrap_or(0.0),
@@ -155,6 +184,9 @@ pub fn run_strategy(
                 e.cross_boost,
             );
             if let DecisionResult::Trade(decision) = res {
+                if !logged_microstructure_passes(e, strat) {
+                    continue;
+                }
                 hit = Some((e, decision.zone));
                 break;
             }
@@ -228,6 +260,20 @@ pub fn run_strategy(
     run
 }
 
+fn logged_microstructure_passes(entry: &EvaluationRow, strat: &Strategy) -> bool {
+    let cfg = strat.microstructure;
+    if !cfg.is_active() {
+        return true;
+    }
+    if entry.book_spread > cfg.max_spread {
+        return false;
+    }
+    if entry.book_bid_depth.min(entry.book_ask_depth) < cfg.min_book_depth {
+        return false;
+    }
+    entry.book_pressure >= cfg.min_book_pressure
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +295,10 @@ mod tests {
             open_price: 70_000.0,
             up_price: 0.30,
             down_price: 0.70,
+            book_spread: 0.01,
+            book_bid_depth: 100.0,
+            book_ask_depth: 100.0,
+            book_pressure: 0.0,
             implied_vol: 0.5,
             cross_boost: 0.0,
         }
@@ -302,5 +352,21 @@ mod tests {
         assert_eq!(run.trades, 1);
         assert_eq!(run.losses, 1);
         assert!(run.realized_pnl < 0.0);
+    }
+
+    #[test]
+    fn logged_microstructure_gate_can_skip_trade() {
+        let evals = vec![EvaluationRow {
+            book_spread: 0.05,
+            book_bid_depth: 100.0,
+            book_ask_depth: 100.0,
+            book_pressure: 0.5,
+            ..mk_eval("c1", 1, 0.75, 2.0, "up")
+        }];
+        let res = vec![mk_res("c1", "up")];
+        let mut strat = crate::sweep::strategy::ev_off();
+        strat.microstructure.max_spread = 0.02;
+        let run = run_strategy(&evals, &res, &strat, 100.0);
+        assert_eq!(run.trades, 0);
     }
 }

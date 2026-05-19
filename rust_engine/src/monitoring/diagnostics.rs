@@ -145,6 +145,9 @@ pub struct SystemDiagnostics {
     pub settlement_guard_minutes: Option<f64>,
     pub settlement_min_abs_move_usd: Option<f64>,
     pub settlement_sigma_buffer: Option<f64>,
+    pub microstructure_max_spread: Option<f64>,
+    pub microstructure_min_book_depth: Option<f64>,
+    pub microstructure_min_book_pressure: Option<f64>,
     pub cycle_samples: u64,
     pub avg_cycle_ms: Option<f64>,
     pub max_cycle_ms: Option<f64>,
@@ -329,17 +332,23 @@ fn record_runtime_strategy(out: &mut SessionDiagnostics, v: &Value) {
     out.system.settlement_alignment_ready = v
         .get("settlement_alignment_ready")
         .and_then(|x| x.as_bool());
-    out.system.settlement_cutoff_minutes = v
-        .get("settlement_cutoff_minutes")
-        .and_then(|x| x.as_f64());
-    out.system.settlement_guard_minutes = v
-        .get("settlement_guard_minutes")
-        .and_then(|x| x.as_f64());
+    out.system.settlement_cutoff_minutes =
+        v.get("settlement_cutoff_minutes").and_then(|x| x.as_f64());
+    out.system.settlement_guard_minutes =
+        v.get("settlement_guard_minutes").and_then(|x| x.as_f64());
     out.system.settlement_min_abs_move_usd = v
         .get("settlement_min_abs_move_usd")
         .and_then(|x| x.as_f64());
-    out.system.settlement_sigma_buffer = v
-        .get("settlement_sigma_buffer")
+    out.system.settlement_sigma_buffer = v.get("settlement_sigma_buffer").and_then(|x| x.as_f64());
+    let micro = v.get("microstructure");
+    out.system.microstructure_max_spread = micro
+        .and_then(|m| m.get("max_spread"))
+        .and_then(|x| x.as_f64());
+    out.system.microstructure_min_book_depth = micro
+        .and_then(|m| m.get("min_book_depth"))
+        .and_then(|x| x.as_f64());
+    out.system.microstructure_min_book_pressure = micro
+        .and_then(|m| m.get("min_book_pressure"))
         .and_then(|x| x.as_f64());
 }
 
@@ -552,10 +561,7 @@ fn update_max(slot: &mut Option<f64>, value: f64) {
 
 fn record_oracle_correction(out: &mut SessionDiagnostics, v: &Value) {
     out.oracle.corrections += 1;
-    out.oracle.total_pnl_delta += v
-        .get("pnl_delta")
-        .and_then(|x| x.as_f64())
-        .unwrap_or(0.0);
+    out.oracle.total_pnl_delta += v.get("pnl_delta").and_then(|x| x.as_f64()).unwrap_or(0.0);
 }
 
 fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
@@ -599,12 +605,10 @@ fn record_breaker_state(out: &mut SessionDiagnostics, v: &Value) {
     out.risk.last_breaker_peak_pnl = v.get("peak_pnl").and_then(|x| x.as_f64());
     out.risk.last_breaker_open_exposure = v.get("open_exposure").and_then(|x| x.as_f64());
     out.risk.last_breaker_stressed_pnl = v.get("stressed_pnl").and_then(|x| x.as_f64());
-    out.risk.last_breaker_realized_drawdown =
-        v.get("realized_drawdown").and_then(|x| x.as_f64());
+    out.risk.last_breaker_realized_drawdown = v.get("realized_drawdown").and_then(|x| x.as_f64());
     out.risk.last_breaker_realized_drawdown_pct =
         v.get("realized_drawdown_pct").and_then(|x| x.as_f64());
-    out.risk.last_breaker_stressed_drawdown =
-        v.get("stressed_drawdown").and_then(|x| x.as_f64());
+    out.risk.last_breaker_stressed_drawdown = v.get("stressed_drawdown").and_then(|x| x.as_f64());
     out.risk.last_breaker_stressed_drawdown_pct =
         v.get("stressed_drawdown_pct").and_then(|x| x.as_f64());
 }
@@ -735,7 +739,8 @@ fn finalize(out: &mut SessionDiagnostics) {
         ));
     }
     if out.oracle.ties > 0 {
-        let move_range = oracle_move_range(out.oracle.tie_min_abs_move, out.oracle.tie_max_abs_move);
+        let move_range =
+            oracle_move_range(out.oracle.tie_min_abs_move, out.oracle.tie_max_abs_move);
         out.warnings.push(format!(
             "{} Polymarket tie resolution(s){}; tie risk must be investigated before live promotion",
             out.oracle.ties, move_range
@@ -776,22 +781,20 @@ fn finalize(out: &mut SessionDiagnostics) {
             .push(format!("{} fatal system error(s)", out.system.fatal_errors));
     }
     if out.risk.breaker_tripped {
-        let reason = out
-            .risk
-            .last_breaker_reason
-            .as_deref()
-            .unwrap_or("unknown");
+        let reason = out.risk.last_breaker_reason.as_deref().unwrap_or("unknown");
         out.warnings.push(format!(
             "circuit breaker is tripped (reason={reason}); no new paper/live trades will be evaluated"
         ));
     }
     if out.signals.evaluations == 0 {
         if out.risk.breaker_tripped {
-            out.warnings
-                .push("no signal evaluations captured because the circuit breaker is tripped".to_string());
+            out.warnings.push(
+                "no signal evaluations captured because the circuit breaker is tripped".to_string(),
+            );
         } else {
-            out.warnings
-                .push("no signal evaluations captured; diagnostic run may be too short".to_string());
+            out.warnings.push(
+                "no signal evaluations captured; diagnostic run may be too short".to_string(),
+            );
         }
     } else if out.signals.evals_with_book_spread == 0 {
         out.warnings.push(
@@ -1014,10 +1017,7 @@ mod tests {
         assert_eq!(diag.signals.max_book_bid_depth, Some(120.5));
         assert_eq!(diag.signals.max_book_ask_depth, Some(90.25));
         assert_eq!(diag.signals.max_abs_book_pressure, Some(0.25));
-        assert!(!diag
-            .warnings
-            .iter()
-            .any(|w| w.contains("CLOB feed health")));
+        assert!(!diag.warnings.iter().any(|w| w.contains("CLOB feed health")));
     }
 
     #[test]
@@ -1285,10 +1285,7 @@ mod tests {
         assert!((diag.oracle.tie_max_abs_move.unwrap() - 28.64).abs() < 1e-9);
         assert!(diag.risk.breaker_tripped);
         assert_eq!(diag.risk.last_breaker_reason.as_deref(), Some("oracle_tie"));
-        assert!(diag
-            .warnings
-            .iter()
-            .any(|w| w.contains("tie resolution")));
+        assert!(diag.warnings.iter().any(|w| w.contains("tie resolution")));
         assert!(diag
             .warnings
             .iter()

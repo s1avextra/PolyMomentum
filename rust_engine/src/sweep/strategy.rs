@@ -3,6 +3,7 @@
 //! Add new variants here, then they appear in `polymomentum-engine sweep`.
 
 use crate::strategy::decision::ZoneConfig;
+use crate::strategy::microstructure::MicrostructureConfig;
 
 #[derive(Debug, Clone)]
 pub struct Strategy {
@@ -12,6 +13,7 @@ pub struct Strategy {
     pub min_confidence: f64,
     pub min_edge: f64,
     pub prefer_maker: bool,
+    pub microstructure: MicrostructureConfig,
 }
 
 pub fn baseline() -> Strategy {
@@ -22,6 +24,7 @@ pub fn baseline() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -43,6 +46,7 @@ pub fn terminal_only() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -67,6 +71,7 @@ pub fn aggressive_terminal() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -91,6 +96,7 @@ pub fn conservative_terminal() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -103,6 +109,7 @@ pub fn no_dead_zone() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -120,6 +127,7 @@ pub fn ev_off() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -136,6 +144,7 @@ pub fn ev_strict() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: false,
+        microstructure: MicrostructureConfig::disabled(),
     }
 }
 
@@ -149,6 +158,41 @@ pub fn maker_first() -> Strategy {
         min_confidence: 0.60,
         min_edge: 0.07,
         prefer_maker: true,
+        microstructure: MicrostructureConfig::disabled(),
+    }
+}
+
+pub fn paper_a_plus_floor() -> Strategy {
+    let cfg = ZoneConfig {
+        early_min_confidence: 0.35,
+        late_min_confidence: 0.35,
+        terminal_min_confidence: 0.35,
+        early_min_z: 0.50,
+        primary_min_z: 0.50,
+        late_min_z: 0.50,
+        terminal_min_z: 0.50,
+        early_min_edge: 0.02,
+        late_min_edge: 0.02,
+        terminal_min_edge: 0.02,
+        min_ev_buffer: -1.0,
+        max_price: 0.75,
+        settlement_guard_minutes: 5.0,
+        settlement_min_abs_move_usd: 25.0,
+        settlement_sigma_buffer: 0.20,
+        ..ZoneConfig::default()
+    };
+    Strategy {
+        name: "paper_a_plus_floor".into(),
+        zone_config: cfg,
+        skip_dead_zone: true,
+        min_confidence: 0.35,
+        min_edge: 0.02,
+        prefer_maker: true,
+        microstructure: MicrostructureConfig {
+            max_spread: 0.02,
+            min_book_depth: 20.0,
+            min_book_pressure: 0.0,
+        },
     }
 }
 
@@ -163,5 +207,6 @@ pub fn default_strategies() -> Vec<Strategy> {
         ev_off(),
         ev_strict(),
         maker_first(),
+        paper_a_plus_floor(),
     ]
 }

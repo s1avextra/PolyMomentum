@@ -152,6 +152,18 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "--edge".to_string(),
             profile.edge.to_string(),
             format!("--ev-buffer={}", profile.ev_buffer),
+            format!("--settlement-floor={}", profile.settlement_floor),
+            format!(
+                "--settlement-guard-minutes={}",
+                profile.settlement_guard_minutes
+            ),
+            format!(
+                "--settlement-sigma-buffer={}",
+                profile.settlement_sigma_buffer
+            ),
+            format!("--micro-max-spread={}", profile.micro_max_spread),
+            format!("--micro-min-depth={}", profile.micro_min_depth),
+            format!("--micro-min-pressure={}", profile.micro_min_pressure),
             "--also-maker".to_string(),
             profile.also_maker.to_string(),
             "--threads".to_string(),
@@ -208,7 +220,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "--min-sharpe-like".to_string(),
         "0.02".to_string(),
         "--max-zone-trade-share".to_string(),
-        "0.98".to_string(),
+        "0.85".to_string(),
         "--min-reports".to_string(),
         windows.len().to_string(),
         "--min-profitable-reports".to_string(),
@@ -220,8 +232,9 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     ]);
     stages.push(StrategyBuilderStage {
         name: "aggregate_promote".to_string(),
-        purpose: "Promote only a candidate that survives every daily slice and strong robustness gates."
-            .to_string(),
+        purpose:
+            "Promote only a candidate that survives every daily slice and strong robustness gates."
+                .to_string(),
         command: shell_command(&promote_args),
         outputs: vec![promotion_output.display().to_string()],
         verify: vec![
@@ -282,7 +295,10 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
                 .to_string(),
     });
 
-    let diagnostic_session = format!("$(jq -r .session_path {})", shell_quote_path(&replay_report));
+    let diagnostic_session = format!(
+        "$(jq -r .session_path {})",
+        shell_quote_path(&replay_report)
+    );
     stages.push(StrategyBuilderStage {
         name: "diagnostics_gate".to_string(),
         purpose: "Turn the replay session into a machine-readable promotion gate.".to_string(),
@@ -582,11 +598,7 @@ fn audit_promotion(
                 ),
             ));
             let hash_status = promotion_hash_status(&artifact);
-            checks.push(check(
-                "promotion.params_hash",
-                hash_status.0,
-                hash_status.1,
-            ));
+            checks.push(check("promotion.params_hash", hash_status.0, hash_status.1));
             let wilson = wilson_lower(
                 (artifact.win_rate * artifact.trades as f64).round() as usize,
                 artifact.trades,
@@ -624,9 +636,7 @@ fn audit_promotion(
     }
 }
 
-fn promotion_hash_status(
-    artifact: &PromotionArtifact,
-) -> (StrategyBuilderCheckStatus, String) {
+fn promotion_hash_status(artifact: &PromotionArtifact) -> (StrategyBuilderCheckStatus, String) {
     match serde_json::from_value::<StrategyVariant>(artifact.strategy_params.clone()) {
         Ok(variant) => {
             let actual = stable_json_hash(&variant);
@@ -735,21 +745,63 @@ struct StrategyBuilderProfile {
     z: &'static str,
     edge: &'static str,
     ev_buffer: &'static str,
+    settlement_floor: &'static str,
+    settlement_guard_minutes: &'static str,
+    settlement_sigma_buffer: &'static str,
+    micro_max_spread: &'static str,
+    micro_min_depth: &'static str,
+    micro_min_pressure: &'static str,
     also_maker: bool,
 }
 
 impl StrategyBuilderProfile {
     fn from_name(name: &str) -> Result<Self> {
         match name {
-            "swift5m" | "guarded5m" => Ok(Self {
-                name: "guarded5m",
+            "swift5m" => Ok(Self {
+                name: "swift5m",
                 conf: "0.15,0.25",
                 z: "0.10,0.30",
                 edge: "0.00,0.02",
                 ev_buffer: "-1.0",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "1.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
                 also_maker: true,
             }),
-            _ => bail!("unknown strategy-builder profile `{name}`; supported profile: guarded5m"),
+            "guarded5m" => Ok(Self {
+                name: "guarded5m",
+                conf: "0.35,0.45,0.55",
+                z: "0.50,1.00,1.25",
+                edge: "0.02,0.05,0.07",
+                ev_buffer: "-1.0,0.05",
+                settlement_floor: "25.0,35.0",
+                settlement_guard_minutes: "5.0",
+                settlement_sigma_buffer: "0.20",
+                micro_max_spread: "0.02",
+                micro_min_depth: "20.0",
+                micro_min_pressure: "0.0,0.10",
+                also_maker: true,
+            }),
+            "a_plus5m" => Ok(Self {
+                name: "a_plus5m",
+                conf: "0.35,0.45,0.55",
+                z: "0.50,1.00,1.25",
+                edge: "0.02,0.05,0.07",
+                ev_buffer: "-1.0,0.05",
+                settlement_floor: "25.0,35.0",
+                settlement_guard_minutes: "5.0",
+                settlement_sigma_buffer: "0.20",
+                micro_max_spread: "0.02",
+                micro_min_depth: "20.0",
+                micro_min_pressure: "0.0,0.10",
+                also_maker: true,
+            }),
+            _ => bail!(
+                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, swift5m"
+            ),
         }
     }
 }

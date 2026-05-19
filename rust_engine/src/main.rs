@@ -33,7 +33,11 @@ use clap::{Parser, Subcommand};
 use config::RuntimeMode;
 
 #[derive(Parser, Debug)]
-#[command(name = "polymomentum-engine", version, about = "PolyMomentum Rust trading engine")]
+#[command(
+    name = "polymomentum-engine",
+    version,
+    about = "PolyMomentum Rust trading engine"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -233,6 +237,15 @@ enum Command {
         /// Comma-separated volatility-scaled settlement buffer multipliers.
         #[arg(long, default_value = "0.0")]
         settlement_sigma_buffer: String,
+        /// Comma-separated executable spread ceilings for microstructure gates.
+        #[arg(long, default_value = "1.0")]
+        micro_max_spread: String,
+        /// Comma-separated minimum thinner-side book depth gates.
+        #[arg(long, default_value = "0.0")]
+        micro_min_depth: String,
+        /// Comma-separated minimum microprice pressure gates.
+        #[arg(long, default_value = "-1.0")]
+        micro_min_pressure: String,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -589,7 +602,11 @@ async fn main() {
     let settings = config::Settings::from_env();
 
     match cli.command {
-        Command::Live { mode, i_understand_live, promotion_artifact } => {
+        Command::Live {
+            mode,
+            i_understand_live,
+            promotion_artifact,
+        } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
             let preflight = run_startup_preflight(&settings, mode, i_understand_live).await;
@@ -647,7 +664,11 @@ async fn main() {
             )
             .await;
         }
-        Command::Preflight { mode, i_understand_live, promotion_artifact } => {
+        Command::Preflight {
+            mode,
+            i_understand_live,
+            promotion_artifact,
+        } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
             let report = run_startup_preflight(&settings, mode, i_understand_live).await;
@@ -659,7 +680,10 @@ async fn main() {
                 std::process::exit(2);
             }
         }
-        Command::ReleaseManifest { mode, promotion_artifact } => {
+        Command::ReleaseManifest {
+            mode,
+            promotion_artifact,
+        } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
             let manifest = release::ReleaseManifest::capture(&settings, mode);
@@ -668,7 +692,10 @@ async fn main() {
                 serde_json::to_string_pretty(&manifest).expect("serialize release manifest")
             );
         }
-        Command::Scan { max_hours, min_liquidity } => {
+        Command::Scan {
+            max_hours,
+            min_liquidity,
+        } => {
             cmd_scan(&settings, max_hours, min_liquidity).await;
         }
         Command::Wallet { json } => cmd_wallet(&settings, json).await,
@@ -678,17 +705,42 @@ async fn main() {
         Command::StrategyBuilder { command } => cmd_strategy_builder(command),
         Command::Ctf { condition_id } => cmd_ctf(&settings, &condition_id).await,
         Command::ValidateReplay { path } => cmd_validate_replay(&path).await,
-        Command::Sweep { session, bankroll, min_trades, zones } => {
+        Command::Sweep {
+            session,
+            bankroll,
+            min_trades,
+            zones,
+        } => {
             cmd_sweep(&session, bankroll, min_trades, zones);
         }
-        Command::PmxtInfo { hour, cache_dir, sample } => {
+        Command::PmxtInfo {
+            hour,
+            cache_dir,
+            sample,
+        } => {
             cmd_pmxt_info(&hour, cache_dir.as_deref(), sample).await;
         }
-        Command::PmxtDownload { start, end, cache_dir } => {
+        Command::PmxtDownload {
+            start,
+            end,
+            cache_dir,
+        } => {
             cmd_pmxt_download(&start, end.as_deref(), cache_dir.as_deref()).await;
         }
-        Command::Distill { input, output, candle_cids, hour } => {
-            cmd_distill(&settings, &input, output.as_deref(), candle_cids.as_deref(), hour.as_deref()).await;
+        Command::Distill {
+            input,
+            output,
+            candle_cids,
+            hour,
+        } => {
+            cmd_distill(
+                &settings,
+                &input,
+                output.as_deref(),
+                candle_cids.as_deref(),
+                hour.as_deref(),
+            )
+            .await;
         }
         Command::HarnessSweep {
             start,
@@ -704,6 +756,9 @@ async fn main() {
             settlement_floor,
             settlement_guard_minutes,
             settlement_sigma_buffer,
+            micro_max_spread,
+            micro_min_depth,
+            micro_min_pressure,
             also_maker,
             top,
             threads,
@@ -719,6 +774,9 @@ async fn main() {
             let settlement_floors = parse_csv_floats(&settlement_floor);
             let settlement_guards = parse_csv_floats(&settlement_guard_minutes);
             let settlement_sigmas = parse_csv_floats(&settlement_sigma_buffer);
+            let micro_spreads = parse_csv_floats(&micro_max_spread);
+            let micro_depths = parse_csv_floats(&micro_min_depth);
+            let micro_pressures = parse_csv_floats(&micro_min_pressure);
             cmd_harness_sweep(
                 &settings,
                 &start,
@@ -734,6 +792,9 @@ async fn main() {
                 settlement_floors,
                 settlement_guards,
                 settlement_sigmas,
+                micro_spreads,
+                micro_depths,
+                micro_pressures,
                 also_maker,
                 top,
                 threads,
@@ -741,7 +802,8 @@ async fn main() {
                 resume,
                 report_json.as_deref(),
                 window_minutes,
-            ).await;
+            )
+            .await;
         }
         Command::Harness {
             start,
@@ -758,7 +820,23 @@ async fn main() {
             allow_gamma_fetch,
             report_json,
         } => {
-            cmd_harness(&settings, &start, end.as_deref(), bankroll, cache_dir.as_deref(), btc_csv.as_deref(), latency_ms, threads, checkpoint.as_deref(), resume, max_contracts, window_minutes, allow_gamma_fetch, report_json.as_deref()).await;
+            cmd_harness(
+                &settings,
+                &start,
+                end.as_deref(),
+                bankroll,
+                cache_dir.as_deref(),
+                btc_csv.as_deref(),
+                latency_ms,
+                threads,
+                checkpoint.as_deref(),
+                resume,
+                max_contracts,
+                window_minutes,
+                allow_gamma_fetch,
+                report_json.as_deref(),
+            )
+            .await;
         }
         Command::SelfTest => {
             println!("self-test: this binary's tests run via `cargo test`. ok.");
@@ -787,25 +865,26 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             profile,
             promotion_output,
         } => {
-            let plan = match strategy_builder::build_plan(strategy_builder::StrategyBuilderPlanInput {
-                start,
-                end,
-                out_dir: std::path::PathBuf::from(out_dir),
-                cache_dir,
-                btc_csv,
-                bankroll,
-                latency_ms,
-                threads,
-                window_minutes,
-                profile,
-                promotion_output,
-            }) {
-                Ok(plan) => plan,
-                Err(e) => {
-                    eprintln!("strategy-builder plan failed: {e:#}");
-                    std::process::exit(2);
-                }
-            };
+            let plan =
+                match strategy_builder::build_plan(strategy_builder::StrategyBuilderPlanInput {
+                    start,
+                    end,
+                    out_dir: std::path::PathBuf::from(out_dir),
+                    cache_dir,
+                    btc_csv,
+                    bankroll,
+                    latency_ms,
+                    threads,
+                    window_minutes,
+                    profile,
+                    promotion_output,
+                }) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        eprintln!("strategy-builder plan failed: {e:#}");
+                        std::process::exit(2);
+                    }
+                };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&plan).expect("serialize strategy-builder plan")
@@ -1182,7 +1261,10 @@ async fn cmd_live_replay(
                         cached_markets.insert(m.condition_id.clone(), m);
                     }
                     if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
-                        eprintln!("write Gamma cache {} failed: {e}", gamma_cache_path.display());
+                        eprintln!(
+                            "write Gamma cache {} failed: {e}",
+                            gamma_cache_path.display()
+                        );
                         std::process::exit(1);
                     }
                 }
@@ -1217,12 +1299,19 @@ async fn cmd_live_replay(
             .map(|d| d.timestamp() as f64)
             .unwrap_or(0.0);
         let window_minutes = live::window::estimate_window_minutes(&c.window_description);
-        let window_minutes = if window_minutes > 0.0 { window_minutes } else { 60.0 };
+        let window_minutes = if window_minutes > 0.0 {
+            window_minutes
+        } else {
+            60.0
+        };
         let open_t = close_t - window_minutes * 60.0;
         close_t > start_ts && open_t < end_ts
     });
     if contracts.is_empty() {
-        eprintln!("live-replay found no BTC candle contracts in [{start}, {}]", end.unwrap_or(start));
+        eprintln!(
+            "live-replay found no BTC candle contracts in [{start}, {}]",
+            end.unwrap_or(start)
+        );
         std::process::exit(1);
     }
     contracts.sort_by(|a, b| {
@@ -1280,7 +1369,9 @@ async fn cmd_live_replay(
         bankroll_usd: bankroll,
         cache_dir: cache_dir_path,
         session_log_dir,
-        latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
+        latency: backtest::l2_replay::StaticLatencyConfig {
+            insert_ms: latency_ms,
+        },
         shared_distilled_dir: shared_dir,
         strategy: match live::replay::ReplayStrategy::load(settings) {
             Ok(strategy) => strategy,
@@ -1312,11 +1403,17 @@ async fn cmd_live_replay(
 
 async fn cmd_scan(s: &config::Settings, max_hours: f64, min_liquidity: f64) {
     let client = data::gamma::GammaClient::new(&s.poly_gamma_url);
-    match client.fetch_markets_by_end_date(max_hours, min_liquidity).await {
+    match client
+        .fetch_markets_by_end_date(max_hours, min_liquidity)
+        .await
+    {
         Ok(markets) => {
-            let contracts =
-                data::scanner::scan_candle_markets(&markets, max_hours, min_liquidity);
-            println!("markets={} candle_contracts={}", markets.len(), contracts.len());
+            let contracts = data::scanner::scan_candle_markets(&markets, max_hours, min_liquidity);
+            println!(
+                "markets={} candle_contracts={}",
+                markets.len(),
+                contracts.len()
+            );
             for c in contracts.iter().take(20) {
                 println!(
                     "  {asset:5} {hours:5.2}h {q}",
@@ -1366,12 +1463,18 @@ async fn cmd_wallet(s: &config::Settings, json: bool) {
                 println!("usdc_e       ${:.2}", b.usdc_e);
                 println!("usdc_native  ${:.2}", b.usdc_native);
                 println!("stable_total ${:.2}", b.total_stable_diagnostics);
-                println!("pusd_allow   ${:.2} CTF Exchange V2", b.pusd_allowance_exchange);
+                println!(
+                    "pusd_allow   ${:.2} CTF Exchange V2",
+                    b.pusd_allowance_exchange
+                );
                 println!(
                     "pusd_allow   ${:.2} Neg Risk CTF Exchange V2",
                     b.pusd_allowance_neg_risk_exchange
                 );
-                println!("usdc_e_allow ${:.2} Collateral Onramp", b.usdc_e_allowance_onramp);
+                println!(
+                    "usdc_e_allow ${:.2} Collateral Onramp",
+                    b.usdc_e_allowance_onramp
+                );
                 println!("pol          {:.4}", b.pol);
                 println!(
                     "live_ready   {}",
@@ -1409,7 +1512,9 @@ async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
         ClobCommand::Time => client.get_server_time().await,
         ClobCommand::Book { token_id } => client.get_book(&token_id).await,
         ClobCommand::Price { token_id, side } => {
-            client.get_price(&token_id, &side.to_ascii_uppercase()).await
+            client
+                .get_price(&token_id, &side.to_ascii_uppercase())
+                .await
         }
         ClobCommand::Midpoint { token_id } => client.get_midpoint(&token_id).await,
         ClobCommand::Spread { token_id } => client.get_spread(&token_id).await,
@@ -1467,7 +1572,10 @@ async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
         ClobCommand::Heartbeat => client.post_heartbeat().await,
     };
     match result {
-        Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+        Ok(v) => println!(
+            "{}",
+            serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())
+        ),
         Err(e) => {
             eprintln!("clob diagnostic failed: {e}");
             std::process::exit(1);
@@ -1510,13 +1618,14 @@ fn cmd_experiment(command: ExperimentCommand) {
                 max_zone_trade_share,
                 require_complete_data: !allow_incomplete_data,
             };
-            let artifact = match backtest::experiment::PromotionArtifact::from_report(&report_doc, gate) {
-                Ok(artifact) => artifact,
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(2);
-                }
-            };
+            let artifact =
+                match backtest::experiment::PromotionArtifact::from_report(&report_doc, gate) {
+                    Ok(artifact) => artifact,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(2);
+                    }
+                };
             if let Err(e) = backtest::experiment::write_promotion_atomic(&output, &artifact) {
                 eprintln!("write promotion artifact failed: {e}");
                 std::process::exit(1);
@@ -1586,15 +1695,15 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_daily_pnl,
                 max_daily_loss,
             };
-            let artifact =
-                match backtest::experiment::PromotionArtifact::from_reports(&reports, gate, multi_gate)
-                {
-                    Ok(artifact) => artifact,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(2);
-                    }
-                };
+            let artifact = match backtest::experiment::PromotionArtifact::from_reports(
+                &reports, gate, multi_gate,
+            ) {
+                Ok(artifact) => artifact,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
             if let Err(e) = backtest::experiment::write_promotion_atomic(&output, &artifact) {
                 eprintln!("write promotion artifact failed: {e}");
                 std::process::exit(1);
@@ -1686,7 +1795,9 @@ async fn cmd_validate_replay(path: &str) {
     let mut mismatches = 0u64;
     let mut validation_cfg = ReplayValidationConfig::default();
     for line in reader.lines().map_while(|l| l.ok()) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
         if v.get("cat").and_then(|x| x.as_str()) == Some("system")
             && v.get("type").and_then(|x| x.as_str()) == Some("runtime_strategy")
         {
@@ -1703,7 +1814,11 @@ async fn cmd_validate_replay(path: &str) {
 
         // Build inputs
         let signal = strategy::momentum::MomentumSignal {
-            direction: v.get("dir").and_then(|x| x.as_str()).unwrap_or("up").to_string(),
+            direction: v
+                .get("dir")
+                .and_then(|x| x.as_str())
+                .unwrap_or("up")
+                .to_string(),
             confidence: f64opt(&v, "conf").unwrap_or(0.0),
             price_change: f64opt(&v, "chg").unwrap_or(0.0),
             price_change_pct: f64opt(&v, "chg_pct").unwrap_or(0.0),
@@ -1732,8 +1847,7 @@ async fn cmd_validate_replay(path: &str) {
             f64opt(&v, "cross_boost").unwrap_or(0.0),
         );
         let traded = matches!(res, strategy::decision::DecisionResult::Trade(_));
-        let expected_logged_decision_trade =
-            traded && validation_cfg.settlement_alignment_ready;
+        let expected_logged_decision_trade = traded && validation_cfg.settlement_alignment_ready;
         let logged_decision_trade = v
             .get("decision_trade")
             .and_then(|x| x.as_bool())
@@ -1863,19 +1977,14 @@ async fn cmd_distill(
             }
         },
         None => {
-            let stem = in_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let stem = in_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             // expects polymarket_orderbook_YYYY-MM-DDTHH.parquet
             let h = stem
                 .strip_prefix("polymarket_orderbook_")
                 .and_then(|s| s.strip_suffix(".parquet"))
                 .unwrap_or("");
-            match chrono::NaiveDateTime::parse_from_str(
-                &format!("{h}:00:00"),
-                "%Y-%m-%dT%H:%M:%S",
-            ) {
+            match chrono::NaiveDateTime::parse_from_str(&format!("{h}:00:00"), "%Y-%m-%dT%H:%M:%S")
+            {
                 Ok(naive) => naive.and_utc(),
                 Err(_) => {
                     eprintln!("could not derive hour from filename; pass --hour");
@@ -1909,17 +2018,16 @@ async fn cmd_distill(
             }
         };
         let candles = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
-        candles
-            .into_iter()
-            .map(|c| c.market.condition_id)
-            .collect()
+        candles.into_iter().map(|c| c.market.condition_id).collect()
     };
     tracing::info!(cids = cids.len(), "candle universe loaded for distill");
 
     let out_path = match output {
         Some(s) => std::path::PathBuf::from(s),
         None => {
-            let dir = in_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let dir = in_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
             backtest::distill::shared_cache_path_for_hour(dir, hour)
         }
     };
@@ -2034,6 +2142,9 @@ async fn cmd_harness_sweep(
     settlement_min_abs_move_usd: Vec<f64>,
     settlement_guard_minutes: Vec<f64>,
     settlement_sigma_buffer: Vec<f64>,
+    micro_max_spread: Vec<f64>,
+    micro_min_depth: Vec<f64>,
+    micro_min_pressure: Vec<f64>,
     also_maker: bool,
     top: usize,
     threads: usize,
@@ -2078,6 +2189,9 @@ async fn cmd_harness_sweep(
         settlement_min_abs_move_usd,
         settlement_guard_minutes,
         settlement_sigma_buffer,
+        micro_max_spread,
+        micro_min_depth,
+        micro_min_pressure,
         also_maker,
     };
     let variants = grid.variants();
@@ -2130,7 +2244,11 @@ async fn cmd_harness_sweep(
             .map(|d| d.timestamp() as f64)
             .unwrap_or(0.0);
         let window_minutes = live::window::estimate_window_minutes(&c.window_description);
-        let window_minutes = if window_minutes > 0.0 { window_minutes } else { 60.0 };
+        let window_minutes = if window_minutes > 0.0 {
+            window_minutes
+        } else {
+            60.0
+        };
         let open_t = close_t - window_minutes * 60.0;
         close_t > start_ts && open_t < end_ts
     });
@@ -2139,7 +2257,10 @@ async fn cmd_harness_sweep(
         eprintln!("no candle contracts in archive window");
         std::process::exit(1);
     }
-    tracing::info!(contracts = universe.contracts.len(), "harness universe loaded");
+    tracing::info!(
+        contracts = universe.contracts.len(),
+        "harness universe loaded"
+    );
 
     // BTC tape
     let mut btc = backtest::btc_history::BTCHistory::new();
@@ -2152,11 +2273,17 @@ async fn cmd_harness_sweep(
         let pad_ms = 3_600_000;
         let start_ms = start_dt.timestamp_millis() - pad_ms;
         let end_ms = end_dt.timestamp_millis() + pad_ms;
-        match btc.load_from_binance(start_ms, end_ms, "BTCUSDT", "1s").await {
+        match btc
+            .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
+            .await
+        {
             Ok(n) if n > 100 => tracing::info!(rows = n, interval = "1s", "BTC klines"),
             _ => {
                 btc = backtest::btc_history::BTCHistory::new();
-                if let Err(e) = btc.load_from_binance(start_ms, end_ms, "BTCUSDT", "1m").await {
+                if let Err(e) = btc
+                    .load_from_binance(start_ms, end_ms, "BTCUSDT", "1m")
+                    .await
+                {
                     eprintln!("Binance fetch failed: {e}");
                     std::process::exit(1);
                 }
@@ -2172,7 +2299,11 @@ async fn cmd_harness_sweep(
         .ok()
         .or_else(|| {
             let p = std::path::PathBuf::from(backtest::distill::SHARED_CACHE_DIR);
-            if p.exists() { Some(backtest::distill::SHARED_CACHE_DIR.to_string()) } else { None }
+            if p.exists() {
+                Some(backtest::distill::SHARED_CACHE_DIR.to_string())
+            } else {
+                None
+            }
         })
         .map(std::path::PathBuf::from);
     // Checkpoint setup. If --checkpoint <dir> is set:
@@ -2185,11 +2316,8 @@ async fn cmd_harness_sweep(
         if path.is_dir() {
             let has_state = std::fs::read_dir(&path)
                 .map(|it| {
-                    it.flatten().any(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".json")
-                    })
+                    it.flatten()
+                        .any(|e| e.file_name().to_string_lossy().ends_with(".json"))
                 })
                 .unwrap_or(false);
             if has_state && !resume {
@@ -2201,7 +2329,10 @@ async fn cmd_harness_sweep(
                 std::process::exit(2);
             }
         } else if path.exists() {
-            eprintln!("--checkpoint {} exists but isn't a directory", path.display());
+            eprintln!(
+                "--checkpoint {} exists but isn't a directory",
+                path.display()
+            );
             std::process::exit(2);
         }
         Some(path)
@@ -2212,8 +2343,9 @@ async fn cmd_harness_sweep(
     {
         let f = stop_flag.clone();
         tokio::spawn(async move {
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM");
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("install SIGTERM");
             let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
                 .expect("install SIGINT");
             tokio::select! {
@@ -2230,7 +2362,9 @@ async fn cmd_harness_sweep(
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         cache_dir: cache_dir_path,
-        latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
+        latency: backtest::l2_replay::StaticLatencyConfig {
+            insert_ms: latency_ms,
+        },
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
@@ -2243,7 +2377,11 @@ async fn cmd_harness_sweep(
         variants.len(),
         cfg.hours.len(),
     );
-    println!("\nRunning sweep over {} variants × {} hours…\n", variants.len(), cfg.hours.len());
+    println!(
+        "\nRunning sweep over {} variants × {} hours…\n",
+        variants.len(),
+        cfg.hours.len()
+    );
     if let Some(d) = &checkpoint_dir {
         println!(
             "Checkpoint: {} (touch {}/PAUSE or send SIGINT to pause cleanly between hours)\n",
@@ -2275,14 +2413,19 @@ async fn cmd_harness_sweep(
             });
             // Filter out variants with zero trades (no signal under those gates)
             // and report the top N positive variants.
-            let positive: Vec<_> = sorted.iter().filter(|r| r.results.n_trades() > 0).cloned().collect();
+            let positive: Vec<_> = sorted
+                .iter()
+                .filter(|r| r.results.n_trades() > 0)
+                .cloned()
+                .collect();
             let limit = top.min(positive.len());
             println!("Top {} variants by PnL (variants with ≥1 trade):\n", limit);
             println!("{}", backtest::harness::render_table(&positive[..limit]));
             let zero_count = sorted.iter().filter(|r| r.results.n_trades() == 0).count();
             println!(
                 "\n{} of {} variants produced 0 trades (gates too strict for the universe).",
-                zero_count, sorted.len(),
+                zero_count,
+                sorted.len(),
             );
         }
         Err(e) => {
@@ -2361,10 +2504,11 @@ async fn cmd_harness(
     // to disk keyed by condition_id so subsequent harness runs are near-instant.
     let cache_dir_path_for_meta = cache_dir_path.clone();
     let gamma_cache_path = cache_dir_path_for_meta.join("gamma_market_cache.json");
-    let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> = match std::fs::read_to_string(&gamma_cache_path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => Default::default(),
-    };
+    let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> =
+        match std::fs::read_to_string(&gamma_cache_path) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Default::default(),
+        };
     if allow_gamma_fetch {
         let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for &h in &hours {
@@ -2389,8 +2533,15 @@ async fn cmd_harness(
             .cloned()
             .collect();
         if !cid_vec.is_empty() {
-            eprintln!("gamma: fetching metadata for {} condition_ids", cid_vec.len());
-            tracing::info!(missing = cid_vec.len(), cached = cached_markets.len(), "Gamma cache miss; fetching");
+            eprintln!(
+                "gamma: fetching metadata for {} condition_ids",
+                cid_vec.len()
+            );
+            tracing::info!(
+                missing = cid_vec.len(),
+                cached = cached_markets.len(),
+                "Gamma cache miss; fetching"
+            );
             let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
             let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
                 Ok(m) => m,
@@ -2403,7 +2554,10 @@ async fn cmd_harness(
                 cached_markets.insert(m.condition_id.clone(), m);
             }
             if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
-                eprintln!("write Gamma cache {} failed: {e}", gamma_cache_path.display());
+                eprintln!(
+                    "write Gamma cache {} failed: {e}",
+                    gamma_cache_path.display()
+                );
                 std::process::exit(1);
             }
         }
@@ -2439,7 +2593,11 @@ async fn cmd_harness(
             .map(|d| d.timestamp() as f64)
             .unwrap_or(0.0);
         let window_minutes = live::window::estimate_window_minutes(&c.window_description);
-        let window_minutes = if window_minutes > 0.0 { window_minutes } else { 60.0 };
+        let window_minutes = if window_minutes > 0.0 {
+            window_minutes
+        } else {
+            60.0
+        };
         let open_t = close_t - window_minutes * 60.0;
         close_t > start_ts && open_t < end_ts
     });
@@ -2470,7 +2628,10 @@ async fn cmd_harness(
         );
         std::process::exit(1);
     }
-    tracing::info!(contracts = universe.contracts.len(), "harness universe loaded");
+    tracing::info!(
+        contracts = universe.contracts.len(),
+        "harness universe loaded"
+    );
 
     // 2. BTC tape.
     let mut btc = backtest::btc_history::BTCHistory::new();
@@ -2489,12 +2650,18 @@ async fn cmd_harness(
         let pad_ms = 3_600_000;
         let start_ms = start_dt.timestamp_millis() - pad_ms;
         let end_ms = end_dt.timestamp_millis() + pad_ms;
-        match btc.load_from_binance(start_ms, end_ms, "BTCUSDT", "1s").await {
+        match btc
+            .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
+            .await
+        {
             Ok(n) if n > 100 => tracing::info!(rows = n, interval = "1s", "BTC klines pulled"),
             Ok(_) | Err(_) => {
                 tracing::warn!("1s klines unavailable; falling back to 1m");
                 btc = backtest::btc_history::BTCHistory::new();
-                match btc.load_from_binance(start_ms, end_ms, "BTCUSDT", "1m").await {
+                match btc
+                    .load_from_binance(start_ms, end_ms, "BTCUSDT", "1m")
+                    .await
+                {
                     Ok(n) => tracing::info!(rows = n, interval = "1m", "BTC klines pulled"),
                     Err(e) => {
                         eprintln!("Binance kline fetch failed: {e}");
@@ -2513,7 +2680,11 @@ async fn cmd_harness(
         .ok()
         .or_else(|| {
             let p = std::path::PathBuf::from(backtest::distill::SHARED_CACHE_DIR);
-            if p.exists() { Some(backtest::distill::SHARED_CACHE_DIR.to_string()) } else { None }
+            if p.exists() {
+                Some(backtest::distill::SHARED_CACHE_DIR.to_string())
+            } else {
+                None
+            }
         })
         .map(std::path::PathBuf::from);
     let checkpoint_dir = if let Some(p) = checkpoint {
@@ -2521,11 +2692,8 @@ async fn cmd_harness(
         if path.is_dir() {
             let has_state = std::fs::read_dir(&path)
                 .map(|it| {
-                    it.flatten().any(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".json")
-                    })
+                    it.flatten()
+                        .any(|e| e.file_name().to_string_lossy().ends_with(".json"))
                 })
                 .unwrap_or(false);
             if has_state && !resume {
@@ -2537,7 +2705,10 @@ async fn cmd_harness(
                 std::process::exit(2);
             }
         } else if path.exists() {
-            eprintln!("--checkpoint {} exists but isn't a directory", path.display());
+            eprintln!(
+                "--checkpoint {} exists but isn't a directory",
+                path.display()
+            );
             std::process::exit(2);
         }
         Some(path)
@@ -2548,8 +2719,9 @@ async fn cmd_harness(
     {
         let f = stop_flag.clone();
         tokio::spawn(async move {
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM");
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("install SIGTERM");
             let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
                 .expect("install SIGINT");
             tokio::select! {
@@ -2565,7 +2737,9 @@ async fn cmd_harness(
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         cache_dir: cache_dir_path,
-        latency: backtest::l2_replay::StaticLatencyConfig { insert_ms: latency_ms },
+        latency: backtest::l2_replay::StaticLatencyConfig {
+            insert_ms: latency_ms,
+        },
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
@@ -2585,11 +2759,8 @@ async fn cmd_harness(
     match backtest::harness::run_harness(&cfg, &variants).await {
         Ok(runs) => {
             if let Some(path) = report_json {
-                let report = backtest::experiment::ExperimentReport::from_harness(
-                    "harness",
-                    &cfg,
-                    &runs,
-                );
+                let report =
+                    backtest::experiment::ExperimentReport::from_harness("harness", &cfg, &runs);
                 if let Err(e) = backtest::experiment::write_report_atomic(path, &report) {
                     eprintln!("write report {path}: {e}");
                     std::process::exit(1);
@@ -2630,10 +2801,15 @@ fn cmd_sweep(sessions: &[String], bankroll: f64, min_trades: u64, show_zones: bo
     // Sort by P&L descending so the strongest variants are at the top.
     let mut sorted = runs.clone();
     sorted.sort_by(|a, b| {
-        b.realized_pnl.partial_cmp(&a.realized_pnl).unwrap_or(std::cmp::Ordering::Equal)
+        b.realized_pnl
+            .partial_cmp(&a.realized_pnl)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    println!("\nSweep over {} session file(s) — bankroll=${bankroll:.0}, min_trades={min_trades}\n", paths.len());
+    println!(
+        "\nSweep over {} session file(s) — bankroll=${bankroll:.0}, min_trades={min_trades}\n",
+        paths.len()
+    );
     println!("{}", sweep::render_table(&sorted));
     if show_zones {
         println!("{}", sweep::render_zone_breakdown(&sorted));

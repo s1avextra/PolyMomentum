@@ -31,6 +31,37 @@ impl MicrostructureConfig {
     pub fn is_active(&self) -> bool {
         self.max_spread < 1.0 || self.min_book_depth > 0.0 || self.min_book_pressure > -1.0
     }
+
+    pub fn apply_safety_floor(
+        &mut self,
+        max_spread_ceiling: f64,
+        min_depth_floor: f64,
+        min_pressure_floor: f64,
+    ) -> bool {
+        let mut changed = false;
+        if max_spread_ceiling.is_finite()
+            && max_spread_ceiling >= 0.0
+            && self.max_spread > max_spread_ceiling
+        {
+            self.max_spread = max_spread_ceiling;
+            changed = true;
+        }
+        if min_depth_floor.is_finite()
+            && min_depth_floor >= 0.0
+            && self.min_book_depth < min_depth_floor
+        {
+            self.min_book_depth = min_depth_floor;
+            changed = true;
+        }
+        if min_pressure_floor.is_finite()
+            && (-1.0..=1.0).contains(&min_pressure_floor)
+            && self.min_book_pressure < min_pressure_floor
+        {
+            self.min_book_pressure = min_pressure_floor;
+            changed = true;
+        }
+        changed
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
@@ -52,11 +83,23 @@ pub struct MicrostructureSkip {
 }
 
 impl BookMicrostructure {
-    pub fn from_levels(bids: &[BookLevelView], asks: &[BookLevelView], depth_levels: usize) -> Self {
+    pub fn from_levels(
+        bids: &[BookLevelView],
+        asks: &[BookLevelView],
+        depth_levels: usize,
+    ) -> Self {
         let best_bid = bids.first().map(|l| l.price).unwrap_or(0.0);
         let best_ask = asks.first().map(|l| l.price).unwrap_or(0.0);
-        let bid_depth: f64 = bids.iter().take(depth_levels).map(|l| l.size.max(0.0)).sum();
-        let ask_depth: f64 = asks.iter().take(depth_levels).map(|l| l.size.max(0.0)).sum();
+        let bid_depth: f64 = bids
+            .iter()
+            .take(depth_levels)
+            .map(|l| l.size.max(0.0))
+            .sum();
+        let ask_depth: f64 = asks
+            .iter()
+            .take(depth_levels)
+            .map(|l| l.size.max(0.0))
+            .sum();
         Self::from_top(best_bid, best_ask, bid_depth, ask_depth)
     }
 
@@ -140,8 +183,14 @@ mod tests {
 
     #[test]
     fn positive_depth_imbalance_pushes_microprice_up() {
-        let bids = vec![BookLevelView { price: 0.50, size: 300.0 }];
-        let asks = vec![BookLevelView { price: 0.52, size: 100.0 }];
+        let bids = vec![BookLevelView {
+            price: 0.50,
+            size: 300.0,
+        }];
+        let asks = vec![BookLevelView {
+            price: 0.52,
+            size: 100.0,
+        }];
         let f = BookMicrostructure::from_levels(&bids, &asks, 3);
         assert!(f.microprice > 0.51);
         assert!(f.pressure > 0.0);
@@ -156,5 +205,19 @@ mod tests {
         };
         let err = f.check_long_entry(&cfg).unwrap_err();
         assert_eq!(err.reason, "microstructure_weak_pressure");
+    }
+
+    #[test]
+    fn safety_floor_only_tightens_microstructure() {
+        let mut cfg = MicrostructureConfig::disabled();
+        assert!(cfg.apply_safety_floor(0.02, 20.0, 0.10));
+        assert_eq!(cfg.max_spread, 0.02);
+        assert_eq!(cfg.min_book_depth, 20.0);
+        assert_eq!(cfg.min_book_pressure, 0.10);
+
+        assert!(!cfg.apply_safety_floor(0.05, 10.0, -0.10));
+        assert_eq!(cfg.max_spread, 0.02);
+        assert_eq!(cfg.min_book_depth, 20.0);
+        assert_eq!(cfg.min_book_pressure, 0.10);
     }
 }

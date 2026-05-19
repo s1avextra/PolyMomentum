@@ -128,6 +128,15 @@ pub struct Settings {
     pub candle_settlement_min_abs_move_usd: f64,
     pub candle_settlement_sigma_buffer: f64,
     pub candle_settlement_alignment_ready: bool,
+    pub candle_runtime_min_confidence_floor: f64,
+    pub candle_runtime_min_z_floor: f64,
+    pub candle_runtime_min_edge_floor: f64,
+    pub candle_runtime_min_ev_buffer_floor: f64,
+    pub candle_runtime_min_price_floor: f64,
+    pub candle_runtime_max_price_ceiling: f64,
+    pub candle_microstructure_max_spread: f64,
+    pub candle_microstructure_min_book_depth: f64,
+    pub candle_microstructure_min_book_pressure: f64,
     pub candle_window_minutes: f64,
 
     pub candle_noise_z_threshold: f64,
@@ -162,11 +171,17 @@ fn env_str(key: &str, default: &str) -> String {
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
-    env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_i64(key: &str, default: i64) -> i64 {
-    env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -214,10 +229,7 @@ impl Settings {
             live_allow_maker_orders: env_bool("LIVE_ALLOW_MAKER_ORDERS", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
-            polygon_rpc_url: env_str(
-                "POLYGON_RPC_URL",
-                "https://polygon-bor-rpc.publicnode.com",
-            ),
+            polygon_rpc_url: env_str("POLYGON_RPC_URL", "https://polygon-bor-rpc.publicnode.com"),
 
             bankroll_usd: env_f64("BANKROLL_USD", 0.0),
             max_total_exposure_usd: env_f64("MAX_TOTAL_EXPOSURE_USD", 80.0),
@@ -235,7 +247,10 @@ impl Settings {
             candle_zone_late_min_confidence: env_f64("CANDLE_ZONE_LATE_MIN_CONFIDENCE", 0.65),
             candle_zone_late_min_z: env_f64("CANDLE_ZONE_LATE_MIN_Z", 0.5),
             candle_zone_late_min_edge: env_f64("CANDLE_ZONE_LATE_MIN_EDGE", 0.08),
-            candle_zone_terminal_min_confidence: env_f64("CANDLE_ZONE_TERMINAL_MIN_CONFIDENCE", 0.55),
+            candle_zone_terminal_min_confidence: env_f64(
+                "CANDLE_ZONE_TERMINAL_MIN_CONFIDENCE",
+                0.55,
+            ),
             candle_zone_terminal_min_z: env_f64("CANDLE_ZONE_TERMINAL_MIN_Z", 0.3),
             candle_zone_terminal_min_edge: env_f64("CANDLE_ZONE_TERMINAL_MIN_EDGE", 0.03),
             candle_dead_zone_lo: env_f64("CANDLE_DEAD_ZONE_LO", 0.80),
@@ -250,6 +265,24 @@ impl Settings {
             candle_settlement_min_abs_move_usd: env_f64("CANDLE_SETTLEMENT_MIN_ABS_MOVE_USD", 10.0),
             candle_settlement_sigma_buffer: env_f64("CANDLE_SETTLEMENT_SIGMA_BUFFER", 0.0),
             candle_settlement_alignment_ready: env_bool("CANDLE_SETTLEMENT_ALIGNMENT_READY", false),
+            candle_runtime_min_confidence_floor: env_f64(
+                "CANDLE_RUNTIME_MIN_CONFIDENCE_FLOOR",
+                0.0,
+            ),
+            candle_runtime_min_z_floor: env_f64("CANDLE_RUNTIME_MIN_Z_FLOOR", 0.0),
+            candle_runtime_min_edge_floor: env_f64("CANDLE_RUNTIME_MIN_EDGE_FLOOR", 0.0),
+            candle_runtime_min_ev_buffer_floor: env_f64("CANDLE_RUNTIME_MIN_EV_BUFFER_FLOOR", -1.0),
+            candle_runtime_min_price_floor: env_f64("CANDLE_RUNTIME_MIN_PRICE_FLOOR", 0.0),
+            candle_runtime_max_price_ceiling: env_f64("CANDLE_RUNTIME_MAX_PRICE_CEILING", 1.0),
+            candle_microstructure_max_spread: env_f64("CANDLE_MICROSTRUCTURE_MAX_SPREAD", 1.0),
+            candle_microstructure_min_book_depth: env_f64(
+                "CANDLE_MICROSTRUCTURE_MIN_BOOK_DEPTH",
+                0.0,
+            ),
+            candle_microstructure_min_book_pressure: env_f64(
+                "CANDLE_MICROSTRUCTURE_MIN_BOOK_PRESSURE",
+                -1.0,
+            ),
             candle_window_minutes: env_f64("CANDLE_WINDOW_MINUTES", 0.0),
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
@@ -258,7 +291,10 @@ impl Settings {
             candle_vol_extreme_multiplier: env_f64("CANDLE_VOL_EXTREME_MULTIPLIER", 2.0),
             candle_cross_asset_enabled: env_bool("CANDLE_CROSS_ASSET_ENABLED", false),
             candle_cross_asset_min_correlation: env_f64("CANDLE_CROSS_ASSET_MIN_CORRELATION", 0.70),
-            candle_cross_asset_confidence_boost: env_f64("CANDLE_CROSS_ASSET_CONFIDENCE_BOOST", 0.10),
+            candle_cross_asset_confidence_boost: env_f64(
+                "CANDLE_CROSS_ASSET_CONFIDENCE_BOOST",
+                0.10,
+            ),
 
             candle_prefer_maker: env_bool("CANDLE_PREFER_MAKER", false),
             candle_maker_timeout_s: env_f64("CANDLE_MAKER_TIMEOUT_S", 3.0),
@@ -266,21 +302,18 @@ impl Settings {
             candle_breaker_min_trades: env_i64("CANDLE_BREAKER_MIN_TRADES", 20),
             candle_breaker_min_win_rate: env_f64("CANDLE_BREAKER_MIN_WIN_RATE", 0.65),
             candle_breaker_max_drawdown_pct: env_f64("CANDLE_BREAKER_MAX_DRAWDOWN_PCT", 0.30),
-            candle_paper_breaker_reset_on_start: env_bool("CANDLE_PAPER_BREAKER_RESET_ON_START", false),
+            candle_paper_breaker_reset_on_start: env_bool(
+                "CANDLE_PAPER_BREAKER_RESET_ON_START",
+                false,
+            ),
 
             kill_switch_path: env_str("KILL_SWITCH_PATH", "/tmp/polymomentum/KILL"),
             alert_required: env_bool("ALERT_REQUIRED", false),
             promotion_artifact_path: env_str("POLYMOMENTUM_PROMOTION_ARTIFACT", ""),
             promotion_required: env_bool("POLYMOMENTUM_REQUIRE_PROMOTION", false),
 
-            state_db_path: env_str(
-                "STATE_DB_PATH",
-                &format!("{}/candle/state.db", logs_dir),
-            ),
-            session_log_dir: env_str(
-                "SESSION_LOG_DIR",
-                &format!("{}/sessions", logs_dir),
-            ),
+            state_db_path: env_str("STATE_DB_PATH", &format!("{}/candle/state.db", logs_dir)),
+            session_log_dir: env_str("SESSION_LOG_DIR", &format!("{}/sessions", logs_dir)),
 
             data_dir,
             logs_dir,
@@ -323,7 +356,10 @@ mod tests {
     #[test]
     fn parses_supported_venues() {
         assert_eq!(VenueMode::parse("paper_only"), Some(VenueMode::PaperOnly));
-        assert_eq!(VenueMode::parse("polymarket-us"), Some(VenueMode::PolymarketUs));
+        assert_eq!(
+            VenueMode::parse("polymarket-us"),
+            Some(VenueMode::PolymarketUs)
+        );
         assert_eq!(
             VenueMode::parse("international"),
             Some(VenueMode::PolymarketInternational)

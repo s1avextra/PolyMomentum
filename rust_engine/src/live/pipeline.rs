@@ -42,12 +42,9 @@ use crate::price_state::PriceState;
 use crate::release::ReleaseManifest;
 use crate::risk::manager::{RiskConfig, RiskManager, TradeRecord};
 use crate::strategy::decision::{
-    decide_candle_trade, DecisionResult, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE,
-    ZoneConfig,
+    decide_candle_trade, DecisionResult, ZoneConfig, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE,
 };
-use crate::strategy::microstructure::{
-    BookLevelView, BookMicrostructure, MicrostructureConfig,
-};
+use crate::strategy::microstructure::{BookLevelView, BookMicrostructure, MicrostructureConfig};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
@@ -167,10 +164,7 @@ impl OraclePending {
             our_open_btc: v.get("our_open_btc")?.as_f64()?,
             our_close_btc: v.get("our_close_btc")?.as_f64()?,
             end_time: v.get("end_time")?.as_f64()?,
-            attempts: v
-                .get("attempts")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0) as u32,
+            attempts: v.get("attempts").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
             direction: v
                 .get("direction")
                 .and_then(|x| x.as_str())
@@ -248,24 +242,43 @@ impl RuntimeStrategy {
                 artifact.selected_strategy.params_hash
             );
         }
-        let safety_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
+        let zone_before = variant.zone_config;
+        let zone_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
+        let settlement_floor_applied = settlement_fields_changed(zone_before, variant.zone_config);
+        let decision_floor_applied =
+            zone_floor_applied && !zones_equal_except_settlement(zone_before, variant.zone_config);
+        let runtime_floor_applied = apply_runtime_variant_safety_floor(&mut variant, settings);
         let mut strategy_spec = artifact.selected_strategy;
         let mut source = format!("promotion:{path}");
-        if safety_floor_applied {
+        if zone_floor_applied || runtime_floor_applied {
             strategy_spec = StrategySpec::from_serializable_params(
                 strategy_spec.name.clone(),
                 strategy_spec.version.clone(),
                 &variant,
                 format!(
-                    "{};settlement_floor cutoff_min={:.2},guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
+                    "{};runtime_floor conf>={:.2},z>={:.2},edge>={:.2},ev>={:.2},price=[{:.2},{:.2}],micro_spread<={:.3},micro_depth>={:.2},micro_pressure>={:.2},settlement cutoff_min={:.2},guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
                     strategy_spec.risk_profile,
+                    variant.min_confidence,
+                    variant.zone_config.primary_min_z,
+                    variant.min_edge,
+                    variant.zone_config.min_ev_buffer,
+                    variant.zone_config.min_price,
+                    variant.zone_config.max_price,
+                    variant.microstructure.max_spread,
+                    variant.microstructure.min_book_depth,
+                    variant.microstructure.min_book_pressure,
                     variant.zone_config.settlement_cutoff_minutes,
                     variant.zone_config.settlement_guard_minutes,
                     variant.zone_config.settlement_min_abs_move_usd,
                     variant.zone_config.settlement_sigma_buffer,
                 ),
             );
-            source = format!("{source}+settlement_floor");
+            if settlement_floor_applied {
+                source = format!("{source}+settlement_floor");
+            }
+            if decision_floor_applied || runtime_floor_applied {
+                source = format!("{source}+runtime_floor");
+            }
         }
         Ok(Self {
             strategy_spec,
@@ -284,6 +297,12 @@ impl RuntimeStrategy {
 
     fn from_settings(settings: &Settings) -> Self {
         let zone_config = ZoneConfig::from_settings(settings);
+        let mut microstructure = MicrostructureConfig::disabled();
+        microstructure.apply_safety_floor(
+            settings.candle_microstructure_max_spread,
+            settings.candle_microstructure_min_book_depth,
+            settings.candle_microstructure_min_book_pressure,
+        );
         let params = json!({
             "zone_config": zone_config,
             "skip_dead_zone": settings.candle_skip_dead_zone,
@@ -293,7 +312,7 @@ impl RuntimeStrategy {
             "max_per_market_usd": settings.max_position_per_market_usd,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": 0.072,
-            "microstructure": MicrostructureConfig::disabled(),
+            "microstructure": microstructure,
         });
         Self {
             strategy_spec: StrategySpec::from_serializable_params(
@@ -313,10 +332,63 @@ impl RuntimeStrategy {
             max_per_market_usd: settings.max_position_per_market_usd,
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: 0.072,
-            microstructure: MicrostructureConfig::disabled(),
+            microstructure,
             source: "settings".to_string(),
         }
     }
+}
+
+fn apply_runtime_variant_safety_floor(variant: &mut StrategyVariant, settings: &Settings) -> bool {
+    let mut changed = false;
+    if settings.candle_runtime_min_confidence_floor.is_finite()
+        && variant.min_confidence < settings.candle_runtime_min_confidence_floor
+    {
+        variant.min_confidence = settings.candle_runtime_min_confidence_floor;
+        changed = true;
+    }
+    if settings.candle_runtime_min_edge_floor.is_finite()
+        && variant.min_edge < settings.candle_runtime_min_edge_floor
+    {
+        variant.min_edge = settings.candle_runtime_min_edge_floor;
+        changed = true;
+    }
+    changed |= variant.microstructure.apply_safety_floor(
+        settings.candle_microstructure_max_spread,
+        settings.candle_microstructure_min_book_depth,
+        settings.candle_microstructure_min_book_pressure,
+    );
+    changed
+}
+
+fn settlement_fields_changed(before: ZoneConfig, after: ZoneConfig) -> bool {
+    before.settlement_cutoff_minutes != after.settlement_cutoff_minutes
+        || before.settlement_guard_minutes != after.settlement_guard_minutes
+        || before.settlement_min_abs_move_usd != after.settlement_min_abs_move_usd
+        || before.settlement_sigma_buffer != after.settlement_sigma_buffer
+}
+
+fn zones_equal_except_settlement(before: ZoneConfig, after: ZoneConfig) -> bool {
+    let mut before = before;
+    before.settlement_cutoff_minutes = after.settlement_cutoff_minutes;
+    before.settlement_guard_minutes = after.settlement_guard_minutes;
+    before.settlement_min_abs_move_usd = after.settlement_min_abs_move_usd;
+    before.settlement_sigma_buffer = after.settlement_sigma_buffer;
+    before.early_min_confidence == after.early_min_confidence
+        && before.early_min_z == after.early_min_z
+        && before.early_min_edge == after.early_min_edge
+        && before.primary_min_z == after.primary_min_z
+        && before.late_min_confidence == after.late_min_confidence
+        && before.late_min_z == after.late_min_z
+        && before.late_min_edge == after.late_min_edge
+        && before.terminal_min_confidence == after.terminal_min_confidence
+        && before.terminal_min_z == after.terminal_min_z
+        && before.terminal_min_edge == after.terminal_min_edge
+        && before.dead_zone_lo == after.dead_zone_lo
+        && before.dead_zone_hi == after.dead_zone_hi
+        && before.min_price == after.min_price
+        && before.max_price == after.max_price
+        && before.edge_cap == after.edge_cap
+        && before.min_ev_buffer == after.min_ev_buffer
 }
 
 pub struct Pipeline {
@@ -528,10 +600,8 @@ impl Pipeline {
             cycle_count: Mutex::new(0),
         });
         if breaker_tripped {
-            let metrics = breaker_state.metrics(
-                restored_open_exposure,
-                p.settings.bankroll_usd.max(1.0),
-            );
+            let metrics =
+                breaker_state.metrics(restored_open_exposure, p.settings.bankroll_usd.max(1.0));
             p.monitor.record_breaker_state(
                 "restored_tripped",
                 "state_db",
@@ -565,6 +635,7 @@ impl Pipeline {
             self.runtime_strategy.min_confidence,
             self.runtime_strategy.min_edge,
             self.runtime_strategy.skip_dead_zone,
+            &self.runtime_strategy.microstructure,
             self.settings.candle_settlement_alignment_ready,
         );
         tracing::info!(
@@ -579,7 +650,11 @@ impl Pipeline {
         if self.alerter.enabled() {
             let _ = self
                 .alerter
-                .send("info", "PolyMomentum Rust starting", &format!("mode={}", self.mode.as_str()))
+                .send(
+                    "info",
+                    "PolyMomentum Rust starting",
+                    &format!("mode={}", self.mode.as_str()),
+                )
                 .await;
         }
 
@@ -832,10 +907,7 @@ impl Pipeline {
     }
 
     pub async fn refresh_contracts(&self) -> Result<()> {
-        let markets = self
-            .gamma
-            .fetch_markets_by_end_date(3.0, 0.0)
-            .await?;
+        let markets = self.gamma.fetch_markets_by_end_date(3.0, 0.0).await?;
         let mut contracts = scan_candle_markets(&markets, 1.0, 50.0);
         if self.settings.candle_window_minutes > 0.0 {
             let before = contracts.len();
@@ -852,8 +924,10 @@ impl Pipeline {
             );
         }
 
-        let active_cids: HashSet<String> =
-            contracts.iter().map(|c| c.market.condition_id.clone()).collect();
+        let active_cids: HashSet<String> = contracts
+            .iter()
+            .map(|c| c.market.condition_id.clone())
+            .collect();
         {
             let mut traded = self.traded.lock().await;
             traded.retain(|c| active_cids.contains(c));
@@ -901,7 +975,8 @@ impl Pipeline {
             sleep(Duration::from_secs(120)).await;
             if let Err(e) = self.refresh_contracts().await {
                 tracing::warn!(error = %e, "refresh failed");
-                self.monitor.record_error("contract_refresh", &e.to_string(), true);
+                self.monitor
+                    .record_error("contract_refresh", &e.to_string(), true);
             }
         }
     }
@@ -964,9 +1039,7 @@ impl Pipeline {
                                 MomentumDetector::new(
                                     Some(ps.implied_vol),
                                     MomentumConfig {
-                                        noise_z_threshold: self
-                                            .settings
-                                            .candle_noise_z_threshold,
+                                        noise_z_threshold: self.settings.candle_noise_z_threshold,
                                         ..Default::default()
                                     },
                                 )
@@ -1022,7 +1095,9 @@ impl Pipeline {
                     continue;
                 }
 
-                let Ok(end) = parse_end(&c.end_date) else { continue };
+                let Ok(end) = parse_end(&c.end_date) else {
+                    continue;
+                };
                 let minutes_left = (end - now).num_seconds() as f64 / 60.0;
                 if minutes_left <= 0.083 || minutes_left > 30.0 {
                     continue;
@@ -1068,7 +1143,8 @@ impl Pipeline {
                     if det.get_open_price(&cid).is_none() {
                         let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
                         let Some(open_price) = ps.price_near_seconds(&c.asset, open_ts, 2.0) else {
-                            self.monitor.record_signal_skip(&cid, "open_price_unavailable");
+                            self.monitor
+                                .record_signal_skip(&cid, "open_price_unavailable");
                             continue;
                         };
                         det.set_window_open(&cid, open_price);
@@ -1218,8 +1294,7 @@ impl Pipeline {
                         } else {
                             &c.down_token_id
                         };
-                        let micro =
-                            live_microstructure(traded_token_id, &books, now_ts);
+                        let micro = live_microstructure(traded_token_id, &books, now_ts);
                         if let Err(skip) =
                             micro.check_long_entry(&self.runtime_strategy.microstructure)
                         {
@@ -1374,7 +1449,8 @@ impl Pipeline {
                 let Some(fill) = simulate_paper_fill(market_price, position, &cfg) else {
                     return Ok(());
                 };
-                let expected_profit = fill.shares * (decision.fair_value - fill.fill_price) - fill.fee;
+                let expected_profit =
+                    fill.shares * (decision.fair_value - fill.fill_price) - fill.fee;
                 let now_ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
@@ -1420,7 +1496,13 @@ impl Pipeline {
                         .map_err(|e| anyhow::anyhow!(e))?;
                     let ack_state = acked.state.as_str().to_string();
                     orders
-                        .fill(&intent.intent_id, fill.shares, fill.fill_price, fill.fee, now_ts)
+                        .fill(
+                            &intent.intent_id,
+                            fill.shares,
+                            fill.fill_price,
+                            fill.fee,
+                            now_ts,
+                        )
                         .map_err(|e| anyhow::anyhow!(e))?;
                     ack_state
                 };
@@ -1434,41 +1516,46 @@ impl Pipeline {
                     minutes_left = signal.minutes_remaining,
                     "candle.trade.paper"
                 );
-                self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
-                    intent_id: intent.intent_id.clone(),
-                    token_id: short_cid(token_id),
-                    side: "BUY".into(),
-                    state: ack_state,
-                    price: fill.fill_price,
-                    live_price: market_price,
-                    size: fill.shares,
-                    order_value,
-                    order_id: short_cid(&order_id),
-                    book_best_ask: market_price,
-                    book_ask_depth: 0.0,
-                    book_bid_depth: 0.0,
-                    balance_usd: bankroll,
-                    submit_latency_ms: Some(0.0),
-                });
-                self.monitor.record_order_filled(&crate::monitoring::session::OrderFilled {
-                    intent_id: intent.intent_id,
-                    order_id: short_cid(&order_id),
-                    filled: fill.shares,
-                    requested: fill.shares,
-                    fill_pct: 1.0,
-                    fill_price: fill.fill_price,
-                    limit_price: market_price,
-                    slippage: fill.fill_price - market_price,
-                    slippage_bps: if market_price > 0.0 {
-                        (fill.fill_price - market_price) / market_price * 10_000.0
-                    } else {
-                        0.0
-                    },
-                    fill_time_s: 0.0,
-                    fee: fill.fee,
-                    n_trades: 1,
-                });
-                self.traded.lock().await.insert(contract.market.condition_id.clone());
+                self.monitor
+                    .record_order_placed(&crate::monitoring::session::OrderPlaced {
+                        intent_id: intent.intent_id.clone(),
+                        token_id: short_cid(token_id),
+                        side: "BUY".into(),
+                        state: ack_state,
+                        price: fill.fill_price,
+                        live_price: market_price,
+                        size: fill.shares,
+                        order_value,
+                        order_id: short_cid(&order_id),
+                        book_best_ask: market_price,
+                        book_ask_depth: 0.0,
+                        book_bid_depth: 0.0,
+                        balance_usd: bankroll,
+                        submit_latency_ms: Some(0.0),
+                    });
+                self.monitor
+                    .record_order_filled(&crate::monitoring::session::OrderFilled {
+                        intent_id: intent.intent_id,
+                        order_id: short_cid(&order_id),
+                        filled: fill.shares,
+                        requested: fill.shares,
+                        fill_pct: 1.0,
+                        fill_price: fill.fill_price,
+                        limit_price: market_price,
+                        slippage: fill.fill_price - market_price,
+                        slippage_bps: if market_price > 0.0 {
+                            (fill.fill_price - market_price) / market_price * 10_000.0
+                        } else {
+                            0.0
+                        },
+                        fill_time_s: 0.0,
+                        fee: fill.fee,
+                        n_trades: 1,
+                    });
+                self.traded
+                    .lock()
+                    .await
+                    .insert(contract.market.condition_id.clone());
                 self.risk
                     .record_trade(TradeRecord {
                         timestamp: now_ts,
@@ -1505,12 +1592,18 @@ impl Pipeline {
             }
             Mode::Live => {
                 let Some(clob) = self.clob.clone() else {
-                    tracing::error!("live mode but no CLOB client (missing api keys / private key)");
+                    tracing::error!(
+                        "live mode but no CLOB client (missing api keys / private key)"
+                    );
                     return Ok(());
                 };
                 // Round to the market's advertised tick and keep a sane fallback
                 // for legacy metadata that does not include minimum_tick_size.
-                let tick = contract.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
+                let tick = contract
+                    .market
+                    .minimum_tick_size
+                    .unwrap_or(0.01)
+                    .max(0.0001);
                 let limit_price = ((market_price / tick).round() * tick).clamp(tick, 1.0 - tick);
                 let shares = ((position / limit_price) * 100.0).floor() / 100.0;
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
@@ -1547,7 +1640,10 @@ impl Pipeline {
                     Some(limit_price),
                     shares,
                     "live_candle_momentum_decision",
-                    format!("{}:{limit_price:.4}:{shares:.4}", contract.market.condition_id),
+                    format!(
+                        "{}:{limit_price:.4}:{shares:.4}",
+                        contract.market.condition_id
+                    ),
                 );
 
                 let t_start = SystemTime::now()
@@ -1606,29 +1702,35 @@ impl Pipeline {
                         let ack_state = {
                             let mut orders = self.order_manager.lock().await;
                             orders
-                                .ack(&intent.intent_id, Some(order_id.clone()), t_start + submit_latency_s)
+                                .ack(
+                                    &intent.intent_id,
+                                    Some(order_id.clone()),
+                                    t_start + submit_latency_s,
+                                )
                                 .map_err(|e| anyhow::anyhow!(e))?
                                 .state
                                 .as_str()
                                 .to_string()
                         };
                         let order_value = limit_price * shares;
-                        self.monitor.record_order_placed(&crate::monitoring::session::OrderPlaced {
-                            intent_id: intent.intent_id,
-                            token_id: short_cid(token_id),
-                            side: "BUY".into(),
-                            state: ack_state,
-                            price: limit_price,
-                            live_price: market_price,
-                            size: shares,
-                            order_value,
-                            order_id: short_cid(&order_id),
-                            book_best_ask: market_price,
-                            book_ask_depth: 0.0,
-                            book_bid_depth: 0.0,
-                            balance_usd: self.risk.effective_bankroll().await,
-                            submit_latency_ms: Some(submit_latency_s * 1000.0),
-                        });
+                        self.monitor.record_order_placed(
+                            &crate::monitoring::session::OrderPlaced {
+                                intent_id: intent.intent_id,
+                                token_id: short_cid(token_id),
+                                side: "BUY".into(),
+                                state: ack_state,
+                                price: limit_price,
+                                live_price: market_price,
+                                size: shares,
+                                order_value,
+                                order_id: short_cid(&order_id),
+                                book_best_ask: market_price,
+                                book_ask_depth: 0.0,
+                                book_bid_depth: 0.0,
+                                balance_usd: self.risk.effective_bankroll().await,
+                                submit_latency_ms: Some(submit_latency_s * 1000.0),
+                            },
+                        );
                         tracing::info!(
                             order_id = short_cid(&order_id),
                             cost = order_value,
@@ -1640,10 +1742,18 @@ impl Pipeline {
                         let truncated = if e.len() > 200 { &e[..200] } else { e.as_str() };
                         {
                             let mut orders = self.order_manager.lock().await;
-                            let _ = orders.reject(&intent.intent_id, truncated, t_start + submit_latency_s);
+                            let _ = orders.reject(
+                                &intent.intent_id,
+                                truncated,
+                                t_start + submit_latency_s,
+                            );
                         }
-                        self.monitor
-                            .record_order_rejected(token_id, truncated, limit_price, shares);
+                        self.monitor.record_order_rejected(
+                            token_id,
+                            truncated,
+                            limit_price,
+                            shares,
+                        );
                         tracing::warn!(error = %truncated, "candle.trade.live.failed");
                     }
                 }
@@ -1660,7 +1770,8 @@ impl Pipeline {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-                pp.values().any(|p| (p.end_time - now) > 0.0 && (p.end_time - now) < 15.0)
+                pp.values()
+                    .any(|p| (p.end_time - now) > 0.0 && (p.end_time - now) < 15.0)
             };
             sleep(Duration::from_secs(if near_resolution { 1 } else { 5 })).await;
 
@@ -1694,7 +1805,11 @@ impl Pipeline {
                             ps.alt_mid.get(&pos.asset).copied().unwrap_or(btc)
                         }
                     });
-                let actual = if close_price >= pos.open_btc { "up" } else { "down" };
+                let actual = if close_price >= pos.open_btc {
+                    "up"
+                } else {
+                    "down"
+                };
                 let won = actual == pos.direction;
                 let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
                 if pos.shadow {
@@ -1857,8 +1972,12 @@ impl Pipeline {
                                     "candle.oracle.shadow_disagreement"
                                 );
                             } else {
-                                if let Some((final_won, final_pnl, provisional_won, provisional_pnl)) =
-                                    entry.oracle_pnl(res_str)
+                                if let Some((
+                                    final_won,
+                                    final_pnl,
+                                    provisional_won,
+                                    provisional_pnl,
+                                )) = entry.oracle_pnl(res_str)
                                 {
                                     let pnl_delta = final_pnl - provisional_pnl;
                                     if pnl_delta.abs() > 1e-9 {
@@ -1870,7 +1989,11 @@ impl Pipeline {
                                             );
                                         } else {
                                             let mut bs = self.breaker.lock().await;
-                                            bs.correct_resolution(provisional_won, final_won, pnl_delta);
+                                            bs.correct_resolution(
+                                                provisional_won,
+                                                final_won,
+                                                pnl_delta,
+                                            );
                                             drop(bs);
                                             self.persist_breaker_state().await;
                                             self.monitor.record_oracle_correction(
@@ -1938,11 +2061,8 @@ impl Pipeline {
             } else {
                 0.0
             };
-            let sources: HashMap<String, f64> = ps
-                .prices
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
+            let sources: HashMap<String, f64> =
+                ps.prices.iter().map(|(k, v)| (k.clone(), *v)).collect();
             self.monitor.record_price_snapshot(
                 ps.mid_price,
                 n_sources,
@@ -2018,7 +2138,10 @@ impl Pipeline {
             .send(
                 "critical",
                 "PolyMomentum circuit breaker",
-                &format!("reason={reason} wins={} losses={} pnl=${:.2}", bs.wins, bs.losses, bs.realized_pnl),
+                &format!(
+                    "reason={reason} wins={} losses={} pnl=${:.2}",
+                    bs.wins, bs.losses, bs.realized_pnl
+                ),
             )
             .await;
     }
@@ -2029,10 +2152,8 @@ impl Pipeline {
 
     async fn persist_paper_positions(&self) {
         let pp = self.paper_positions.lock().await.clone();
-        let entries: Vec<(String, serde_json::Value)> = pp
-            .into_iter()
-            .map(|(k, v)| (k, v.to_json()))
-            .collect();
+        let entries: Vec<(String, serde_json::Value)> =
+            pp.into_iter().map(|(k, v)| (k, v.to_json())).collect();
         if let Err(e) = self.risk.save_paper_positions(&entries).await {
             tracing::warn!(error = %e, "persist paper positions failed");
         }
@@ -2052,10 +2173,8 @@ impl Pipeline {
 
     async fn persist_oracle_pending(&self) {
         let op = self.oracle_pending.lock().await.clone();
-        let entries: Vec<(String, serde_json::Value)> = op
-            .into_iter()
-            .map(|(k, v)| (k, v.to_json()))
-            .collect();
+        let entries: Vec<(String, serde_json::Value)> =
+            op.into_iter().map(|(k, v)| (k, v.to_json())).collect();
         if let Err(e) = self.risk.save_oracle_pending(&entries).await {
             tracing::warn!(error = %e, "persist oracle pending failed");
         }
@@ -2151,8 +2270,9 @@ async fn try_wallet_bankroll(settings: &Settings) -> Option<f64> {
     if settings.private_key.is_empty() {
         return None;
     }
-    let r = crate::data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key)
-        .ok()?;
+    let r =
+        crate::data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key)
+            .ok()?;
     let b = r.fetch_balances().await.ok()?;
     if b.pusd > 0.0 {
         tracing::info!(
@@ -2258,12 +2378,8 @@ mod tests {
     use tempfile::TempDir;
 
     fn promotion_for_variant(variant: &StrategyVariant) -> PromotionArtifact {
-        let spec = StrategySpec::from_serializable_params(
-            "candle_momentum",
-            "1",
-            variant,
-            "test-risk",
-        );
+        let spec =
+            StrategySpec::from_serializable_params("candle_momentum", "1", variant, "test-risk");
         PromotionArtifact {
             schema_version: 1,
             created_at: "2026-05-01T00:00:00Z".to_string(),
@@ -2374,6 +2490,11 @@ mod tests {
         settings.candle_settlement_guard_minutes = 5.0;
         settings.candle_settlement_min_abs_move_usd = 25.0;
         settings.candle_settlement_sigma_buffer = 0.2;
+        settings.candle_runtime_min_confidence_floor = 0.7;
+        settings.candle_runtime_min_edge_floor = 0.09;
+        settings.candle_microstructure_max_spread = 0.02;
+        settings.candle_microstructure_min_book_depth = 20.0;
+        settings.candle_microstructure_min_book_pressure = 0.0;
 
         let runtime = RuntimeStrategy::load(&settings).unwrap();
 
@@ -2381,11 +2502,16 @@ mod tests {
         assert_eq!(runtime.zone_config.settlement_guard_minutes, 5.0);
         assert_eq!(runtime.zone_config.settlement_min_abs_move_usd, 25.0);
         assert_eq!(runtime.zone_config.settlement_sigma_buffer, 0.2);
+        assert_eq!(runtime.min_confidence, 0.7);
+        assert_eq!(runtime.min_edge, 0.09);
+        assert_eq!(runtime.microstructure.max_spread, 0.02);
+        assert_eq!(runtime.microstructure.min_book_depth, 20.0);
+        assert_eq!(runtime.microstructure.min_book_pressure, 0.0);
         assert_ne!(
             runtime.strategy_spec.params_hash,
             artifact.selected_strategy.params_hash
         );
-        assert!(runtime.source.ends_with("+settlement_floor"));
+        assert!(runtime.source.ends_with("+settlement_floor+runtime_floor"));
     }
 
     #[test]

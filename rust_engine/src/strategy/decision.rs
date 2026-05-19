@@ -160,6 +160,36 @@ impl ZoneConfig {
     pub fn apply_settings_safety_floor(&mut self, s: &crate::config::Settings) -> bool {
         let mut changed = false;
 
+        changed |= tighten_min(
+            &mut self.early_min_confidence,
+            s.candle_runtime_min_confidence_floor,
+        );
+        changed |= tighten_min(
+            &mut self.late_min_confidence,
+            s.candle_runtime_min_confidence_floor,
+        );
+        changed |= tighten_min(
+            &mut self.terminal_min_confidence,
+            s.candle_runtime_min_confidence_floor,
+        );
+        changed |= tighten_min(&mut self.early_min_z, s.candle_runtime_min_z_floor);
+        changed |= tighten_min(&mut self.primary_min_z, s.candle_runtime_min_z_floor);
+        changed |= tighten_min(&mut self.late_min_z, s.candle_runtime_min_z_floor);
+        changed |= tighten_min(&mut self.terminal_min_z, s.candle_runtime_min_z_floor);
+        changed |= tighten_min(&mut self.early_min_edge, s.candle_runtime_min_edge_floor);
+        changed |= tighten_min(&mut self.late_min_edge, s.candle_runtime_min_edge_floor);
+        changed |= tighten_min(&mut self.terminal_min_edge, s.candle_runtime_min_edge_floor);
+        changed |= tighten_min(
+            &mut self.min_ev_buffer,
+            s.candle_runtime_min_ev_buffer_floor,
+        );
+        changed |= tighten_min(&mut self.min_price, s.candle_runtime_min_price_floor);
+        changed |= tighten_max(&mut self.max_price, s.candle_runtime_max_price_ceiling);
+        if self.min_price > self.max_price {
+            self.min_price = self.max_price;
+            changed = true;
+        }
+
         if s.candle_settlement_cutoff_minutes.is_finite()
             && s.candle_settlement_cutoff_minutes >= 0.0
             && self.settlement_cutoff_minutes < s.candle_settlement_cutoff_minutes
@@ -193,6 +223,24 @@ impl ZoneConfig {
     }
 }
 
+fn tighten_min(slot: &mut f64, floor: f64) -> bool {
+    if floor.is_finite() && *slot < floor {
+        *slot = floor;
+        true
+    } else {
+        false
+    }
+}
+
+fn tighten_max(slot: &mut f64, ceiling: f64) -> bool {
+    if ceiling.is_finite() && ceiling >= 0.0 && *slot > ceiling {
+        *slot = ceiling;
+        true
+    } else {
+        false
+    }
+}
+
 pub fn zone_for(elapsed_pct: f64) -> &'static str {
     if elapsed_pct < 0.40 {
         "early"
@@ -212,7 +260,11 @@ pub fn zone_thresholds(
     cfg: &ZoneConfig,
 ) -> (f64, f64, f64) {
     match zone {
-        "early" => (cfg.early_min_confidence, cfg.early_min_z, cfg.early_min_edge),
+        "early" => (
+            cfg.early_min_confidence,
+            cfg.early_min_z,
+            cfg.early_min_edge,
+        ),
         "primary" => (min_confidence, cfg.primary_min_z, min_edge),
         "terminal" => (
             cfg.terminal_min_confidence,
@@ -247,8 +299,8 @@ pub fn settlement_guard_buffer_usd(
     implied_vol: f64,
     minutes_remaining: f64,
 ) -> f64 {
-    let sigma_buffer =
-        cfg.settlement_sigma_buffer * remaining_sigma_usd(btc_price, implied_vol, minutes_remaining);
+    let sigma_buffer = cfg.settlement_sigma_buffer
+        * remaining_sigma_usd(btc_price, implied_vol, minutes_remaining);
     cfg.settlement_min_abs_move_usd.max(sigma_buffer).max(0.0)
 }
 
@@ -372,13 +424,8 @@ pub fn decide_candle_trade(
     let yes_no_vig = up_price + down_price - 1.0;
 
     let days_remaining = minutes_remaining / 1440.0;
-    let raw_fair = binary_option_price_with_rate(
-        btc_price,
-        open_btc,
-        days_remaining,
-        implied_vol,
-        0.05,
-    );
+    let raw_fair =
+        binary_option_price_with_rate(btc_price, open_btc, days_remaining, implied_vol, 0.05);
     let fair_value = if signal.direction == "up" {
         raw_fair
     } else {
@@ -440,8 +487,20 @@ mod tests {
         let sig = mk_signal(0.40, 1.5, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.0, 1.0, 5.0, 0.5, 0.5, 70_100.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.5,
+            0.5,
+            70_100.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "low_confidence"),
@@ -454,8 +513,20 @@ mod tests {
         let sig = mk_signal(0.85, 1.5, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.0, 1.0, 5.0, 0.5, 0.5, 70_100.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.5,
+            0.5,
+            70_100.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "dead_zone_80_90"),
@@ -468,8 +539,20 @@ mod tests {
         let sig = mk_signal(0.95, 1.5, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.0, 1.0, 5.0, 0.95, 0.05, 70_100.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.95,
+            0.05,
+            70_100.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "price_out_of_range"),
@@ -485,8 +568,20 @@ mod tests {
         let sig = mk_signal(0.75, 2.0, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.95, 0.05, 5.0, 0.30, 0.70, 70_500.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.95,
+            0.05,
+            5.0,
+            0.30,
+            0.70,
+            70_500.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_cutoff"),
@@ -499,8 +594,20 @@ mod tests {
         let sig = mk_signal(0.95, 2.0, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.2, 0.8, 5.0, 0.40, 0.60, 70_002.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.2,
+            0.8,
+            5.0,
+            0.40,
+            0.60,
+            70_002.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_margin"),
@@ -535,8 +642,26 @@ mod tests {
         settings.candle_settlement_guard_minutes = 5.0;
         settings.candle_settlement_min_abs_move_usd = 25.0;
         settings.candle_settlement_sigma_buffer = 0.2;
+        settings.candle_runtime_min_confidence_floor = 0.7;
+        settings.candle_runtime_min_z_floor = 1.5;
+        settings.candle_runtime_min_edge_floor = 0.09;
+        settings.candle_runtime_min_ev_buffer_floor = 0.08;
+        settings.candle_runtime_min_price_floor = 0.2;
+        settings.candle_runtime_max_price_ceiling = 0.75;
 
         assert!(cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.early_min_confidence, 0.7);
+        assert_eq!(cfg.late_min_confidence, 0.7);
+        assert_eq!(cfg.terminal_min_confidence, 0.7);
+        assert_eq!(cfg.early_min_z, 2.0);
+        assert_eq!(cfg.primary_min_z, 1.5);
+        assert_eq!(cfg.early_min_z, 2.0);
+        assert_eq!(cfg.early_min_edge, 0.09);
+        assert_eq!(cfg.late_min_edge, 0.09);
+        assert_eq!(cfg.terminal_min_edge, 0.09);
+        assert_eq!(cfg.min_ev_buffer, 0.08);
+        assert_eq!(cfg.min_price, 0.2);
+        assert_eq!(cfg.max_price, 0.75);
         assert_eq!(cfg.settlement_cutoff_minutes, 1.5);
         assert_eq!(cfg.settlement_guard_minutes, 5.0);
         assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
@@ -546,8 +671,20 @@ mod tests {
         settings.candle_settlement_guard_minutes = 1.0;
         settings.candle_settlement_min_abs_move_usd = 10.0;
         settings.candle_settlement_sigma_buffer = 0.0;
+        settings.candle_runtime_min_confidence_floor = 0.5;
+        settings.candle_runtime_min_z_floor = 0.5;
+        settings.candle_runtime_min_edge_floor = 0.03;
+        settings.candle_runtime_min_ev_buffer_floor = -1.0;
+        settings.candle_runtime_min_price_floor = 0.1;
+        settings.candle_runtime_max_price_ceiling = 0.9;
 
         assert!(!cfg.apply_settings_safety_floor(&settings));
+        assert_eq!(cfg.early_min_confidence, 0.7);
+        assert_eq!(cfg.primary_min_z, 1.5);
+        assert_eq!(cfg.early_min_edge, 0.09);
+        assert_eq!(cfg.min_ev_buffer, 0.08);
+        assert_eq!(cfg.min_price, 0.2);
+        assert_eq!(cfg.max_price, 0.75);
         assert_eq!(cfg.settlement_cutoff_minutes, 1.5);
         assert_eq!(cfg.settlement_guard_minutes, 5.0);
         assert_eq!(cfg.settlement_min_abs_move_usd, 25.0);
@@ -562,8 +699,20 @@ mod tests {
             ..ZoneConfig::default()
         };
         let r = decide_candle_trade(
-            &sig, 4.0, 1.0, 5.0, 0.30, 0.70, 70_500.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.30,
+            0.70,
+            70_500.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_cutoff"),
@@ -577,8 +726,20 @@ mod tests {
         let sig = mk_signal(0.65, 1.5, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
-            &sig, 4.0, 1.0, 5.0, 0.65, 0.35, 70_100.0, 70_000.0, 0.5,
-            DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE, true, &cfg, 0.0,
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.65,
+            0.35,
+            70_100.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "negative_ev"),

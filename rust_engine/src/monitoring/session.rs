@@ -127,6 +127,7 @@ impl SessionMonitor {
         min_confidence: f64,
         min_edge: f64,
         skip_dead_zone: bool,
+        microstructure: &crate::strategy::microstructure::MicrostructureConfig,
         settlement_alignment_ready: bool,
     ) {
         self.write_event(
@@ -139,6 +140,7 @@ impl SessionMonitor {
                 "min_confidence": min_confidence,
                 "min_edge": min_edge,
                 "skip_dead_zone": skip_dead_zone,
+                "microstructure": microstructure,
                 "settlement_alignment_ready": settlement_alignment_ready,
                 "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
                 "settlement_guard_minutes": zone_config.settlement_guard_minutes,
@@ -150,7 +152,11 @@ impl SessionMonitor {
 
     pub fn record_order_placed(&self, evt: &OrderPlaced) {
         self.counters.lock().unwrap().order_count += 1;
-        self.write_event("order", "placed", serde_json::to_value(evt).unwrap_or(Value::Null));
+        self.write_event(
+            "order",
+            "placed",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
     }
 
     pub fn record_order_filled(&self, evt: &OrderFilled) {
@@ -164,7 +170,11 @@ impl SessionMonitor {
             c.partial_fill_count += 1;
         }
         drop(c);
-        self.write_event("order", "filled", serde_json::to_value(evt).unwrap_or(Value::Null));
+        self.write_event(
+            "order",
+            "filled",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
     }
 
     pub fn record_order_rejected(&self, token_id: &str, reason: &str, price: f64, size: f64) {
@@ -182,7 +192,11 @@ impl SessionMonitor {
     }
 
     pub fn record_order_reconciled(&self, evt: &OrderReconciled) {
-        self.write_event("order", "reconciled", serde_json::to_value(evt).unwrap_or(Value::Null));
+        self.write_event(
+            "order",
+            "reconciled",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
     }
 
     pub fn record_signal_evaluation(&self, evt: &SignalEvaluation) {
@@ -211,7 +225,11 @@ impl SessionMonitor {
 
     pub fn top_skip_reasons(&self, n: usize) -> Vec<(String, u64)> {
         let c = self.counters.lock().unwrap();
-        let mut v: Vec<(String, u64)> = c.skip_reasons.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let mut v: Vec<(String, u64)> = c
+            .skip_reasons
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v.truncate(n);
         v
@@ -406,7 +424,8 @@ impl SessionMonitor {
         if sources.len() >= 2 {
             let mut prices: Vec<f64> = sources.values().copied().collect();
             prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let gap = prices.last().copied().unwrap_or(0.0) - prices.first().copied().unwrap_or(0.0);
+            let gap =
+                prices.last().copied().unwrap_or(0.0) - prices.first().copied().unwrap_or(0.0);
             c.price_gaps.push(gap);
         }
         drop(c);
@@ -430,7 +449,11 @@ impl SessionMonitor {
 
     pub fn record_cycle(&self, cycle: u64, cycle_ms: f64, contracts: usize) {
         if cycle_ms.is_finite() {
-            self.counters.lock().unwrap().cycle_ms.push(cycle_ms.max(0.0));
+            self.counters
+                .lock()
+                .unwrap()
+                .cycle_ms
+                .push(cycle_ms.max(0.0));
         }
         self.write_event(
             "system",
@@ -506,11 +529,7 @@ impl SessionMonitor {
         } else {
             c.price_staleness_ms.iter().sum::<f64>() / c.price_staleness_ms.len() as f64
         };
-        let max_staleness_ms = c
-            .price_staleness_ms
-            .iter()
-            .cloned()
-            .fold(0.0_f64, f64::max);
+        let max_staleness_ms = c.price_staleness_ms.iter().cloned().fold(0.0_f64, f64::max);
         let avg_gap = if c.price_gaps.is_empty() {
             0.0
         } else {
@@ -518,8 +537,11 @@ impl SessionMonitor {
         };
         let max_gap = c.price_gaps.iter().cloned().fold(0.0_f64, f64::max);
 
-        let mut sorted_skips: Vec<(String, u64)> =
-            c.skip_reasons.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let mut sorted_skips: Vec<(String, u64)> = c
+            .skip_reasons
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         sorted_skips.sort_by(|a, b| b.1.cmp(&a.1));
 
         json!({
@@ -557,7 +579,6 @@ impl SessionMonitor {
             },
         })
     }
-
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -672,11 +693,7 @@ mod tests {
         let entry = std::fs::read_dir(tmp.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("session_")
-            })
+            .find(|e| e.file_name().to_string_lossy().starts_with("session_"))
             .expect("session file");
         let body = std::fs::read_to_string(entry.path()).unwrap();
         assert!(body.contains("\"reason\":\"low_confidence\""));
