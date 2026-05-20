@@ -46,6 +46,40 @@ pub struct SweepGrid {
     pub micro_min_depth: Vec<f64>,
     /// Minimum microprice pressure toward the intended token.
     pub micro_min_pressure: Vec<f64>,
+    /// Timing zone to keep enabled for each variant.
+    pub zone_mode: ZoneMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneMode {
+    All,
+    Early,
+    Primary,
+    Late,
+    Terminal,
+}
+
+impl ZoneMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "all" => Some(Self::All),
+            "early" => Some(Self::Early),
+            "primary" => Some(Self::Primary),
+            "late" => Some(Self::Late),
+            "terminal" => Some(Self::Terminal),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Early => "early",
+            Self::Primary => "primary",
+            Self::Late => "late",
+            Self::Terminal => "terminal",
+        }
+    }
 }
 
 impl SweepGrid {
@@ -74,6 +108,7 @@ impl SweepGrid {
             micro_max_spread: vec![micro_max_spread],
             micro_min_depth: vec![micro_min_depth],
             micro_min_pressure: vec![micro_min_pressure],
+            zone_mode: ZoneMode::All,
         }
     }
 
@@ -117,7 +152,7 @@ impl SweepGrid {
                                                     for &micro_pressure in &self.micro_min_pressure
                                                     {
                                                         for &maker in &maker_sides {
-                                                            let cfg = ZoneConfig {
+                                                            let mut cfg = ZoneConfig {
                                                                 early_min_confidence: conf,
                                                                 late_min_confidence: conf,
                                                                 terminal_min_confidence: conf,
@@ -136,6 +171,10 @@ impl SweepGrid {
                                                                 settlement_sigma_buffer: sigma,
                                                                 ..ZoneConfig::default()
                                                             };
+                                                            apply_zone_mode(
+                                                                &mut cfg,
+                                                                self.zone_mode,
+                                                            );
                                                             let microstructure =
                                                                 MicrostructureConfig {
                                                                     max_spread: micro_spread,
@@ -144,7 +183,8 @@ impl SweepGrid {
                                                                         micro_pressure,
                                                                 };
                                                             let label = format!(
-                                                                "c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
+                                                                "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
+                                                                self.zone_mode.as_str(),
                                                                 conf,
                                                                 z,
                                                                 edge,
@@ -204,6 +244,54 @@ impl SweepGrid {
     }
 }
 
+fn apply_zone_mode(cfg: &mut ZoneConfig, mode: ZoneMode) {
+    const DISABLED_CONFIDENCE: f64 = 1.1;
+    const DISABLED_Z: f64 = 100.0;
+    const DISABLED_EDGE: f64 = 1.0;
+
+    match mode {
+        ZoneMode::All => {}
+        ZoneMode::Early => {
+            cfg.primary_min_z = DISABLED_Z;
+            cfg.late_min_confidence = DISABLED_CONFIDENCE;
+            cfg.late_min_z = DISABLED_Z;
+            cfg.late_min_edge = DISABLED_EDGE;
+            cfg.terminal_min_confidence = DISABLED_CONFIDENCE;
+            cfg.terminal_min_z = DISABLED_Z;
+            cfg.terminal_min_edge = DISABLED_EDGE;
+        }
+        ZoneMode::Primary => {
+            cfg.early_min_confidence = DISABLED_CONFIDENCE;
+            cfg.early_min_z = DISABLED_Z;
+            cfg.early_min_edge = DISABLED_EDGE;
+            cfg.late_min_confidence = DISABLED_CONFIDENCE;
+            cfg.late_min_z = DISABLED_Z;
+            cfg.late_min_edge = DISABLED_EDGE;
+            cfg.terminal_min_confidence = DISABLED_CONFIDENCE;
+            cfg.terminal_min_z = DISABLED_Z;
+            cfg.terminal_min_edge = DISABLED_EDGE;
+        }
+        ZoneMode::Late => {
+            cfg.early_min_confidence = DISABLED_CONFIDENCE;
+            cfg.early_min_z = DISABLED_Z;
+            cfg.early_min_edge = DISABLED_EDGE;
+            cfg.primary_min_z = DISABLED_Z;
+            cfg.terminal_min_confidence = DISABLED_CONFIDENCE;
+            cfg.terminal_min_z = DISABLED_Z;
+            cfg.terminal_min_edge = DISABLED_EDGE;
+        }
+        ZoneMode::Terminal => {
+            cfg.early_min_confidence = DISABLED_CONFIDENCE;
+            cfg.early_min_z = DISABLED_Z;
+            cfg.early_min_edge = DISABLED_EDGE;
+            cfg.primary_min_z = DISABLED_Z;
+            cfg.late_min_confidence = DISABLED_CONFIDENCE;
+            cfg.late_min_z = DISABLED_Z;
+            cfg.late_min_edge = DISABLED_EDGE;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +340,19 @@ mod tests {
         assert!(variants.iter().all(|v| v.zone_config.min_price == 0.12));
         assert!(variants.iter().all(|v| v.zone_config.max_price == 0.75));
         assert!(variants.iter().any(|v| v.name.contains("_p0.12-0.75_")));
+    }
+
+    #[test]
+    fn zone_mode_disables_unselected_zones() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.zone_mode = ZoneMode::Primary;
+        let variants = grid.variants();
+        let first = &variants[0];
+        assert!(first.name.starts_with("primary_"));
+        assert!(first.zone_config.primary_min_z < 100.0);
+        assert!(first.zone_config.early_min_confidence > 1.0);
+        assert!(first.zone_config.late_min_confidence > 1.0);
+        assert!(first.zone_config.terminal_min_confidence > 1.0);
     }
 }

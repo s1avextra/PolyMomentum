@@ -255,6 +255,9 @@ enum Command {
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
+        /// Restrict grid to one timing zone: all, early, primary, late, terminal.
+        #[arg(long, default_value = "all")]
+        zone_mode: String,
         /// Show top N variants in the report.
         #[arg(long, default_value_t = 20)]
         top: usize,
@@ -390,6 +393,9 @@ enum Command {
         /// Include both maker and taker fill variants for --grid.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
+        /// Restrict --grid to one timing zone: all, early, primary, late, terminal.
+        #[arg(long, default_value = "all")]
+        zone_mode: String,
         /// Show only the top N variants after ranking by PnL.
         #[arg(long, default_value_t = 20)]
         top: usize,
@@ -808,10 +814,15 @@ async fn main() {
             micro_min_depth,
             micro_min_pressure,
             also_maker,
+            zone_mode,
             top,
             report_json,
         } => {
             let grid_config = if grid {
+                let Some(zone_mode) = sweep::strategy::ZoneMode::parse(&zone_mode) else {
+                    eprintln!("--zone-mode must be one of: all, early, primary, late, terminal");
+                    std::process::exit(2);
+                };
                 Some(sweep::strategy::GridConfig {
                     conf: parse_csv_floats(&conf),
                     z: parse_csv_floats(&z),
@@ -826,6 +837,7 @@ async fn main() {
                     micro_min_depth: parse_csv_floats(&micro_min_depth),
                     micro_min_pressure: parse_csv_floats(&micro_min_pressure),
                     also_maker,
+                    zone_mode,
                 })
             } else {
                 None
@@ -910,6 +922,7 @@ async fn main() {
             micro_min_depth,
             micro_min_pressure,
             also_maker,
+            zone_mode,
             top,
             threads,
             checkpoint,
@@ -929,6 +942,10 @@ async fn main() {
             let micro_spreads = parse_csv_floats(&micro_max_spread);
             let micro_depths = parse_csv_floats(&micro_min_depth);
             let micro_pressures = parse_csv_floats(&micro_min_pressure);
+            let Some(zone_mode) = backtest::sweep::ZoneMode::parse(&zone_mode) else {
+                eprintln!("--zone-mode must be one of: all, early, primary, late, terminal");
+                std::process::exit(2);
+            };
             cmd_harness_sweep(
                 &settings,
                 &start,
@@ -950,6 +967,7 @@ async fn main() {
                 micro_depths,
                 micro_pressures,
                 also_maker,
+                zone_mode,
                 top,
                 threads,
                 checkpoint.as_deref(),
@@ -2358,6 +2376,7 @@ async fn cmd_harness_sweep(
     micro_min_depth: Vec<f64>,
     micro_min_pressure: Vec<f64>,
     also_maker: bool,
+    zone_mode: backtest::sweep::ZoneMode,
     top: usize,
     threads: usize,
     checkpoint: Option<&str>,
@@ -2407,6 +2426,7 @@ async fn cmd_harness_sweep(
         micro_min_depth,
         micro_min_pressure,
         also_maker,
+        zone_mode,
     };
     let variants = grid.variants();
     if variants.is_empty() {
@@ -3140,43 +3160,47 @@ async fn cmd_eval_cache(
             Err(_) => Default::default(),
         };
     if allow_gamma_fetch {
-        let mut all_cids = std::collections::HashSet::new();
-        for &h in &hours {
-            eprintln!("pmxt: scanning condition_ids for {h}");
-            match loader.distinct_condition_ids(h) {
-                Ok(s) => all_cids.extend(s),
-                Err(e) => {
-                    eprintln!("read distinct cids for {h}: {e}");
-                    std::process::exit(1);
-                }
+        let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+        let metadata_start = start_dt - ChronoDuration::hours(1);
+        let metadata_end = end_dt + ChronoDuration::hours(2);
+        eprintln!("gamma: fetching historical markets ending {metadata_start} -> {metadata_end}");
+        let new_markets = match gamma
+            .fetch_markets_by_end_date_range(metadata_start, metadata_end, true)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Gamma historical metadata lookup failed: {e}");
+                std::process::exit(1);
             }
-        }
-        let missing: Vec<String> = all_cids
-            .iter()
-            .filter(|cid| {
-                cached_markets
-                    .get(*cid)
-                    .map(gamma_market_needs_refresh)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-        if !missing.is_empty() {
-            eprintln!(
-                "gamma: fetching metadata for {} condition_ids",
-                missing.len()
+        };
+        let fetched = new_markets.len();
+        let candle_markets = data::scanner::scan_candle_markets_for_backtest(&new_markets, 0.0);
+        let mut merged = 0usize;
+        for contract in candle_markets {
+            if contract.asset != "BTC" {
+                continue;
+            }
+            if !window_minutes
+                .map(|target| {
+                    (live::window::estimate_window_minutes(&contract.window_description) - target)
+                        .abs()
+                        <= 1e-6
+                })
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            cached_markets.insert(
+                contract.market.condition_id.clone(),
+                contract.market.clone(),
             );
-            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-            let new_markets = match gamma.fetch_markets_by_condition_ids(&missing).await {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("Gamma lookup failed: {e}");
-                    std::process::exit(1);
-                }
-            };
-            for market in new_markets {
-                cached_markets.insert(market.condition_id.clone(), market);
-            }
+            merged += 1;
+        }
+        eprintln!(
+            "gamma: fetched {fetched} historical market(s), merged {merged} BTC candle market(s)"
+        );
+        if merged > 0 {
             if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
                 eprintln!(
                     "write Gamma cache {} failed: {e}",
@@ -3260,7 +3284,12 @@ async fn cmd_eval_cache(
             }
         }
     }
-    ensure_btc_history_covers("eval-cache", &btc, btc_required_start_ms, btc_required_end_ms);
+    ensure_btc_history_covers(
+        "eval-cache",
+        &btc,
+        btc_required_start_ms,
+        btc_required_end_ms,
+    );
 
     let shared_distilled_dir = std::env::var("PMXT_DISTILLED_DIR")
         .ok()

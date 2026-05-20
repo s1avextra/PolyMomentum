@@ -124,7 +124,9 @@ impl GammaClient {
             }
 
             for raw in &items {
-                let Some(m) = parse_gamma_market(raw) else { continue };
+                let Some(m) = parse_gamma_market(raw) else {
+                    continue;
+                };
                 if m.outcomes.is_empty() || m.outcomes.iter().all(|o| o.price == 0.0) {
                     continue;
                 }
@@ -156,7 +158,63 @@ impl GammaClient {
             offset += page_size;
         }
 
-        tracing::info!(count = all.len(), max_hours, "Gamma markets-by-endDate fetched");
+        tracing::info!(
+            count = all.len(),
+            max_hours,
+            "Gamma markets-by-endDate fetched"
+        );
+        Ok(all)
+    }
+
+    /// Fetch historical markets whose endDate falls inside an explicit UTC
+    /// range. This is the targeted metadata path for backtests: fetch by time
+    /// first, then let the candle scanner keep only supported candle markets.
+    pub async fn fetch_markets_by_end_date_range(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+        closed: bool,
+    ) -> Result<Vec<Market>> {
+        let mut all: Vec<Market> = Vec::new();
+        let mut offset = 0u32;
+        let page_size = 100u32;
+
+        loop {
+            let params = vec![
+                ("limit", page_size.to_string()),
+                ("offset", offset.to_string()),
+                ("closed", closed.to_string()),
+                ("order", "endDate".to_string()),
+                ("ascending", "true".to_string()),
+                ("end_date_min", start.to_rfc3339()),
+                ("end_date_max", end.to_rfc3339()),
+            ];
+            let v = self.get_with_retry(GAMMA_MARKETS, &params).await?;
+            let items = unwrap_market_list(v);
+            if items.is_empty() {
+                break;
+            }
+            for raw in &items {
+                let Some(m) = parse_gamma_market(raw) else {
+                    continue;
+                };
+                all.push(m);
+            }
+            if items.len() < page_size as usize {
+                break;
+            }
+            offset += page_size;
+        }
+
+        all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
+        all.dedup_by(|a, b| a.condition_id == b.condition_id);
+        tracing::info!(
+            count = all.len(),
+            start = %start,
+            end = %end,
+            closed,
+            "Gamma historical markets fetched"
+        );
         Ok(all)
     }
 }
@@ -193,7 +251,9 @@ fn parse_json_or_csv(v: Option<&Value>) -> Vec<String> {
             })
             .collect();
     }
-    let Some(s) = v.as_str() else { return Vec::new() };
+    let Some(s) = v.as_str() else {
+        return Vec::new();
+    };
     let s = s.trim();
     if s.is_empty() {
         return Vec::new();
@@ -222,19 +282,28 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let question = raw.get("question").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let question = raw
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if condition_id.is_empty() || question.is_empty() {
         return None;
     }
 
     let outcome_names = parse_json_or_csv(raw.get("outcomes"));
-    let outcome_prices_raw =
-        parse_json_or_csv(raw.get("outcomePrices").or_else(|| raw.get("outcome_prices")));
+    let outcome_prices_raw = parse_json_or_csv(
+        raw.get("outcomePrices")
+            .or_else(|| raw.get("outcome_prices")),
+    );
     let outcome_prices: Vec<f64> = outcome_prices_raw
         .iter()
         .map(|s| s.parse::<f64>().unwrap_or(0.0))
         .collect();
-    let token_ids = parse_json_or_csv(raw.get("clobTokenIds").or_else(|| raw.get("clob_token_ids")));
+    let token_ids = parse_json_or_csv(
+        raw.get("clobTokenIds")
+            .or_else(|| raw.get("clob_token_ids")),
+    );
 
     let outcomes: Vec<Outcome> = outcome_names
         .iter()
@@ -266,7 +335,11 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
     let mut neg_risk_augmented = false;
     if let Some(Value::Array(events)) = raw.get("events") {
         if let Some(ev) = events.first() {
-            event_slug = ev.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            event_slug = ev
+                .get("slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             event_id = ev
                 .get("id")
                 .map(|v| match v {
@@ -275,7 +348,11 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
                     other => other.to_string(),
                 })
                 .unwrap_or_default();
-            event_title = ev.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            event_title = ev
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             neg_risk_augmented = ev
                 .get("negRiskAugmented")
                 .and_then(|v| v.as_bool())
@@ -286,10 +363,18 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
     Some(Market {
         condition_id,
         question,
-        slug: raw.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        slug: raw
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         outcomes,
         tags,
-        category: raw.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        category: raw
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         active: raw.get("active").and_then(|v| v.as_bool()).unwrap_or(true),
         closed: raw.get("closed").and_then(|v| v.as_bool()).unwrap_or(false),
         volume: raw.get("volume").and_then(parse_f64).unwrap_or(0.0),
@@ -309,7 +394,10 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        neg_risk: raw.get("negRisk").and_then(|v| v.as_bool()).unwrap_or(false),
+        neg_risk: raw
+            .get("negRisk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         neg_risk_augmented,
         minimum_tick_size: raw
             .get("minimum_tick_size")

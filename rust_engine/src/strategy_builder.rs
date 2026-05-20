@@ -148,6 +148,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             float_arg(input.window_minutes),
             "--output".to_string(),
             eval_cache_path.display().to_string(),
+            "--allow-gamma-fetch".to_string(),
         ];
         if let Some(cache_dir) = &input.cache_dir {
             eval_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
