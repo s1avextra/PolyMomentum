@@ -154,6 +154,7 @@ pub struct Settings {
     pub candle_breaker_min_win_rate: f64,
     pub candle_breaker_max_drawdown_pct: f64,
     pub candle_paper_breaker_reset_on_start: bool,
+    pub candle_paper_breaker_auto_rearm_secs: i64,
 
     pub kill_switch_path: String,
     pub alert_required: bool,
@@ -305,6 +306,10 @@ impl Settings {
             candle_paper_breaker_reset_on_start: env_bool(
                 "CANDLE_PAPER_BREAKER_RESET_ON_START",
                 false,
+            ),
+            candle_paper_breaker_auto_rearm_secs: env_i64(
+                "CANDLE_PAPER_BREAKER_AUTO_REARM_SECS",
+                300,
             ),
 
             kill_switch_path: env_str("KILL_SWITCH_PATH", "/tmp/polymomentum/KILL"),

@@ -73,11 +73,16 @@ impl BreakerState {
 
     pub fn metrics(&self, open_exposure: f64, initial_bankroll: f64) -> BreakerMetrics {
         let total = self.wins + self.losses;
-        let win_rate = if total > 0 { self.wins as f64 / total as f64 } else { 0.0 };
+        let win_rate = if total > 0 {
+            self.wins as f64 / total as f64
+        } else {
+            0.0
+        };
         let initial_bankroll = initial_bankroll.max(1.0);
         let realized_drawdown = (self.peak_pnl - self.realized_pnl).max(0.0);
-        let realized_drawdown_pct = if self.peak_pnl > 0.0 {
-            realized_drawdown / self.peak_pnl
+        let peak_equity = (initial_bankroll + self.peak_pnl).max(initial_bankroll);
+        let realized_drawdown_pct = if realized_drawdown > 0.0 {
+            realized_drawdown / peak_equity
         } else if self.realized_pnl < 0.0 {
             self.realized_pnl.abs() / initial_bankroll
         } else {
@@ -86,8 +91,8 @@ impl BreakerState {
         let open_exposure = open_exposure.max(0.0);
         let stressed_pnl = self.realized_pnl - open_exposure;
         let stressed_drawdown = (self.peak_pnl - stressed_pnl).max(0.0);
-        let stressed_drawdown_pct = if self.peak_pnl > 0.0 {
-            stressed_drawdown / self.peak_pnl
+        let stressed_drawdown_pct = if stressed_drawdown > 0.0 {
+            stressed_drawdown / peak_equity
         } else if stressed_pnl < 0.0 {
             stressed_pnl.abs() / initial_bankroll
         } else {
@@ -111,7 +116,12 @@ impl BreakerState {
     /// Realized drawdown is the primary circuit breaker. Open exposure is
     /// still stress-tested, but bounded paper/live positions are not treated
     /// as realized losses while stressed PnL remains positive.
-    pub fn should_trip(&self, cfg: &BreakerConfig, open_exposure: f64, initial_bankroll: f64) -> Option<&'static str> {
+    pub fn should_trip(
+        &self,
+        cfg: &BreakerConfig,
+        open_exposure: f64,
+        initial_bankroll: f64,
+    ) -> Option<&'static str> {
         let metrics = self.metrics(open_exposure, initial_bankroll);
         if metrics.total_trades < cfg.min_trades as u64 {
             return None;
@@ -139,7 +149,10 @@ mod tests {
         for _ in 0..10 {
             s.record_resolution(false, -1.0);
         }
-        assert!(s.should_trip(&BreakerConfig::default(), 0.0, 100.0).is_none());
+        assert!(
+            s.should_trip(&BreakerConfig::default(), 0.0, 100.0)
+                .is_none()
+        );
     }
 
     #[test]
@@ -180,6 +193,20 @@ mod tests {
         }
         let trip = s.should_trip(&BreakerConfig::default(), 0.0, 100.0);
         assert_eq!(trip, Some("realized_drawdown"));
+    }
+
+    #[test]
+    fn profitable_giveback_uses_equity_drawdown_not_pnl_peak() {
+        let mut s = BreakerState::default();
+        s.realized_pnl = 39.1973;
+        s.peak_pnl = 67.8299;
+        s.wins = 26;
+        s.losses = 12;
+
+        let metrics = s.metrics(0.0, 100.0);
+
+        assert!(metrics.realized_drawdown_pct < 0.30);
+        assert_eq!(s.should_trip(&BreakerConfig::default(), 0.0, 100.0), None);
     }
 
     #[test]

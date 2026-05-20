@@ -412,6 +412,8 @@ pub struct Pipeline {
     oracle_pending: Mutex<HashMap<String, OraclePending>>,
     breaker: Mutex<BreakerState>,
     breaker_tripped: Mutex<bool>,
+    breaker_trip_reason: Mutex<Option<String>>,
+    breaker_tripped_at_s: Mutex<Option<i64>>,
     price_state: Arc<RwLock<PriceState>>,
     book_state: SharedBookState,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
@@ -456,6 +458,11 @@ impl Pipeline {
             risk.get_meta("candle_breaker_tripped").await?.as_deref(),
             Some("1")
         );
+        let mut breaker_trip_reason = risk.get_meta("candle_breaker_reason").await?;
+        let mut breaker_tripped_at_s = risk
+            .get_meta("candle_breaker_tripped_at")
+            .await?
+            .and_then(|raw| raw.parse::<i64>().ok());
         let mut breaker_state = match risk.get_meta("candle_breaker_state").await? {
             Some(raw) => match serde_json::from_str::<BreakerState>(&raw) {
                 Ok(state) => state,
@@ -504,8 +511,16 @@ impl Pipeline {
             if let Err(e) = risk.delete_meta("candle_breaker_state").await {
                 tracing::warn!(error = %e, "delete candle breaker state failed");
             }
+            if let Err(e) = risk.delete_meta("candle_breaker_reason").await {
+                tracing::warn!(error = %e, "delete candle breaker reason failed");
+            }
+            if let Err(e) = risk.delete_meta("candle_breaker_tripped_at").await {
+                tracing::warn!(error = %e, "delete candle breaker timestamp failed");
+            }
             breaker_tripped = false;
             breaker_state = BreakerState::default();
+            breaker_trip_reason = None;
+            breaker_tripped_at_s = None;
             monitor.record_breaker_state(
                 "paper_reset_on_start",
                 "configured_session_reset",
@@ -590,6 +605,8 @@ impl Pipeline {
             oracle_pending: Mutex::new(oracle_pending),
             breaker: Mutex::new(breaker_state),
             breaker_tripped: Mutex::new(breaker_tripped),
+            breaker_trip_reason: Mutex::new(breaker_trip_reason),
+            breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
@@ -601,22 +618,24 @@ impl Pipeline {
             cycle_count: Mutex::new(0),
         });
         if breaker_tripped {
-            let metrics =
-                breaker_state.metrics(restored_open_exposure, p.settings.bankroll_usd.max(1.0));
-            p.monitor.record_breaker_state(
-                "restored_tripped",
-                "state_db",
-                breaker_state.wins,
-                breaker_state.losses,
-                breaker_state.realized_pnl,
-                breaker_state.peak_pnl,
-                metrics.open_exposure,
-                metrics.stressed_pnl,
-                metrics.realized_drawdown,
-                metrics.realized_drawdown_pct,
-                metrics.stressed_drawdown,
-                metrics.stressed_drawdown_pct,
-            );
+            if !p.maybe_rearm_paper_breaker().await {
+                let metrics =
+                    breaker_state.metrics(restored_open_exposure, p.settings.bankroll_usd.max(1.0));
+                p.monitor.record_breaker_state(
+                    "restored_tripped",
+                    "state_db",
+                    breaker_state.wins,
+                    breaker_state.losses,
+                    breaker_state.realized_pnl,
+                    breaker_state.peak_pnl,
+                    metrics.open_exposure,
+                    metrics.stressed_pnl,
+                    metrics.realized_drawdown,
+                    metrics.realized_drawdown_pct,
+                    metrics.stressed_drawdown,
+                    metrics.stressed_drawdown_pct,
+                );
+            }
         }
 
         Ok(p)
@@ -1078,6 +1097,9 @@ impl Pipeline {
                 }
             }
             if *self.breaker_tripped.lock().await {
+                if self.maybe_rearm_paper_breaker().await {
+                    continue;
+                }
                 sleep(Duration::from_secs(1)).await;
                 continue;
             }
@@ -2106,7 +2128,15 @@ impl Pipeline {
             return;
         }
         *tripped = true;
+        let tripped_at = unix_now_s();
+        *self.breaker_trip_reason.lock().await = Some(reason.to_string());
+        *self.breaker_tripped_at_s.lock().await = Some(tripped_at);
         let _ = self.risk.set_meta("candle_breaker_tripped", "1").await;
+        let _ = self.risk.set_meta("candle_breaker_reason", reason).await;
+        let _ = self
+            .risk
+            .set_meta("candle_breaker_tripped_at", &tripped_at.to_string())
+            .await;
         self.persist_breaker_state().await;
         let bs = *self.breaker.lock().await;
         let open_exposure: f64 = self
@@ -2151,6 +2181,74 @@ impl Pipeline {
                 ),
             )
             .await;
+    }
+
+    async fn maybe_rearm_paper_breaker(&self) -> bool {
+        let breaker_tripped = *self.breaker_tripped.lock().await;
+        if !breaker_tripped {
+            return false;
+        }
+        let breaker_state = *self.breaker.lock().await;
+        let paper_positions_empty = self.paper_positions.lock().await.is_empty();
+        let oracle_pending_empty = self.oracle_pending.lock().await.is_empty();
+        let trip_reason = self.breaker_trip_reason.lock().await.clone();
+        let tripped_at_s = *self.breaker_tripped_at_s.lock().await;
+        let Some(rearm_reason) = paper_breaker_rearm_reason(
+            self.mode,
+            self.settings.candle_paper_breaker_auto_rearm_secs,
+            breaker_tripped,
+            breaker_state,
+            paper_positions_empty,
+            oracle_pending_empty,
+            trip_reason.as_deref(),
+            tripped_at_s,
+            unix_now_s(),
+            &self.breaker_cfg,
+            self.settings.bankroll_usd.max(1.0),
+        ) else {
+            return false;
+        };
+
+        tracing::warn!(
+            reason = rearm_reason,
+            wins = breaker_state.wins,
+            losses = breaker_state.losses,
+            pnl = breaker_state.realized_pnl,
+            "rearming paper circuit breaker"
+        );
+        self.clear_breaker_state(rearm_reason).await;
+        true
+    }
+
+    async fn clear_breaker_state(&self, reason: &str) {
+        *self.breaker_tripped.lock().await = false;
+        *self.breaker.lock().await = BreakerState::default();
+        *self.breaker_trip_reason.lock().await = None;
+        *self.breaker_tripped_at_s.lock().await = None;
+        for key in [
+            "candle_breaker_tripped",
+            "candle_breaker_state",
+            "candle_breaker_reason",
+            "candle_breaker_tripped_at",
+        ] {
+            if let Err(e) = self.risk.delete_meta(key).await {
+                tracing::warn!(key, error = %e, "delete breaker metadata failed");
+            }
+        }
+        self.monitor.record_breaker_state(
+            "paper_rearmed",
+            reason,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        );
     }
 
     fn kill_switch_active(&self) -> bool {
@@ -2378,6 +2476,52 @@ fn should_reset_paper_breaker_on_start(
         && (breaker_tripped || breaker_state.wins + breaker_state.losses > 0)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn paper_breaker_rearm_reason(
+    mode: Mode,
+    auto_rearm_secs: i64,
+    breaker_tripped: bool,
+    breaker_state: BreakerState,
+    paper_positions_empty: bool,
+    oracle_pending_empty: bool,
+    trip_reason: Option<&str>,
+    tripped_at_s: Option<i64>,
+    now_s: i64,
+    cfg: &BreakerConfig,
+    initial_bankroll: f64,
+) -> Option<&'static str> {
+    if !matches!(mode, Mode::Paper)
+        || !breaker_tripped
+        || !paper_positions_empty
+        || !oracle_pending_empty
+        || matches!(trip_reason, Some("kill_switch" | "oracle_tie"))
+    {
+        return None;
+    }
+    if breaker_state
+        .should_trip(cfg, 0.0, initial_bankroll)
+        .is_none()
+    {
+        return Some("paper_policy_clear");
+    }
+    if auto_rearm_secs >= 0 {
+        let elapsed = tripped_at_s
+            .map(|tripped_at| now_s.saturating_sub(tripped_at))
+            .unwrap_or(0);
+        if elapsed >= auto_rearm_secs {
+            return Some("paper_cooldown_elapsed");
+        }
+    }
+    None
+}
+
+fn unix_now_s() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2478,6 +2622,105 @@ mod tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn paper_breaker_auto_rearms_flat_policy_clear_only_in_paper() {
+        let mut state = BreakerState::default();
+        state.realized_pnl = 39.1973;
+        state.peak_pnl = 67.8299;
+        state.wins = 26;
+        state.losses = 12;
+
+        assert_eq!(
+            paper_breaker_rearm_reason(
+                Mode::Paper,
+                300,
+                true,
+                state,
+                true,
+                true,
+                Some("realized_drawdown"),
+                Some(1_000),
+                1_001,
+                &BreakerConfig::default(),
+                100.0,
+            ),
+            Some("paper_policy_clear")
+        );
+        assert_eq!(
+            paper_breaker_rearm_reason(
+                Mode::Live,
+                300,
+                true,
+                state,
+                true,
+                true,
+                Some("realized_drawdown"),
+                Some(1_000),
+                1_001,
+                &BreakerConfig::default(),
+                100.0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn paper_breaker_auto_rearm_respects_hard_reasons_and_open_state() {
+        let mut state = BreakerState::default();
+        for _ in 0..30 {
+            state.record_resolution(false, -1.0);
+        }
+
+        assert_eq!(
+            paper_breaker_rearm_reason(
+                Mode::Paper,
+                300,
+                true,
+                state,
+                true,
+                true,
+                Some("win_rate_low"),
+                Some(1_000),
+                1_301,
+                &BreakerConfig::default(),
+                100.0,
+            ),
+            Some("paper_cooldown_elapsed")
+        );
+        assert_eq!(
+            paper_breaker_rearm_reason(
+                Mode::Paper,
+                300,
+                true,
+                state,
+                false,
+                true,
+                Some("win_rate_low"),
+                Some(1_000),
+                1_301,
+                &BreakerConfig::default(),
+                100.0,
+            ),
+            None
+        );
+        assert_eq!(
+            paper_breaker_rearm_reason(
+                Mode::Paper,
+                300,
+                true,
+                state,
+                true,
+                true,
+                Some("kill_switch"),
+                Some(1_000),
+                1_301,
+                &BreakerConfig::default(),
+                100.0,
+            ),
+            None
+        );
     }
 
     #[test]
