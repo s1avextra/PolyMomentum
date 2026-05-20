@@ -16,6 +16,23 @@ pub struct Strategy {
     pub microstructure: MicrostructureConfig,
 }
 
+#[derive(Debug, Clone)]
+pub struct GridConfig {
+    pub conf: Vec<f64>,
+    pub z: Vec<f64>,
+    pub edge: Vec<f64>,
+    pub ev_buffer: Vec<f64>,
+    pub min_price: Vec<f64>,
+    pub max_price: Vec<f64>,
+    pub settlement_min_abs_move_usd: Vec<f64>,
+    pub settlement_guard_minutes: Vec<f64>,
+    pub settlement_sigma_buffer: Vec<f64>,
+    pub micro_max_spread: Vec<f64>,
+    pub micro_min_depth: Vec<f64>,
+    pub micro_min_pressure: Vec<f64>,
+    pub also_maker: bool,
+}
+
 pub fn baseline() -> Strategy {
     Strategy {
         name: "baseline".into(),
@@ -209,4 +226,129 @@ pub fn default_strategies() -> Vec<Strategy> {
         maker_first(),
         paper_a_plus_floor(),
     ]
+}
+
+pub fn grid_strategies(grid: &GridConfig) -> Vec<Strategy> {
+    let maker_sides: Vec<bool> = if grid.also_maker {
+        vec![false, true]
+    } else {
+        vec![false]
+    };
+    let mut out = Vec::new();
+    for &conf in &grid.conf {
+        for &z in &grid.z {
+            for &edge in &grid.edge {
+                for &ev in &grid.ev_buffer {
+                    for &min_price in &grid.min_price {
+                        for &max_price in &grid.max_price {
+                            if min_price > max_price {
+                                continue;
+                            }
+                            for &floor in &grid.settlement_min_abs_move_usd {
+                                for &guard in &grid.settlement_guard_minutes {
+                                    for &sigma in &grid.settlement_sigma_buffer {
+                                        for &micro_spread in &grid.micro_max_spread {
+                                            for &micro_depth in &grid.micro_min_depth {
+                                                for &micro_pressure in &grid.micro_min_pressure {
+                                                    for &maker in &maker_sides {
+                                                        let zone_config = ZoneConfig {
+                                                            early_min_confidence: conf,
+                                                            late_min_confidence: conf,
+                                                            terminal_min_confidence: conf,
+                                                            early_min_z: z,
+                                                            primary_min_z: z,
+                                                            late_min_z: z,
+                                                            terminal_min_z: z,
+                                                            early_min_edge: edge,
+                                                            late_min_edge: edge,
+                                                            terminal_min_edge: edge,
+                                                            min_price,
+                                                            max_price,
+                                                            min_ev_buffer: ev,
+                                                            settlement_min_abs_move_usd: floor,
+                                                            settlement_guard_minutes: guard,
+                                                            settlement_sigma_buffer: sigma,
+                                                            ..ZoneConfig::default()
+                                                        };
+                                                        out.push(Strategy {
+                                                            name: format!(
+                                                                "c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
+                                                                conf,
+                                                                z,
+                                                                edge,
+                                                                ev,
+                                                                min_price,
+                                                                max_price,
+                                                                floor,
+                                                                guard,
+                                                                sigma,
+                                                                micro_spread,
+                                                                micro_depth,
+                                                                micro_pressure,
+                                                                if maker { "mk" } else { "tk" },
+                                                            ),
+                                                            zone_config,
+                                                            skip_dead_zone: true,
+                                                            min_confidence: conf,
+                                                            min_edge: edge,
+                                                            prefer_maker: maker,
+                                                            microstructure: MicrostructureConfig {
+                                                                max_spread: micro_spread,
+                                                                min_book_depth: micro_depth,
+                                                                min_book_pressure: micro_pressure,
+                                                            },
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn small_grid() -> GridConfig {
+        GridConfig {
+            conf: vec![0.20, 0.30],
+            z: vec![0.0, 0.5],
+            edge: vec![0.02],
+            ev_buffer: vec![-1.0],
+            min_price: vec![0.10],
+            max_price: vec![0.75],
+            settlement_min_abs_move_usd: vec![25.0],
+            settlement_guard_minutes: vec![5.0],
+            settlement_sigma_buffer: vec![0.20],
+            micro_max_spread: vec![0.02],
+            micro_min_depth: vec![20.0],
+            micro_min_pressure: vec![0.0],
+            also_maker: true,
+        }
+    }
+
+    #[test]
+    fn grid_expands_cartesian_product() {
+        let strategies = grid_strategies(&small_grid());
+        assert_eq!(strategies.len(), 2 * 2 * 2);
+        assert!(strategies.iter().any(|s| s.prefer_maker));
+        assert!(strategies.iter().any(|s| !s.prefer_maker));
+    }
+
+    #[test]
+    fn grid_names_are_unique() {
+        let strategies = grid_strategies(&small_grid());
+        let names: std::collections::HashSet<&str> =
+            strategies.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names.len(), strategies.len());
+    }
 }

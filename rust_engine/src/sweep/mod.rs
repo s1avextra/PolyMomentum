@@ -21,11 +21,12 @@ pub mod strategy;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use crate::sweep::replay::{run_strategy, EvaluationRow, ResolutionRow};
 use crate::sweep::strategy::Strategy;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct SweepRun {
     pub strategy_name: String,
     pub trades: u64,
@@ -50,7 +51,7 @@ impl SweepRun {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct ZoneStats {
     pub trades: u64,
     pub wins: u64,

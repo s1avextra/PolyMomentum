@@ -348,6 +348,78 @@ enum Command {
         /// Show per-zone breakdown for each strategy.
         #[arg(long, default_value_t = false)]
         zones: bool,
+        /// Run a cartesian parameter grid instead of the built-in named variants.
+        #[arg(long, default_value_t = false)]
+        grid: bool,
+        /// Comma-separated confidence thresholds for --grid.
+        #[arg(long, default_value = "0.20,0.25,0.30,0.35")]
+        conf: String,
+        /// Comma-separated z-score thresholds for --grid.
+        #[arg(long, default_value = "0.0,0.5")]
+        z: String,
+        /// Comma-separated edge thresholds for --grid.
+        #[arg(long, default_value = "0.00,0.02,0.05")]
+        edge: String,
+        /// Comma-separated EV buffers for --grid (negative disables the EV gate).
+        #[arg(long, default_value = "-1.0,0.02")]
+        ev_buffer: String,
+        /// Comma-separated minimum executable token prices for --grid.
+        #[arg(long, default_value = "0.10")]
+        min_price: String,
+        /// Comma-separated maximum executable token prices for --grid.
+        #[arg(long, default_value = "0.75")]
+        max_price: String,
+        /// Comma-separated settlement floors in USD for --grid.
+        #[arg(long, default_value = "25.0")]
+        settlement_floor: String,
+        /// Comma-separated settlement guard lengths in minutes for --grid.
+        #[arg(long, default_value = "5.0")]
+        settlement_guard_minutes: String,
+        /// Comma-separated volatility-scaled settlement buffers for --grid.
+        #[arg(long, default_value = "0.20")]
+        settlement_sigma_buffer: String,
+        /// Comma-separated executable spread ceilings for --grid.
+        #[arg(long, default_value = "0.02")]
+        micro_max_spread: String,
+        /// Comma-separated thinner-side book depth gates for --grid.
+        #[arg(long, default_value = "20.0")]
+        micro_min_depth: String,
+        /// Comma-separated minimum microprice pressure gates for --grid.
+        #[arg(long, default_value = "0.0")]
+        micro_min_pressure: String,
+        /// Include both maker and taker fill variants for --grid.
+        #[arg(long, default_value_t = true)]
+        also_maker: bool,
+        /// Show only the top N variants after ranking by PnL.
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        /// Write sorted sweep results to JSON.
+        #[arg(long)]
+        report_json: Option<String>,
+    },
+    /// Generate replay-grade signal/resolution JSONL from cached PMXT once.
+    EvalCache {
+        /// Inclusive UTC start hour (RFC3339).
+        #[arg(long)]
+        start: String,
+        /// Inclusive UTC end hour. Defaults to `start`.
+        #[arg(long)]
+        end: Option<String>,
+        /// PMXT v2 cache directory.
+        #[arg(long)]
+        cache_dir: Option<String>,
+        /// BTC kline CSV used as the virtual exchange price feed.
+        #[arg(long)]
+        btc_csv: Option<String>,
+        /// Output JSONL path for signal.evaluation + resolution.resolved rows.
+        #[arg(long)]
+        output: String,
+        /// Restrict the candle universe to one window length, e.g. 5.
+        #[arg(long)]
+        window_minutes: Option<f64>,
+        /// Permit Gamma fetches for missing historical metadata.
+        #[arg(long, default_value_t = false)]
+        allow_gamma_fetch: bool,
     },
     /// Run unit + integration tests embedded in the binary.
     SelfTest,
@@ -722,8 +794,72 @@ async fn main() {
             bankroll,
             min_trades,
             zones,
+            grid,
+            conf,
+            z,
+            edge,
+            ev_buffer,
+            min_price,
+            max_price,
+            settlement_floor,
+            settlement_guard_minutes,
+            settlement_sigma_buffer,
+            micro_max_spread,
+            micro_min_depth,
+            micro_min_pressure,
+            also_maker,
+            top,
+            report_json,
         } => {
-            cmd_sweep(&session, bankroll, min_trades, zones);
+            let grid_config = if grid {
+                Some(sweep::strategy::GridConfig {
+                    conf: parse_csv_floats(&conf),
+                    z: parse_csv_floats(&z),
+                    edge: parse_csv_floats(&edge),
+                    ev_buffer: parse_csv_floats(&ev_buffer),
+                    min_price: parse_csv_floats(&min_price),
+                    max_price: parse_csv_floats(&max_price),
+                    settlement_min_abs_move_usd: parse_csv_floats(&settlement_floor),
+                    settlement_guard_minutes: parse_csv_floats(&settlement_guard_minutes),
+                    settlement_sigma_buffer: parse_csv_floats(&settlement_sigma_buffer),
+                    micro_max_spread: parse_csv_floats(&micro_max_spread),
+                    micro_min_depth: parse_csv_floats(&micro_min_depth),
+                    micro_min_pressure: parse_csv_floats(&micro_min_pressure),
+                    also_maker,
+                })
+            } else {
+                None
+            };
+            cmd_sweep(
+                &session,
+                bankroll,
+                min_trades,
+                zones,
+                grid_config,
+                top,
+                report_json.as_deref(),
+            );
+        }
+        Command::EvalCache {
+            start,
+            end,
+            cache_dir,
+            btc_csv,
+            output,
+            window_minutes,
+            allow_gamma_fetch,
+        } => {
+            cmd_eval_cache(
+                &settings,
+                &start,
+                end.as_deref(),
+                cache_dir.as_deref(),
+                btc_csv.as_deref(),
+                &output,
+                window_minutes,
+                allow_gamma_fetch,
+            )
+            .await;
         }
         Command::PmxtInfo {
             hour,
@@ -1345,26 +1481,24 @@ async fn cmd_live_replay(
         std::process::exit(2);
     }
     eprintln!("live-replay: BTC candle contracts={}", contracts.len());
+    let universe = backtest::harness::CandleUniverse { contracts };
+    let (btc_required_start_ms, btc_required_end_ms) = btc_required_range_ms(
+        &universe,
+        start_dt.timestamp_millis(),
+        (end_dt + ChronoDuration::hours(1)).timestamp_millis(),
+    );
 
     let mut btc = backtest::btc_history::BTCHistory::new();
     if let Err(e) = btc.load_csv(btc_csv) {
         eprintln!("BTC CSV load failed: {e}");
         std::process::exit(1);
     }
-    if btc.n_ticks() < 50 {
-        eprintln!("not enough BTC ticks in {btc_csv} ({} < 50)", btc.n_ticks());
-        std::process::exit(1);
-    }
-    let replay_start_ms = start_dt.timestamp_millis();
-    let replay_end_ms = (end_dt + ChronoDuration::hours(1)).timestamp_millis();
-    let btc_start_ms = btc.first_timestamp_ms();
-    let btc_end_ms = btc.last_timestamp_ms();
-    if btc_end_ms < replay_start_ms || btc_start_ms > replay_end_ms {
-        eprintln!(
-            "BTC CSV does not overlap replay window: btc_ms=[{btc_start_ms},{btc_end_ms}] replay_ms=[{replay_start_ms},{replay_end_ms}]"
-        );
-        std::process::exit(1);
-    }
+    ensure_btc_history_covers(
+        "live-replay",
+        &btc,
+        btc_required_start_ms,
+        btc_required_end_ms,
+    );
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
         .ok()
@@ -1382,7 +1516,7 @@ async fn cmd_live_replay(
         .unwrap_or_else(|| std::path::PathBuf::from(&settings.session_log_dir));
     let cfg = live::replay::LiveReplayConfig {
         hours,
-        universe: backtest::harness::CandleUniverse { contracts },
+        universe,
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         cache_dir: cache_dir_path,
@@ -2148,6 +2282,60 @@ fn parse_csv_floats(s: &str) -> Vec<f64> {
         .collect()
 }
 
+fn btc_required_range_ms(
+    universe: &backtest::harness::CandleUniverse,
+    fallback_start_ms: i64,
+    fallback_end_ms: i64,
+) -> (i64, i64) {
+    let mut start_ms = fallback_start_ms;
+    let mut end_ms = fallback_end_ms;
+    for contract in &universe.contracts {
+        let Ok(close) = chrono::DateTime::parse_from_rfc3339(&contract.end_date) else {
+            continue;
+        };
+        let minutes = live::window::estimate_window_minutes(&contract.window_description);
+        let minutes = if minutes > 0.0 { minutes } else { 60.0 };
+        let close_ms = close.timestamp_millis();
+        let open_ms = close_ms - (minutes * 60_000.0).round() as i64;
+        start_ms = start_ms.min(open_ms);
+        end_ms = end_ms.max(close_ms);
+    }
+    (start_ms, end_ms)
+}
+
+fn ensure_btc_history_covers(
+    label: &str,
+    btc: &backtest::btc_history::BTCHistory,
+    required_start_ms: i64,
+    required_end_ms: i64,
+) {
+    if btc.n_ticks() < 50 {
+        eprintln!("{label}: not enough BTC ticks ({} < 50)", btc.n_ticks());
+        std::process::exit(1);
+    }
+    let first = btc.first_timestamp_ms();
+    let last = btc.last_timestamp_ms();
+    if first > required_start_ms + 1_000 || last < required_end_ms {
+        eprintln!(
+            "{label}: BTC tape covers {} → {}, but strategy window needs {} → {}",
+            fmt_utc_ms(first),
+            fmt_utc_ms(last),
+            fmt_utc_ms(required_start_ms),
+            fmt_utc_ms(required_end_ms),
+        );
+        std::process::exit(1);
+    }
+}
+
+fn fmt_utc_ms(ts_ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_millis_opt(ts_ms)
+        .single()
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_else(|| ts_ms.to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_harness_sweep(
     settings: &config::Settings,
@@ -2287,6 +2475,11 @@ async fn cmd_harness_sweep(
         contracts = universe.contracts.len(),
         "harness universe loaded"
     );
+    let (btc_required_start_ms, btc_required_end_ms) = btc_required_range_ms(
+        &universe,
+        start_dt.timestamp_millis(),
+        end_dt.timestamp_millis() + 3_600_000,
+    );
 
     // BTC tape
     let mut btc = backtest::btc_history::BTCHistory::new();
@@ -2297,8 +2490,8 @@ async fn cmd_harness_sweep(
         }
     } else {
         let pad_ms = 3_600_000;
-        let start_ms = start_dt.timestamp_millis() - pad_ms;
-        let end_ms = end_dt.timestamp_millis() + pad_ms;
+        let start_ms = btc_required_start_ms - pad_ms;
+        let end_ms = btc_required_end_ms + pad_ms;
         match btc
             .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
             .await
@@ -2316,10 +2509,12 @@ async fn cmd_harness_sweep(
             }
         }
     }
-    if btc.n_ticks() < 50 {
-        eprintln!("not enough BTC ticks ({} < 50)", btc.n_ticks());
-        std::process::exit(1);
-    }
+    ensure_btc_history_covers(
+        "harness-sweep",
+        &btc,
+        btc_required_start_ms,
+        btc_required_end_ms,
+    );
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
         .ok()
@@ -2659,6 +2854,11 @@ async fn cmd_harness(
         contracts = universe.contracts.len(),
         "harness universe loaded"
     );
+    let (btc_required_start_ms, btc_required_end_ms) = btc_required_range_ms(
+        &universe,
+        start_dt.timestamp_millis(),
+        end_dt.timestamp_millis() + 3_600_000,
+    );
 
     // 2. BTC tape.
     let mut btc = backtest::btc_history::BTCHistory::new();
@@ -2675,8 +2875,8 @@ async fn cmd_harness(
         // prices on the boundary. Use 1-second klines for intra-window
         // momentum detection; falls back to 1m if Binance rate-limits.
         let pad_ms = 3_600_000;
-        let start_ms = start_dt.timestamp_millis() - pad_ms;
-        let end_ms = end_dt.timestamp_millis() + pad_ms;
+        let start_ms = btc_required_start_ms - pad_ms;
+        let end_ms = btc_required_end_ms + pad_ms;
         match btc
             .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
             .await
@@ -2698,10 +2898,7 @@ async fn cmd_harness(
             }
         }
     }
-    if btc.n_ticks() < 50 {
-        eprintln!("not enough BTC ticks ({} < 50)", btc.n_ticks());
-        std::process::exit(1);
-    }
+    ensure_btc_history_covers("harness", &btc, btc_required_start_ms, btc_required_end_ms);
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
         .ok()
@@ -2811,13 +3008,28 @@ async fn cmd_harness(
     }
 }
 
-fn cmd_sweep(sessions: &[String], bankroll: f64, min_trades: u64, show_zones: bool) {
+fn cmd_sweep(
+    sessions: &[String],
+    bankroll: f64,
+    min_trades: u64,
+    show_zones: bool,
+    grid: Option<sweep::strategy::GridConfig>,
+    top: usize,
+    report_json: Option<&str>,
+) {
     if sessions.is_empty() {
         eprintln!("--session is required (repeat for multiple files)");
         std::process::exit(2);
     }
     let paths: Vec<std::path::PathBuf> = sessions.iter().map(std::path::PathBuf::from).collect();
-    let strats = sweep::strategy::default_strategies();
+    let strats = match grid {
+        Some(grid) => sweep::strategy::grid_strategies(&grid),
+        None => sweep::strategy::default_strategies(),
+    };
+    if strats.is_empty() {
+        eprintln!("empty sweep strategy set (check --conf/--z/--edge/--ev-buffer)");
+        std::process::exit(2);
+    }
     let runs = match sweep::run_sweep(&paths, &strats, bankroll, min_trades) {
         Ok(r) => r,
         Err(e) => {
@@ -2833,14 +3045,28 @@ fn cmd_sweep(sessions: &[String], bankroll: f64, min_trades: u64, show_zones: bo
             .partial_cmp(&a.realized_pnl)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    if let Some(path) = report_json {
+        if let Err(e) = write_json_atomic(path, &sorted, true) {
+            eprintln!("write sweep report {path}: {e}");
+            std::process::exit(1);
+        }
+        println!("Sweep report: {path}");
+    }
+    let shown: Vec<_> = if top == 0 {
+        sorted.iter().collect()
+    } else {
+        sorted.iter().take(top).collect()
+    };
+    let shown_runs: Vec<_> = shown.into_iter().cloned().collect();
 
     println!(
-        "\nSweep over {} session file(s) — bankroll=${bankroll:.0}, min_trades={min_trades}\n",
-        paths.len()
+        "\nSweep over {} session file(s) — bankroll=${bankroll:.0}, min_trades={min_trades}, variants={}\n",
+        paths.len(),
+        strats.len()
     );
-    println!("{}", sweep::render_table(&sorted));
+    println!("{}", sweep::render_table(&shown_runs));
     if show_zones {
-        println!("{}", sweep::render_zone_breakdown(&sorted));
+        println!("{}", sweep::render_zone_breakdown(&shown_runs));
     }
 
     // Surface data-gap warnings.
@@ -2851,6 +3077,221 @@ fn cmd_sweep(sessions: &[String], bankroll: f64, min_trades: u64, show_zones: bo
             "\n⚠  insufficient sample: best variant has only {max_resolved} resolved trade(s); \
              collect ≥{min_trades} before drawing conclusions."
         );
+    }
+}
+
+async fn cmd_eval_cache(
+    settings: &config::Settings,
+    start: &str,
+    end: Option<&str>,
+    cache_dir: Option<&str>,
+    btc_csv: Option<&str>,
+    output: &str,
+    window_minutes: Option<f64>,
+    allow_gamma_fetch: bool,
+) {
+    use chrono::{DateTime, Duration as ChronoDuration, Utc};
+
+    let start_dt: DateTime<Utc> = match DateTime::parse_from_rfc3339(start) {
+        Ok(d) => d.with_timezone(&Utc),
+        Err(e) => {
+            eprintln!("--start must be RFC3339: {e}");
+            std::process::exit(2);
+        }
+    };
+    let end_dt = match end {
+        Some(e) => match DateTime::parse_from_rfc3339(e) {
+            Ok(d) => d.with_timezone(&Utc),
+            Err(err) => {
+                eprintln!("--end must be RFC3339: {err}");
+                std::process::exit(2);
+            }
+        },
+        None => start_dt,
+    };
+    if end_dt < start_dt {
+        eprintln!("--end must be >= --start");
+        std::process::exit(2);
+    }
+
+    let mut hours = Vec::new();
+    let mut cur = start_dt;
+    while cur <= end_dt {
+        hours.push(cur);
+        cur += ChronoDuration::hours(1);
+    }
+
+    let cache_dir_path = cache_dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
+    let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
+    for &h in &hours {
+        eprintln!("pmxt: ensuring archive hour {h}");
+        if let Err(e) = loader.download_hour(h, false).await {
+            eprintln!("download {h} failed: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    let gamma_cache_path = cache_dir_path.join("gamma_market_cache.json");
+    let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> =
+        match std::fs::read_to_string(&gamma_cache_path) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Default::default(),
+        };
+    if allow_gamma_fetch {
+        let mut all_cids = std::collections::HashSet::new();
+        for &h in &hours {
+            eprintln!("pmxt: scanning condition_ids for {h}");
+            match loader.distinct_condition_ids(h) {
+                Ok(s) => all_cids.extend(s),
+                Err(e) => {
+                    eprintln!("read distinct cids for {h}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        let missing: Vec<String> = all_cids
+            .iter()
+            .filter(|cid| {
+                cached_markets
+                    .get(*cid)
+                    .map(gamma_market_needs_refresh)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "gamma: fetching metadata for {} condition_ids",
+                missing.len()
+            );
+            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+            let new_markets = match gamma.fetch_markets_by_condition_ids(&missing).await {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Gamma lookup failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            for market in new_markets {
+                cached_markets.insert(market.condition_id.clone(), market);
+            }
+            if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
+                eprintln!(
+                    "write Gamma cache {} failed: {e}",
+                    gamma_cache_path.display()
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!(
+            "eval-cache: using cached Gamma metadata from {}",
+            gamma_cache_path.display()
+        );
+    }
+    if cached_markets.is_empty() {
+        eprintln!(
+            "eval-cache has no cached Gamma metadata at {}; pass --allow-gamma-fetch to build it",
+            gamma_cache_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
+    let mut contracts = data::scanner::scan_candle_markets_for_backtest(&markets, 0.0);
+    contracts.retain(|c| c.asset == "BTC");
+    filter_contracts_by_window_minutes(&mut contracts, window_minutes, "eval-cache");
+    let start_ts = start_dt.timestamp() as f64;
+    let end_ts = end_dt.timestamp() as f64 + 3600.0;
+    contracts.retain(|c| {
+        let close_t = chrono::DateTime::parse_from_rfc3339(&c.end_date)
+            .map(|d| d.timestamp() as f64)
+            .unwrap_or(0.0);
+        let minutes = live::window::estimate_window_minutes(&c.window_description);
+        let minutes = if minutes > 0.0 { minutes } else { 60.0 };
+        let open_t = close_t - minutes * 60.0;
+        close_t > start_ts && open_t < end_ts
+    });
+    contracts.sort_by(|a, b| {
+        a.end_date
+            .cmp(&b.end_date)
+            .then_with(|| a.market.condition_id.cmp(&b.market.condition_id))
+    });
+    let universe = backtest::harness::CandleUniverse { contracts };
+    if universe.contracts.is_empty() {
+        eprintln!("no candle contracts in archive window");
+        std::process::exit(1);
+    }
+    let (btc_required_start_ms, btc_required_end_ms) = btc_required_range_ms(
+        &universe,
+        start_dt.timestamp_millis(),
+        end_dt.timestamp_millis() + 3_600_000,
+    );
+
+    let mut btc = backtest::btc_history::BTCHistory::new();
+    if let Some(path) = btc_csv {
+        match btc.load_csv(path) {
+            Ok(n) => tracing::info!(rows = n, "BTC CSV loaded"),
+            Err(e) => {
+                eprintln!("BTC CSV load failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let pad_ms = 3_600_000;
+        let start_ms = btc_required_start_ms - pad_ms;
+        let end_ms = btc_required_end_ms + pad_ms;
+        match btc
+            .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
+            .await
+        {
+            Ok(n) if n > 100 => tracing::info!(rows = n, interval = "1s", "BTC klines pulled"),
+            _ => {
+                btc = backtest::btc_history::BTCHistory::new();
+                if let Err(e) = btc
+                    .load_from_binance(start_ms, end_ms, "BTCUSDT", "1m")
+                    .await
+                {
+                    eprintln!("Binance kline fetch failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    ensure_btc_history_covers("eval-cache", &btc, btc_required_start_ms, btc_required_end_ms);
+
+    let shared_distilled_dir = std::env::var("PMXT_DISTILLED_DIR")
+        .ok()
+        .or_else(|| {
+            let p = std::path::PathBuf::from(backtest::distill::SHARED_CACHE_DIR);
+            if p.exists() {
+                Some(backtest::distill::SHARED_CACHE_DIR.to_string())
+            } else {
+                None
+            }
+        })
+        .map(std::path::PathBuf::from);
+    let cfg = backtest::eval_cache::EvalCacheConfig {
+        hours,
+        universe,
+        btc_history: std::sync::Arc::new(btc),
+        cache_dir: cache_dir_path,
+        shared_distilled_dir,
+        output: std::path::PathBuf::from(output),
+    };
+    match backtest::eval_cache::write_eval_cache(cfg) {
+        Ok(summary) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summary).expect("serialize eval-cache summary")
+            );
+        }
+        Err(e) => {
+            eprintln!("eval-cache failed: {e:#}");
+            std::process::exit(1);
+        }
     }
 }
 

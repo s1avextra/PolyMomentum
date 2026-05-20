@@ -1,8 +1,9 @@
 //! Strategy-builder orchestration and audit helpers.
 //!
 //! This module does not invent a new research engine. It makes the existing
-//! stages explicit and reproducible: cached PMXT harness sweep, aggregate
-//! promotion, cached live-replay parity, and session diagnostics.
+//! stages explicit and reproducible: one-pass PMXT eval-cache scouting, cached
+//! PMXT harness sweep, aggregate promotion, cached live-replay parity, and
+//! session diagnostics.
 
 use std::path::{Path, PathBuf};
 
@@ -106,6 +107,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     }
 
     let out_dir = input.out_dir;
+    let eval_cache_dir = out_dir.join("eval_cache");
+    let scout_reports_dir = out_dir.join("scout_reports");
     let reports_dir = out_dir.join("reports");
     let checkpoint_dir = out_dir.join("checkpoints");
     let replay_dir = out_dir.join("live_replay_sessions");
@@ -128,9 +131,100 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
 
     for (idx, (day_start, day_end)) in windows.iter().enumerate() {
         let date = date_stamp(day_start.date_naive());
+        let eval_cache_path = eval_cache_dir.join(format!("eval_cache_{date}.jsonl"));
+        let scout_report_path = scout_reports_dir.join(format!("eval_sweep_{date}.json"));
         let report_path = reports_dir.join(format!("harness_sweep_{date}.json"));
         let checkpoint = checkpoint_dir.join(date);
         report_paths.push(report_path.clone());
+
+        let mut eval_args = vec![
+            "polymomentum-engine".to_string(),
+            "eval-cache".to_string(),
+            "--start".to_string(),
+            day_start.to_rfc3339(),
+            "--end".to_string(),
+            day_end.to_rfc3339(),
+            "--window-minutes".to_string(),
+            float_arg(input.window_minutes),
+            "--output".to_string(),
+            eval_cache_path.display().to_string(),
+        ];
+        if let Some(cache_dir) = &input.cache_dir {
+            eval_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+        }
+        if let Some(btc_csv) = &input.btc_csv {
+            eval_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+        }
+        stages.push(StrategyBuilderStage {
+            name: format!("eval_cache_{}", idx + 1),
+            purpose:
+                "Replay raw PMXT once into live-like signal/resolution rows for fast candidate scouting."
+                    .to_string(),
+            command: shell_command(&eval_args),
+            outputs: vec![eval_cache_path.display().to_string()],
+            verify: vec![
+                "summary evaluations > 0 and resolutions > 0".to_string(),
+                "BTC tape coverage check passes for the full candle window".to_string(),
+            ],
+            resource_policy:
+                "Run on a dev box for multi-hour windows; safe on VPS only for short diagnostics."
+                    .to_string(),
+        });
+
+        let mut scout_args = vec![
+            "polymomentum-engine".to_string(),
+            "sweep".to_string(),
+            "--session".to_string(),
+            eval_cache_path.display().to_string(),
+            "--bankroll".to_string(),
+            money_arg(input.bankroll),
+            "--min-trades".to_string(),
+            "30".to_string(),
+            "--grid".to_string(),
+            "--top".to_string(),
+            "25".to_string(),
+            "--report-json".to_string(),
+            scout_report_path.display().to_string(),
+            "--conf".to_string(),
+            profile.conf.to_string(),
+            "--z".to_string(),
+            profile.z.to_string(),
+            "--edge".to_string(),
+            profile.edge.to_string(),
+            format!("--ev-buffer={}", profile.ev_buffer),
+            format!("--min-price={}", profile.min_price),
+            format!("--max-price={}", profile.max_price),
+            format!("--settlement-floor={}", profile.settlement_floor),
+            format!(
+                "--settlement-guard-minutes={}",
+                profile.settlement_guard_minutes
+            ),
+            format!(
+                "--settlement-sigma-buffer={}",
+                profile.settlement_sigma_buffer
+            ),
+            format!("--micro-max-spread={}", profile.micro_max_spread),
+            format!("--micro-min-depth={}", profile.micro_min_depth),
+            format!("--micro-min-pressure={}", profile.micro_min_pressure),
+        ];
+        if profile.also_maker {
+            scout_args.push("--also-maker".to_string());
+        }
+        stages.push(StrategyBuilderStage {
+            name: format!("eval_cache_sweep_{}", idx + 1),
+            purpose:
+                "Search a broad strategy grid over the cached signal stream before spending full L2 harness time."
+                    .to_string(),
+            command: shell_command(&scout_args),
+            outputs: vec![scout_report_path.display().to_string()],
+            verify: vec![
+                "top variants have enough resolved trades before being trusted".to_string(),
+                "candidate parameters are re-run through harness-sweep before promotion".to_string(),
+            ],
+            resource_policy:
+                "CPU-light compared with raw replay; still keep broad multi-day searches on the dev box."
+                    .to_string(),
+        });
 
         let mut args = vec![
             "polymomentum-engine".to_string(),
@@ -349,8 +443,9 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         window_minutes: input.window_minutes,
         stages,
         notes: vec![
-            "The builder uses cached PMXT + BTC data to find candidates, then live-replay to mirror paper shadow before any live gate changes.".to_string(),
+            "The builder first creates replay-grade eval caches for fast scouting, then uses the full PMXT harness as the authoritative promotion gate.".to_string(),
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
+            "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
             "Only flip CANDLE_SETTLEMENT_ALIGNMENT_READY after replay and paper sessions both show oracle agreement on resolved shadow candidates.".to_string(),
         ],
     })
@@ -904,7 +999,15 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 7);
+        assert_eq!(plan.stages.len(), 13);
+        assert!(plan
+            .stages
+            .iter()
+            .any(|s| s.command.contains("eval-cache") && s.command.contains("--window-minutes 5")));
+        assert!(plan
+            .stages
+            .iter()
+            .any(|s| s.command.contains("sweep") && s.command.contains("--grid")));
         assert!(plan
             .stages
             .iter()
