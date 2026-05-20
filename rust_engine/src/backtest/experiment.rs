@@ -46,6 +46,16 @@ pub struct VariantReport {
     pub fill_rate: f64,
     #[serde(default)]
     pub reject_reasons: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub breaker_tripped: bool,
+    #[serde(default)]
+    pub breaker_reason: Option<String>,
+    #[serde(default)]
+    pub breaker_tripped_at_s: Option<f64>,
+    #[serde(default)]
+    pub breaker_realized_drawdown_pct: f64,
+    #[serde(default)]
+    pub breaker_stressed_drawdown_pct: f64,
     pub win_rate: f64,
     pub total_pnl: f64,
     pub avg_pnl: f64,
@@ -262,6 +272,11 @@ impl VariantReport {
             fills_failed: run.results.fills_failed,
             fill_rate: run.results.fill_rate(),
             reject_reasons: run.results.reject_reasons.clone(),
+            breaker_tripped: run.results.breaker.tripped,
+            breaker_reason: run.results.breaker.reason.clone(),
+            breaker_tripped_at_s: run.results.breaker.tripped_at_s,
+            breaker_realized_drawdown_pct: run.results.breaker.metrics.realized_drawdown_pct,
+            breaker_stressed_drawdown_pct: run.results.breaker.metrics.stressed_drawdown_pct,
             win_rate: run.results.win_rate(),
             total_pnl: run.results.total_pnl(),
             avg_pnl: run.results.avg_pnl(),
@@ -321,6 +336,12 @@ impl PromotionArtifact {
                 selected.fills_failed, selected.reject_reasons
             ));
         }
+        if selected.breaker_tripped {
+            risk_notes.push(format!(
+                "selected variant tripped circuit breaker: {}",
+                selected.breaker_reason.as_deref().unwrap_or("unknown")
+            ));
+        }
         let (dominant_zone, dominant_zone_trade_share) = dominant_zone_share(selected);
         if let (Some(zone), Some(share)) = (&dominant_zone, dominant_zone_trade_share) {
             risk_notes.push(format!(
@@ -375,7 +396,8 @@ impl PromotionArtifact {
             .iter()
             .filter(|variant| {
                 promotion_rejection_reasons(variant, &gate).is_empty()
-                    && multi_report_rejection_reasons(reports, variant, &gate, &multi_gate).is_empty()
+                    && multi_report_rejection_reasons(reports, variant, &gate, &multi_gate)
+                        .is_empty()
             })
             .max_by(|a, b| {
                 a.total_pnl
@@ -411,11 +433,9 @@ impl PromotionArtifact {
         let mut selected_report = aggregate.clone();
         selected_report.variants = vec![selected.clone()];
         let mut artifact = Self::from_report(&selected_report, gate)?;
-        artifact.risk_notes.extend(multi_report_risk_notes(
-            reports,
-            selected,
-            &multi_gate,
-        ));
+        artifact
+            .risk_notes
+            .extend(multi_report_risk_notes(reports, selected, &multi_gate));
         Ok(artifact)
     }
 }
@@ -455,7 +475,9 @@ fn aggregate_reports(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let first = reports.first().context("aggregate reports requires at least one report")?;
+    let first = reports
+        .first()
+        .context("aggregate reports requires at least one report")?;
     let last = reports.last().unwrap_or(first);
     let mut market_catalog = MarketCatalog::default();
     for report in reports {
@@ -480,10 +502,14 @@ fn aggregate_reports(
             .collect::<Vec<_>>()
             .join(","),
     );
-    src.metadata
-        .insert("windows".to_string(), reports.iter().map(|r| {
-            format!("{}..{}", r.start, r.end)
-        }).collect::<Vec<_>>().join(","));
+    src.metadata.insert(
+        "windows".to_string(),
+        reports
+            .iter()
+            .map(|r| format!("{}..{}", r.start, r.end))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
 
     let mut notes = Vec::new();
     for report in reports {
@@ -562,13 +588,28 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
             fills_success as f64 / execution_attempts as f64
         },
         reject_reasons,
+        breaker_tripped: group.iter().any(|v| v.breaker_tripped),
+        breaker_reason: group.iter().find_map(|v| v.breaker_reason.clone()),
+        breaker_tripped_at_s: group.iter().find_map(|v| v.breaker_tripped_at_s),
+        breaker_realized_drawdown_pct: group
+            .iter()
+            .map(|v| v.breaker_realized_drawdown_pct)
+            .fold(0.0, f64::max),
+        breaker_stressed_drawdown_pct: group
+            .iter()
+            .map(|v| v.breaker_stressed_drawdown_pct)
+            .fold(0.0, f64::max),
         win_rate: if wins + losses == 0 {
             0.0
         } else {
             wins as f64 / (wins + losses) as f64
         },
         total_pnl,
-        avg_pnl: if trades == 0 { 0.0 } else { total_pnl / trades as f64 },
+        avg_pnl: if trades == 0 {
+            0.0
+        } else {
+            total_pnl / trades as f64
+        },
         total_fees,
         sharpe_like: daily_sharpe(group),
         by_zone,
@@ -714,6 +755,10 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
     let mut reasons = Vec::new();
     if selected.strategy_params.is_null() {
         reasons.push("selected variant lacks strategy_params; regenerate the report".to_string());
+    }
+    if selected.breaker_tripped {
+        let reason = selected.breaker_reason.as_deref().unwrap_or("unknown");
+        reasons.push(format!("circuit breaker tripped during backtest: {reason}"));
     }
     if selected.trades < gate.min_trades {
         reasons.push(format!(
@@ -870,8 +915,8 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
 
 pub fn read_report(path: impl AsRef<Path>) -> Result<ExperimentReport> {
     let path = path.as_ref();
-    let payload =
-        std::fs::read(path).with_context(|| format!("read experiment report {}", path.display()))?;
+    let payload = std::fs::read(path)
+        .with_context(|| format!("read experiment report {}", path.display()))?;
     serde_json::from_slice(&payload)
         .with_context(|| format!("parse experiment report {}", path.display()))
 }
@@ -903,10 +948,7 @@ pub fn write_report_atomic(path: impl AsRef<Path>, report: &ExperimentReport) ->
     Ok(())
 }
 
-pub fn write_promotion_atomic(
-    path: impl AsRef<Path>,
-    artifact: &PromotionArtifact,
-) -> Result<()> {
+pub fn write_promotion_atomic(path: impl AsRef<Path>, artifact: &PromotionArtifact) -> Result<()> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -995,6 +1037,7 @@ mod tests {
             bankroll_usd: 100.0,
             cache_dir: std::path::PathBuf::from("/tmp/pmxt"),
             latency: StaticLatencyConfig { insert_ms: 50 },
+            breaker_cfg: crate::live::breaker::BreakerConfig::default(),
             shared_distilled_dir: None,
             threads: Some(1),
             checkpoint_dir: None,
@@ -1070,16 +1113,16 @@ mod tests {
         let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
         report.variants = vec![worse, overfit, better];
 
-        let artifact =
-            PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap();
+        let artifact = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap();
 
         assert_eq!(artifact.selected_strategy.risk_profile, "better");
         assert_eq!(artifact.trades, 30);
-        assert_eq!(artifact.data_manifest_hash, report.data_manifest.manifest_hash);
-        assert_eq!(artifact.dominant_zone.as_deref(), Some("primary"));
-        assert!(
-            (artifact.dominant_zone_trade_share.unwrap() - (16.0 / 30.0)).abs() < f64::EPSILON
+        assert_eq!(
+            artifact.data_manifest_hash,
+            report.data_manifest.manifest_hash
         );
+        assert_eq!(artifact.dominant_zone.as_deref(), Some("primary"));
+        assert!((artifact.dominant_zone_trade_share.unwrap() - (16.0 / 30.0)).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1099,6 +1142,11 @@ mod tests {
             fills_failed: 0,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1128,6 +1176,11 @@ mod tests {
             fills_failed: 0,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 0.60,
             total_pnl: 1.0,
             avg_pnl: 0.20,
@@ -1139,6 +1192,42 @@ mod tests {
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
         assert!(err.to_string().contains("trades 5 below minimum"));
+    }
+
+    #[test]
+    fn promotion_rejects_backtest_breaker_trip() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 0,
+            execution_attempts: 0,
+            fills_success: 0,
+            fills_failed: 0,
+            fill_rate: 0.0,
+            reject_reasons: BTreeMap::new(),
+            breaker_tripped: true,
+            breaker_reason: Some("win_rate_low".to_string()),
+            breaker_tripped_at_s: Some(1_700_000_000.0),
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            win_rate: 0.66,
+            total_pnl: 1.0,
+            avg_pnl: 0.03,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("circuit breaker tripped during backtest"));
     }
 
     #[test]
@@ -1157,6 +1246,11 @@ mod tests {
             fills_failed: 1,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::from([("maker_unfilled".to_string(), 1)]),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1167,7 +1261,9 @@ mod tests {
 
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
-        assert!(err.to_string().contains("unresolved_fills 1 above maximum 0"));
+        assert!(err
+            .to_string()
+            .contains("unresolved_fills 1 above maximum 0"));
     }
 
     #[test]
@@ -1186,6 +1282,11 @@ mod tests {
             fills_failed: 0,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1215,6 +1316,11 @@ mod tests {
             fills_failed: 0,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 1.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1244,6 +1350,11 @@ mod tests {
             fills_failed: 0,
             fill_rate: 0.0,
             reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
             win_rate: 20.0 / 30.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1282,6 +1393,11 @@ mod tests {
                 fills_failed: 0,
                 fill_rate: 0.0,
                 reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
                 win_rate: 20.0 / 30.0,
                 total_pnl: consistent_pnl,
                 avg_pnl: consistent_pnl / 30.0,
@@ -1301,6 +1417,11 @@ mod tests {
                 fills_failed: 0,
                 fill_rate: 0.0,
                 reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
                 win_rate: 20.0 / 30.0,
                 total_pnl: if i == 0 { 100.0 } else { -10.0 },
                 avg_pnl: 0.0,
@@ -1350,6 +1471,11 @@ mod tests {
                 fills_failed: 0,
                 fill_rate: 0.0,
                 reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
                 win_rate: 0.7,
                 total_pnl: fragile_pnl,
                 avg_pnl: fragile_pnl / 40.0,
@@ -1369,6 +1495,11 @@ mod tests {
                 fills_failed: 0,
                 fill_rate: 0.0,
                 reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
                 win_rate: 0.7,
                 total_pnl: robust_pnl,
                 avg_pnl: robust_pnl / 40.0,

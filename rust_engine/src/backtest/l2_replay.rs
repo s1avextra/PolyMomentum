@@ -167,6 +167,8 @@ pub trait Strategy {
         true
     }
 
+    fn on_fills(&mut self, _fills: &[BacktestFill]) {}
+
     fn on_event(
         &mut self,
         timestamp_s: f64,
@@ -267,7 +269,10 @@ impl L2BacktestEngine {
 
             // Flush due fills BEFORE applying the new event — same lookahead
             // guard as the Python engine.
-            self.flush_pending_orders(event.timestamp_s);
+            let fills = self.flush_pending_orders(event.timestamp_s);
+            if !fills.is_empty() {
+                strategy.on_fills(&fills);
+            }
 
             let mid = {
                 let book = self.books.entry(token_id.to_string()).or_default();
@@ -303,9 +308,10 @@ impl L2BacktestEngine {
         }
     }
 
-    fn flush_pending_orders(&mut self, current_ts: f64) {
+    fn flush_pending_orders(&mut self, current_ts: f64) -> Vec<BacktestFill> {
+        let mut emitted = Vec::new();
         if self.pending_orders.is_empty() {
-            return;
+            return emitted;
         }
         let latency_s = self.latency.insert_ms as f64 / 1000.0;
         let mut still_pending: Vec<BacktestOrder> = Vec::new();
@@ -320,7 +326,7 @@ impl L2BacktestEngine {
             // Snapshot the book state we need so we don't hold the borrow.
             let book_snapshot = self.books.get(&order.token_id).cloned();
             let Some(book) = book_snapshot else {
-                self.fills.push(BacktestFill {
+                let fill = BacktestFill {
                     order,
                     fill_timestamp_s: fill_ts,
                     fill_price: 0.0,
@@ -331,11 +337,13 @@ impl L2BacktestEngine {
                     book_age_ms: 0.0,
                     success: false,
                     reason: "no book at fill time".to_string(),
-                });
+                };
+                self.fills.push(fill.clone());
+                emitted.push(fill);
                 continue;
             };
             if book.best_bid <= 0.0 || book.best_ask <= 0.0 {
-                self.fills.push(BacktestFill {
+                let fill = BacktestFill {
                     order,
                     fill_timestamp_s: fill_ts,
                     fill_price: 0.0,
@@ -346,14 +354,16 @@ impl L2BacktestEngine {
                     book_age_ms: 0.0,
                     success: false,
                     reason: "no book at fill time".to_string(),
-                });
+                };
+                self.fills.push(fill.clone());
+                emitted.push(fill);
                 continue;
             }
 
             let side = match Side::parse(&order.side) {
                 Some(s) => s,
                 None => {
-                    self.fills.push(BacktestFill {
+                    let fill = BacktestFill {
                         order,
                         fill_timestamp_s: fill_ts,
                         fill_price: 0.0,
@@ -364,7 +374,9 @@ impl L2BacktestEngine {
                         book_age_ms: 0.0,
                         success: false,
                         reason: "invalid side".to_string(),
-                    });
+                    };
+                    self.fills.push(fill.clone());
+                    emitted.push(fill);
                     continue;
                 }
             };
@@ -377,7 +389,7 @@ impl L2BacktestEngine {
                     .fill(side, order.size, &book, order_type, order.limit_price);
             let book_age_ms = ((fill_ts - book.last_update_ts_s) * 1000.0).max(0.0);
             if !result.success {
-                self.fills.push(BacktestFill {
+                let fill = BacktestFill {
                     order,
                     fill_timestamp_s: fill_ts,
                     fill_price: 0.0,
@@ -388,7 +400,9 @@ impl L2BacktestEngine {
                     book_age_ms,
                     success: false,
                     reason: result.reason.as_str().to_string(),
-                });
+                };
+                self.fills.push(fill.clone());
+                emitted.push(fill);
                 continue;
             }
             let effective_rate = if matches!(result.reason, FillReason::MakerFill) {
@@ -397,7 +411,7 @@ impl L2BacktestEngine {
                 order.fee_rate
             };
             let fee = polymarket_fee(result.filled_size, result.fill_price, effective_rate);
-            self.fills.push(BacktestFill {
+            let fill = BacktestFill {
                 order,
                 fill_timestamp_s: fill_ts,
                 fill_price: result.fill_price,
@@ -408,9 +422,12 @@ impl L2BacktestEngine {
                 book_age_ms,
                 success: true,
                 reason: result.reason.as_str().to_string(),
-            });
+            };
+            self.fills.push(fill.clone());
+            emitted.push(fill);
         }
         self.pending_orders = still_pending;
+        emitted
     }
 
     pub fn summary(&self) -> Summary {
@@ -567,6 +584,49 @@ mod tests {
         assert!(f.success);
         assert!((f.fill_price - 0.53).abs() < 1e-9); // best_ask 0.52 + 1 tick = 0.53
         assert!((f.fill_timestamp_s - 1.05).abs() < 1e-9);
+    }
+
+    struct FillHookStrategy {
+        inner: OneShotBuy,
+        seen_fills: usize,
+    }
+
+    impl Strategy for FillHookStrategy {
+        fn on_fills(&mut self, fills: &[BacktestFill]) {
+            self.seen_fills += fills.len();
+        }
+
+        fn on_event(
+            &mut self,
+            ts: f64,
+            tok: &str,
+            book: &TokenBook,
+            h: &BTreeMap<String, Vec<(f64, f64)>>,
+        ) -> Vec<BacktestOrder> {
+            self.inner.on_event(ts, tok, book, h)
+        }
+    }
+
+    #[test]
+    fn strategy_receives_fill_callbacks_after_latency_flush() {
+        let mut e = L2BacktestEngine::new(
+            FillModel::OneTickTaker(OneTickTaker::default()),
+            StaticLatencyConfig { insert_ms: 50 },
+        );
+        let mut s = FillHookStrategy {
+            inner: OneShotBuy { fired: false },
+            seen_fills: 0,
+        };
+        e.replay(
+            vec![
+                snap_event("t", 1.0, 0.50, 0.52),
+                snap_event("t", 1.10, 0.50, 0.52),
+            ],
+            &mut s,
+            0.072,
+        );
+        assert_eq!(e.fills.len(), 1);
+        assert_eq!(s.seen_fills, 1);
     }
 
     struct OneShotMakerBuy {

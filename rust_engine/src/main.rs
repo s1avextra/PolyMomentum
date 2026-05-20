@@ -2150,7 +2150,7 @@ fn parse_csv_floats(s: &str) -> Vec<f64> {
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_harness_sweep(
-    _settings: &config::Settings,
+    settings: &config::Settings,
     start: &str,
     end: Option<&str>,
     bankroll: f64,
@@ -2391,6 +2391,7 @@ async fn cmd_harness_sweep(
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,
         },
+        breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
@@ -2766,6 +2767,7 @@ async fn cmd_harness(
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,
         },
+        breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),

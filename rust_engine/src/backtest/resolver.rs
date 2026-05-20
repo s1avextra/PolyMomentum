@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use crate::backtest::btc_history::BTCHistory;
 use crate::backtest::l2_replay::BacktestFill;
+use crate::live::breaker::{BreakerMetrics, BreakerState};
 use crate::strategy::decision::CandleDecision;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -29,6 +30,8 @@ pub struct BacktestResults {
     pub trades: Vec<ResolvedTrade>,
     pub unresolved_fills: Vec<BacktestFill>,
     #[serde(default)]
+    pub breaker: BacktestBreakerReport,
+    #[serde(default)]
     pub execution_attempts: usize,
     #[serde(default)]
     pub fills_success: usize,
@@ -36,6 +39,43 @@ pub struct BacktestResults {
     pub fills_failed: usize,
     #[serde(default)]
     pub reject_reasons: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BacktestBreakerReport {
+    pub tripped: bool,
+    pub reason: Option<String>,
+    pub tripped_at_s: Option<f64>,
+    pub state: BreakerState,
+    pub metrics: BreakerMetrics,
+}
+
+impl BacktestBreakerReport {
+    pub fn from_state(
+        state: BreakerState,
+        open_exposure: f64,
+        initial_bankroll: f64,
+        tripped: bool,
+        reason: Option<String>,
+        tripped_at_s: Option<f64>,
+    ) -> Self {
+        Self {
+            tripped,
+            reason,
+            tripped_at_s,
+            state,
+            metrics: state.metrics(open_exposure, initial_bankroll),
+        }
+    }
+
+    pub fn has_state(&self) -> bool {
+        self.tripped
+            || self.reason.is_some()
+            || self.tripped_at_s.is_some()
+            || self.state.wins + self.state.losses > 0
+            || self.state.realized_pnl.abs() > 1e-9
+            || self.state.peak_pnl.abs() > 1e-9
+    }
 }
 
 impl BacktestResults {
@@ -64,6 +104,9 @@ impl BacktestResults {
     pub fn merge_from(&mut self, other: Self) {
         self.trades.extend(other.trades);
         self.unresolved_fills.extend(other.unresolved_fills);
+        if other.breaker.has_state() || !self.breaker.has_state() {
+            self.breaker = other.breaker;
+        }
         self.execution_attempts += other.execution_attempts;
         self.fills_success += other.fills_success;
         self.fills_failed += other.fills_failed;
@@ -124,7 +167,11 @@ impl BacktestResults {
         let mean = pnls.iter().sum::<f64>() / pnls.len() as f64;
         let var = pnls.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / pnls.len() as f64;
         let std = var.sqrt();
-        if std > 0.0 { mean / std } else { 0.0 }
+        if std > 0.0 {
+            mean / std
+        } else {
+            0.0
+        }
     }
 
     pub fn by_zone(&self) -> BTreeMap<String, ZoneBucket> {
@@ -158,7 +205,11 @@ impl ZoneBucket {
 
     pub fn win_rate(&self) -> f64 {
         let r = self.wins + self.losses;
-        if r == 0 { 0.0 } else { self.wins as f64 / r as f64 }
+        if r == 0 {
+            0.0
+        } else {
+            self.wins as f64 / r as f64
+        }
     }
 }
 

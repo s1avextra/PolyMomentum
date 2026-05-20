@@ -447,11 +447,7 @@ impl Pipeline {
         let alerter = Alerter::from_env();
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
-        let breaker_cfg = BreakerConfig {
-            min_trades: settings.candle_breaker_min_trades.max(1) as u32,
-            min_win_rate: settings.candle_breaker_min_win_rate,
-            max_drawdown_pct: settings.candle_breaker_max_drawdown_pct,
-        };
+        let breaker_cfg = BreakerConfig::from_settings(&settings);
 
         // Restore breaker + paper positions + oracle pending
         let mut breaker_tripped = matches!(

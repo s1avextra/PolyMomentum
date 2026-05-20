@@ -19,6 +19,16 @@ impl Default for BreakerConfig {
     }
 }
 
+impl BreakerConfig {
+    pub fn from_settings(settings: &crate::config::Settings) -> Self {
+        Self {
+            min_trades: settings.candle_breaker_min_trades.max(1) as u32,
+            min_win_rate: settings.candle_breaker_min_win_rate,
+            max_drawdown_pct: settings.candle_breaker_max_drawdown_pct,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct BreakerState {
     pub wins: u64,
@@ -27,7 +37,7 @@ pub struct BreakerState {
     pub peak_pnl: f64,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct BreakerMetrics {
     pub total_trades: u64,
     pub win_rate: f64,
@@ -149,10 +159,9 @@ mod tests {
         for _ in 0..10 {
             s.record_resolution(false, -1.0);
         }
-        assert!(
-            s.should_trip(&BreakerConfig::default(), 0.0, 100.0)
-                .is_none()
-        );
+        assert!(s
+            .should_trip(&BreakerConfig::default(), 0.0, 100.0)
+            .is_none());
     }
 
     #[test]

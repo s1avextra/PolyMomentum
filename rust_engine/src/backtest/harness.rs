@@ -27,9 +27,12 @@ use crate::backtest::l2_replay::{
     BacktestOrder, FillModel, L2BacktestEngine, StaticLatencyConfig, Strategy, TokenBook,
 };
 use crate::backtest::pmxt::{L2Event, PMXTv2Loader};
-use crate::backtest::resolver::{resolve_fills, BacktestResults, CandleWindow};
+use crate::backtest::resolver::{
+    resolve_fills, BacktestBreakerReport, BacktestResults, CandleWindow,
+};
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
+use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::strategy::decision::{decide_candle_trade, CandleDecision, DecisionResult};
 use crate::strategy::microstructure::{BookLevelView, BookMicrostructure};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
@@ -172,6 +175,13 @@ pub struct CandleBacktestStrategy {
     momentum: MomentumDetector,
     bankroll_usd: f64,
     btc_history: Arc<BTCHistory>,
+    breaker_cfg: BreakerConfig,
+    breaker_state: BreakerState,
+    breaker_tripped: bool,
+    breaker_reason: Option<String>,
+    breaker_tripped_at_s: Option<f64>,
+    submitted_positions: BTreeMap<String, BacktestOpenPosition>,
+    open_positions: BTreeMap<String, BacktestOpenPosition>,
     pub decisions: Vec<CandleDecision>,
     /// Per-condition_id flag so we only enter once per market.
     traded: HashSet<String>,
@@ -194,12 +204,24 @@ pub struct CandleBacktestStrategy {
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
+#[derive(Debug, Clone)]
+struct BacktestOpenPosition {
+    direction: String,
+    open_btc: f64,
+    close_ts_s: f64,
+    entry_price: f64,
+    size: f64,
+    fee: f64,
+}
+
 impl CandleBacktestStrategy {
-    pub fn new(
+    pub fn new_with_breaker(
         variant: StrategyVariant,
         universe: &CandleUniverse,
         bankroll_usd: f64,
         btc_history: Arc<BTCHistory>,
+        breaker: BacktestBreakerReport,
+        breaker_cfg: BreakerConfig,
     ) -> Self {
         let mom_cfg = MomentumConfig {
             noise_z_threshold: 0.3,
@@ -222,6 +244,13 @@ impl CandleBacktestStrategy {
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
             btc_history,
+            breaker_cfg,
+            breaker_state: breaker.state,
+            breaker_tripped: breaker.tripped,
+            breaker_reason: breaker.reason,
+            breaker_tripped_at_s: breaker.tripped_at_s,
+            submitted_positions: BTreeMap::new(),
+            open_positions: BTreeMap::new(),
             decisions: Vec::new(),
             traded: HashSet::new(),
             last_eval_bucket_by_token: HashMap::new(),
@@ -253,11 +282,94 @@ impl CandleBacktestStrategy {
             .map(backtest_microstructure)
             .unwrap_or_default()
     }
+
+    fn open_exposure(&self) -> f64 {
+        self.open_positions
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum()
+    }
+
+    fn settle_due_positions(&mut self, timestamp_s: f64) {
+        let due: Vec<String> = self
+            .open_positions
+            .iter()
+            .filter(|(_, p)| p.close_ts_s <= timestamp_s)
+            .map(|(intent_id, _)| intent_id.clone())
+            .collect();
+        for intent_id in due {
+            let Some(pos) = self.open_positions.remove(&intent_id) else {
+                continue;
+            };
+            let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
+            if close_btc <= 0.0 || pos.open_btc <= 0.0 {
+                self.open_positions.insert(intent_id, pos);
+                continue;
+            }
+            let actual = if close_btc >= pos.open_btc {
+                "up"
+            } else {
+                "down"
+            };
+            let won = pos.direction == actual;
+            let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
+            self.breaker_state.record_resolution(won, pnl);
+            self.trip_breaker_if_needed(pos.close_ts_s);
+        }
+        self.trip_breaker_if_needed(timestamp_s);
+    }
+
+    fn settle_all_positions(&mut self) {
+        self.settle_due_positions(f64::MAX);
+    }
+
+    fn trip_breaker_if_needed(&mut self, timestamp_s: f64) {
+        if self.breaker_tripped {
+            return;
+        }
+        if let Some(reason) = self.breaker_state.should_trip(
+            &self.breaker_cfg,
+            self.open_exposure(),
+            self.bankroll_usd.max(1.0),
+        ) {
+            self.breaker_tripped = true;
+            self.breaker_reason = Some(reason.to_string());
+            self.breaker_tripped_at_s = Some(timestamp_s);
+        }
+    }
+
+    pub fn breaker_report(&self) -> BacktestBreakerReport {
+        BacktestBreakerReport::from_state(
+            self.breaker_state,
+            self.open_exposure(),
+            self.bankroll_usd.max(1.0),
+            self.breaker_tripped,
+            self.breaker_reason.clone(),
+            self.breaker_tripped_at_s,
+        )
+    }
 }
 
 impl Strategy for CandleBacktestStrategy {
     fn needs_l2_history(&self) -> bool {
         false
+    }
+
+    fn on_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
+        for fill in fills {
+            let Some(mut pos) = self.submitted_positions.remove(&fill.order.intent_id) else {
+                continue;
+            };
+            if !fill.success {
+                continue;
+            }
+            pos.entry_price = fill.fill_price;
+            pos.size = fill.filled_size;
+            pos.fee = fill.fee;
+            self.open_positions
+                .insert(fill.order.intent_id.clone(), pos);
+            self.settle_due_positions(fill.fill_timestamp_s);
+        }
     }
 
     fn on_event(
@@ -269,6 +381,10 @@ impl Strategy for CandleBacktestStrategy {
     ) -> Vec<BacktestOrder> {
         self.events_seen += 1;
         self.books.insert(token_id.to_string(), book.clone());
+        self.settle_due_positions(timestamp_s);
+        if self.breaker_tripped {
+            return Vec::new();
+        }
         let Some(runtime) = self.universe_by_token.get(token_id) else {
             return Vec::new();
         };
@@ -429,6 +545,17 @@ impl Strategy for CandleBacktestStrategy {
             "candle_momentum_decision",
             format!("{cid}:{timestamp_s:.6}:{traded_token}"),
         );
+        self.submitted_positions.insert(
+            intent.intent_id.clone(),
+            BacktestOpenPosition {
+                direction: decision.direction.clone(),
+                open_btc: signal.open_price,
+                close_ts_s: runtime.close_ts_s,
+                entry_price: 0.0,
+                size: 0.0,
+                fee: 0.0,
+            },
+        );
 
         vec![BacktestOrder {
             intent_id: intent.intent_id,
@@ -459,6 +586,15 @@ fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
     BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
 }
 
+fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
+    let gross = if won {
+        (1.0 - entry_price) * size
+    } else {
+        -entry_price * size
+    };
+    gross - fee
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HarnessRun {
     pub variant: StrategyVariant,
@@ -472,6 +608,7 @@ pub struct HarnessConfig {
     pub bankroll_usd: f64,
     pub cache_dir: PathBuf,
     pub latency: StaticLatencyConfig,
+    pub breaker_cfg: BreakerConfig,
     /// Optional shared distilled-cache directory. When set, the harness
     /// checks `<dir>/<hour>.v1.candles.jsonl.gz` BEFORE the per-tenant
     /// sidecar and the parquet. The shared-cache writer is `polymomentum-
@@ -669,14 +806,20 @@ pub async fn run_harness(
         );
 
         let replay_t0 = std::time::Instant::now();
-        let run = |v: &StrategyVariant| -> BacktestResults {
+        let starting_breakers: Vec<BacktestBreakerReport> = variant_state
+            .iter()
+            .map(|state| state.breaker.clone())
+            .collect();
+        let run = |(idx, v): (usize, &StrategyVariant)| -> BacktestResults {
             let fm = build_fill_model(v);
             let mut engine = L2BacktestEngine::new(fm, cfg.latency);
-            let mut strategy = CandleBacktestStrategy::new(
+            let mut strategy = CandleBacktestStrategy::new_with_breaker(
                 v.clone(),
                 &cfg.universe,
                 cfg.bankroll_usd,
                 Arc::clone(&cfg.btc_history),
+                starting_breakers[idx].clone(),
+                cfg.breaker_cfg,
             );
             engine.replay(events.iter().cloned(), &mut strategy, v.default_fee_rate);
 
@@ -696,13 +839,17 @@ pub async fn run_harness(
                 "strategy diagnostic",
             );
 
+            strategy.settle_all_positions();
+            let breaker = strategy.breaker_report();
             let decisions = strategy.decisions;
-            resolve_fills(&engine.fills, &decisions, &windows, &cfg.btc_history)
+            let mut results = resolve_fills(&engine.fills, &decisions, &windows, &cfg.btc_history);
+            results.breaker = breaker;
+            results
         };
         let per_variant: Vec<BacktestResults> = if let Some(pool) = &local_pool {
-            pool.install(|| variants.par_iter().map(run).collect())
+            pool.install(|| variants.par_iter().enumerate().map(run).collect())
         } else {
-            variants.par_iter().map(run).collect()
+            variants.par_iter().enumerate().map(run).collect()
         };
 
         // Persist this hour's per-variant results BEFORE merging — so an
@@ -885,11 +1032,21 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
     let mut out = String::new();
     writeln!(
         &mut out,
-        "{:<24} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>9} {:>11} {:>9}",
-        "variant", "trades", "att", "fill%", "fails", "wins", "losses", "PnL", "PnL/trade", "fees"
+        "{:<24} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>9} {:>11} {:>9} {:>5}",
+        "variant",
+        "trades",
+        "att",
+        "fill%",
+        "fails",
+        "wins",
+        "losses",
+        "PnL",
+        "PnL/trade",
+        "fees",
+        "brk"
     )
     .unwrap();
-    writeln!(&mut out, "{}", "─".repeat(110)).unwrap();
+    writeln!(&mut out, "{}", "─".repeat(116)).unwrap();
     let mut sorted = runs.to_vec();
     sorted.sort_by(|a, b| {
         b.results
@@ -900,7 +1057,7 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
     for r in &sorted {
         writeln!(
             &mut out,
-            "{:<24} {:>7} {:>7} {:>6.1}% {:>7} {:>7} {:>7} {:>+8.2} {:>+10.3} {:>9.4}",
+            "{:<24} {:>7} {:>7} {:>6.1}% {:>7} {:>7} {:>7} {:>+8.2} {:>+10.3} {:>9.4} {:>5}",
             r.variant.name,
             r.results.n_trades(),
             r.results.execution_attempts,
@@ -911,6 +1068,11 @@ pub fn render_table(runs: &[HarnessRun]) -> String {
             r.results.total_pnl(),
             r.results.avg_pnl(),
             r.results.total_fees(),
+            if r.results.breaker.tripped {
+                "yes"
+            } else {
+                "no"
+            },
         )
         .unwrap();
     }
@@ -1024,6 +1186,7 @@ mod tests {
             bankroll_usd: 100.0,
             cache_dir: PathBuf::from("/tmp"),
             latency: StaticLatencyConfig::default(),
+            breaker_cfg: BreakerConfig::default(),
             shared_distilled_dir: None,
             threads: None,
             checkpoint_dir: None,
@@ -1074,6 +1237,77 @@ mod tests {
         assert!(active.contains("0xabc"));
         let inactive = cfg.universe.condition_id_set_for_hour(inactive_hour);
         assert!(!inactive.contains("0xabc"));
+    }
+
+    fn mk_test_fill(
+        intent_id: &str,
+        fill_timestamp_s: f64,
+    ) -> crate::backtest::l2_replay::BacktestFill {
+        crate::backtest::l2_replay::BacktestFill {
+            order: BacktestOrder {
+                intent_id: intent_id.to_string(),
+                timestamp_s: fill_timestamp_s - 0.05,
+                condition_id: "cid".to_string(),
+                token_id: "tok".to_string(),
+                side: "buy".to_string(),
+                size: 10.0,
+                order_type: "market".to_string(),
+                limit_price: None,
+                fee_rate: 0.0,
+                maker_fee_rate: 0.0,
+            },
+            fill_timestamp_s,
+            fill_price: 0.5,
+            filled_size: 10.0,
+            cost: 5.0,
+            fee: 0.0,
+            slippage: 0.0,
+            book_age_ms: 0.0,
+            success: true,
+            reason: "taker".to_string(),
+        }
+    }
+
+    #[test]
+    fn backtest_strategy_trips_shared_breaker_on_settled_losses() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut btc = BTCHistory::default();
+        btc.timestamps_ms.extend([10_000, 20_000]);
+        btc.prices.extend([90.0, 90.0]);
+        let breaker_cfg = BreakerConfig {
+            min_trades: 2,
+            min_win_rate: 0.75,
+            max_drawdown_pct: 0.30,
+        };
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            Arc::new(btc),
+            BacktestBreakerReport::default(),
+            breaker_cfg,
+        );
+
+        for (intent_id, close_ts_s) in [("loss-1", 10.0), ("loss-2", 20.0)] {
+            strategy.submitted_positions.insert(
+                intent_id.to_string(),
+                BacktestOpenPosition {
+                    direction: "up".to_string(),
+                    open_btc: 100.0,
+                    close_ts_s,
+                    entry_price: 0.0,
+                    size: 0.0,
+                    fee: 0.0,
+                },
+            );
+            strategy.on_fills(&[mk_test_fill(intent_id, close_ts_s - 1.0)]);
+        }
+
+        strategy.settle_due_positions(21.0);
+        let report = strategy.breaker_report();
+        assert!(report.tripped);
+        assert_eq!(report.reason.as_deref(), Some("win_rate_low"));
+        assert_eq!(report.state.losses, 2);
     }
 
     #[test]
