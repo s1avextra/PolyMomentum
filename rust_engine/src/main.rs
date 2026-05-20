@@ -640,6 +640,9 @@ enum StrategyBuilderCommand {
         /// Candle frame length to isolate.
         #[arg(long, default_value_t = 5.0)]
         window_minutes: f64,
+        /// Feed-forward fold length in inclusive UTC hours.
+        #[arg(long, default_value_t = 24)]
+        fold_hours: i64,
         /// Builder profile. Currently `guarded5m` is the production default.
         #[arg(long, default_value = "guarded5m")]
         profile: String,
@@ -1037,6 +1040,7 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             latency_ms,
             threads,
             window_minutes,
+            fold_hours,
             profile,
             zone_mode,
             promotion_output,
@@ -1052,6 +1056,7 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     latency_ms,
                     threads,
                     window_minutes,
+                    fold_hours,
                     profile,
                     zone_mode,
                     promotion_output,

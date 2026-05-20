@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 
 use crate::backtest::experiment::{self, PromotionArtifact};
@@ -27,6 +27,7 @@ pub struct StrategyBuilderPlanInput {
     pub latency_ms: u64,
     pub threads: usize,
     pub window_minutes: f64,
+    pub fold_hours: i64,
     pub profile: String,
     pub zone_mode: String,
     pub promotion_output: Option<String>,
@@ -55,6 +56,7 @@ pub struct StrategyBuilderPlan {
     pub end: String,
     pub out_dir: String,
     pub window_minutes: f64,
+    pub fold_hours: i64,
     pub zone_mode: String,
     pub stages: Vec<StrategyBuilderStage>,
     pub notes: Vec<String>,
@@ -107,6 +109,9 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     if input.window_minutes <= 0.0 {
         bail!("--window-minutes must be > 0");
     }
+    if input.fold_hours <= 0 {
+        bail!("--fold-hours must be > 0");
+    }
     let zone_mode = parse_zone_mode(&input.zone_mode)?;
 
     let out_dir = input.out_dir;
@@ -114,8 +119,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     let scout_reports_dir = out_dir.join("scout_reports");
     let reports_dir = out_dir.join("reports");
     let checkpoint_dir = out_dir.join("checkpoints");
-    let replay_dir = out_dir.join("live_replay_sessions");
-    let replay_report = out_dir.join("live_replay_report.json");
+    let holdout_replay_dir = out_dir.join("holdout_live_replay_sessions");
+    let holdout_replay_reports_dir = out_dir.join("holdout_live_replay_reports");
     let promotion_output = input
         .promotion_output
         .map(PathBuf::from)
@@ -128,298 +133,213 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         });
 
     let profile = StrategyBuilderProfile::from_name(&input.profile)?;
-    let windows = daily_windows(start, end)?;
+    let windows = feed_forward_windows(start, end, input.fold_hours)?;
+    if windows.len() < 2 {
+        bail!(
+            "feed-forward plan requires at least two folds; got {} window(s). Use a wider --start/--end range or a smaller --fold-hours.",
+            windows.len()
+        );
+    }
     let mut stages = Vec::new();
-    let mut report_paths = Vec::new();
+    let mut calibration_reports = Vec::new();
 
-    for (idx, (day_start, day_end)) in windows.iter().enumerate() {
-        let date = date_stamp(day_start.date_naive());
-        let eval_cache_path = eval_cache_dir.join(format!("eval_cache_{date}.jsonl"));
-        let scout_report_path = scout_reports_dir.join(format!("eval_sweep_{date}.json"));
-        let report_path = reports_dir.join(format!("harness_sweep_{date}.json"));
-        let checkpoint = checkpoint_dir.join(date);
-        report_paths.push(report_path.clone());
+    for holdout_idx in 1..windows.len() {
+        let calibration_idx = holdout_idx - 1;
+        let (calibration_start, calibration_end) = windows[calibration_idx];
+        let calibration_report = push_calibration_window_stages(
+            &mut stages,
+            calibration_idx + 1,
+            calibration_start,
+            calibration_end,
+            &eval_cache_dir,
+            &scout_reports_dir,
+            &reports_dir,
+            &checkpoint_dir,
+            &profile,
+            zone_mode,
+            input.cache_dir.as_ref(),
+            input.btc_csv.as_ref(),
+            input.bankroll,
+            input.latency_ms,
+            input.threads,
+            input.window_minutes,
+        );
+        calibration_reports.push(calibration_report);
 
-        let mut eval_args = vec![
-            "polymomentum-engine".to_string(),
-            "eval-cache".to_string(),
-            "--start".to_string(),
-            day_start.to_rfc3339(),
-            "--end".to_string(),
-            day_end.to_rfc3339(),
-            "--window-minutes".to_string(),
-            float_arg(input.window_minutes),
-            "--output".to_string(),
-            eval_cache_path.display().to_string(),
-            "--allow-gamma-fetch".to_string(),
-        ];
-        if let Some(cache_dir) = &input.cache_dir {
-            eval_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
-        }
-        if let Some(btc_csv) = &input.btc_csv {
-            eval_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
-        }
+        let (holdout_start, holdout_end) = windows[holdout_idx];
+        let fold_promotion = out_dir.join(format!(
+            "promotion_ff_fold_{:02}_train_{}_test_{}.json",
+            holdout_idx,
+            window_stamp(start, calibration_end),
+            window_stamp(holdout_start, holdout_end)
+        ));
         stages.push(StrategyBuilderStage {
-            name: format!("eval_cache_{}", idx + 1),
+            name: format!("feed_forward_promote_{}", holdout_idx),
             purpose:
-                "Replay raw PMXT once into live-like signal/resolution rows for fast candidate scouting."
+                "Select a fixed artifact using only calibration windows that end before the holdout starts."
                     .to_string(),
-            command: shell_command(&eval_args),
-            outputs: vec![eval_cache_path.display().to_string()],
+            command: promotion_command(&calibration_reports, &fold_promotion, zone_mode),
+            outputs: vec![fold_promotion.display().to_string()],
             verify: vec![
-                "summary evaluations > 0 and resolutions > 0".to_string(),
-                "BTC tape coverage check passes for the full candle window".to_string(),
+                format!("train_end={} < holdout_start={}", calibration_end.to_rfc3339(), holdout_start.to_rfc3339()),
+                "promotion artifact params hash matches strategy_params".to_string(),
             ],
-            resource_policy:
-                "Run on a dev box for multi-hour windows; safe on VPS only for short diagnostics."
-                    .to_string(),
+            resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
         });
 
-        let mut scout_args = vec![
+        let holdout_stamp = window_stamp(holdout_start, holdout_end);
+        let replay_report =
+            holdout_replay_reports_dir.join(format!("fold_{holdout_idx:02}_{holdout_stamp}.json"));
+        let replay_session_dir =
+            holdout_replay_dir.join(format!("fold_{holdout_idx:02}_{holdout_stamp}"));
+        let mut replay_args = vec![
             "polymomentum-engine".to_string(),
-            "sweep".to_string(),
-            "--session".to_string(),
-            eval_cache_path.display().to_string(),
-            "--bankroll".to_string(),
-            money_arg(input.bankroll),
-            "--min-trades".to_string(),
-            "30".to_string(),
-            "--grid".to_string(),
-            "--zone-mode".to_string(),
-            zone_mode.to_string(),
-            "--top".to_string(),
-            "25".to_string(),
-            "--report-json".to_string(),
-            scout_report_path.display().to_string(),
-            "--conf".to_string(),
-            profile.conf.to_string(),
-            "--z".to_string(),
-            profile.z.to_string(),
-            "--edge".to_string(),
-            profile.edge.to_string(),
-            format!("--ev-buffer={}", profile.ev_buffer),
-            format!("--min-price={}", profile.min_price),
-            format!("--max-price={}", profile.max_price),
-            format!("--settlement-floor={}", profile.settlement_floor),
-            format!(
-                "--settlement-guard-minutes={}",
-                profile.settlement_guard_minutes
-            ),
-            format!(
-                "--settlement-sigma-buffer={}",
-                profile.settlement_sigma_buffer
-            ),
-            format!("--micro-max-spread={}", profile.micro_max_spread),
-            format!("--micro-min-depth={}", profile.micro_min_depth),
-            format!("--micro-min-pressure={}", profile.micro_min_pressure),
-        ];
-        if profile.also_maker {
-            scout_args.push("--also-maker".to_string());
-        }
-        stages.push(StrategyBuilderStage {
-            name: format!("eval_cache_sweep_{}", idx + 1),
-            purpose:
-                "Search a broad strategy grid over the cached signal stream before spending full L2 harness time."
-                    .to_string(),
-            command: shell_command(&scout_args),
-            outputs: vec![scout_report_path.display().to_string()],
-            verify: vec![
-                "top variants have enough resolved trades before being trusted".to_string(),
-                "candidate parameters are re-run through harness-sweep before promotion".to_string(),
-            ],
-            resource_policy:
-                "CPU-light compared with raw replay; still keep broad multi-day searches on the dev box."
-                    .to_string(),
-        });
-
-        let mut args = vec![
-            "polymomentum-engine".to_string(),
-            "harness-sweep".to_string(),
+            "live-replay".to_string(),
             "--start".to_string(),
-            day_start.to_rfc3339(),
+            holdout_start.to_rfc3339(),
             "--end".to_string(),
-            day_end.to_rfc3339(),
+            holdout_end.to_rfc3339(),
             "--bankroll".to_string(),
             money_arg(input.bankroll),
             "--latency-ms".to_string(),
             input.latency_ms.to_string(),
             "--window-minutes".to_string(),
             float_arg(input.window_minutes),
-            "--zone-mode".to_string(),
-            zone_mode.to_string(),
-            "--conf".to_string(),
-            profile.conf.to_string(),
-            "--z".to_string(),
-            profile.z.to_string(),
-            "--edge".to_string(),
-            profile.edge.to_string(),
-            format!("--ev-buffer={}", profile.ev_buffer),
-            format!("--min-price={}", profile.min_price),
-            format!("--max-price={}", profile.max_price),
-            format!("--settlement-floor={}", profile.settlement_floor),
-            format!(
-                "--settlement-guard-minutes={}",
-                profile.settlement_guard_minutes
-            ),
-            format!(
-                "--settlement-sigma-buffer={}",
-                profile.settlement_sigma_buffer
-            ),
-            format!("--micro-max-spread={}", profile.micro_max_spread),
-            format!("--micro-min-depth={}", profile.micro_min_depth),
-            format!("--micro-min-pressure={}", profile.micro_min_pressure),
-            "--threads".to_string(),
-            input.threads.to_string(),
-            "--checkpoint".to_string(),
-            checkpoint.display().to_string(),
+            "--promotion-artifact".to_string(),
+            fold_promotion.display().to_string(),
+            "--session-log-dir".to_string(),
+            replay_session_dir.display().to_string(),
+            "--allow-gamma-fetch".to_string(),
             "--report-json".to_string(),
-            report_path.display().to_string(),
+            replay_report.display().to_string(),
         ];
-        if profile.also_maker {
-            args.push("--also-maker".to_string());
-        }
         if let Some(cache_dir) = &input.cache_dir {
-            args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+            replay_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
         }
         if let Some(btc_csv) = &input.btc_csv {
-            args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+            replay_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+        } else {
+            replay_args.extend([
+                "--btc-csv".to_string(),
+                "<required-btc-tick-csv>".to_string(),
+            ]);
         }
         stages.push(StrategyBuilderStage {
-            name: format!("backtest_sweep_{}", idx + 1),
-            purpose: "Find parameter candidates on one out-of-sample daily slice.".to_string(),
-            command: shell_command(&args),
-            outputs: vec![report_path.display().to_string()],
+            name: format!("feed_forward_holdout_replay_{}", holdout_idx),
+            purpose:
+                "Test the already-promoted artifact on the next unseen holdout window through the live replay path."
+                    .to_string(),
+            command: shell_command(&replay_args),
+            outputs: vec![
+                replay_report.display().to_string(),
+                replay_session_dir.display().to_string(),
+            ],
             verify: vec![
-                "report JSON exists and data_manifest.complete=true".to_string(),
-                "selected candidates have nonzero trades and no unresolved fills".to_string(),
+                "holdout replay uses a promotion artifact trained only on prior windows".to_string(),
+                "live-replay report has shadow_resolutions > 0".to_string(),
+                "session diagnostics have oracle.checks >= shadow.resolved and zero disagreements".to_string(),
             ],
             resource_policy:
-                "Run on a dev box; on the 2-core VPS keep --threads 1 and avoid concurrent heavy scans."
+                "Can be short on the VPS, but full feed-forward replays should run on a dev box first."
                     .to_string(),
+        });
+
+        let diagnostic_session = format!(
+            "$(jq -r .session_path {})",
+            shell_quote_path(&replay_report)
+        );
+        stages.push(StrategyBuilderStage {
+            name: format!("feed_forward_diagnostics_{}", holdout_idx),
+            purpose: "Turn the holdout replay session into a machine-readable gate.".to_string(),
+            command: shell_command(&[
+                "polymomentum-engine".to_string(),
+                "diagnostics".to_string(),
+                "session".to_string(),
+                diagnostic_session.clone(),
+            ]),
+            outputs: Vec::new(),
+            verify: vec![
+                "diagnostics ok=true".to_string(),
+                "warnings are explainable; no oracle disagreement on executable candidates"
+                    .to_string(),
+            ],
+            resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
+        });
+
+        let mut fold_audit_args = vec![
+            "polymomentum-engine".to_string(),
+            "strategy-builder".to_string(),
+            "audit".to_string(),
+        ];
+        for report in &calibration_reports {
+            fold_audit_args.extend(["--report".to_string(), report.display().to_string()]);
+        }
+        fold_audit_args.extend([
+            "--promotion-artifact".to_string(),
+            fold_promotion.display().to_string(),
+            "--replay-session".to_string(),
+            diagnostic_session,
+            "--min-trades".to_string(),
+            "750".to_string(),
+            "--min-win-rate".to_string(),
+            "0.63".to_string(),
+            "--min-wilson-win-rate-lower".to_string(),
+            "0.60".to_string(),
+            "--min-total-pnl".to_string(),
+            "250".to_string(),
+            "--min-shadow-resolutions".to_string(),
+            "50".to_string(),
+            "--min-research-reports".to_string(),
+            calibration_reports.len().to_string(),
+        ]);
+        stages.push(StrategyBuilderStage {
+            name: format!("feed_forward_audit_{}", holdout_idx),
+            purpose:
+                "Audit calibration robustness and the future holdout session without selecting on holdout PnL."
+                    .to_string(),
+            command: shell_command(&fold_audit_args),
+            outputs: Vec::new(),
+            verify: vec![
+                "audit ok=true before treating the fold as validation evidence".to_string(),
+                "adaptive.drift is based on the holdout replay session only".to_string(),
+            ],
+            resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
         });
     }
 
-    let mut promote_args = vec![
-        "polymomentum-engine".to_string(),
-        "experiment".to_string(),
-        "aggregate-promote".to_string(),
-    ];
-    let min_zone_count = if zone_mode == "all" { "2" } else { "1" };
-    let max_zone_trade_share = if zone_mode == "all" { "0.85" } else { "1.0" };
-    for report in &report_paths {
-        promote_args.extend(["--report".to_string(), report.display().to_string()]);
-    }
-    promote_args.extend([
-        "--output".to_string(),
-        promotion_output.display().to_string(),
-        "--min-trades".to_string(),
-        "750".to_string(),
-        "--min-losses".to_string(),
-        "50".to_string(),
-        "--min-zone-count".to_string(),
-        min_zone_count.to_string(),
-        "--min-win-rate".to_string(),
-        "0.63".to_string(),
-        "--min-wilson-win-rate-lower".to_string(),
-        "0.60".to_string(),
-        "--min-total-pnl".to_string(),
-        "250".to_string(),
-        "--min-sharpe-like".to_string(),
-        "0.02".to_string(),
-        "--max-zone-trade-share".to_string(),
-        max_zone_trade_share.to_string(),
-        "--min-reports".to_string(),
-        windows.len().to_string(),
-        "--min-profitable-reports".to_string(),
-        windows.len().to_string(),
-        "--min-daily-trades".to_string(),
-        "50".to_string(),
-        "--min-daily-pnl".to_string(),
-        "50".to_string(),
-    ]);
+    let final_idx = windows.len() - 1;
+    let (final_calibration_start, final_calibration_end) = windows[final_idx];
+    let final_report = push_calibration_window_stages(
+        &mut stages,
+        final_idx + 1,
+        final_calibration_start,
+        final_calibration_end,
+        &eval_cache_dir,
+        &scout_reports_dir,
+        &reports_dir,
+        &checkpoint_dir,
+        &profile,
+        zone_mode,
+        input.cache_dir.as_ref(),
+        input.btc_csv.as_ref(),
+        input.bankroll,
+        input.latency_ms,
+        input.threads,
+        input.window_minutes,
+    );
+    calibration_reports.push(final_report);
+
     stages.push(StrategyBuilderStage {
-        name: "aggregate_promote".to_string(),
+        name: "final_feed_forward_promote".to_string(),
         purpose:
-            "Promote only a candidate that survives every daily slice and strong robustness gates."
+            "Train the deployable paper artifact on all now-historical windows after feed-forward holdouts pass."
                 .to_string(),
-        command: shell_command(&promote_args),
+        command: promotion_command(&calibration_reports, &promotion_output, zone_mode),
         outputs: vec![promotion_output.display().to_string()],
         verify: vec![
+            "this artifact is for future paper/live only, not for scoring the historical holdouts"
+                .to_string(),
             "promotion artifact params hash matches strategy_params".to_string(),
-            "promotion gate and risk_notes are acceptable for paper shadow".to_string(),
-        ],
-        resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
-    });
-
-    let mut replay_args = vec![
-        "polymomentum-engine".to_string(),
-        "live-replay".to_string(),
-        "--start".to_string(),
-        start.to_rfc3339(),
-        "--end".to_string(),
-        end.to_rfc3339(),
-        "--bankroll".to_string(),
-        money_arg(input.bankroll),
-        "--latency-ms".to_string(),
-        input.latency_ms.to_string(),
-        "--window-minutes".to_string(),
-        float_arg(input.window_minutes),
-        "--promotion-artifact".to_string(),
-        promotion_output.display().to_string(),
-        "--session-log-dir".to_string(),
-        replay_dir.display().to_string(),
-        "--allow-gamma-fetch".to_string(),
-        "--report-json".to_string(),
-        replay_report.display().to_string(),
-    ];
-    if let Some(cache_dir) = &input.cache_dir {
-        replay_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
-    }
-    if let Some(btc_csv) = &input.btc_csv {
-        replay_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
-    } else {
-        replay_args.extend([
-            "--btc-csv".to_string(),
-            "<required-btc-tick-csv>".to_string(),
-        ]);
-    }
-    stages.push(StrategyBuilderStage {
-        name: "cached_live_replay_shadow".to_string(),
-        purpose:
-            "Replay the promoted strategy through the live decision path and the settlement-shadow resolver."
-                .to_string(),
-        command: shell_command(&replay_args),
-        outputs: vec![
-            replay_report.display().to_string(),
-            replay_dir.display().to_string(),
-        ],
-        verify: vec![
-            "live-replay report has shadow_resolutions > 0".to_string(),
-            "session diagnostics have oracle.checks >= shadow.resolved and zero disagreements".to_string(),
-        ],
-        resource_policy:
-            "Can be short on the VPS, but full sweeps/replays should still run on a dev box first."
-                .to_string(),
-    });
-
-    let diagnostic_session = format!(
-        "$(jq -r .session_path {})",
-        shell_quote_path(&replay_report)
-    );
-    stages.push(StrategyBuilderStage {
-        name: "diagnostics_gate".to_string(),
-        purpose: "Turn the replay session into a machine-readable promotion gate.".to_string(),
-        command: shell_command(&[
-            "polymomentum-engine".to_string(),
-            "diagnostics".to_string(),
-            "session".to_string(),
-            diagnostic_session,
-        ]),
-        outputs: Vec::new(),
-        verify: vec![
-            "diagnostics ok=true".to_string(),
-            "warnings are explainable; settlement-shadow warning is expected until live gate flips"
-                .to_string(),
         ],
         resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
     });
@@ -449,7 +369,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "strategy-builder".to_string(),
         "audit".to_string(),
     ];
-    for report in &report_paths {
+    for report in &calibration_reports {
         audit_args.extend(["--report".to_string(), report.display().to_string()]);
     }
     audit_args.extend([
@@ -468,7 +388,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "--min-shadow-resolutions".to_string(),
         "50".to_string(),
         "--min-research-reports".to_string(),
-        windows.len().to_string(),
+        calibration_reports.len().to_string(),
     ]);
     stages.push(StrategyBuilderStage {
         name: "adaptive_health_audit".to_string(),
@@ -505,6 +425,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         input.threads.to_string(),
         "--window-minutes".to_string(),
         float_arg(input.window_minutes),
+        "--fold-hours".to_string(),
+        input.fold_hours.to_string(),
         "--profile".to_string(),
         profile.name.to_string(),
         "--zone-mode".to_string(),
@@ -541,11 +463,14 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         end: end.to_rfc3339(),
         out_dir: out_dir.display().to_string(),
         window_minutes: input.window_minutes,
+        fold_hours: input.fold_hours,
         zone_mode: zone_mode.to_string(),
         stages,
         notes: vec![
-            "The builder first creates replay-grade eval caches for fast scouting, then uses the full PMXT harness as the authoritative promotion gate.".to_string(),
-            "Zone-specific sweeps keep timing regimes isolated; aggregate promotion must prove the same parameter hash survives multiple out-of-sample windows.".to_string(),
+            "The builder is feed-forward: every holdout replay uses a promotion artifact selected only from strictly earlier calibration windows.".to_string(),
+            "Historical holdout performance is measured by fixed-artifact live-replay, not by selecting the best grid cell on the holdout window.".to_string(),
+            "The final promotion artifact is for future paper/live only; it is not reused to score the historical windows that trained it.".to_string(),
+            "Zone-specific sweeps keep timing regimes isolated; aggregate promotion must prove the same parameter hash survives the calibration windows available at that point in time.".to_string(),
             "Adaptive operation is reactive, not self-mutating: drift warnings trigger a fresh scout, while live/paper keeps the last promoted artifact until a new one passes all gates.".to_string(),
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
             "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
@@ -1090,31 +1015,250 @@ fn parse_zone_mode(value: &str) -> Result<&str> {
     }
 }
 
-fn daily_windows(
+fn feed_forward_windows(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
+    fold_hours: i64,
 ) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
     let mut out = Vec::new();
-    let mut day = start.date_naive();
-    let last_day = end.date_naive();
-    loop {
-        let day_start = day
-            .and_hms_opt(0, 0, 0)
-            .context("build day start")?
-            .and_utc();
-        let day_end = day
-            .and_hms_opt(23, 0, 0)
-            .context("build day end")?
-            .and_utc();
-        out.push((start.max(day_start), end.min(day_end)));
-        if day >= last_day {
-            break;
-        }
-        day = day
-            .checked_add_signed(ChronoDuration::days(1))
-            .context("advance day")?;
+    let mut cur = start;
+    while cur <= end {
+        let inclusive_end = cur + ChronoDuration::hours(fold_hours - 1);
+        let window_end = inclusive_end.min(end);
+        out.push((cur, window_end));
+        cur = window_end + ChronoDuration::hours(1);
     }
     Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_calibration_window_stages(
+    stages: &mut Vec<StrategyBuilderStage>,
+    idx: usize,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    eval_cache_dir: &Path,
+    scout_reports_dir: &Path,
+    reports_dir: &Path,
+    checkpoint_dir: &Path,
+    profile: &StrategyBuilderProfile,
+    zone_mode: &str,
+    cache_dir: Option<&String>,
+    btc_csv: Option<&String>,
+    bankroll: f64,
+    latency_ms: u64,
+    threads: usize,
+    window_minutes: f64,
+) -> PathBuf {
+    let stamp = window_stamp(window_start, window_end);
+    let eval_cache_path = eval_cache_dir.join(format!("eval_cache_{stamp}.jsonl"));
+    let scout_report_path = scout_reports_dir.join(format!("eval_sweep_{stamp}.json"));
+    let report_path = reports_dir.join(format!("harness_sweep_{stamp}.json"));
+    let checkpoint = checkpoint_dir.join(stamp);
+
+    let mut eval_args = vec![
+        "polymomentum-engine".to_string(),
+        "eval-cache".to_string(),
+        "--start".to_string(),
+        window_start.to_rfc3339(),
+        "--end".to_string(),
+        window_end.to_rfc3339(),
+        "--window-minutes".to_string(),
+        float_arg(window_minutes),
+        "--output".to_string(),
+        eval_cache_path.display().to_string(),
+        "--allow-gamma-fetch".to_string(),
+    ];
+    if let Some(cache_dir) = cache_dir {
+        eval_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+    }
+    if let Some(btc_csv) = btc_csv {
+        eval_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+    }
+    stages.push(StrategyBuilderStage {
+        name: format!("calibration_eval_cache_{idx}"),
+        purpose:
+            "Replay a historical calibration window into live-like signal/resolution rows for candidate scouting."
+                .to_string(),
+        command: shell_command(&eval_args),
+        outputs: vec![eval_cache_path.display().to_string()],
+        verify: vec![
+            "summary evaluations > 0 and resolutions > 0".to_string(),
+            "BTC tape coverage check passes for the full calibration window".to_string(),
+        ],
+        resource_policy:
+            "Run on a dev box for multi-hour windows; safe on VPS only for short diagnostics."
+                .to_string(),
+    });
+
+    let mut scout_args = vec![
+        "polymomentum-engine".to_string(),
+        "sweep".to_string(),
+        "--session".to_string(),
+        eval_cache_path.display().to_string(),
+        "--bankroll".to_string(),
+        money_arg(bankroll),
+        "--min-trades".to_string(),
+        "30".to_string(),
+        "--grid".to_string(),
+        "--zone-mode".to_string(),
+        zone_mode.to_string(),
+        "--top".to_string(),
+        "25".to_string(),
+        "--report-json".to_string(),
+        scout_report_path.display().to_string(),
+        "--conf".to_string(),
+        profile.conf.to_string(),
+        "--z".to_string(),
+        profile.z.to_string(),
+        "--edge".to_string(),
+        profile.edge.to_string(),
+        format!("--ev-buffer={}", profile.ev_buffer),
+        format!("--min-price={}", profile.min_price),
+        format!("--max-price={}", profile.max_price),
+        format!("--settlement-floor={}", profile.settlement_floor),
+        format!(
+            "--settlement-guard-minutes={}",
+            profile.settlement_guard_minutes
+        ),
+        format!(
+            "--settlement-sigma-buffer={}",
+            profile.settlement_sigma_buffer
+        ),
+        format!("--micro-max-spread={}", profile.micro_max_spread),
+        format!("--micro-min-depth={}", profile.micro_min_depth),
+        format!("--micro-min-pressure={}", profile.micro_min_pressure),
+    ];
+    if profile.also_maker {
+        scout_args.push("--also-maker".to_string());
+    }
+    stages.push(StrategyBuilderStage {
+        name: format!("calibration_eval_sweep_{idx}"),
+        purpose:
+            "Search a broad strategy grid over the cached calibration stream before spending full L2 harness time."
+                .to_string(),
+        command: shell_command(&scout_args),
+        outputs: vec![scout_report_path.display().to_string()],
+        verify: vec![
+            "top variants have enough resolved calibration trades before being trusted".to_string(),
+            "candidate parameters are re-run through harness-sweep before promotion".to_string(),
+        ],
+        resource_policy:
+            "CPU-light compared with raw replay; still keep broad multi-window searches on the dev box."
+                .to_string(),
+    });
+
+    let mut args = vec![
+        "polymomentum-engine".to_string(),
+        "harness-sweep".to_string(),
+        "--start".to_string(),
+        window_start.to_rfc3339(),
+        "--end".to_string(),
+        window_end.to_rfc3339(),
+        "--bankroll".to_string(),
+        money_arg(bankroll),
+        "--latency-ms".to_string(),
+        latency_ms.to_string(),
+        "--window-minutes".to_string(),
+        float_arg(window_minutes),
+        "--zone-mode".to_string(),
+        zone_mode.to_string(),
+        "--conf".to_string(),
+        profile.conf.to_string(),
+        "--z".to_string(),
+        profile.z.to_string(),
+        "--edge".to_string(),
+        profile.edge.to_string(),
+        format!("--ev-buffer={}", profile.ev_buffer),
+        format!("--min-price={}", profile.min_price),
+        format!("--max-price={}", profile.max_price),
+        format!("--settlement-floor={}", profile.settlement_floor),
+        format!(
+            "--settlement-guard-minutes={}",
+            profile.settlement_guard_minutes
+        ),
+        format!(
+            "--settlement-sigma-buffer={}",
+            profile.settlement_sigma_buffer
+        ),
+        format!("--micro-max-spread={}", profile.micro_max_spread),
+        format!("--micro-min-depth={}", profile.micro_min_depth),
+        format!("--micro-min-pressure={}", profile.micro_min_pressure),
+        "--threads".to_string(),
+        threads.to_string(),
+        "--checkpoint".to_string(),
+        checkpoint.display().to_string(),
+        "--report-json".to_string(),
+        report_path.display().to_string(),
+    ];
+    if profile.also_maker {
+        args.push("--also-maker".to_string());
+    }
+    if let Some(cache_dir) = cache_dir {
+        args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+    }
+    if let Some(btc_csv) = btc_csv {
+        args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+    }
+    stages.push(StrategyBuilderStage {
+        name: format!("calibration_harness_sweep_{idx}"),
+        purpose:
+            "Fit candidate parameters on a calibration window that is strictly before any later holdout using it."
+                .to_string(),
+        command: shell_command(&args),
+        outputs: vec![report_path.display().to_string()],
+        verify: vec![
+            "report JSON exists and data_manifest.complete=true".to_string(),
+            "this report is used only for later-window promotion, not as holdout evidence".to_string(),
+        ],
+        resource_policy:
+            "Run on a dev box; on the 2-core VPS keep --threads 1 and avoid concurrent heavy scans."
+                .to_string(),
+    });
+
+    report_path
+}
+
+fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> String {
+    let mut args = vec![
+        "polymomentum-engine".to_string(),
+        "experiment".to_string(),
+        "aggregate-promote".to_string(),
+    ];
+    for report in reports {
+        args.extend(["--report".to_string(), report.display().to_string()]);
+    }
+    let min_zone_count = if zone_mode == "all" { "2" } else { "1" };
+    let max_zone_trade_share = if zone_mode == "all" { "0.85" } else { "1.0" };
+    args.extend([
+        "--output".to_string(),
+        output.display().to_string(),
+        "--min-trades".to_string(),
+        "750".to_string(),
+        "--min-losses".to_string(),
+        "50".to_string(),
+        "--min-zone-count".to_string(),
+        min_zone_count.to_string(),
+        "--min-win-rate".to_string(),
+        "0.63".to_string(),
+        "--min-wilson-win-rate-lower".to_string(),
+        "0.60".to_string(),
+        "--min-total-pnl".to_string(),
+        "250".to_string(),
+        "--min-sharpe-like".to_string(),
+        "0.02".to_string(),
+        "--max-zone-trade-share".to_string(),
+        max_zone_trade_share.to_string(),
+        "--min-reports".to_string(),
+        reports.len().to_string(),
+        "--min-profitable-reports".to_string(),
+        reports.len().to_string(),
+        "--min-daily-trades".to_string(),
+        "50".to_string(),
+        "--min-daily-pnl".to_string(),
+        "50".to_string(),
+    ]);
+    shell_command(&args)
 }
 
 #[derive(Debug)]
@@ -1226,8 +1370,8 @@ fn compact_stamp(dt: DateTime<Utc>) -> String {
     dt.format("%Y%m%dT%H%M%SZ").to_string()
 }
 
-fn date_stamp(day: NaiveDate) -> String {
-    format!("{:04}{:02}{:02}", day.year(), day.month(), day.day())
+fn window_stamp(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
+    format!("{}_{}", compact_stamp(start), compact_stamp(end))
 }
 
 fn money_arg(value: f64) -> String {
@@ -1271,14 +1415,16 @@ mod tests {
             latency_ms: 50,
             threads: 4,
             window_minutes: 5.0,
+            fold_hours: 24,
             profile: "guarded5m".to_string(),
             zone_mode: "primary".to_string(),
             promotion_output: None,
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 15);
+        assert_eq!(plan.stages.len(), 21);
         assert_eq!(plan.zone_mode, "primary");
+        assert_eq!(plan.fold_hours, 24);
         assert!(plan
             .stages
             .iter()
@@ -1308,6 +1454,53 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.name == "adaptive_health_audit"));
+        assert!(!plan
+            .stages
+            .iter()
+            .any(|s| s.name == "cached_live_replay_shadow"));
+
+        let fold1_promote = plan
+            .stages
+            .iter()
+            .find(|s| s.name == "feed_forward_promote_1")
+            .unwrap();
+        assert!(fold1_promote
+            .command
+            .contains("harness_sweep_20260423T000000Z_20260423T230000Z.json"));
+        assert!(!fold1_promote
+            .command
+            .contains("harness_sweep_20260424T000000Z_20260424T230000Z.json"));
+
+        let fold1_replay = plan
+            .stages
+            .iter()
+            .find(|s| s.name == "feed_forward_holdout_replay_1")
+            .unwrap();
+        assert!(fold1_replay
+            .command
+            .contains("--start 2026-04-24T00:00:00+00:00"));
+        assert!(fold1_replay.command.contains("promotion_ff_fold_01"));
+    }
+
+    #[test]
+    fn plan_rejects_single_fold_to_prevent_lookahead() {
+        let err = build_plan(StrategyBuilderPlanInput {
+            start: "2026-04-25T10:00:00Z".to_string(),
+            end: Some("2026-04-25T17:00:00Z".to_string()),
+            out_dir: PathBuf::from("logs/strategy_builder/test"),
+            cache_dir: None,
+            btc_csv: None,
+            bankroll: 100.0,
+            latency_ms: 50,
+            threads: 1,
+            window_minutes: 5.0,
+            fold_hours: 24,
+            profile: "swift5m".to_string(),
+            zone_mode: "primary".to_string(),
+            promotion_output: None,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("at least two folds"));
     }
 
     #[test]

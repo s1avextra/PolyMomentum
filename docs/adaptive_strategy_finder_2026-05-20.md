@@ -26,20 +26,32 @@
 
 ## Production Design
 
-1. Scout candidates quickly with `eval-cache --grid`, isolated by timing zone.
-2. Validate candidates with full L2 `harness-sweep --zone-mode`.
-3. Aggregate-promote only the same parameter hash across independent windows.
-4. Replay/paper the promoted artifact through the live path.
-5. After each paper/live session, run `strategy-builder audit`.
-6. If adaptive drift is `warn`, keep the current artifact active but launch a
+1. Split data into chronological feed-forward folds.
+2. Scout candidates quickly with `eval-cache --grid`, isolated by timing zone,
+   using only calibration windows that precede the next holdout.
+3. Validate candidates with full L2 `harness-sweep --zone-mode` only on those
+   calibration windows.
+4. Aggregate-promote only from reports whose end time is strictly before the
+   holdout start.
+5. Replay/paper the fixed promoted artifact through the live path on the next
+   unseen holdout window.
+6. After each paper/live session, run `strategy-builder audit`.
+7. If adaptive drift is `warn`, keep the current artifact active but launch a
    fresh rolling re-scout on the dev box.
-7. If adaptive drift is `fail`, freeze live promotion or reduce to paper-only
+8. If adaptive drift is `fail`, freeze live promotion or reduce to paper-only
    until a fresh artifact passes aggregate promotion, replay, and diagnostics.
 
 ## Current Implementation
 
-- `strategy-builder plan` now accepts `--zone-mode` and propagates it into fast
-  scout sweeps and full L2 harness sweeps.
+- `strategy-builder plan` now accepts `--zone-mode` and `--fold-hours`.
+- Generated tests are feed-forward by construction:
+  - `feed_forward_promote_N` trains only on calibration reports from earlier
+    windows.
+  - `feed_forward_holdout_replay_N` tests the fixed artifact on the next
+    future window.
+  - the final deployable artifact is trained after holdout evidence exists and
+    is meant only for future paper/live, never for scoring those same historical
+    windows.
 - The generated plan now includes:
   - `adaptive_health_audit`
   - `adaptive_rescout_trigger`
