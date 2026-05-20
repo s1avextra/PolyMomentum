@@ -28,7 +28,7 @@ use crate::backtest::l2_replay::{
 };
 use crate::backtest::pmxt::{L2Event, PMXTv2Loader};
 use crate::backtest::resolver::{
-    resolve_fills, BacktestBreakerReport, BacktestResults, CandleWindow,
+    resolve_fills, BacktestBreakerReport, BacktestDiagnostics, BacktestResults, CandleWindow,
 };
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
@@ -347,6 +347,20 @@ impl CandleBacktestStrategy {
             self.breaker_reason.clone(),
             self.breaker_tripped_at_s,
         )
+    }
+
+    pub fn diagnostics(&self) -> BacktestDiagnostics {
+        BacktestDiagnostics {
+            events_seen: self.events_seen,
+            events_for_known_token: self.events_for_known_token,
+            skipped_resolved: self.skipped_resolved,
+            skipped_too_early: self.skipped_too_early,
+            skipped_no_btc: self.skipped_no_btc,
+            skipped_no_signal: self.skipped_no_signal,
+            skipped_decision: self.skipped_decision,
+            skipped_throttled: self.skipped_throttled,
+            skip_reasons: self.skip_reasons.clone(),
+        }
     }
 }
 
@@ -841,9 +855,11 @@ pub async fn run_harness(
 
             strategy.settle_all_positions();
             let breaker = strategy.breaker_report();
+            let diagnostics = strategy.diagnostics();
             let decisions = strategy.decisions;
             let mut results = resolve_fills(&engine.fills, &decisions, &windows, &cfg.btc_history);
             results.breaker = breaker;
+            results.diagnostics = diagnostics;
             results
         };
         let per_variant: Vec<BacktestResults> = if let Some(pool) = &local_pool {

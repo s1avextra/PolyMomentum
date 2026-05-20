@@ -166,8 +166,6 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             format!("--micro-max-spread={}", profile.micro_max_spread),
             format!("--micro-min-depth={}", profile.micro_min_depth),
             format!("--micro-min-pressure={}", profile.micro_min_pressure),
-            "--also-maker".to_string(),
-            profile.also_maker.to_string(),
             "--threads".to_string(),
             input.threads.to_string(),
             "--checkpoint".to_string(),
@@ -175,6 +173,9 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "--report-json".to_string(),
             report_path.display().to_string(),
         ];
+        if profile.also_maker {
+            args.push("--also-maker".to_string());
+        }
         if let Some(cache_dir) = &input.cache_dir {
             args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
         }
@@ -912,6 +913,13 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.command.contains("aggregate-promote")));
+        assert!(plan
+            .stages
+            .iter()
+            .filter(|s| s.command.contains("harness-sweep"))
+            .all(
+                |s| s.command.contains("--also-maker") && !s.command.contains("--also-maker true")
+            ));
     }
 
     #[test]

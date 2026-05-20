@@ -32,6 +32,8 @@ pub struct BacktestResults {
     #[serde(default)]
     pub breaker: BacktestBreakerReport,
     #[serde(default)]
+    pub diagnostics: BacktestDiagnostics,
+    #[serde(default)]
     pub execution_attempts: usize,
     #[serde(default)]
     pub fills_success: usize,
@@ -39,6 +41,35 @@ pub struct BacktestResults {
     pub fills_failed: usize,
     #[serde(default)]
     pub reject_reasons: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BacktestDiagnostics {
+    pub events_seen: u64,
+    pub events_for_known_token: u64,
+    pub skipped_resolved: u64,
+    pub skipped_too_early: u64,
+    pub skipped_no_btc: u64,
+    pub skipped_no_signal: u64,
+    pub skipped_decision: u64,
+    pub skipped_throttled: u64,
+    pub skip_reasons: BTreeMap<String, u64>,
+}
+
+impl BacktestDiagnostics {
+    pub fn merge_from(&mut self, other: Self) {
+        self.events_seen += other.events_seen;
+        self.events_for_known_token += other.events_for_known_token;
+        self.skipped_resolved += other.skipped_resolved;
+        self.skipped_too_early += other.skipped_too_early;
+        self.skipped_no_btc += other.skipped_no_btc;
+        self.skipped_no_signal += other.skipped_no_signal;
+        self.skipped_decision += other.skipped_decision;
+        self.skipped_throttled += other.skipped_throttled;
+        for (reason, count) in other.skip_reasons {
+            *self.skip_reasons.entry(reason).or_insert(0) += count;
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -107,6 +138,7 @@ impl BacktestResults {
         if other.breaker.has_state() || !self.breaker.has_state() {
             self.breaker = other.breaker;
         }
+        self.diagnostics.merge_from(other.diagnostics);
         self.execution_attempts += other.execution_attempts;
         self.fills_success += other.fills_success;
         self.fills_failed += other.fills_failed;

@@ -8,6 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::backtest::harness::{HarnessConfig, HarnessRun};
+use crate::backtest::resolver::BacktestDiagnostics;
 use crate::data::catalog::MarketCatalog;
 use crate::data::manifest::{DataManifest, DataSourceManifest};
 use crate::strategy::spec::StrategySpec;
@@ -56,6 +57,8 @@ pub struct VariantReport {
     pub breaker_realized_drawdown_pct: f64,
     #[serde(default)]
     pub breaker_stressed_drawdown_pct: f64,
+    #[serde(default)]
+    pub diagnostics: BacktestDiagnostics,
     pub win_rate: f64,
     pub total_pnl: f64,
     pub avg_pnl: f64,
@@ -277,6 +280,7 @@ impl VariantReport {
             breaker_tripped_at_s: run.results.breaker.tripped_at_s,
             breaker_realized_drawdown_pct: run.results.breaker.metrics.realized_drawdown_pct,
             breaker_stressed_drawdown_pct: run.results.breaker.metrics.stressed_drawdown_pct,
+            diagnostics: run.results.diagnostics.clone(),
             win_rate: run.results.win_rate(),
             total_pnl: run.results.total_pnl(),
             avg_pnl: run.results.avg_pnl(),
@@ -546,6 +550,20 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
             *reject_reasons.entry(reason.clone()).or_insert(0) += count;
         }
     }
+    let mut diagnostics = BacktestDiagnostics::default();
+    for variant in group {
+        diagnostics.events_seen += variant.diagnostics.events_seen;
+        diagnostics.events_for_known_token += variant.diagnostics.events_for_known_token;
+        diagnostics.skipped_resolved += variant.diagnostics.skipped_resolved;
+        diagnostics.skipped_too_early += variant.diagnostics.skipped_too_early;
+        diagnostics.skipped_no_btc += variant.diagnostics.skipped_no_btc;
+        diagnostics.skipped_no_signal += variant.diagnostics.skipped_no_signal;
+        diagnostics.skipped_decision += variant.diagnostics.skipped_decision;
+        diagnostics.skipped_throttled += variant.diagnostics.skipped_throttled;
+        for (reason, count) in &variant.diagnostics.skip_reasons {
+            *diagnostics.skip_reasons.entry(reason.clone()).or_insert(0) += count;
+        }
+    }
     let total_pnl: f64 = group.iter().map(|v| v.total_pnl).sum();
     let total_fees: f64 = group.iter().map(|v| v.total_fees).sum();
     let mut by_zone: BTreeMap<String, ZoneReport> = BTreeMap::new();
@@ -599,6 +617,7 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
             .iter()
             .map(|v| v.breaker_stressed_drawdown_pct)
             .fold(0.0, f64::max),
+        diagnostics,
         win_rate: if wins + losses == 0 {
             0.0
         } else {
@@ -1147,6 +1166,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1181,6 +1201,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 0.60,
             total_pnl: 1.0,
             avg_pnl: 0.20,
@@ -1215,6 +1236,7 @@ mod tests {
             breaker_tripped_at_s: Some(1_700_000_000.0),
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1251,6 +1273,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1287,6 +1310,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1321,6 +1345,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 1.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1355,6 +1380,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
             win_rate: 20.0 / 30.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -1398,6 +1424,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
+                diagnostics: BacktestDiagnostics::default(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: consistent_pnl,
                 avg_pnl: consistent_pnl / 30.0,
@@ -1422,6 +1449,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
+                diagnostics: BacktestDiagnostics::default(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: if i == 0 { 100.0 } else { -10.0 },
                 avg_pnl: 0.0,
@@ -1476,6 +1504,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
+                diagnostics: BacktestDiagnostics::default(),
                 win_rate: 0.7,
                 total_pnl: fragile_pnl,
                 avg_pnl: fragile_pnl / 40.0,
@@ -1500,6 +1529,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
+                diagnostics: BacktestDiagnostics::default(),
                 win_rate: 0.7,
                 total_pnl: robust_pnl,
                 avg_pnl: robust_pnl / 40.0,
