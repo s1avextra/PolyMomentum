@@ -643,6 +643,9 @@ enum StrategyBuilderCommand {
         /// Builder profile. Currently `guarded5m` is the production default.
         #[arg(long, default_value = "guarded5m")]
         profile: String,
+        /// Restrict strategy-builder sweeps to one timing zone: all, early, primary, late, terminal.
+        #[arg(long, default_value = "all")]
+        zone_mode: String,
         /// Override promotion artifact output path.
         #[arg(long)]
         promotion_output: Option<String>,
@@ -1035,6 +1038,7 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             threads,
             window_minutes,
             profile,
+            zone_mode,
             promotion_output,
         } => {
             let plan =
@@ -1049,6 +1053,7 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     threads,
                     window_minutes,
                     profile,
+                    zone_mode,
                     promotion_output,
                 }) {
                     Ok(plan) => plan,

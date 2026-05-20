@@ -28,6 +28,7 @@ pub struct StrategyBuilderPlanInput {
     pub threads: usize,
     pub window_minutes: f64,
     pub profile: String,
+    pub zone_mode: String,
     pub promotion_output: Option<String>,
 }
 
@@ -54,6 +55,7 @@ pub struct StrategyBuilderPlan {
     pub end: String,
     pub out_dir: String,
     pub window_minutes: f64,
+    pub zone_mode: String,
     pub stages: Vec<StrategyBuilderStage>,
     pub notes: Vec<String>,
 }
@@ -105,6 +107,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     if input.window_minutes <= 0.0 {
         bail!("--window-minutes must be > 0");
     }
+    let zone_mode = parse_zone_mode(&input.zone_mode)?;
 
     let out_dir = input.out_dir;
     let eval_cache_dir = out_dir.join("eval_cache");
@@ -182,6 +185,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "--min-trades".to_string(),
             "30".to_string(),
             "--grid".to_string(),
+            "--zone-mode".to_string(),
+            zone_mode.to_string(),
             "--top".to_string(),
             "25".to_string(),
             "--report-json".to_string(),
@@ -240,6 +245,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             input.latency_ms.to_string(),
             "--window-minutes".to_string(),
             float_arg(input.window_minutes),
+            "--zone-mode".to_string(),
+            zone_mode.to_string(),
             "--conf".to_string(),
             profile.conf.to_string(),
             "--z".to_string(),
@@ -297,6 +304,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "experiment".to_string(),
         "aggregate-promote".to_string(),
     ];
+    let min_zone_count = if zone_mode == "all" { "2" } else { "1" };
+    let max_zone_trade_share = if zone_mode == "all" { "0.85" } else { "1.0" };
     for report in &report_paths {
         promote_args.extend(["--report".to_string(), report.display().to_string()]);
     }
@@ -308,7 +317,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "--min-losses".to_string(),
         "50".to_string(),
         "--min-zone-count".to_string(),
-        "2".to_string(),
+        min_zone_count.to_string(),
         "--min-win-rate".to_string(),
         "0.63".to_string(),
         "--min-wilson-win-rate-lower".to_string(),
@@ -318,7 +327,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "--min-sharpe-like".to_string(),
         "0.02".to_string(),
         "--max-zone-trade-share".to_string(),
-        "0.85".to_string(),
+        max_zone_trade_share.to_string(),
         "--min-reports".to_string(),
         windows.len().to_string(),
         "--min-profitable-reports".to_string(),
@@ -435,6 +444,96 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
     });
 
+    let mut audit_args = vec![
+        "polymomentum-engine".to_string(),
+        "strategy-builder".to_string(),
+        "audit".to_string(),
+    ];
+    for report in &report_paths {
+        audit_args.extend(["--report".to_string(), report.display().to_string()]);
+    }
+    audit_args.extend([
+        "--promotion-artifact".to_string(),
+        promotion_output.display().to_string(),
+        "--replay-session".to_string(),
+        "<paper-or-replay-session.jsonl>".to_string(),
+        "--min-trades".to_string(),
+        "750".to_string(),
+        "--min-win-rate".to_string(),
+        "0.63".to_string(),
+        "--min-wilson-win-rate-lower".to_string(),
+        "0.60".to_string(),
+        "--min-total-pnl".to_string(),
+        "250".to_string(),
+        "--min-shadow-resolutions".to_string(),
+        "50".to_string(),
+        "--min-research-reports".to_string(),
+        windows.len().to_string(),
+    ]);
+    stages.push(StrategyBuilderStage {
+        name: "adaptive_health_audit".to_string(),
+        purpose:
+            "Continuously compare paper/live outcomes against the promoted backtest baseline and flag strategy decay."
+                .to_string(),
+        command: shell_command(&audit_args),
+        outputs: Vec::new(),
+        verify: vec![
+            "adaptive.drift checks are ok before increasing size".to_string(),
+            "any warning starts a rolling re-scout; any failure freezes live promotion".to_string(),
+        ],
+        resource_policy: "Lightweight; safe on the VPS after each paper/live session.".to_string(),
+    });
+
+    let rolling_out_dir = out_dir.join("rolling_rescout");
+    let rolling_start = format!("<latest-{}m-window-start>", float_arg(input.window_minutes));
+    let rolling_end = format!("<latest-{}m-window-end>", float_arg(input.window_minutes));
+    let mut rescout_args = vec![
+        "polymomentum-engine".to_string(),
+        "strategy-builder".to_string(),
+        "plan".to_string(),
+        "--start".to_string(),
+        rolling_start,
+        "--end".to_string(),
+        rolling_end,
+        "--out-dir".to_string(),
+        rolling_out_dir.display().to_string(),
+        "--bankroll".to_string(),
+        money_arg(input.bankroll),
+        "--latency-ms".to_string(),
+        input.latency_ms.to_string(),
+        "--threads".to_string(),
+        input.threads.to_string(),
+        "--window-minutes".to_string(),
+        float_arg(input.window_minutes),
+        "--profile".to_string(),
+        profile.name.to_string(),
+        "--zone-mode".to_string(),
+        zone_mode.to_string(),
+    ];
+    if let Some(cache_dir) = &input.cache_dir {
+        rescout_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+    }
+    if let Some(btc_csv) = &input.btc_csv {
+        rescout_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+    }
+    stages.push(StrategyBuilderStage {
+        name: "adaptive_rescout_trigger".to_string(),
+        purpose:
+            "When drift warnings appear, re-run the same walk-forward loop on the freshest resolved window before touching paper/live params."
+                .to_string(),
+        command: shell_command(&rescout_args),
+        outputs: vec![rolling_out_dir.display().to_string()],
+        verify: vec![
+            "fresh candidate must pass aggregate promotion before replacing the current artifact"
+                .to_string(),
+            "old artifact remains active until a new artifact passes replay and diagnostics gates"
+                .to_string(),
+        ],
+        resource_policy:
+            "Plan is lightweight; execute the generated heavy sweeps on the dev box, not the VPS."
+                .to_string(),
+    });
+
     Ok(StrategyBuilderPlan {
         schema_version: 1,
         profile: profile.name.to_string(),
@@ -442,9 +541,12 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         end: end.to_rfc3339(),
         out_dir: out_dir.display().to_string(),
         window_minutes: input.window_minutes,
+        zone_mode: zone_mode.to_string(),
         stages,
         notes: vec![
             "The builder first creates replay-grade eval caches for fast scouting, then uses the full PMXT harness as the authoritative promotion gate.".to_string(),
+            "Zone-specific sweeps keep timing regimes isolated; aggregate promotion must prove the same parameter hash survives multiple out-of-sample windows.".to_string(),
+            "Adaptive operation is reactive, not self-mutating: drift warnings trigger a fresh scout, while live/paper keeps the last promoted artifact until a new one passes all gates.".to_string(),
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
             "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
             "Only flip CANDLE_SETTLEMENT_ALIGNMENT_READY after replay and paper sessions both show oracle agreement on resolved shadow candidates.".to_string(),
@@ -546,11 +648,18 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
 
     if let Some(path) = &input.promotion_artifact {
         audit_promotion(path, &input, &mut checks);
+        audit_adaptive_drift(path, &input, &mut checks);
     } else {
         checks.push(check(
             "promotion.load",
             StrategyBuilderCheckStatus::Warn,
             "no promotion artifact supplied".to_string(),
+        ));
+        checks.push(check(
+            "adaptive.baseline",
+            StrategyBuilderCheckStatus::Warn,
+            "no promotion artifact supplied, so paper/live decay cannot be compared to a locked baseline"
+                .to_string(),
         ));
     }
 
@@ -739,6 +848,166 @@ fn audit_promotion(
     }
 }
 
+fn audit_adaptive_drift(
+    promotion_path: &str,
+    input: &StrategyBuilderAuditInput,
+    checks: &mut Vec<StrategyBuilderCheck>,
+) {
+    let artifact = match experiment::read_promotion(promotion_path) {
+        Ok(artifact) => artifact,
+        Err(_) => return,
+    };
+    if input.replay_sessions.is_empty() {
+        checks.push(check(
+            "adaptive.drift",
+            StrategyBuilderCheckStatus::Warn,
+            "no paper/replay session supplied; adaptive stale checks need resolved forward outcomes"
+                .to_string(),
+        ));
+        return;
+    }
+
+    let baseline_avg_pnl = if artifact.trades == 0 {
+        0.0
+    } else {
+        artifact.total_pnl / artifact.trades as f64
+    };
+    for session in &input.replay_sessions {
+        match diagnostics::analyze_session(session) {
+            Ok(diag) => {
+                let resolved = diag.resolutions.wins + diag.resolutions.losses;
+                let (status, reason) = classify_adaptive_drift(
+                    artifact.win_rate,
+                    baseline_avg_pnl,
+                    diag.resolutions.wins,
+                    diag.resolutions.losses,
+                    diag.resolutions.total_pnl,
+                    input.min_shadow_resolutions,
+                    input.min_win_rate,
+                    diag.risk.breaker_tripped,
+                    diag.system.errors,
+                );
+                checks.push(check(
+                    "adaptive.drift",
+                    status,
+                    format!(
+                        "{} baseline_wr={:.3} baseline_avg_pnl={:.4} resolved={} wins={} losses={} pnl={:.2}; {}",
+                        session,
+                        artifact.win_rate,
+                        baseline_avg_pnl,
+                        resolved,
+                        diag.resolutions.wins,
+                        diag.resolutions.losses,
+                        diag.resolutions.total_pnl,
+                        reason
+                    ),
+                ));
+            }
+            Err(e) => checks.push(check(
+                "adaptive.drift",
+                StrategyBuilderCheckStatus::Fail,
+                format!("{session}: {e:#}"),
+            )),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_adaptive_drift(
+    baseline_win_rate: f64,
+    baseline_avg_pnl: f64,
+    session_wins: u64,
+    session_losses: u64,
+    session_pnl: f64,
+    min_samples: u64,
+    min_win_rate: f64,
+    breaker_tripped: bool,
+    system_errors: u64,
+) -> (StrategyBuilderCheckStatus, String) {
+    let resolved = session_wins + session_losses;
+    if resolved < min_samples {
+        return (
+            StrategyBuilderCheckStatus::Warn,
+            format!("sample below drift threshold: resolved={resolved} min_samples={min_samples}"),
+        );
+    }
+    if breaker_tripped {
+        return (
+            StrategyBuilderCheckStatus::Fail,
+            "breaker tripped during forward session".to_string(),
+        );
+    }
+    if system_errors > 0 {
+        return (
+            StrategyBuilderCheckStatus::Fail,
+            format!("system errors during forward session: {system_errors}"),
+        );
+    }
+
+    let session_win_rate = if resolved == 0 {
+        0.0
+    } else {
+        session_wins as f64 / resolved as f64
+    };
+    let session_avg_pnl = if resolved == 0 {
+        0.0
+    } else {
+        session_pnl / resolved as f64
+    };
+    let hard_win_floor = min_win_rate.max(baseline_win_rate - 0.20);
+    if session_pnl < 0.0 {
+        return (
+            StrategyBuilderCheckStatus::Fail,
+            format!(
+                "negative forward pnl: win_rate={session_win_rate:.3} avg_pnl={session_avg_pnl:.4}"
+            ),
+        );
+    }
+    if session_win_rate < hard_win_floor {
+        return (
+            StrategyBuilderCheckStatus::Fail,
+            format!(
+                "win-rate decay beyond hard floor: win_rate={session_win_rate:.3} floor={hard_win_floor:.3}"
+            ),
+        );
+    }
+    if baseline_avg_pnl > 0.0 && session_avg_pnl < baseline_avg_pnl * 0.25 {
+        return (
+            StrategyBuilderCheckStatus::Fail,
+            format!(
+                "expectancy decay beyond hard floor: avg_pnl={session_avg_pnl:.4} floor={:.4}",
+                baseline_avg_pnl * 0.25
+            ),
+        );
+    }
+
+    let warn_win_floor = baseline_win_rate - 0.12;
+    if session_win_rate < warn_win_floor {
+        return (
+            StrategyBuilderCheckStatus::Warn,
+            format!(
+                "win-rate decay warning: win_rate={session_win_rate:.3} warn_floor={warn_win_floor:.3}"
+            ),
+        );
+    }
+    if baseline_avg_pnl > 0.0 && session_avg_pnl < baseline_avg_pnl * 0.50 {
+        return (
+            StrategyBuilderCheckStatus::Warn,
+            format!(
+                "expectancy decay warning: avg_pnl={session_avg_pnl:.4} warn_floor={:.4}",
+                baseline_avg_pnl * 0.50
+            ),
+        );
+    }
+
+    (
+        StrategyBuilderCheckStatus::Ok,
+        format!(
+            "forward performance inside adaptive band: win_rate={session_win_rate:.3} avg_pnl={session_avg_pnl:.4}"
+        ),
+    )
+}
+
 fn promotion_hash_status(artifact: &PromotionArtifact) -> (StrategyBuilderCheckStatus, String) {
     match serde_json::from_value::<StrategyVariant>(artifact.strategy_params.clone()) {
         Ok(variant) => {
@@ -812,6 +1081,13 @@ fn parse_rfc3339(value: &str, label: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|d| d.with_timezone(&Utc))
         .with_context(|| format!("{label} must be RFC3339"))
+}
+
+fn parse_zone_mode(value: &str) -> Result<&str> {
+    match value {
+        "all" | "early" | "primary" | "late" | "terminal" => Ok(value),
+        _ => bail!("--zone-mode must be one of: all, early, primary, late, terminal"),
+    }
 }
 
 fn daily_windows(
@@ -996,11 +1272,13 @@ mod tests {
             threads: 4,
             window_minutes: 5.0,
             profile: "guarded5m".to_string(),
+            zone_mode: "primary".to_string(),
             promotion_output: None,
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 13);
+        assert_eq!(plan.stages.len(), 15);
+        assert_eq!(plan.zone_mode, "primary");
         assert!(plan
             .stages
             .iter()
@@ -1021,9 +1299,15 @@ mod tests {
             .stages
             .iter()
             .filter(|s| s.command.contains("harness-sweep"))
-            .all(
-                |s| s.command.contains("--also-maker") && !s.command.contains("--also-maker true")
-            ));
+            .all(|s| {
+                s.command.contains("--also-maker")
+                    && s.command.contains("--zone-mode primary")
+                    && !s.command.contains("--also-maker true")
+            }));
+        assert!(plan
+            .stages
+            .iter()
+            .any(|s| s.name == "adaptive_health_audit"));
     }
 
     #[test]
@@ -1111,5 +1395,16 @@ mod tests {
         assert!(audit.checks.iter().any(|c| {
             c.name == "replay.below_floor_oracle" && c.status == StrategyBuilderCheckStatus::Ok
         }));
+    }
+
+    #[test]
+    fn adaptive_drift_flags_forward_decay() {
+        let (status, detail) = classify_adaptive_drift(0.80, 1.0, 5, 5, -1.0, 10, 0.60, false, 0);
+        assert_eq!(status, StrategyBuilderCheckStatus::Fail);
+        assert!(detail.contains("negative forward pnl"));
+
+        let (status, detail) = classify_adaptive_drift(0.80, 1.0, 8, 2, 7.0, 10, 0.60, false, 0);
+        assert_eq!(status, StrategyBuilderCheckStatus::Ok);
+        assert!(detail.contains("inside adaptive band"));
     }
 }
