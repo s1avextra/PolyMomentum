@@ -1,0 +1,116 @@
+
+# AGENTS.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+## 5. Backtest-First Validation
+
+**Do not use paper mode for validation when backtest/live-replay can prove the same behavior.**
+
+- Prefer feed-forward backtests, cached live-replay, diagnostics, and parity checks for strategy, order-flow, fill-model, risk, and PnL validation.
+- Use paper mode only for validation that cannot be reproduced offline: credentials, live exchange/websocket behavior, production process supervision, VPS deployment wiring, or real venue rejects/acks/fills.
+- If paper mode is necessary, state exactly what backtest cannot validate and keep the run bounded with diagnostics collection.
+
+---
+
+## 6. Parquet & shared-cache rules (multi-tenant VPS)
+
+PolyMomentum shares the multibot VPS with **adgts** and **polyarbitrage**.
+The PMXT v2 archive cache (`/opt/shared/pmxt_v2_cache/`) and the distilled
+candles cache (`/opt/shared/pmxt_v2_distilled_candles/`) are owned by the
+`pmxt-data` group and writable by both polymomentum and polyarbitrage.
+
+### Hard rules (peer-coordinated; mirrored in polyarbitrage's AGENTS.md)
+
+1. **Never delete a parquet you didn't download.** Convention is "downloader owns it." If your fetch helper just hit the network for a file, you may delete it after processing. Pre-existing files (downloaded by a peer bot) stay.
+2. **Never read another tenant's private dirs.** `/opt/polyarbitrage/*`, `/etc/polyarbitrage/*`, their wallet — off-limits. Same the other way for `/opt/polymomentum/*`. Cross-bot coordination goes through `/opt/shared/cross_bot_notes/` only.
+3. **Never run two `cargo build --release` concurrently** on the VPS. The box is 2-core; two release builds OOM. Use `nice -n 10 cargo build --release` so peer bot work stays responsive.
+4. **Never concurrently scan the same parquet hour from two processes.** Parquet predicate pushdown is single-threaded per file (pyarrow + arrow-rs). Stage your pipeline so each parquet is read at most once per pass.
+5. **CPU-intensive work runs on a dev box, not the VPS.** Sweeps, harness runs, parameter searches — anything that saturates CPU for >30 s — runs on a 10+ core dev box; results/artifacts get exported to the shared dir or rsync'd to `/opt/polymomentum/`. The VPS is for live runtime, the parquet downloader, and one-off `distill` invocations only. Two-core VPS + a 144-variant sweep starves peer live runtimes (missed ticks, alerter falls behind). Finalized 2026-04-27.
+
+### Conventions
+
+6. **Always filter at the parquet level.** Use `RowFilter` (Rust `parquet` crate) or `pyarrow.dataset.scanner(filter=…, columns=[…])`. Each hour file is ~330–460 MB compressed, ~700 MB uncompressed, ~86 M rows — full loads will OOM the 2-core box.
+7. **Provide a `--delete-after-process`-style flag** for one-shot backfills so callers can choose to keep or drop the parquet. Pre-existing files (rule 1) stay regardless.
+8. **Provide a distilled-cache flag** (or env var) for any sweep that re-reads the same window. PolyMomentum's flag: `--cache-dir <dir>` for the per-tenant sidecar (`*.events.bin.gz`), and `PMXT_DISTILLED_DIR` env var or auto-detect of `/opt/shared/pmxt_v2_distilled_candles/` for the cross-bot cache.
+9. **Atomic-rename writes for every shared file.** Write to `*.tmp.<pid>` then `rename(2)`. No lockfiles — they bite us on shared volumes. Concurrent writers on the same `<hour>.v1.*` file are safe because both produce byte-identical content for the same input parquet + cid list (verified by byte-diff sanity test); the second writer's rename clobbers identical bytes.
+10. **Iterate parquets in row-group / batch order — never pre-sort or buffer.** Both writers must emit events in parquet-native order so the byte-diff sanity test passes. If the schema needs sorting in the future, bump the filename's schema tag (`v1` → `v2`) — never reorder in place.
+
+### Shared distilled candles cache
+
+- Path: `/opt/shared/pmxt_v2_distilled_candles/<hour>.v1.candles.jsonl.gz`
+- **Schema v1: FROZEN as of 2026-04-27.** See `docs/cross_bot_protocol_v1_finalized.md` and `docs/cross_bot_distilled_cache_response.md`. Event types `book` + `chg` + `trade`. Numeric strings (zero-padded to parquet decimal scale) on price/size; f64 (shortest-round-trip) elsewhere. Trade `tx` field omitted when null (never serialized as `"tx": null`).
+- Writer: `polymomentum-engine distill --input <parquet> [--candle-cids <file>] [--output <path>]`
+- Reader contract: missing | corrupt | schema-mismatch → fall back to the per-tenant sidecar, then to a parquet RowFilter scan. Reader skips malformed JSONL lines with a warning.
+- Candle universe: see `docs/candle_universe.md` (regex + 11 supported assets) — both bots must agree on this set so byte-diff tests pass.
+
+### Coordination notes directory
+
+- `/opt/shared/cross_bot_notes/` — read/write for both bots via `pmxt-data` group.
+- Filename convention: `YYYY-MM-DD_<topic>_from_<sender>.md`.
+- Mirror every note we write into our own `docs/` so it's git-tracked.
+- When you make a peer-visible change (new shared format, new CLI, new convention), drop a `<date>_<topic>_from_polymomentum.md` so future Codex sessions on either side can pick it up without re-discovery.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
