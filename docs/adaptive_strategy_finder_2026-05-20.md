@@ -21,7 +21,7 @@
   monitoring methods highlights that ADWIN is useful, but block-level and
   independence-test methods need larger samples; our first production version
   should use session-level performance gates and only graduate to richer tests
-  when the paper/live sample grows:
+  when the forward replay/integration sample grows:
   https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2024.1330257/full
 
 ## Production Design
@@ -33,13 +33,15 @@
    calibration windows.
 4. Aggregate-promote only from reports whose end time is strictly before the
    holdout start.
-5. Replay/paper the fixed promoted artifact through the live path on the next
-   unseen holdout window.
-6. After each paper/live session, run `strategy-builder audit`.
+5. Replay the fixed promoted artifact through the live path on the next unseen
+   holdout window.
+6. After each live-replay or bounded venue-integration session, run
+   `strategy-builder audit`.
 7. If adaptive drift is `warn`, keep the current artifact active but launch a
    fresh rolling re-scout on the dev box.
-8. If adaptive drift is `fail`, freeze live promotion or reduce to paper-only
-   until a fresh artifact passes aggregate promotion, replay, and diagnostics.
+8. If adaptive drift is `fail`, freeze live promotion until a fresh artifact
+   passes aggregate promotion, replay, and diagnostics. Use paper mode only for
+   checks that cannot be reproduced offline.
 
 ## Current Implementation
 
@@ -50,13 +52,13 @@
   - `feed_forward_holdout_replay_N` tests the fixed artifact on the next
     future window.
   - the final deployable artifact is trained after holdout evidence exists and
-    is meant only for future paper/live, never for scoring those same historical
-    windows.
+    is meant only for future integration/live, never for scoring those same
+    historical windows.
 - The generated plan now includes:
   - `adaptive_health_audit`
   - `adaptive_rescout_trigger`
 - `strategy-builder audit` now adds `adaptive.drift` checks when a promotion
-  artifact and paper/replay session are supplied.
+  artifact and replay or bounded integration session are supplied.
 - The first drift detector is performance-aware and intentionally simple:
   - insufficient resolved forward sample -> `warn`
   - breaker trip, system errors, negative forward PnL, hard win-rate decay, or
@@ -66,7 +68,7 @@
 
 ## Next Upgrade
 
-Once paper/live produces enough resolved sessions, add an ADWIN/Page-Hinkley
-style rolling detector over per-trade PnL and per-trade win/loss outcomes. Keep
-that detector as an alert and re-scout trigger, not as an automatic live
-parameter mutator.
+Once replay/live integration produces enough resolved sessions, add an
+ADWIN/Page-Hinkley style rolling detector over per-trade PnL and per-trade
+win/loss outcomes. Keep that detector as an alert and re-scout trigger, not as
+an automatic live parameter mutator.

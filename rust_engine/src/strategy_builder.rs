@@ -207,6 +207,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             float_arg(input.window_minutes),
             "--promotion-artifact".to_string(),
             fold_promotion.display().to_string(),
+            "--settlement-alignment-ready".to_string(),
             "--session-log-dir".to_string(),
             replay_session_dir.display().to_string(),
             "--allow-gamma-fetch".to_string(),
@@ -236,8 +237,9 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             ],
             verify: vec![
                 "holdout replay uses a promotion artifact trained only on prior windows".to_string(),
-                "live-replay report has shadow_resolutions > 0".to_string(),
-                "session diagnostics have oracle.checks >= shadow.resolved and zero disagreements".to_string(),
+                "live-replay runs with --settlement-alignment-ready so executable order mechanics are validated offline".to_string(),
+                "live-replay report has resolved fills or shadow resolutions".to_string(),
+                "session diagnostics have oracle.checks >= resolved/shadow samples and zero actionable disagreements".to_string(),
             ],
             resource_policy:
                 "Can be short on the VPS, but full feed-forward replays should run on a dev box first."
@@ -332,12 +334,12 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     stages.push(StrategyBuilderStage {
         name: "final_feed_forward_promote".to_string(),
         purpose:
-            "Train the deployable paper artifact on all now-historical windows after feed-forward holdouts pass."
+            "Train the deployable artifact on all now-historical windows after feed-forward holdouts pass."
                 .to_string(),
         command: promotion_command(&calibration_reports, &promotion_output, zone_mode),
         outputs: vec![promotion_output.display().to_string()],
         verify: vec![
-            "this artifact is for future paper/live only, not for scoring the historical holdouts"
+            "this artifact is for future integration/live only, not for scoring the historical holdouts"
                 .to_string(),
             "promotion artifact params hash matches strategy_params".to_string(),
         ],
@@ -345,9 +347,10 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     });
 
     stages.push(StrategyBuilderStage {
-        name: "paper_preflight".to_string(),
-        purpose: "Verify the promoted artifact and runtime configuration before paper deployment."
-            .to_string(),
+        name: "runtime_preflight".to_string(),
+        purpose:
+            "Verify the promoted artifact and non-live runtime configuration before deployment."
+                .to_string(),
         command: shell_command(&[
             "polymomentum-engine".to_string(),
             "preflight".to_string(),
@@ -376,7 +379,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "--promotion-artifact".to_string(),
         promotion_output.display().to_string(),
         "--replay-session".to_string(),
-        "<paper-or-replay-session.jsonl>".to_string(),
+        "<live-replay-or-venue-integration-session.jsonl>".to_string(),
         "--min-trades".to_string(),
         "750".to_string(),
         "--min-win-rate".to_string(),
@@ -393,7 +396,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     stages.push(StrategyBuilderStage {
         name: "adaptive_health_audit".to_string(),
         purpose:
-            "Continuously compare paper/live outcomes against the promoted backtest baseline and flag strategy decay."
+            "Continuously compare forward replay/integration outcomes against the promoted backtest baseline and flag strategy decay."
                 .to_string(),
         command: shell_command(&audit_args),
         outputs: Vec::new(),
@@ -401,7 +404,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "adaptive.drift checks are ok before increasing size".to_string(),
             "any warning starts a rolling re-scout; any failure freezes live promotion".to_string(),
         ],
-        resource_policy: "Lightweight; safe on the VPS after each paper/live session.".to_string(),
+        resource_policy: "Lightweight; safe on the VPS after each replay or bounded integration session.".to_string(),
     });
 
     let rolling_out_dir = out_dir.join("rolling_rescout");
@@ -441,7 +444,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
     stages.push(StrategyBuilderStage {
         name: "adaptive_rescout_trigger".to_string(),
         purpose:
-            "When drift warnings appear, re-run the same walk-forward loop on the freshest resolved window before touching paper/live params."
+            "When drift warnings appear, re-run the same walk-forward loop on the freshest resolved window before touching runtime params."
                 .to_string(),
         command: shell_command(&rescout_args),
         outputs: vec![rolling_out_dir.display().to_string()],
@@ -469,12 +472,12 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         notes: vec![
             "The builder is feed-forward: every holdout replay uses a promotion artifact selected only from strictly earlier calibration windows.".to_string(),
             "Historical holdout performance is measured by fixed-artifact live-replay, not by selecting the best grid cell on the holdout window.".to_string(),
-            "The final promotion artifact is for future paper/live only; it is not reused to score the historical windows that trained it.".to_string(),
+            "The final promotion artifact is for future integration/live only; it is not reused to score the historical windows that trained it.".to_string(),
             "Zone-specific sweeps keep timing regimes isolated; aggregate promotion must prove the same parameter hash survives the calibration windows available at that point in time.".to_string(),
-            "Adaptive operation is reactive, not self-mutating: drift warnings trigger a fresh scout, while live/paper keeps the last promoted artifact until a new one passes all gates.".to_string(),
+            "Adaptive operation is reactive, not self-mutating: drift warnings trigger a fresh scout, while runtime keeps the last promoted artifact until a new one passes all gates.".to_string(),
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
             "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
-            "Only flip CANDLE_SETTLEMENT_ALIGNMENT_READY after replay and paper sessions both show oracle agreement on resolved shadow candidates.".to_string(),
+            "Use backtest/live-replay validation first; paper mode is only for live venue plumbing that cannot be reproduced offline.".to_string(),
         ],
     })
 }
@@ -583,7 +586,7 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         checks.push(check(
             "adaptive.baseline",
             StrategyBuilderCheckStatus::Warn,
-            "no promotion artifact supplied, so paper/live decay cannot be compared to a locked baseline"
+            "no promotion artifact supplied, so forward decay cannot be compared to a locked baseline"
                 .to_string(),
         ));
     }
@@ -606,6 +609,8 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         match diagnostics::analyze_session(session) {
             Ok(diag) => {
                 let shadow = *diag.event_counts.get("shadow.resolved").unwrap_or(&0);
+                let resolved = diag.resolutions.resolved;
+                let oracle_samples = shadow.max(resolved);
                 checks.push(check(
                     "replay.session",
                     if diag.ok {
@@ -614,10 +619,11 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         StrategyBuilderCheckStatus::Fail
                     },
                     format!(
-                        "{} ok={} events={} shadow={} oracle={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
+                        "{} ok={} events={} resolved={} shadow={} oracle={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
                         session,
                         diag.ok,
                         diag.total_events,
+                        resolved,
                         shadow,
                         diag.oracle.checks,
                         diag.oracle.disagreements,
@@ -626,8 +632,8 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         diag.system.errors
                     ),
                 ));
-                let status = if shadow >= input.min_shadow_resolutions
-                    && diag.oracle.checks >= shadow
+                let status = if oracle_samples >= input.min_shadow_resolutions
+                    && diag.oracle.checks >= oracle_samples
                     && diag.oracle.actionable_disagreements == 0
                     && diag.oracle.ties == 0
                     && diag.system.errors == 0
@@ -640,9 +646,11 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                     "replay.shadow_oracle",
                     status,
                     format!(
-                        "{} shadow={} min_shadow={} oracle={} ties={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
+                        "{} resolved={} shadow={} samples={} min_samples={} oracle={} ties={} disagreements={} actionable_disagreements={} below_floor_disagreements={} errors={}",
                         session,
+                        resolved,
                         shadow,
+                        oracle_samples,
                         input.min_shadow_resolutions,
                         diag.oracle.checks,
                         diag.oracle.ties,
@@ -650,6 +658,17 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         diag.oracle.actionable_disagreements,
                         diag.oracle.below_floor_disagreements,
                         diag.system.errors
+                    ),
+                ));
+                checks.push(check(
+                    "replay.settlement_alignment",
+                    match diag.system.settlement_alignment_ready {
+                        Some(true) => StrategyBuilderCheckStatus::Ok,
+                        Some(false) | None => StrategyBuilderCheckStatus::Warn,
+                    },
+                    format!(
+                        "{} settlement_alignment_ready={:?}; executable order-path parity requires true",
+                        session, diag.system.settlement_alignment_ready
                     ),
                 ));
                 checks.push(check(
@@ -662,14 +681,18 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                 ));
                 checks.push(check(
                     "replay.a_plus_sample",
-                    if shadow >= input.a_plus_min_shadow_resolutions {
+                    if oracle_samples >= input.a_plus_min_shadow_resolutions {
                         StrategyBuilderCheckStatus::Ok
                     } else {
                         StrategyBuilderCheckStatus::Warn
                     },
                     format!(
-                        "{} shadow={} a_plus_min_shadow_resolutions={}",
-                        session, shadow, input.a_plus_min_shadow_resolutions
+                        "{} samples={} resolved={} shadow={} a_plus_min_samples={}",
+                        session,
+                        oracle_samples,
+                        resolved,
+                        shadow,
+                        input.a_plus_min_shadow_resolutions
                     ),
                 ));
             }
@@ -685,7 +708,7 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         checks.push(check(
             "replay.session",
             StrategyBuilderCheckStatus::Warn,
-            "no live-replay/paper session supplied".to_string(),
+            "no live-replay or bounded integration session supplied".to_string(),
         ));
     }
 
@@ -786,7 +809,7 @@ fn audit_adaptive_drift(
         checks.push(check(
             "adaptive.drift",
             StrategyBuilderCheckStatus::Warn,
-            "no paper/replay session supplied; adaptive stale checks need resolved forward outcomes"
+            "no replay or bounded integration session supplied; adaptive stale checks need resolved forward outcomes"
                 .to_string(),
         ));
         return;
@@ -962,7 +985,7 @@ fn promotion_hash_status(artifact: &PromotionArtifact) -> (StrategyBuilderCheckS
 fn next_steps(ok: bool, warn_count: usize, a_plus_ready: bool) -> Vec<String> {
     if !ok {
         return vec![
-            "Fix failed checks before promoting or changing paper/live gates.".to_string(),
+            "Fix failed checks before promoting or changing runtime gates.".to_string(),
             "Re-run strategy-builder audit with the new report, promotion, and replay sessions."
                 .to_string(),
         ];
@@ -970,22 +993,22 @@ fn next_steps(ok: bool, warn_count: usize, a_plus_ready: bool) -> Vec<String> {
     if warn_count > 0 {
         return vec![
             "Review warnings and document why they are acceptable for the current gate.".to_string(),
-            "Run a fresh paper-shadow window and compare diagnostics before enabling settlement alignment."
+            "Run fresh feed-forward live-replay/backtest diagnostics before using paper mode for irreducible venue plumbing."
                 .to_string(),
         ];
     }
     if a_plus_ready {
         return vec![
-            "Begin or continue paper soak on the A+ artifact with diagnostics collection."
+            "Begin or continue bounded venue-integration checks on the A+ artifact with diagnostics collection."
                 .to_string(),
-            "Keep live trading gated until paper soak remains A+ across a fresh resolved sample."
+            "Keep live trading gated until offline replay remains A+ across a fresh resolved sample and venue plumbing is clean."
                 .to_string(),
         ];
     }
     vec![
-        "Run the promoted artifact in paper-shadow mode until multiple resolved oracle checks agree."
+        "Run the promoted artifact through feed-forward live-replay until multiple resolved oracle checks agree."
             .to_string(),
-        "Only then consider setting CANDLE_SETTLEMENT_ALIGNMENT_READY=true for paper execution."
+        "Only use paper mode after offline validation, and only for checks that need the real venue."
             .to_string(),
     ]
 }
@@ -1480,6 +1503,9 @@ mod tests {
             .command
             .contains("--start 2026-04-24T00:00:00+00:00"));
         assert!(fold1_replay.command.contains("promotion_ff_fold_01"));
+        assert!(fold1_replay
+            .command
+            .contains("--settlement-alignment-ready"));
     }
 
     #[test]
@@ -1587,6 +1613,86 @@ mod tests {
         }));
         assert!(audit.checks.iter().any(|c| {
             c.name == "replay.below_floor_oracle" && c.status == StrategyBuilderCheckStatus::Ok
+        }));
+    }
+
+    #[test]
+    fn audit_accepts_executable_resolved_replay_samples() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "system",
+                "type": "runtime_strategy",
+                "settlement_alignment_ready": true,
+                "settlement_min_abs_move_usd": 25.0,
+                "strategy": {"params_hash": "strategy"}
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": true,
+                "execution_attempted": true,
+                "traded": false,
+                "book_spread": 0.01
+            }),
+            serde_json::json!({
+                "cat": "order",
+                "type": "filled",
+                "intent_id": "intent_1"
+            }),
+            serde_json::json!({
+                "cat": "resolution",
+                "type": "resolved",
+                "won": true,
+                "pnl": 2.0,
+                "btc_move": 44.0
+            }),
+            serde_json::json!({
+                "cat": "oracle",
+                "type": "resolution",
+                "agreed": true,
+                "our_open_btc": 100000.0,
+                "our_close_btc": 100044.0
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let audit = audit(StrategyBuilderAuditInput {
+            report_paths: Vec::new(),
+            promotion_artifact: None,
+            replay_sessions: vec![path.display().to_string()],
+            min_trades: 1,
+            min_win_rate: 0.0,
+            min_wilson_win_rate_lower: 0.0,
+            min_total_pnl: 0.0,
+            min_shadow_resolutions: 1,
+            min_research_reports: 0,
+            min_replay_sessions: 1,
+            a_plus_min_shadow_resolutions: 1,
+        });
+
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "replay.shadow_oracle" && c.status == StrategyBuilderCheckStatus::Ok
+        }));
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "replay.settlement_alignment" && c.status == StrategyBuilderCheckStatus::Ok
         }));
     }
 

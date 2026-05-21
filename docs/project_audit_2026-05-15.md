@@ -84,11 +84,13 @@ A+ requires all of these at the same time:
 
 ## Next production loop
 
-1. Let the freshly deployed paper mode collect a nonzero post-deploy sample.
-2. Run `soak-report.sh` again and confirm replay parity is still `0` on fresh
-   evaluations, not only on the pre-deploy long session.
-3. Continue paper until enough resolved shadow samples exist for the settlement
-   alignment gate.
+1. Run fresh feed-forward backtest/live-replay validation before any paper
+   session when the behavior is reproducible offline.
+2. Run `strategy-builder audit` on the replay session and confirm resolved
+   samples, oracle checks, and diagnostics pass on fresh evaluations, not only
+   on the pre-deploy long session.
+3. Use paper mode only for live venue plumbing that cached replay cannot prove
+   (credentials, user-channel/REST reconciliation, real rejects/acks/fills).
 4. Run CPU-heavy backtest/sweep work on the dev machine, not the VPS, exporting
    only reports/artifacts needed for promotion.
 5. Convert/fund to pUSD and set allowances before any live preflight.

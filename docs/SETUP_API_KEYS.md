@@ -12,7 +12,7 @@ This is a **one-time** setup needed only for **live mode**. Paper mode and the `
 | `POLY_API_PASSPHRASE` | Random string | Additional auth factor |
 | `CLOB_V2_READY` | Explicit live-order guard | Must stay `0` until the CLOB V2 order path is verified |
 | `POLYMOMENTUM_LIVE_RECONCILIATION_READY` | Explicit reconciliation guard | Must stay `0` until accepted orders reconcile from CLOB user-channel/REST evidence |
-| `CANDLE_SETTLEMENT_ALIGNMENT_READY` | Explicit settlement guard | Must stay `false` until paper/replay oracle checks agree |
+| `CANDLE_SETTLEMENT_ALIGNMENT_READY` | Explicit settlement guard | Must stay `false` until feed-forward live-replay oracle checks agree |
 
 The API key, secret, and passphrase are **derived from your private key**. Polymarket's CLOB exposes a `POST /auth/api-key` endpoint that returns deterministic creds tied to a wallet — running the derivation twice yields the same values.
 
@@ -97,9 +97,10 @@ Verify the bot can read your wallet and the on-chain view of an old market:
 
 ## Step 6 — First live trade
 
-When you're ready (paper validated, venue/account compliance cleared, CLOB V2
-order signing verified, pUSD/allowances ready, $1-sized stake), do not edit the
-unit with `sed`. For the international CLOB, configure the venue env first.
+When you're ready (feed-forward replay validation passed, venue/account
+compliance cleared, CLOB V2 order signing verified, pUSD/allowances ready,
+$1-sized stake), do not edit the unit with `sed`. For the international CLOB,
+configure the venue env first.
 `OPERATOR_COUNTRY` must reflect the approved operator/account jurisdiction, not
 the VPS location:
 
@@ -116,8 +117,9 @@ CANDLE_SETTLEMENT_ALIGNMENT_READY=true
 Do not set `CLOB_V2_READY=1` until the code path has migrated away from V1 raw
 order signing. Do not set `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1` until the
 user-channel/REST reconciliation path has been verified. Do not set
-`CANDLE_SETTLEMENT_ALIGNMENT_READY=true` until replay and paper settlement-shadow
-checks agree on resolved candidates.
+`CANDLE_SETTLEMENT_ALIGNMENT_READY=true` until feed-forward live-replay and
+diagnostics show zero actionable oracle drift on resolved candidates. Use paper
+mode only for venue behavior that cannot be reproduced offline.
 
 Then deploy through the guarded path:
 

@@ -99,6 +99,9 @@ enum Command {
         /// Promotion artifact JSON to replay the same strategy as paper/live.
         #[arg(long)]
         promotion_artifact: Option<String>,
+        /// Treat settlement alignment as verified for this offline replay.
+        #[arg(long, default_value_t = false)]
+        settlement_alignment_ready: bool,
         /// Write the live-replay report JSON to this path in addition to stdout.
         #[arg(long)]
         report_json: Option<String>,
@@ -739,10 +742,14 @@ async fn main() {
             max_contracts,
             window_minutes,
             promotion_artifact,
+            settlement_alignment_ready,
             report_json,
         } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
+            if settlement_alignment_ready {
+                settings.candle_settlement_alignment_ready = true;
+            }
             cmd_live_replay(
                 &settings,
                 &start,
