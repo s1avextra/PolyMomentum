@@ -69,6 +69,9 @@ pub struct OrderDiagnostics {
     pub placed: u64,
     pub filled: u64,
     pub rejected: u64,
+    pub passive_rejections: u64,
+    pub critical_rejections: u64,
+    pub reject_reasons: BTreeMap<String, u64>,
     pub missing_intent_id: u64,
     pub placed_missing_state: u64,
     pub submit_latency_samples: u64,
@@ -208,7 +211,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("signal", "skip") => record_signal_skip(&mut out, &v),
             ("order", "placed") => record_order_placed(&mut out, &v),
             ("order", "filled") => record_order_filled(&mut out, &v),
-            ("order", "rejected") => out.orders.rejected += 1,
+            ("order", "rejected") => record_order_rejected(&mut out, &v),
             ("resolution", "resolved") => record_resolution(&mut out, &v),
             ("oracle", "resolution") => record_oracle_resolution(&mut out, &v),
             ("oracle", "correction") => record_oracle_correction(&mut out, &v),
@@ -447,6 +450,22 @@ fn record_order_filled(out: &mut SessionDiagnostics, v: &Value) {
     out.orders.filled += 1;
     if missing_string(v, "intent_id") {
         out.orders.missing_intent_id += 1;
+    }
+}
+
+fn record_order_rejected(out: &mut SessionDiagnostics, v: &Value) {
+    out.orders.rejected += 1;
+    let reason = v
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("unknown")
+        .to_string();
+    *out.orders.reject_reasons.entry(reason.clone()).or_insert(0) += 1;
+    if is_passive_rejection(&reason) {
+        out.orders.passive_rejections += 1;
+    } else {
+        out.orders.critical_rejections += 1;
     }
 }
 
@@ -693,9 +712,17 @@ fn finalize(out: &mut SessionDiagnostics) {
             out.orders.placed_missing_state
         ));
     }
-    if out.orders.rejected > 0 {
-        out.warnings
-            .push(format!("{} rejected order event(s)", out.orders.rejected));
+    if out.orders.passive_rejections > 0 {
+        out.warnings.push(format!(
+            "{} passive order non-fill event(s): {:?}",
+            out.orders.passive_rejections, out.orders.reject_reasons
+        ));
+    }
+    if out.orders.critical_rejections > 0 {
+        out.warnings.push(format!(
+            "{} critical rejected order event(s): {:?}",
+            out.orders.critical_rejections, out.orders.reject_reasons
+        ));
     }
     if out.resolutions.resolved > out.orders.filled {
         out.warnings.push(format!(
@@ -832,7 +859,7 @@ fn finalize(out: &mut SessionDiagnostics) {
         && out.signals.missing_replay_fields == 0
         && out.orders.missing_intent_id == 0
         && out.orders.placed_missing_state == 0
-        && out.orders.rejected == 0
+        && out.orders.critical_rejections == 0
         && out.resolutions.resolved <= out.orders.filled
         && unresolved_oracle_disagreements == 0
         && out.oracle.ties == 0
@@ -841,6 +868,10 @@ fn finalize(out: &mut SessionDiagnostics) {
 }
 
 const SETTLEMENT_BASIS_WARN_BTC: f64 = 5.0;
+
+fn is_passive_rejection(reason: &str) -> bool {
+    matches!(reason, "maker_unfilled" | "post_only_cross")
+}
 
 fn oracle_move_range(min: Option<f64>, max: Option<f64>) -> String {
     match (min, max) {
@@ -1018,6 +1049,68 @@ mod tests {
         assert_eq!(diag.signals.max_book_ask_depth, Some(90.25));
         assert_eq!(diag.signals.max_abs_book_pressure, Some(0.25));
         assert!(!diag.warnings.iter().any(|w| w.contains("CLOB feed health")));
+    }
+
+    #[test]
+    fn session_diagnostics_treats_passive_maker_nonfills_as_nonfatal() {
+        let tmp = TempDir::new().unwrap();
+        let passive_path = tmp.path().join("passive.jsonl");
+        let critical_path = tmp.path().join("critical.jsonl");
+        let base = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "decision_trade": true,
+                "execution_attempted": true,
+                "traded": false,
+                "book_spread": 0.01
+            }),
+        ];
+        let write_session = |path: &std::path::Path, reason: &str| {
+            let mut lines = base.iter().cloned().collect::<Vec<_>>();
+            lines.push(serde_json::json!({
+                "cat": "order",
+                "type": "rejected",
+                "reason": reason,
+                "price": 0.49,
+                "size": 10.0
+            }));
+            let payload = lines
+                .into_iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            std::fs::write(path, payload).unwrap();
+        };
+        write_session(&passive_path, "maker_unfilled");
+        write_session(&critical_path, "clob trade failed");
+
+        let passive = analyze_session(&passive_path).unwrap();
+        let critical = analyze_session(&critical_path).unwrap();
+
+        assert!(passive.ok, "{:?}", passive.warnings);
+        assert_eq!(passive.orders.rejected, 1);
+        assert_eq!(passive.orders.passive_rejections, 1);
+        assert_eq!(passive.orders.critical_rejections, 0);
+        assert_eq!(
+            passive.orders.reject_reasons.get("maker_unfilled").copied(),
+            Some(1)
+        );
+        assert!(!critical.ok, "{:?}", critical.warnings);
+        assert_eq!(critical.orders.rejected, 1);
+        assert_eq!(critical.orders.passive_rejections, 0);
+        assert_eq!(critical.orders.critical_rejections, 1);
     }
 
     #[test]
