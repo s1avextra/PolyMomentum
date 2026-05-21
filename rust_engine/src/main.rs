@@ -1410,50 +1410,61 @@ async fn cmd_live_replay(
             Err(_) => Default::default(),
         };
     if allow_gamma_fetch {
-        let mut all_cids = std::collections::HashSet::new();
-        for &h in &hours {
-            eprintln!("live-replay: scanning condition_ids for {h}");
-            match loader.distinct_condition_ids(h) {
-                Ok(s) => all_cids.extend(s),
-                Err(e) => {
-                    eprintln!("read distinct cids for {h}: {e}");
-                    std::process::exit(1);
-                }
+        let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+        let metadata_start = start_dt - ChronoDuration::hours(1);
+        let metadata_end = end_dt + ChronoDuration::hours(2);
+        eprintln!(
+            "live-replay: fetching historical markets ending {metadata_start} -> {metadata_end}"
+        );
+        let new_markets = match gamma
+            .fetch_markets_by_end_date_range(metadata_start, metadata_end, true)
+            .await
+        {
+            Ok(markets) => markets,
+            Err(e) => {
+                eprintln!("Gamma historical metadata lookup failed: {e}");
+                std::process::exit(1);
             }
-        }
-        let missing_cids: Vec<String> = all_cids
-            .iter()
-            .filter(|c| {
-                cached_markets
-                    .get(*c)
-                    .map(gamma_market_needs_refresh)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-        if !missing_cids.is_empty() {
-            eprintln!(
-                "live-replay: fetching Gamma metadata for {} missing condition_ids",
-                missing_cids.len()
+        };
+        let fetched = new_markets.len();
+        let candle_markets = data::scanner::scan_candle_markets_for_backtest(&new_markets, 0.0);
+        let mut merged = 0usize;
+        for contract in candle_markets {
+            if contract.asset != "BTC" {
+                continue;
+            }
+            if !window_minutes
+                .map(|target| {
+                    (live::window::estimate_window_minutes(&contract.window_description) - target)
+                        .abs()
+                        <= 1e-6
+                })
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if cached_markets
+                .get(&contract.market.condition_id)
+                .map(gamma_market_needs_refresh)
+                .unwrap_or(true)
+            {
+                merged += 1;
+            }
+            cached_markets.insert(
+                contract.market.condition_id.clone(),
+                contract.market.clone(),
             );
-            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-            match gamma.fetch_markets_by_condition_ids(&missing_cids).await {
-                Ok(markets) => {
-                    for m in markets {
-                        cached_markets.insert(m.condition_id.clone(), m);
-                    }
-                    if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
-                        eprintln!(
-                            "write Gamma cache {} failed: {e}",
-                            gamma_cache_path.display()
-                        );
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Gamma lookup failed: {e}");
-                    std::process::exit(1);
-                }
+        }
+        eprintln!(
+            "live-replay: fetched {fetched} historical market(s), merged {merged} BTC candle market(s)"
+        );
+        if merged > 0 {
+            if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
+                eprintln!(
+                    "write Gamma cache {} failed: {e}",
+                    gamma_cache_path.display()
+                );
+                std::process::exit(1);
             }
         }
     } else {
