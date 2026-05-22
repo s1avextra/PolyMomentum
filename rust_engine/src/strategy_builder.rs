@@ -36,6 +36,7 @@ pub struct StrategyBuilderPlanInput {
 #[derive(Debug, Clone)]
 pub struct StrategyBuilderAuditInput {
     pub report_paths: Vec<String>,
+    pub adaptive_report_paths: Vec<String>,
     pub promotion_artifact: Option<String>,
     pub replay_sessions: Vec<String>,
     pub min_trades: usize,
@@ -87,6 +88,12 @@ pub struct StrategyBuilderCheck {
     pub name: String,
     pub status: StrategyBuilderCheckStatus,
     pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct CalibrationReportPaths {
+    static_report: PathBuf,
+    adaptive_report: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -178,7 +185,11 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             purpose:
                 "Select a fixed artifact using only calibration windows that end before the holdout starts."
                     .to_string(),
-            command: promotion_command(&calibration_reports, &fold_promotion, zone_mode),
+            command: promotion_command(
+                &static_calibration_reports(&calibration_reports),
+                &fold_promotion,
+                zone_mode,
+            ),
             outputs: vec![fold_promotion.display().to_string()],
             verify: vec![
                 format!("train_end={} < holdout_start={}", calibration_end.to_rfc3339(), holdout_start.to_rfc3339()),
@@ -274,7 +285,14 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "audit".to_string(),
         ];
         for report in &calibration_reports {
-            fold_audit_args.extend(["--report".to_string(), report.display().to_string()]);
+            fold_audit_args.extend([
+                "--report".to_string(),
+                report.static_report.display().to_string(),
+            ]);
+            fold_audit_args.extend([
+                "--adaptive-report".to_string(),
+                report.adaptive_report.display().to_string(),
+            ]);
         }
         fold_audit_args.extend([
             "--promotion-artifact".to_string(),
@@ -336,7 +354,11 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         purpose:
             "Train the deployable artifact on all now-historical windows after feed-forward holdouts pass."
                 .to_string(),
-        command: promotion_command(&calibration_reports, &promotion_output, zone_mode),
+        command: promotion_command(
+            &static_calibration_reports(&calibration_reports),
+            &promotion_output,
+            zone_mode,
+        ),
         outputs: vec![promotion_output.display().to_string()],
         verify: vec![
             "this artifact is for future integration/live only, not for scoring the historical holdouts"
@@ -373,7 +395,14 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         "audit".to_string(),
     ];
     for report in &calibration_reports {
-        audit_args.extend(["--report".to_string(), report.display().to_string()]);
+        audit_args.extend([
+            "--report".to_string(),
+            report.static_report.display().to_string(),
+        ]);
+        audit_args.extend([
+            "--adaptive-report".to_string(),
+            report.adaptive_report.display().to_string(),
+        ]);
     }
     audit_args.extend([
         "--promotion-artifact".to_string(),
@@ -589,6 +618,7 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
             input.min_research_reports
         ),
     ));
+    audit_adaptive_probe_reports(&input, &mut checks);
 
     if let Some(path) = &input.promotion_artifact {
         audit_promotion(path, &input, &mut checks);
@@ -809,6 +839,89 @@ fn audit_promotion(
             StrategyBuilderCheckStatus::Fail,
             format!("{path}: {e:#}"),
         )),
+    }
+}
+
+fn audit_adaptive_probe_reports(
+    input: &StrategyBuilderAuditInput,
+    checks: &mut Vec<StrategyBuilderCheck>,
+) {
+    if input.adaptive_report_paths.is_empty() {
+        checks.push(check(
+            "adaptive_probe.reports",
+            StrategyBuilderCheckStatus::Warn,
+            "no adaptive breaker probe reports supplied; A+ requires checking whether rearm-only runs change the picture"
+                .to_string(),
+        ));
+        return;
+    }
+
+    checks.push(check(
+        "adaptive_probe.reports",
+        StrategyBuilderCheckStatus::Ok,
+        format!(
+            "adaptive_reports={} static_reports={}",
+            input.adaptive_report_paths.len(),
+            input.report_paths.len()
+        ),
+    ));
+    for report_path in &input.adaptive_report_paths {
+        match experiment::read_report(report_path) {
+            Ok(report) => {
+                let best = report.variants.first();
+                let best_rearms = best.map(|v| v.diagnostics.adaptive_rearms).unwrap_or(0);
+                let best_paused = best
+                    .map(|v| v.diagnostics.breaker_paused_events)
+                    .unwrap_or(0);
+                let best_breaker = best.map(|v| v.breaker_tripped).unwrap_or(false);
+                let max_rearms = report
+                    .variants
+                    .iter()
+                    .map(|v| v.diagnostics.adaptive_rearms)
+                    .max()
+                    .unwrap_or(0);
+                let max_paused = report
+                    .variants
+                    .iter()
+                    .map(|v| v.diagnostics.breaker_paused_events)
+                    .max()
+                    .unwrap_or(0);
+                let variants_with_rearms = report
+                    .variants
+                    .iter()
+                    .filter(|v| v.diagnostics.adaptive_rearms > 0)
+                    .count();
+                let status = if best.is_none() {
+                    StrategyBuilderCheckStatus::Fail
+                } else if best_breaker || best_rearms > 0 {
+                    StrategyBuilderCheckStatus::Fail
+                } else if variants_with_rearms > 0 {
+                    StrategyBuilderCheckStatus::Warn
+                } else {
+                    StrategyBuilderCheckStatus::Ok
+                };
+                checks.push(check(
+                    "adaptive_probe.health",
+                    status,
+                    format!(
+                        "{} variants={} best_breaker={} best_adaptive_rearms={} best_paused_events={} variants_with_rearms={} max_adaptive_rearms={} max_paused_events={}",
+                        report_path,
+                        report.variants.len(),
+                        best_breaker,
+                        best_rearms,
+                        best_paused,
+                        variants_with_rearms,
+                        max_rearms,
+                        max_paused,
+                    ),
+                ));
+            }
+            Err(e) => checks.push(check(
+                "adaptive_probe.load",
+                StrategyBuilderCheckStatus::Fail,
+                format!("{report_path}: {e:#}"),
+            )),
+        }
     }
 }
 
@@ -1088,7 +1201,7 @@ fn push_calibration_window_stages(
     latency_ms: u64,
     threads: usize,
     window_minutes: f64,
-) -> PathBuf {
+) -> CalibrationReportPaths {
     let stamp = window_stamp(window_start, window_end);
     let eval_cache_path = eval_cache_dir.join(format!("eval_cache_{stamp}.jsonl"));
     let scout_report_path = scout_reports_dir.join(format!("eval_sweep_{stamp}.json"));
@@ -1288,7 +1401,17 @@ fn push_calibration_window_stages(
                 .to_string(),
     });
 
-    report_path
+    CalibrationReportPaths {
+        static_report: report_path,
+        adaptive_report: adaptive_report_path,
+    }
+}
+
+fn static_calibration_reports(reports: &[CalibrationReportPaths]) -> Vec<PathBuf> {
+    reports
+        .iter()
+        .map(|report| report.static_report.clone())
+        .collect()
 }
 
 fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> String {
@@ -1561,6 +1684,16 @@ mod tests {
         assert!(fold1_replay
             .command
             .contains("--settlement-alignment-ready"));
+
+        let fold1_audit = plan
+            .stages
+            .iter()
+            .find(|s| s.name == "feed_forward_audit_1")
+            .unwrap();
+        assert!(fold1_audit.command.contains("--adaptive-report"));
+        assert!(fold1_audit
+            .command
+            .contains("harness_sweep_adaptive_rearm_20260423T000000Z_20260423T230000Z.json"));
     }
 
     #[test]
@@ -1650,6 +1783,7 @@ mod tests {
 
         let audit = audit(StrategyBuilderAuditInput {
             report_paths: Vec::new(),
+            adaptive_report_paths: Vec::new(),
             promotion_artifact: None,
             replay_sessions: vec![path.display().to_string()],
             min_trades: 1,
@@ -1731,6 +1865,7 @@ mod tests {
 
         let audit = audit(StrategyBuilderAuditInput {
             report_paths: Vec::new(),
+            adaptive_report_paths: Vec::new(),
             promotion_artifact: None,
             replay_sessions: vec![path.display().to_string()],
             min_trades: 1,
@@ -1803,6 +1938,7 @@ mod tests {
 
         let audit = audit(StrategyBuilderAuditInput {
             report_paths: vec![path.display().to_string()],
+            adaptive_report_paths: Vec::new(),
             promotion_artifact: None,
             replay_sessions: Vec::new(),
             min_trades: 50,
@@ -1819,6 +1955,78 @@ mod tests {
             c.name == "report.best_variant_health"
                 && c.status == StrategyBuilderCheckStatus::Fail
                 && c.detail.contains("adaptive_rearms=1")
+        }));
+    }
+
+    #[test]
+    fn audit_fails_adaptive_probe_when_best_variant_rearms() {
+        use std::collections::BTreeMap;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("adaptive_report.json");
+        let mut src = crate::data::manifest::DataSourceManifest::new("pmxt", "order_book_l2");
+        src.complete = true;
+        let mut diagnostics = crate::backtest::resolver::BacktestDiagnostics::default();
+        diagnostics.adaptive_rearms = 2;
+        diagnostics.breaker_paused_events = 100;
+        let report = crate::backtest::experiment::ExperimentReport {
+            schema_version: 1,
+            generated_at: "2026-05-22T00:00:00Z".to_string(),
+            label: "adaptive".to_string(),
+            mode: "backtest".to_string(),
+            start: "2026-05-21T00:00:00Z".to_string(),
+            end: "2026-05-21T23:00:00Z".to_string(),
+            bankroll_usd: 100.0,
+            latency_ms: 50,
+            market_catalog: crate::data::catalog::MarketCatalog::default(),
+            data_manifest: crate::data::manifest::DataManifest::new(vec![src], Vec::new()),
+            variants: vec![crate::backtest::experiment::VariantReport {
+                strategy: crate::strategy::spec::StrategySpec::new("s", "1", "hash", "risk"),
+                strategy_params: serde_json::json!({"name": "test"}),
+                trades: 100,
+                wins: 70,
+                losses: 30,
+                unresolved_fills: 0,
+                execution_attempts: 100,
+                fills_success: 100,
+                fills_failed: 0,
+                fill_rate: 1.0,
+                reject_reasons: BTreeMap::new(),
+                breaker_tripped: true,
+                breaker_reason: Some("win_rate_low".to_string()),
+                breaker_tripped_at_s: Some(1_700_000_000.0),
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
+                diagnostics,
+                win_rate: 0.70,
+                total_pnl: 100.0,
+                avg_pnl: 1.0,
+                total_fees: 0.0,
+                sharpe_like: 1.0,
+                by_zone: BTreeMap::new(),
+            }],
+        };
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+
+        let audit = audit(StrategyBuilderAuditInput {
+            report_paths: Vec::new(),
+            adaptive_report_paths: vec![path.display().to_string()],
+            promotion_artifact: None,
+            replay_sessions: Vec::new(),
+            min_trades: 50,
+            min_win_rate: 0.60,
+            min_wilson_win_rate_lower: 0.50,
+            min_total_pnl: 10.0,
+            min_shadow_resolutions: 1,
+            min_research_reports: 0,
+            min_replay_sessions: 0,
+            a_plus_min_shadow_resolutions: 1,
+        });
+
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "adaptive_probe.health"
+                && c.status == StrategyBuilderCheckStatus::Fail
+                && c.detail.contains("best_adaptive_rearms=2")
         }));
     }
 
