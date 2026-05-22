@@ -180,6 +180,7 @@ pub struct CandleBacktestStrategy {
     breaker_tripped: bool,
     breaker_reason: Option<String>,
     breaker_tripped_at_s: Option<f64>,
+    adaptive_rearm_after_s: Option<f64>,
     submitted_positions: BTreeMap<String, BacktestOpenPosition>,
     open_positions: BTreeMap<String, BacktestOpenPosition>,
     pub decisions: Vec<CandleDecision>,
@@ -201,6 +202,8 @@ pub struct CandleBacktestStrategy {
     pub skipped_no_signal: u64,
     pub skipped_decision: u64,
     pub skipped_throttled: u64,
+    pub breaker_paused_events: u64,
+    pub adaptive_rearms: u64,
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
@@ -222,6 +225,7 @@ impl CandleBacktestStrategy {
         btc_history: Arc<BTCHistory>,
         breaker: BacktestBreakerReport,
         breaker_cfg: BreakerConfig,
+        adaptive_rearm_after_s: Option<f64>,
     ) -> Self {
         let mom_cfg = MomentumConfig {
             noise_z_threshold: 0.3,
@@ -249,6 +253,7 @@ impl CandleBacktestStrategy {
             breaker_tripped: breaker.tripped,
             breaker_reason: breaker.reason,
             breaker_tripped_at_s: breaker.tripped_at_s,
+            adaptive_rearm_after_s,
             submitted_positions: BTreeMap::new(),
             open_positions: BTreeMap::new(),
             decisions: Vec::new(),
@@ -263,6 +268,8 @@ impl CandleBacktestStrategy {
             skipped_no_signal: 0,
             skipped_decision: 0,
             skipped_throttled: 0,
+            breaker_paused_events: 0,
+            adaptive_rearms: 0,
             skip_reasons: BTreeMap::new(),
         }
     }
@@ -338,6 +345,37 @@ impl CandleBacktestStrategy {
         }
     }
 
+    fn maybe_rearm_adaptive_health(&mut self, timestamp_s: f64) {
+        let Some(cooldown_s) = self.adaptive_rearm_after_s else {
+            return;
+        };
+        if !self.breaker_tripped {
+            return;
+        }
+        if self.breaker_reason.as_deref() != Some("win_rate_low") {
+            return;
+        }
+        let Some(tripped_at_s) = self.breaker_tripped_at_s else {
+            return;
+        };
+        if timestamp_s - tripped_at_s < cooldown_s {
+            return;
+        }
+        if !self.open_positions.is_empty() || !self.submitted_positions.is_empty() {
+            return;
+        }
+
+        self.breaker_state = BreakerState::default();
+        self.breaker_tripped = false;
+        self.breaker_reason = None;
+        self.breaker_tripped_at_s = None;
+        self.adaptive_rearms += 1;
+        *self
+            .skip_reasons
+            .entry("adaptive_health_rearm".to_string())
+            .or_insert(0) += 1;
+    }
+
     pub fn breaker_report(&self) -> BacktestBreakerReport {
         BacktestBreakerReport::from_state(
             self.breaker_state,
@@ -359,6 +397,8 @@ impl CandleBacktestStrategy {
             skipped_no_signal: self.skipped_no_signal,
             skipped_decision: self.skipped_decision,
             skipped_throttled: self.skipped_throttled,
+            breaker_paused_events: self.breaker_paused_events,
+            adaptive_rearms: self.adaptive_rearms,
             skip_reasons: self.skip_reasons.clone(),
         }
     }
@@ -396,7 +436,9 @@ impl Strategy for CandleBacktestStrategy {
         self.events_seen += 1;
         self.books.insert(token_id.to_string(), book.clone());
         self.settle_due_positions(timestamp_s);
+        self.maybe_rearm_adaptive_health(timestamp_s);
         if self.breaker_tripped {
+            self.breaker_paused_events += 1;
             return Vec::new();
         }
         let Some(runtime) = self.universe_by_token.get(token_id) else {
@@ -623,6 +665,12 @@ pub struct HarnessConfig {
     pub cache_dir: PathBuf,
     pub latency: StaticLatencyConfig,
     pub breaker_cfg: BreakerConfig,
+    /// Offline-only model of adaptive health recovery. A value of `Some(n)`
+    /// lets a backtest resume after a `win_rate_low` breaker has cooled down
+    /// for `n` seconds and there is no open/in-flight exposure. Drawdown and
+    /// exposure trips stay hard stops. Promotion gates reject candidates that
+    /// require a rearm, so this is diagnostic rather than a live shortcut.
+    pub adaptive_rearm_after_s: Option<f64>,
     /// Optional shared distilled-cache directory. When set, the harness
     /// checks `<dir>/<hour>.v1.candles.jsonl.gz` BEFORE the per-tenant
     /// sidecar and the parquet. The shared-cache writer is `polymomentum-
@@ -834,6 +882,7 @@ pub async fn run_harness(
                 Arc::clone(&cfg.btc_history),
                 starting_breakers[idx].clone(),
                 cfg.breaker_cfg,
+                cfg.adaptive_rearm_after_s,
             );
             engine.replay(events.iter().cloned(), &mut strategy, v.default_fee_rate);
 
@@ -1203,6 +1252,7 @@ mod tests {
             cache_dir: PathBuf::from("/tmp"),
             latency: StaticLatencyConfig::default(),
             breaker_cfg: BreakerConfig::default(),
+            adaptive_rearm_after_s: None,
             shared_distilled_dir: None,
             threads: None,
             checkpoint_dir: None,
@@ -1302,6 +1352,7 @@ mod tests {
             Arc::new(btc),
             BacktestBreakerReport::default(),
             breaker_cfg,
+            None,
         );
 
         for (intent_id, close_ts_s) in [("loss-1", 10.0), ("loss-2", 20.0)] {
@@ -1324,6 +1375,73 @@ mod tests {
         assert!(report.tripped);
         assert_eq!(report.reason.as_deref(), Some("win_rate_low"));
         assert_eq!(report.state.losses, 2);
+    }
+
+    #[test]
+    fn adaptive_rearm_only_resets_win_rate_breaker_after_cooldown() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut breaker_state = BreakerState::default();
+        breaker_state.losses = 2;
+        breaker_state.realized_pnl = -10.0;
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            Arc::new(BTCHistory::default()),
+            BacktestBreakerReport {
+                tripped: true,
+                reason: Some("win_rate_low".to_string()),
+                tripped_at_s: Some(100.0),
+                state: breaker_state,
+                ..BacktestBreakerReport::default()
+            },
+            BreakerConfig::default(),
+            Some(60.0),
+        );
+
+        strategy.maybe_rearm_adaptive_health(159.0);
+        assert!(strategy.breaker_report().tripped);
+        assert_eq!(strategy.diagnostics().adaptive_rearms, 0);
+
+        strategy.maybe_rearm_adaptive_health(161.0);
+        let report = strategy.breaker_report();
+        assert!(!report.tripped);
+        assert_eq!(report.state.wins + report.state.losses, 0);
+        assert_eq!(strategy.diagnostics().adaptive_rearms, 1);
+        assert_eq!(
+            strategy
+                .diagnostics()
+                .skip_reasons
+                .get("adaptive_health_rearm"),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn adaptive_rearm_leaves_drawdown_breaker_tripped() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            Arc::new(BTCHistory::default()),
+            BacktestBreakerReport {
+                tripped: true,
+                reason: Some("realized_drawdown".to_string()),
+                tripped_at_s: Some(100.0),
+                ..BacktestBreakerReport::default()
+            },
+            BreakerConfig::default(),
+            Some(60.0),
+        );
+
+        strategy.maybe_rearm_adaptive_health(1_000.0);
+        assert!(strategy.breaker_report().tripped);
+        assert_eq!(
+            strategy.breaker_report().reason.as_deref(),
+            Some("realized_drawdown")
+        );
+        assert_eq!(strategy.diagnostics().adaptive_rearms, 0);
     }
 
     #[test]

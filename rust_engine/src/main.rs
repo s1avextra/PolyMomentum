@@ -294,6 +294,11 @@ enum Command {
         /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
         #[arg(long)]
         window_minutes: Option<f64>,
+        /// Offline diagnostic only: let `win_rate_low` pause for N minutes,
+        /// then resume if no exposure is open. Candidates that need this
+        /// are still rejected by promotion gates.
+        #[arg(long, default_value_t = 0.0)]
+        adaptive_health_rearm_minutes: f64,
     },
     /// Run the full L2-backtest harness over PMXT v2 archives. Loads candle
     /// markets from Gamma, downloads/streams the requested UTC hours,
@@ -344,6 +349,11 @@ enum Command {
         /// Write a reproducible JSON experiment report to this path.
         #[arg(long)]
         report_json: Option<String>,
+        /// Offline diagnostic only: let `win_rate_low` pause for N minutes,
+        /// then resume if no exposure is open. Candidates that need this
+        /// are still rejected by promotion gates.
+        #[arg(long, default_value_t = 0.0)]
+        adaptive_health_rearm_minutes: f64,
     },
     /// Replay one or more captured session JSONLs through a grid of strategy
     /// variants and report synthetic P&L per variant.
@@ -951,6 +961,7 @@ async fn main() {
             resume,
             report_json,
             window_minutes,
+            adaptive_health_rearm_minutes,
         } => {
             let conf = parse_csv_floats(&conf);
             let zs = parse_csv_floats(&z);
@@ -998,6 +1009,7 @@ async fn main() {
                 resume,
                 report_json.as_deref(),
                 window_minutes,
+                adaptive_health_rearm_minutes,
             )
             .await;
         }
@@ -1015,6 +1027,7 @@ async fn main() {
             window_minutes,
             allow_gamma_fetch,
             report_json,
+            adaptive_health_rearm_minutes,
         } => {
             cmd_harness(
                 &settings,
@@ -1031,6 +1044,7 @@ async fn main() {
                 window_minutes,
                 allow_gamma_fetch,
                 report_json.as_deref(),
+                adaptive_health_rearm_minutes,
             )
             .await;
         }
@@ -2504,6 +2518,7 @@ async fn cmd_harness_sweep(
     resume: bool,
     report_json: Option<&str>,
     window_minutes: Option<f64>,
+    adaptive_health_rearm_minutes: f64,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -2539,6 +2554,14 @@ async fn cmd_harness_sweep(
         eprintln!("--max-per-market-usd must be a positive finite number");
         std::process::exit(2);
     }
+    let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
+        m if !m.is_finite() || m < 0.0 => {
+            eprintln!("--adaptive-health-rearm-minutes must be a finite non-negative number");
+            std::process::exit(2);
+        }
+        m if m > 0.0 => Some(m * 60.0),
+        _ => None,
+    };
 
     // Build the variant grid.
     let mut base = backtest::strategies::StrategyVariant::baseline();
@@ -2740,6 +2763,7 @@ async fn cmd_harness_sweep(
             insert_ms: latency_ms,
         },
         breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
+        adaptive_rearm_after_s,
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
@@ -2826,6 +2850,7 @@ async fn cmd_harness(
     window_minutes: Option<f64>,
     allow_gamma_fetch: bool,
     report_json: Option<&str>,
+    adaptive_health_rearm_minutes: f64,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -2850,6 +2875,14 @@ async fn cmd_harness(
         eprintln!("--end must be ≥ --start");
         std::process::exit(2);
     }
+    let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
+        m if !m.is_finite() || m < 0.0 => {
+            eprintln!("--adaptive-health-rearm-minutes must be a finite non-negative number");
+            std::process::exit(2);
+        }
+        m if m > 0.0 => Some(m * 60.0),
+        _ => None,
+    };
 
     // Build the hour list (inclusive).
     let mut hours = Vec::new();
@@ -3123,6 +3156,7 @@ async fn cmd_harness(
             insert_ms: latency_ms,
         },
         breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
+        adaptive_rearm_after_s,
         shared_distilled_dir: shared_dir,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),

@@ -560,6 +560,8 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
         diagnostics.skipped_no_signal += variant.diagnostics.skipped_no_signal;
         diagnostics.skipped_decision += variant.diagnostics.skipped_decision;
         diagnostics.skipped_throttled += variant.diagnostics.skipped_throttled;
+        diagnostics.breaker_paused_events += variant.diagnostics.breaker_paused_events;
+        diagnostics.adaptive_rearms += variant.diagnostics.adaptive_rearms;
         for (reason, count) in &variant.diagnostics.skip_reasons {
             *diagnostics.skip_reasons.entry(reason.clone()).or_insert(0) += count;
         }
@@ -779,6 +781,12 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
         let reason = selected.breaker_reason.as_deref().unwrap_or("unknown");
         reasons.push(format!("circuit breaker tripped during backtest: {reason}"));
     }
+    if selected.diagnostics.adaptive_rearms > 0 {
+        reasons.push(format!(
+            "adaptive_rearms {} above maximum 0; static promotion requires uninterrupted replay",
+            selected.diagnostics.adaptive_rearms
+        ));
+    }
     if selected.trades < gate.min_trades {
         reasons.push(format!(
             "trades {} below minimum {}",
@@ -909,6 +917,12 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
         .insert("token_count".to_string(), catalog.token_count().to_string());
     pmxt.metadata
         .insert("assets".to_string(), catalog.assets().join(","));
+    if let Some(rearm_s) = cfg.adaptive_rearm_after_s {
+        pmxt.metadata.insert(
+            "adaptive_health_rearm_seconds".to_string(),
+            format!("{rearm_s:.3}"),
+        );
+    }
     if let Some(shared) = &cfg.shared_distilled_dir {
         pmxt.metadata.insert(
             "shared_distilled_dir".to_string(),
@@ -1057,6 +1071,7 @@ mod tests {
             cache_dir: std::path::PathBuf::from("/tmp/pmxt"),
             latency: StaticLatencyConfig { insert_ms: 50 },
             breaker_cfg: crate::live::breaker::BreakerConfig::default(),
+            adaptive_rearm_after_s: None,
             shared_distilled_dir: None,
             threads: Some(1),
             checkpoint_dir: None,
@@ -1250,6 +1265,45 @@ mod tests {
         assert!(err
             .to_string()
             .contains("circuit breaker tripped during backtest"));
+    }
+
+    #[test]
+    fn promotion_rejects_adaptive_rearm_diagnostics() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut diagnostics = BacktestDiagnostics::default();
+        diagnostics.adaptive_rearms = 1;
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 20,
+            losses: 10,
+            unresolved_fills: 0,
+            execution_attempts: 30,
+            fills_success: 30,
+            fills_failed: 0,
+            fill_rate: 1.0,
+            reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics,
+            win_rate: 20.0 / 30.0,
+            total_pnl: 2.0,
+            avg_pnl: 2.0 / 30.0,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("adaptive_rearms 1 above maximum 0"));
     }
 
     #[test]

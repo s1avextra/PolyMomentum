@@ -53,6 +53,10 @@ pub struct BacktestDiagnostics {
     pub skipped_no_signal: u64,
     pub skipped_decision: u64,
     pub skipped_throttled: u64,
+    #[serde(default)]
+    pub breaker_paused_events: u64,
+    #[serde(default)]
+    pub adaptive_rearms: u64,
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
@@ -66,6 +70,8 @@ impl BacktestDiagnostics {
         self.skipped_no_signal += other.skipped_no_signal;
         self.skipped_decision += other.skipped_decision;
         self.skipped_throttled += other.skipped_throttled;
+        self.breaker_paused_events += other.breaker_paused_events;
+        self.adaptive_rearms += other.adaptive_rearms;
         for (reason, count) in other.skip_reasons {
             *self.skip_reasons.entry(reason).or_insert(0) += count;
         }
