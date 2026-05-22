@@ -545,6 +545,22 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                             per_report_min_pnl,
                         ),
                     ));
+                    checks.push(check(
+                        "report.best_variant_health",
+                        if best.breaker_tripped || best.diagnostics.adaptive_rearms > 0 {
+                            StrategyBuilderCheckStatus::Fail
+                        } else {
+                            StrategyBuilderCheckStatus::Ok
+                        },
+                        format!(
+                            "{} breaker_tripped={} breaker_reason={} adaptive_rearms={} breaker_paused_events={}",
+                            report_path,
+                            best.breaker_tripped,
+                            best.breaker_reason.as_deref().unwrap_or("none"),
+                            best.diagnostics.adaptive_rearms,
+                            best.diagnostics.breaker_paused_events,
+                        ),
+                    ));
                 } else {
                     checks.push(check(
                         "report.best_variant",
@@ -1077,7 +1093,7 @@ fn push_calibration_window_stages(
     let eval_cache_path = eval_cache_dir.join(format!("eval_cache_{stamp}.jsonl"));
     let scout_report_path = scout_reports_dir.join(format!("eval_sweep_{stamp}.json"));
     let report_path = reports_dir.join(format!("harness_sweep_{stamp}.json"));
-    let checkpoint = checkpoint_dir.join(stamp);
+    let checkpoint = checkpoint_dir.join(&stamp);
 
     let mut eval_args = vec![
         "polymomentum-engine".to_string(),
@@ -1171,7 +1187,7 @@ fn push_calibration_window_stages(
                 .to_string(),
     });
 
-    let mut args = vec![
+    let mut harness_base_args = vec![
         "polymomentum-engine".to_string(),
         "harness-sweep".to_string(),
         "--start".to_string(),
@@ -1209,20 +1225,23 @@ fn push_calibration_window_stages(
         format!("--micro-min-pressure={}", profile.micro_min_pressure),
         "--threads".to_string(),
         threads.to_string(),
+    ];
+    if profile.also_maker {
+        harness_base_args.push("--also-maker".to_string());
+    }
+    if let Some(cache_dir) = cache_dir {
+        harness_base_args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
+    }
+    if let Some(btc_csv) = btc_csv {
+        harness_base_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+    }
+    let mut args = harness_base_args.clone();
+    args.extend([
         "--checkpoint".to_string(),
         checkpoint.display().to_string(),
         "--report-json".to_string(),
         report_path.display().to_string(),
-    ];
-    if profile.also_maker {
-        args.push("--also-maker".to_string());
-    }
-    if let Some(cache_dir) = cache_dir {
-        args.extend(["--cache-dir".to_string(), cache_dir.clone()]);
-    }
-    if let Some(btc_csv) = btc_csv {
-        args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
-    }
+    ]);
     stages.push(StrategyBuilderStage {
         name: format!("calibration_harness_sweep_{idx}"),
         purpose:
@@ -1232,10 +1251,40 @@ fn push_calibration_window_stages(
         outputs: vec![report_path.display().to_string()],
         verify: vec![
             "report JSON exists and data_manifest.complete=true".to_string(),
+            "best variant has breaker_tripped=false and diagnostics.adaptive_rearms=0".to_string(),
             "this report is used only for later-window promotion, not as holdout evidence".to_string(),
         ],
         resource_policy:
             "Run on a dev box; on the 2-core VPS keep --threads 1 and avoid concurrent heavy scans."
+                .to_string(),
+    });
+
+    let adaptive_report_path =
+        reports_dir.join(format!("harness_sweep_adaptive_rearm_{stamp}.json"));
+    let adaptive_checkpoint = checkpoint_dir.join(format!("{stamp}_adaptive_rearm"));
+    let mut adaptive_args = harness_base_args;
+    adaptive_args.extend([
+        "--checkpoint".to_string(),
+        adaptive_checkpoint.display().to_string(),
+        "--report-json".to_string(),
+        adaptive_report_path.display().to_string(),
+        "--adaptive-health-rearm-minutes".to_string(),
+        "15".to_string(),
+    ]);
+    stages.push(StrategyBuilderStage {
+        name: format!("calibration_adaptive_breaker_probe_{idx}"),
+        purpose:
+            "Stress-test whether a calibration window only survives by pausing and rearming the low-win-rate breaker."
+                .to_string(),
+        command: shell_command(&adaptive_args),
+        outputs: vec![adaptive_report_path.display().to_string()],
+        verify: vec![
+            "diagnostic report is never passed to aggregate-promote".to_string(),
+            "compare diagnostics.adaptive_rearms and breaker_paused_events against the static harness report".to_string(),
+            "adaptive_rearms > 0 is research evidence for regime instability, not promotion evidence".to_string(),
+        ],
+        resource_policy:
+            "Heavy diagnostic; run on the dev box unless the window is tiny and --threads 1 on the VPS."
                 .to_string(),
     });
 
@@ -1445,7 +1494,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 21);
+        assert_eq!(plan.stages.len(), 24);
         assert_eq!(plan.zone_mode, "primary");
         assert_eq!(plan.fold_hours, 24);
         assert!(plan
@@ -1464,6 +1513,11 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.command.contains("aggregate-promote")));
+        assert!(plan.stages.iter().any(|s| {
+            s.name.starts_with("calibration_adaptive_breaker_probe_")
+                && s.command.contains("--adaptive-health-rearm-minutes 15")
+                && s.command.contains("harness_sweep_adaptive_rearm_")
+        }));
         assert!(plan
             .stages
             .iter()
@@ -1490,6 +1544,7 @@ mod tests {
         assert!(fold1_promote
             .command
             .contains("harness_sweep_20260423T000000Z_20260423T230000Z.json"));
+        assert!(!fold1_promote.command.contains("adaptive_rearm"));
         assert!(!fold1_promote
             .command
             .contains("harness_sweep_20260424T000000Z_20260424T230000Z.json"));
@@ -1693,6 +1748,77 @@ mod tests {
         }));
         assert!(audit.checks.iter().any(|c| {
             c.name == "replay.settlement_alignment" && c.status == StrategyBuilderCheckStatus::Ok
+        }));
+    }
+
+    #[test]
+    fn audit_fails_best_report_variant_that_needed_adaptive_rearm() {
+        use std::collections::BTreeMap;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("report.json");
+        let mut src = crate::data::manifest::DataSourceManifest::new("pmxt", "order_book_l2");
+        src.complete = true;
+        let mut diagnostics = crate::backtest::resolver::BacktestDiagnostics::default();
+        diagnostics.adaptive_rearms = 1;
+        diagnostics.breaker_paused_events = 42;
+        let report = crate::backtest::experiment::ExperimentReport {
+            schema_version: 1,
+            generated_at: "2026-05-22T00:00:00Z".to_string(),
+            label: "test".to_string(),
+            mode: "backtest".to_string(),
+            start: "2026-05-21T00:00:00Z".to_string(),
+            end: "2026-05-21T23:00:00Z".to_string(),
+            bankroll_usd: 100.0,
+            latency_ms: 50,
+            market_catalog: crate::data::catalog::MarketCatalog::default(),
+            data_manifest: crate::data::manifest::DataManifest::new(vec![src], Vec::new()),
+            variants: vec![crate::backtest::experiment::VariantReport {
+                strategy: crate::strategy::spec::StrategySpec::new("s", "1", "hash", "risk"),
+                strategy_params: serde_json::json!({"name": "test"}),
+                trades: 100,
+                wins: 70,
+                losses: 30,
+                unresolved_fills: 0,
+                execution_attempts: 100,
+                fills_success: 100,
+                fills_failed: 0,
+                fill_rate: 1.0,
+                reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
+                diagnostics,
+                win_rate: 0.70,
+                total_pnl: 100.0,
+                avg_pnl: 1.0,
+                total_fees: 0.0,
+                sharpe_like: 1.0,
+                by_zone: BTreeMap::new(),
+            }],
+        };
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+
+        let audit = audit(StrategyBuilderAuditInput {
+            report_paths: vec![path.display().to_string()],
+            promotion_artifact: None,
+            replay_sessions: Vec::new(),
+            min_trades: 50,
+            min_win_rate: 0.60,
+            min_wilson_win_rate_lower: 0.50,
+            min_total_pnl: 10.0,
+            min_shadow_resolutions: 1,
+            min_research_reports: 1,
+            min_replay_sessions: 0,
+            a_plus_min_shadow_resolutions: 1,
+        });
+
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "report.best_variant_health"
+                && c.status == StrategyBuilderCheckStatus::Fail
+                && c.detail.contains("adaptive_rearms=1")
         }));
     }
 
