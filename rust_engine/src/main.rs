@@ -72,9 +72,10 @@ enum Command {
         /// PMXT v2 cache directory.
         #[arg(long)]
         cache_dir: Option<String>,
-        /// BTC tick/kline CSV used as the virtual exchange price feed.
+        /// BTC tick/kline CSV used as the virtual exchange price feed. If omitted, pull Binance
+        /// public klines for the required replay range.
         #[arg(long)]
-        btc_csv: String,
+        btc_csv: Option<String>,
         /// Replay bankroll used for sizing.
         #[arg(long, default_value_t = 100.0)]
         bankroll: f64,
@@ -255,6 +256,12 @@ enum Command {
         /// Comma-separated minimum microprice pressure gates.
         #[arg(long, default_value = "-1.0")]
         micro_min_pressure: String,
+        /// Fraction of bankroll to risk per attempted candle trade.
+        #[arg(long, default_value_t = 0.10)]
+        position_pct: f64,
+        /// Hard USD cap per market for attempted candle trades.
+        #[arg(long, default_value_t = 20.0)]
+        max_per_market_usd: f64,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -755,7 +762,7 @@ async fn main() {
                 &start,
                 end.as_deref(),
                 cache_dir.as_deref(),
-                &btc_csv,
+                btc_csv.as_deref(),
                 bankroll,
                 latency_ms,
                 session_log_dir.as_deref(),
@@ -934,6 +941,8 @@ async fn main() {
             micro_max_spread,
             micro_min_depth,
             micro_min_pressure,
+            position_pct,
+            max_per_market_usd,
             also_maker,
             zone_mode,
             top,
@@ -979,6 +988,8 @@ async fn main() {
                 micro_spreads,
                 micro_depths,
                 micro_pressures,
+                position_pct,
+                max_per_market_usd,
                 also_maker,
                 zone_mode,
                 top,
@@ -1349,7 +1360,7 @@ async fn cmd_live_replay(
     start: &str,
     end: Option<&str>,
     cache_dir: Option<&str>,
-    btc_csv: &str,
+    btc_csv: Option<&str>,
     bankroll: f64,
     latency_ms: u64,
     session_log_dir: Option<&str>,
@@ -1418,14 +1429,14 @@ async fn cmd_live_replay(
         };
     if allow_gamma_fetch {
         let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-        let metadata_start = start_dt - ChronoDuration::hours(1);
-        let metadata_end = end_dt + ChronoDuration::hours(2);
-        eprintln!(
-            "live-replay: fetching historical markets ending {metadata_start} -> {metadata_end}"
-        );
-        let new_markets = match gamma
-            .fetch_markets_by_end_date_range(metadata_start, metadata_end, true)
-            .await
+        let new_markets = match fetch_gamma_historical_markets_for_window(
+            &gamma,
+            start_dt,
+            end_dt,
+            window_minutes,
+            "live-replay",
+        )
+        .await
         {
             Ok(markets) => markets,
             Err(e) => {
@@ -1535,9 +1546,31 @@ async fn cmd_live_replay(
     );
 
     let mut btc = backtest::btc_history::BTCHistory::new();
-    if let Err(e) = btc.load_csv(btc_csv) {
-        eprintln!("BTC CSV load failed: {e}");
-        std::process::exit(1);
+    if let Some(path) = btc_csv {
+        if let Err(e) = btc.load_csv(path) {
+            eprintln!("BTC CSV load failed: {e}");
+            std::process::exit(1);
+        }
+    } else {
+        let pad_ms = 3_600_000;
+        let start_ms = btc_required_start_ms - pad_ms;
+        let end_ms = btc_required_end_ms + pad_ms;
+        match btc
+            .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
+            .await
+        {
+            Ok(n) if n > 100 => tracing::info!(rows = n, interval = "1s", "BTC klines"),
+            _ => {
+                btc = backtest::btc_history::BTCHistory::new();
+                if let Err(e) = btc
+                    .load_from_binance(start_ms, end_ms, "BTCUSDT", "1m")
+                    .await
+                {
+                    eprintln!("Binance fetch failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
     ensure_btc_history_covers(
         "live-replay",
@@ -2382,6 +2415,64 @@ fn fmt_utc_ms(ts_ms: i64) -> String {
         .unwrap_or_else(|| ts_ms.to_string())
 }
 
+fn btc_updown_slug_step_seconds(window_minutes: Option<f64>) -> Option<i64> {
+    let target = window_minutes?;
+    if (target - 5.0).abs() <= 1e-6 {
+        Some(5 * 60)
+    } else if (target - 15.0).abs() <= 1e-6 {
+        Some(15 * 60)
+    } else {
+        None
+    }
+}
+
+fn btc_updown_slugs_for_window(
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    step_s: i64,
+) -> Vec<String> {
+    let start_s = start.timestamp();
+    let end_exclusive_s = end.timestamp() + 3_600;
+    let mut t = start_s - start_s.rem_euclid(step_s);
+    let mut slugs = Vec::new();
+    while t < end_exclusive_s {
+        if t + step_s > start_s {
+            let prefix = if step_s == 300 {
+                "btc-updown-5m"
+            } else {
+                "btc-updown-15m"
+            };
+            slugs.push(format!("{prefix}-{t}"));
+        }
+        t += step_s;
+    }
+    slugs
+}
+
+async fn fetch_gamma_historical_markets_for_window(
+    gamma: &data::gamma::GammaClient,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    window_minutes: Option<f64>,
+    label: &str,
+) -> anyhow::Result<Vec<data::models::Market>> {
+    if let Some(step_s) = btc_updown_slug_step_seconds(window_minutes) {
+        let slugs = btc_updown_slugs_for_window(start, end, step_s);
+        eprintln!("{label}: fetching {} BTC candle slug(s)", slugs.len());
+        let markets = gamma.fetch_markets_by_slugs(&slugs, true).await?;
+        if !markets.is_empty() {
+            return Ok(markets);
+        }
+    }
+
+    let metadata_start = start - chrono::Duration::hours(1);
+    let metadata_end = end + chrono::Duration::hours(2);
+    eprintln!("{label}: fetching historical markets ending {metadata_start} -> {metadata_end}");
+    gamma
+        .fetch_markets_by_end_date_range(metadata_start, metadata_end, true)
+        .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_harness_sweep(
     settings: &config::Settings,
@@ -2403,6 +2494,8 @@ async fn cmd_harness_sweep(
     micro_max_spread: Vec<f64>,
     micro_min_depth: Vec<f64>,
     micro_min_pressure: Vec<f64>,
+    position_pct: f64,
+    max_per_market_usd: f64,
     also_maker: bool,
     zone_mode: backtest::sweep::ZoneMode,
     top: usize,
@@ -2438,9 +2531,21 @@ async fn cmd_harness_sweep(
         cur += ChronoDuration::hours(1);
     }
 
+    if !(position_pct.is_finite() && position_pct > 0.0) {
+        eprintln!("--position-pct must be a positive finite number");
+        std::process::exit(2);
+    }
+    if !(max_per_market_usd.is_finite() && max_per_market_usd > 0.0) {
+        eprintln!("--max-per-market-usd must be a positive finite number");
+        std::process::exit(2);
+    }
+
     // Build the variant grid.
+    let mut base = backtest::strategies::StrategyVariant::baseline();
+    base.position_pct = position_pct;
+    base.max_per_market_usd = max_per_market_usd;
     let grid = backtest::sweep::SweepGrid {
-        base: backtest::strategies::StrategyVariant::baseline(),
+        base,
         conf,
         z,
         edge,
@@ -2755,9 +2860,8 @@ async fn cmd_harness(
         cur += one_hour;
     }
 
-    // 1. Discover candle universe directly from the parquet's distinct
-    //    condition_ids. This is the only reliable way for HISTORICAL hours —
-    //    Gamma's "active" feed only reflects the present.
+    // 1. Download/cache PMXT hours, then hydrate historical Gamma metadata
+    //    by end-date range. Gamma's active feed only reflects the present.
     let cache_dir_path = cache_dir
         .map(std::path::PathBuf::from)
         .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
@@ -2770,8 +2874,8 @@ async fn cmd_harness(
         }
     }
 
-    // Gamma lookup is the bottleneck (~50 cids/RTT). Cache the parsed Markets
-    // to disk keyed by condition_id so subsequent harness runs are near-instant.
+    // Cache parsed Markets to disk keyed by condition_id so subsequent
+    // harness runs are near-instant.
     let cache_dir_path_for_meta = cache_dir_path.clone();
     let gamma_cache_path = cache_dir_path_for_meta.join("gamma_market_cache.json");
     let mut cached_markets: std::collections::BTreeMap<String, data::models::Market> =
@@ -2780,49 +2884,55 @@ async fn cmd_harness(
             Err(_) => Default::default(),
         };
     if allow_gamma_fetch {
-        let mut all_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for &h in &hours {
-            eprintln!("pmxt: scanning condition_ids for {h}");
-            match loader.distinct_condition_ids(h) {
-                Ok(s) => all_cids.extend(s),
-                Err(e) => {
-                    eprintln!("read distinct cids for {}: {e}", h);
-                    std::process::exit(1);
-                }
+        let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+        let new_markets = match fetch_gamma_historical_markets_for_window(
+            &gamma,
+            start_dt,
+            end_dt,
+            window_minutes,
+            "gamma",
+        )
+        .await
+        {
+            Ok(markets) => markets,
+            Err(e) => {
+                eprintln!("Gamma historical metadata lookup failed: {e}");
+                std::process::exit(1);
             }
+        };
+        let fetched = new_markets.len();
+        let candle_markets = data::scanner::scan_candle_markets_for_backtest(&new_markets, 0.0);
+        let mut merged = 0usize;
+        for contract in candle_markets {
+            if contract.asset != "BTC" {
+                continue;
+            }
+            if !window_minutes
+                .map(|target| {
+                    (live::window::estimate_window_minutes(&contract.window_description) - target)
+                        .abs()
+                        <= 1e-6
+                })
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if cached_markets
+                .get(&contract.market.condition_id)
+                .map(gamma_market_needs_refresh)
+                .unwrap_or(true)
+            {
+                merged += 1;
+            }
+            cached_markets.insert(
+                contract.market.condition_id.clone(),
+                contract.market.clone(),
+            );
         }
-        tracing::info!(cids = all_cids.len(), "distinct condition_ids in archive");
-        let cid_vec: Vec<String> = all_cids
-            .iter()
-            .filter(|c| {
-                cached_markets
-                    .get(*c)
-                    .map(gamma_market_needs_refresh)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-        if !cid_vec.is_empty() {
-            eprintln!(
-                "gamma: fetching metadata for {} condition_ids",
-                cid_vec.len()
-            );
-            tracing::info!(
-                missing = cid_vec.len(),
-                cached = cached_markets.len(),
-                "Gamma cache miss; fetching"
-            );
-            let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-            let new_markets = match gamma.fetch_markets_by_condition_ids(&cid_vec).await {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("Gamma lookup failed: {e}");
-                    std::process::exit(1);
-                }
-            };
-            for m in new_markets {
-                cached_markets.insert(m.condition_id.clone(), m);
-            }
+        eprintln!(
+            "gamma: fetched {fetched} historical market(s), merged {merged} BTC candle market(s)"
+        );
+        if merged > 0 {
             if let Err(e) = write_json_atomic(&gamma_cache_path, &cached_markets, false) {
                 eprintln!(
                     "write Gamma cache {} failed: {e}",
@@ -3189,12 +3299,14 @@ async fn cmd_eval_cache(
         };
     if allow_gamma_fetch {
         let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-        let metadata_start = start_dt - ChronoDuration::hours(1);
-        let metadata_end = end_dt + ChronoDuration::hours(2);
-        eprintln!("gamma: fetching historical markets ending {metadata_start} -> {metadata_end}");
-        let new_markets = match gamma
-            .fetch_markets_by_end_date_range(metadata_start, metadata_end, true)
-            .await
+        let new_markets = match fetch_gamma_historical_markets_for_window(
+            &gamma,
+            start_dt,
+            end_dt,
+            window_minutes,
+            "gamma",
+        )
+        .await
         {
             Ok(m) => m,
             Err(e) => {
