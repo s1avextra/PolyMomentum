@@ -5,6 +5,7 @@
 //! PMXT harness sweep, aggregate promotion, cached live-replay parity, and
 //! session diagnostics.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -545,12 +546,14 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                 }
                 if let Some(best) = report.variants.first() {
                     let wilson = wilson_lower(best.wins, best.trades);
+                    let passive_failures_only =
+                        only_passive_execution_failures(&best.reject_reasons);
                     let status = if best.trades >= per_report_min_trades
                         && best.win_rate >= input.min_win_rate
                         && wilson >= input.min_wilson_win_rate_lower
                         && best.total_pnl >= per_report_min_pnl
                         && best.unresolved_fills == 0
-                        && best.fills_failed == 0
+                        && (best.fills_failed == 0 || passive_failures_only)
                     {
                         StrategyBuilderCheckStatus::Ok
                     } else {
@@ -560,12 +563,13 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         "report.best_variant",
                         status,
                         format!(
-                            "{} trades={} attempts={} fill_rate={:.3} failed={} win_rate={:.3} wilson95={:.3} pnl={:.2} unresolved={} per_report_gates[min_trades={}, min_pnl={:.2}]",
+                            "{} trades={} attempts={} fill_rate={:.3} failed={} passive_failures_only={} win_rate={:.3} wilson95={:.3} pnl={:.2} unresolved={} per_report_gates[min_trades={}, min_pnl={:.2}]",
                             report_path,
                             best.trades,
                             best.execution_attempts,
                             best.fill_rate,
                             best.fills_failed,
+                            passive_failures_only,
                             best.win_rate,
                             wilson,
                             best.total_pnl,
@@ -786,6 +790,13 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         checks,
         next_steps,
     }
+}
+
+fn only_passive_execution_failures(reject_reasons: &BTreeMap<String, usize>) -> bool {
+    !reject_reasons.is_empty()
+        && reject_reasons
+            .keys()
+            .all(|reason| matches!(reason.as_str(), "maker_unfilled" | "post_only_cross"))
 }
 
 fn audit_promotion(

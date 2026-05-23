@@ -47,6 +47,7 @@ pub struct TradeRecord {
 pub struct RiskConfig {
     pub initial_bankroll: f64,
     pub exposure_ratio: f64,
+    pub max_total_exposure_override: f64,
     pub max_per_market_ratio: f64,
     pub max_per_market_override: f64,
 }
@@ -56,6 +57,7 @@ impl Default for RiskConfig {
         Self {
             initial_bankroll: 0.0,
             exposure_ratio: 0.80,
+            max_total_exposure_override: 80.0,
             max_per_market_ratio: 0.20,
             max_per_market_override: 20.0,
         }
@@ -119,7 +121,12 @@ impl RiskManager {
     pub async fn available_capital(&self) -> f64 {
         let i = self.inner.lock().await;
         let bk = (i.cfg.initial_bankroll + i.total_pnl).max(0.0);
-        let max = bk * i.cfg.exposure_ratio;
+        let ratio_cap = bk * i.cfg.exposure_ratio;
+        let max = if i.cfg.max_total_exposure_override > 0.0 {
+            ratio_cap.min(i.cfg.max_total_exposure_override)
+        } else {
+            ratio_cap
+        };
         let exp: f64 = i.positions.values().map(|p| p.notional()).sum();
         (max - exp).max(0.0)
     }
@@ -452,6 +459,22 @@ mod tests {
             ..Default::default()
         }).await.unwrap();
         assert!((mr2.total_pnl().await - 5.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn available_capital_respects_total_exposure_override() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.db");
+        let mr = RiskManager::open(&path, RiskConfig {
+            initial_bankroll: 100.0,
+            exposure_ratio: 0.80,
+            max_total_exposure_override: 25.0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        assert!((mr.available_capital().await - 25.0).abs() < 1e-9);
     }
 
     #[tokio::test]

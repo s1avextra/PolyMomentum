@@ -174,6 +174,7 @@ pub struct CandleBacktestStrategy {
     books: BTreeMap<String, TokenBook>,
     momentum: MomentumDetector,
     bankroll_usd: f64,
+    max_total_exposure_usd: f64,
     btc_history: Arc<BTCHistory>,
     breaker_cfg: BreakerConfig,
     breaker_state: BreakerState,
@@ -222,6 +223,7 @@ impl CandleBacktestStrategy {
         variant: StrategyVariant,
         universe: &CandleUniverse,
         bankroll_usd: f64,
+        max_total_exposure_usd: f64,
         btc_history: Arc<BTCHistory>,
         breaker: BacktestBreakerReport,
         breaker_cfg: BreakerConfig,
@@ -247,6 +249,7 @@ impl CandleBacktestStrategy {
             books: BTreeMap::new(),
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
+            max_total_exposure_usd,
             btc_history,
             breaker_cfg,
             breaker_state: breaker.state,
@@ -292,6 +295,13 @@ impl CandleBacktestStrategy {
 
     fn open_exposure(&self) -> f64 {
         self.open_positions
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum()
+    }
+
+    fn submitted_exposure(&self) -> f64 {
+        self.submitted_positions
             .values()
             .map(|p| p.entry_price * p.size)
             .sum()
@@ -553,8 +563,22 @@ impl Strategy for CandleBacktestStrategy {
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
-        let position =
+        let base_position =
             (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
+        let exposure_cap = self.max_total_exposure_usd.max(0.0);
+        let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let exposure_available = if exposure_cap > 0.0 {
+            (exposure_cap - used_exposure).max(0.0)
+        } else {
+            base_position
+        };
+        let position = base_position.min(exposure_available);
+        if position < 1.0 {
+            self.skipped_decision += 1;
+            let key = format!("exposure_cap_{}", decision.zone);
+            *self.skip_reasons.entry(key).or_insert(0) += 1;
+            return Vec::new();
+        }
         let market_price = decision.market_price;
         if market_price <= 0.0 {
             return Vec::new();
@@ -607,8 +631,8 @@ impl Strategy for CandleBacktestStrategy {
                 direction: decision.direction.clone(),
                 open_btc: signal.open_price,
                 close_ts_s: runtime.close_ts_s,
-                entry_price: 0.0,
-                size: 0.0,
+                entry_price: sizing_price,
+                size,
                 fee: 0.0,
             },
         );
@@ -662,6 +686,7 @@ pub struct HarnessConfig {
     pub universe: CandleUniverse,
     pub btc_history: Arc<BTCHistory>,
     pub bankroll_usd: f64,
+    pub max_total_exposure_usd: f64,
     pub cache_dir: PathBuf,
     pub latency: StaticLatencyConfig,
     pub breaker_cfg: BreakerConfig,
@@ -879,6 +904,7 @@ pub async fn run_harness(
                 v.clone(),
                 &cfg.universe,
                 cfg.bankroll_usd,
+                cfg.max_total_exposure_usd,
                 Arc::clone(&cfg.btc_history),
                 starting_breakers[idx].clone(),
                 cfg.breaker_cfg,
@@ -1249,6 +1275,7 @@ mod tests {
             universe,
             btc_history: Arc::new(btc),
             bankroll_usd: 100.0,
+            max_total_exposure_usd: 80.0,
             cache_dir: PathBuf::from("/tmp"),
             latency: StaticLatencyConfig::default(),
             breaker_cfg: BreakerConfig::default(),
@@ -1349,6 +1376,7 @@ mod tests {
             variants[0].clone(),
             &cfg.universe,
             100.0,
+            80.0,
             Arc::new(btc),
             BacktestBreakerReport::default(),
             breaker_cfg,
@@ -1387,6 +1415,7 @@ mod tests {
             variants[0].clone(),
             &cfg.universe,
             100.0,
+            80.0,
             Arc::new(BTCHistory::default()),
             BacktestBreakerReport {
                 tripped: true,
@@ -1424,6 +1453,7 @@ mod tests {
             variants[0].clone(),
             &cfg.universe,
             100.0,
+            80.0,
             Arc::new(BTCHistory::default()),
             BacktestBreakerReport {
                 tripped: true,

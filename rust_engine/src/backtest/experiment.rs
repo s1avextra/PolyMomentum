@@ -1068,6 +1068,7 @@ mod tests {
             },
             btc_history: std::sync::Arc::new(btc),
             bankroll_usd: 100.0,
+            max_total_exposure_usd: 80.0,
             cache_dir: std::path::PathBuf::from("/tmp/pmxt"),
             latency: StaticLatencyConfig { insert_ms: 50 },
             breaker_cfg: crate::live::breaker::BreakerConfig::default(),

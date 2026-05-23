@@ -284,7 +284,6 @@ pub fn resolve_fills(
     let mut results = BacktestResults::from_fills(fills);
     for (fill, decision) in fills.iter().zip(decisions) {
         if !fill.success {
-            results.unresolved_fills.push(fill.clone());
             continue;
         }
         let cid = match fill.order.condition_id.as_str() {
@@ -384,6 +383,15 @@ mod tests {
         }
     }
 
+    fn mk_failed_fill(reason: &str) -> BacktestFill {
+        let mut fill = mk_fill("c1", 0.40, 10.0, 0.0);
+        fill.success = false;
+        fill.filled_size = 0.0;
+        fill.cost = 0.0;
+        fill.reason = reason.to_string();
+        fill
+    }
+
     #[test]
     fn resolves_winning_up_trade() {
         let h = mk_history();
@@ -428,5 +436,24 @@ mod tests {
         let res = resolve_fills(&fills, &decisions, &[], &h);
         assert_eq!(res.n_trades(), 0);
         assert_eq!(res.unresolved_fills.len(), 1);
+    }
+
+    #[test]
+    fn failed_execution_attempt_is_not_unresolved_exposure() {
+        let h = mk_history();
+        let windows = vec![CandleWindow {
+            condition_id: "c1".into(),
+            open_ts_s: 1_700_000_000.0,
+            close_ts_s: 1_700_000_300.0,
+        }];
+        let fills = vec![mk_failed_fill("maker_unfilled")];
+        let decisions = vec![mk_decision("up")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.n_trades(), 0);
+        assert_eq!(res.fills_failed, 1);
+        assert_eq!(res.reject_reasons.get("maker_unfilled"), Some(&1));
+        assert!(res.unresolved_fills.is_empty());
     }
 }

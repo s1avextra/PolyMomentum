@@ -103,6 +103,7 @@ impl PMXTv2Loader {
             // bounded timeout so a slow link can finish a long download.
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(20))
+                .http1_only()
                 .build()
                 .expect("client"),
         }

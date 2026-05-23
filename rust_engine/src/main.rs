@@ -262,6 +262,9 @@ enum Command {
         /// Hard USD cap per market for attempted candle trades.
         #[arg(long, default_value_t = 20.0)]
         max_per_market_usd: f64,
+        /// Hard USD cap across unresolved candle exposure.
+        #[arg(long)]
+        max_total_exposure_usd: Option<f64>,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -314,6 +317,9 @@ enum Command {
         /// Bankroll used to size hypothetical trades.
         #[arg(long, default_value_t = 100.0)]
         bankroll: f64,
+        /// Hard USD cap across unresolved candle exposure.
+        #[arg(long)]
+        max_total_exposure_usd: Option<f64>,
         /// PMXT v2 cache directory (otherwise env, shared VPS cache, then local fallback).
         #[arg(long)]
         cache_dir: Option<String>,
@@ -956,6 +962,7 @@ async fn main() {
             micro_min_pressure,
             position_pct,
             max_per_market_usd,
+            max_total_exposure_usd,
             also_maker,
             zone_mode,
             top,
@@ -1004,6 +1011,7 @@ async fn main() {
                 micro_pressures,
                 position_pct,
                 max_per_market_usd,
+                max_total_exposure_usd.unwrap_or(settings.max_total_exposure_usd),
                 also_maker,
                 zone_mode,
                 top,
@@ -1020,6 +1028,7 @@ async fn main() {
             start,
             end,
             bankroll,
+            max_total_exposure_usd,
             cache_dir,
             btc_csv,
             latency_ms,
@@ -1037,6 +1046,7 @@ async fn main() {
                 &start,
                 end.as_deref(),
                 bankroll,
+                max_total_exposure_usd.unwrap_or(settings.max_total_exposure_usd),
                 cache_dir.as_deref(),
                 btc_csv.as_deref(),
                 latency_ms,
@@ -2515,6 +2525,7 @@ async fn cmd_harness_sweep(
     micro_min_pressure: Vec<f64>,
     position_pct: f64,
     max_per_market_usd: f64,
+    max_total_exposure_usd: f64,
     also_maker: bool,
     zone_mode: backtest::sweep::ZoneMode,
     top: usize,
@@ -2557,6 +2568,10 @@ async fn cmd_harness_sweep(
     }
     if !(max_per_market_usd.is_finite() && max_per_market_usd > 0.0) {
         eprintln!("--max-per-market-usd must be a positive finite number");
+        std::process::exit(2);
+    }
+    if !(max_total_exposure_usd.is_finite() && max_total_exposure_usd > 0.0) {
+        eprintln!("--max-total-exposure-usd must be a positive finite number");
         std::process::exit(2);
     }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
@@ -2763,6 +2778,7 @@ async fn cmd_harness_sweep(
         universe,
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
+        max_total_exposure_usd,
         cache_dir: cache_dir_path,
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,
@@ -2845,6 +2861,7 @@ async fn cmd_harness(
     start: &str,
     end: Option<&str>,
     bankroll: f64,
+    max_total_exposure_usd: f64,
     cache_dir: Option<&str>,
     btc_csv: Option<&str>,
     latency_ms: u64,
@@ -2878,6 +2895,10 @@ async fn cmd_harness(
     };
     if end_dt < start_dt {
         eprintln!("--end must be ≥ --start");
+        std::process::exit(2);
+    }
+    if !(max_total_exposure_usd.is_finite() && max_total_exposure_usd > 0.0) {
+        eprintln!("--max-total-exposure-usd must be a positive finite number");
         std::process::exit(2);
     }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
@@ -3156,6 +3177,7 @@ async fn cmd_harness(
         universe,
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
+        max_total_exposure_usd,
         cache_dir: cache_dir_path,
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,

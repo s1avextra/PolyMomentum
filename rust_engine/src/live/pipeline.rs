@@ -438,6 +438,7 @@ impl Pipeline {
         };
         let risk_cfg = RiskConfig {
             initial_bankroll: bankroll,
+            max_total_exposure_override: settings.max_total_exposure_usd,
             max_per_market_override: runtime_strategy.max_per_market_usd,
             ..Default::default()
         };
