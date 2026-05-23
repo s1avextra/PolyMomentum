@@ -924,7 +924,7 @@ impl Pipeline {
     }
 
     pub async fn refresh_contracts(&self) -> Result<()> {
-        let markets = self.gamma.fetch_markets_by_end_date(3.0, 0.0).await?;
+        let markets = self.fetch_live_contract_markets().await?;
         let mut contracts = scan_candle_markets(&markets, 1.0, 50.0);
         if self.settings.candle_window_minutes > 0.0 {
             let before = contracts.len();
@@ -985,6 +985,19 @@ impl Pipeline {
         *self.contracts.write().await = contracts;
         tracing::info!(contracts = n, "candle.scan");
         Ok(())
+    }
+
+    async fn fetch_live_contract_markets(&self) -> Result<Vec<crate::data::models::Market>> {
+        if !self.settings.candle_cross_asset_enabled {
+            if let Some(step_s) = btc_updown_slug_step_seconds(self.settings.candle_window_minutes)
+            {
+                let slugs = btc_updown_slugs_for_live_window(Utc::now(), step_s, 45);
+                tracing::info!(slugs = slugs.len(), step_s, "candle.slug_discovery");
+                return self.gamma.fetch_markets_by_slugs(&slugs, false).await;
+            }
+        }
+
+        self.gamma.fetch_markets_by_end_date(3.0, 0.0).await
     }
 
     async fn contract_refresh_loop(self: Arc<Self>) {
@@ -2357,6 +2370,37 @@ fn short_cid(s: &str) -> String {
     }
 }
 
+fn btc_updown_slug_step_seconds(window_minutes: f64) -> Option<i64> {
+    if (window_minutes - 5.0).abs() <= 1e-6 {
+        Some(5 * 60)
+    } else if (window_minutes - 15.0).abs() <= 1e-6 {
+        Some(15 * 60)
+    } else {
+        None
+    }
+}
+
+fn btc_updown_slugs_for_live_window(
+    now: DateTime<Utc>,
+    step_s: i64,
+    horizon_minutes: i64,
+) -> Vec<String> {
+    let now_s = now.timestamp();
+    let mut t = (now_s - step_s).div_euclid(step_s) * step_s;
+    let end_s = now_s + horizon_minutes.max(1) * 60 + step_s;
+    let prefix = if step_s == 300 {
+        "btc-updown-5m"
+    } else {
+        "btc-updown-15m"
+    };
+    let mut slugs = Vec::new();
+    while t <= end_s {
+        slugs.push(format!("{prefix}-{t}"));
+        t += step_s;
+    }
+    slugs
+}
+
 fn nonzero_ts_or_now(ts: f64) -> f64 {
     if ts > 0.0 {
         ts
@@ -2523,6 +2567,7 @@ fn unix_now_s() -> i64 {
 mod tests {
     use super::*;
     use crate::backtest::experiment::{PromotionArtifact, PromotionGate};
+    use chrono::TimeZone;
     use tempfile::TempDir;
 
     fn promotion_for_variant(variant: &StrategyVariant) -> PromotionArtifact {
@@ -2775,6 +2820,23 @@ mod tests {
         let err = RuntimeStrategy::load(&settings).unwrap_err();
 
         assert!(err.to_string().contains("hash mismatch"));
+    }
+
+    #[test]
+    fn live_btc_slug_window_covers_current_and_near_future_5m_frames() {
+        let now = Utc.with_ymd_and_hms(2026, 5, 23, 12, 23, 10).unwrap();
+        let slugs = btc_updown_slugs_for_live_window(now, 300, 15);
+
+        assert!(slugs.contains(&"btc-updown-5m-1779538800".to_string()));
+        assert!(slugs.contains(&"btc-updown-5m-1779539100".to_string()));
+        assert!(slugs.len() <= 6);
+    }
+
+    #[test]
+    fn live_slug_discovery_only_targets_supported_btc_windows() {
+        assert_eq!(btc_updown_slug_step_seconds(5.0), Some(300));
+        assert_eq!(btc_updown_slug_step_seconds(15.0), Some(900));
+        assert_eq!(btc_updown_slug_step_seconds(60.0), None);
     }
 
     #[test]
