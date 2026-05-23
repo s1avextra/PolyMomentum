@@ -3,19 +3,20 @@
 # update systemd unit, restart.
 #
 # Usage:
-#   deploy/deploy.sh user@vps-ip [--enable-service] [--mode paper|live] [--i-understand-live] [--binary ./polymomentum-engine-linux-x86_64]
+#   deploy/deploy.sh user@vps-ip [--enable-service] [--mode paper|live] [--i-understand-live] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json]
 #
 # Layout on VPS:
 #   /opt/polymomentum/
 #     polymomentum-engine                 ← Rust binary
 #     logs/                               ← shared log dir (state.db, sessions/)
 #     data/                               ← shared data dir
+#     config/                             ← promotion artifacts and deploy config
 #   /etc/polymomentum/env                 ← .env-style config
 #   /etc/systemd/system/polymomentum-engine.service
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 user@vps-ip [--enable-service] [--mode paper|live] [--binary ./polymomentum-engine-linux-x86_64]" >&2
+    echo "Usage: $0 user@vps-ip [--enable-service] [--mode paper|live] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json]" >&2
     exit 1
 fi
 
@@ -24,12 +25,14 @@ ENABLE=false
 MODE="paper"
 LIVE_ACK=false
 BINARY_PATH=""
+PROMOTION_PATH=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --enable-service) ENABLE=true; shift ;;
         --mode) MODE="$2"; shift 2 ;;
         --i-understand-live) LIVE_ACK=true; shift ;;
         --binary) BINARY_PATH="$2"; shift 2 ;;
+        --promotion-artifact) PROMOTION_PATH="$2"; shift 2 ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -46,6 +49,9 @@ fi
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="/opt/polymomentum"
 SCP_CMD="${SCP_CMD:-scp}"
+PROMOTION_FILE=""
+PROMOTION_REMOTE=""
+PROMOTION_BASENAME=""
 
 scp_copy() {
     $SCP_CMD "$@"
@@ -88,8 +94,27 @@ else
     fi
 fi
 
+if [ -n "$PROMOTION_PATH" ]; then
+    case "$PROMOTION_PATH" in
+        /*) PROMOTION_FILE="$PROMOTION_PATH" ;;
+        *) PROMOTION_FILE="$(pwd)/$PROMOTION_PATH" ;;
+    esac
+    if [ ! -f "$PROMOTION_FILE" ]; then
+        echo "--promotion-artifact path does not exist: $PROMOTION_FILE" >&2
+        exit 1
+    fi
+    PROMOTION_BASENAME="$(basename "$PROMOTION_FILE")"
+    case "$PROMOTION_BASENAME" in
+        ""|*[!A-Za-z0-9._-]*)
+            echo "--promotion-artifact basename must contain only letters, numbers, dot, dash, or underscore: $PROMOTION_BASENAME" >&2
+            exit 2
+            ;;
+    esac
+    PROMOTION_REMOTE="$APP_DIR/config/$PROMOTION_BASENAME"
+fi
+
 echo "=== Copying binary to $VPS ==="
-ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data"
+ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data $APP_DIR/config"
 ssh "$VPS" "if [ -f /tmp/polymomentum/KILL ]; then sudo touch $APP_DIR/KILL; fi; \
     if sudo test -f /etc/polymomentum/env; then \
         sudo sed -i 's|^KILL_SWITCH_PATH=/tmp/polymomentum/KILL$|KILL_SWITCH_PATH=$APP_DIR/KILL|' /etc/polymomentum/env; \
@@ -98,6 +123,14 @@ scp_copy "$BIN" "$VPS:$APP_DIR/polymomentum-engine.new"
 ssh "$VPS" "chown polymomentum:polymomentum $APP_DIR/polymomentum-engine.new && \
     chmod 0755 $APP_DIR/polymomentum-engine.new && \
     mv $APP_DIR/polymomentum-engine.new $APP_DIR/polymomentum-engine"
+
+if [ -n "$PROMOTION_REMOTE" ]; then
+    echo "=== Installing promotion artifact ==="
+    scp_copy "$PROMOTION_FILE" "$VPS:$PROMOTION_REMOTE.tmp"
+    ssh "$VPS" "chown polymomentum:polymomentum $PROMOTION_REMOTE.tmp && \
+        chmod 0640 $PROMOTION_REMOTE.tmp && \
+        mv $PROMOTION_REMOTE.tmp $PROMOTION_REMOTE"
+fi
 
 echo "=== Installing support scripts and timers ==="
 scp_copy "$ROOT_DIR/deploy/healthcheck.sh" "$VPS:/tmp/polymomentum-healthcheck.sh"
@@ -121,6 +154,10 @@ if [ "$MODE" = "live" ]; then
     sed -i.bak 's|--mode live$|--mode live --i-understand-live|' "$SERVICE_TMP"
     rm -f "$SERVICE_TMP.bak"
 fi
+if [ -n "$PROMOTION_REMOTE" ]; then
+    sed -i.bak "s|preflight --mode $MODE|preflight --mode $MODE --promotion-artifact $PROMOTION_REMOTE|; s|live --mode $MODE|live --mode $MODE --promotion-artifact $PROMOTION_REMOTE|" "$SERVICE_TMP"
+    rm -f "$SERVICE_TMP.bak"
+fi
 scp_copy "$SERVICE_TMP" "$VPS:/tmp/polymomentum-engine.service"
 rm -f "$SERVICE_TMP"
 ssh "$VPS" "sudo mv /tmp/polymomentum-engine.service /etc/systemd/system/polymomentum-engine.service && \
@@ -139,7 +176,8 @@ if $ENABLE; then
 
     echo "=== Running remote preflight ==="
     PREFLIGHT_ACK="$([ "$MODE" = "live" ] && echo --i-understand-live || true)"
-    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$APP_DIR/KILL; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK'"
+    PREFLIGHT_PROMOTION="$([ -n "$PROMOTION_REMOTE" ] && echo "--promotion-artifact $PROMOTION_REMOTE" || true)"
+    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$APP_DIR/KILL; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK $PREFLIGHT_PROMOTION'"
 
     echo "=== Enabling service ==="
     ssh "$VPS" "sudo systemctl enable polymomentum-engine && sudo systemctl restart polymomentum-engine"

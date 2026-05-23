@@ -132,6 +132,7 @@ pub fn run_preflight(
     check_kill_switch(settings, &mut checks);
     check_promotion_artifact(settings, &mut checks);
     check_settlement_alignment(settings, mode, &mut checks);
+    check_candle_window(settings, mode, &mut checks);
 
     if mode.is_live() {
         check_live_confirmation(i_understand_live, &mut checks);
@@ -140,6 +141,7 @@ pub fn run_preflight(
         check_live_reconciliation(settings, &mut checks);
         check_live_credentials(settings, &mut checks);
         check_live_alerts(settings, &mut checks);
+        check_live_order_style_alignment(settings, &mut checks);
     } else {
         check_paper_bankroll(settings, &mut checks);
         push(
@@ -170,6 +172,9 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "polymarket_us_api_enabled": settings.polymarket_us_api_enabled,
         "clob_v2_ready": settings.clob_v2_ready,
         "live_reconciliation_ready": settings.live_reconciliation_ready,
+        "live_min_order_size_shares": settings.live_min_order_size_shares,
+        "live_order_budget_buffer": settings.live_order_budget_buffer,
+        "live_allow_maker_orders": settings.live_allow_maker_orders,
         "private_key_present": !settings.private_key.is_empty(),
         "poly_api_key_present": !settings.poly_api_key.is_empty(),
         "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
@@ -179,6 +184,8 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "max_position_per_market_usd": settings.max_position_per_market_usd,
         "candle_position_pct": settings.candle_position_pct,
         "candle_prefer_maker": settings.candle_prefer_maker,
+        "candle_maker_timeout_s": settings.candle_maker_timeout_s,
+        "candle_window_minutes": settings.candle_window_minutes,
         "candle_cross_asset_enabled": settings.candle_cross_asset_enabled,
         "candle_settlement_alignment_ready": settings.candle_settlement_alignment_ready,
         "alert_required": settings.alert_required,
@@ -195,7 +202,11 @@ fn redacted_config_hash(settings: &Settings) -> String {
     format!("{digest:x}")
 }
 
-fn check_settlement_alignment(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+fn check_settlement_alignment(
+    settings: &Settings,
+    mode: RuntimeMode,
+    checks: &mut Vec<PreflightCheck>,
+) {
     if settings.candle_settlement_alignment_ready {
         push(
             checks,
@@ -215,7 +226,38 @@ fn check_settlement_alignment(settings: &Settings, mode: RuntimeMode, checks: &m
             checks,
             "settlement_alignment",
             CheckStatus::Warn,
-            "paper runs settlement-shadow only until CANDLE_SETTLEMENT_ALIGNMENT_READY=true".to_string(),
+            "paper runs settlement-shadow only until CANDLE_SETTLEMENT_ALIGNMENT_READY=true"
+                .to_string(),
+        );
+    }
+}
+
+fn check_candle_window(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+    let target = settings.candle_window_minutes;
+    if (target - 5.0).abs() < 0.05 {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Ok,
+            "CANDLE_WINDOW_MINUTES=5".to_string(),
+        );
+    } else if mode.is_live() {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Fail,
+            format!(
+                "live requires CANDLE_WINDOW_MINUTES=5 to match the promoted 5-minute backtest; got {target}"
+            ),
+        );
+    } else {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Warn,
+            format!(
+                "set CANDLE_WINDOW_MINUTES=5 before promotion-bound paper/live runs; current value is {target}"
+            ),
         );
     }
 }
@@ -268,6 +310,45 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
     }
 }
 
+fn check_live_order_style_alignment(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        return;
+    }
+
+    let Ok(artifact) = crate::backtest::experiment::read_promotion(path) else {
+        return;
+    };
+    let Ok(variant) = serde_json::from_value::<StrategyVariant>(artifact.strategy_params.clone())
+    else {
+        return;
+    };
+
+    if variant.prefer_maker && !settings.live_allow_maker_orders {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Fail,
+            "promoted strategy uses maker orders; set LIVE_ALLOW_MAKER_ORDERS=1 or promote a taker strategy before live"
+                .to_string(),
+        );
+    } else if variant.prefer_maker {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Ok,
+            "promoted maker strategy matches LIVE_ALLOW_MAKER_ORDERS=1".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Ok,
+            "promoted taker strategy does not require maker enablement".to_string(),
+        );
+    }
+}
+
 fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
     if artifact.schema_version != 1 {
         return Some(format!(
@@ -286,7 +367,11 @@ fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
     }
     let variant: StrategyVariant = match serde_json::from_value(artifact.strategy_params.clone()) {
         Ok(variant) => variant,
-        Err(e) => return Some(format!("strategy_params do not parse as StrategyVariant: {e}")),
+        Err(e) => {
+            return Some(format!(
+                "strategy_params do not parse as StrategyVariant: {e}"
+            ))
+        }
     };
     let params_hash = stable_json_hash(&variant);
     if params_hash != artifact.selected_strategy.params_hash {
@@ -608,12 +693,7 @@ fn check_promotion_artifact(settings: &Settings, checks: &mut Vec<PreflightCheck
     match crate::backtest::experiment::read_promotion(path) {
         Ok(artifact) => {
             if let Some(detail) = promotion_validation_error(&artifact) {
-                push(
-                    checks,
-                    "promotion_artifact",
-                    CheckStatus::Fail,
-                    detail,
-                );
+                push(checks, "promotion_artifact", CheckStatus::Fail, detail);
             } else {
                 push(
                     checks,
@@ -696,6 +776,7 @@ fn push(checks: &mut Vec<PreflightCheck>, name: &'static str, status: CheckStatu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backtest::experiment::PromotionGate;
     use tempfile::TempDir;
 
     fn test_settings(tmp: &TempDir) -> Settings {
@@ -715,6 +796,7 @@ mod tests {
         s.venue_parse_error = None;
         s.alert_required = false;
         s.bankroll_usd = 100.0;
+        s.candle_window_minutes = 5.0;
         s.promotion_artifact_path.clear();
         s.promotion_required = false;
         s.clob_v2_ready = false;
@@ -833,6 +915,82 @@ mod tests {
         s.promotion_artifact_path = artifact.display().to_string();
         let report = run_preflight(&s, RuntimeMode::Paper, false);
         assert!(!report.ok);
-        assert!(report.failure_summary().contains("failed to load promotion"));
+        assert!(report
+            .failure_summary()
+            .contains("failed to load promotion"));
+    }
+
+    #[test]
+    fn live_preflight_requires_5m_window() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.candle_window_minutes = 0.0;
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("CANDLE_WINDOW_MINUTES=5"));
+    }
+
+    #[test]
+    fn live_preflight_rejects_maker_promotion_without_maker_permission() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion(tmp.path(), StrategyVariant::maker_first());
+        s.promotion_artifact_path = artifact.display().to_string();
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = true;
+        s.live_reconciliation_ready = true;
+        s.candle_settlement_alignment_ready = true;
+        s.alert_required = true;
+        s.live_allow_maker_orders = false;
+        s.private_key =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "secret".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("LIVE_ALLOW_MAKER_ORDERS=1"));
+    }
+
+    fn write_test_promotion(root: &std::path::Path, variant: StrategyVariant) -> PathBuf {
+        let selected_strategy = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            &variant,
+            format!(
+                "position_pct={:.4};max_per_market_usd={:.2}",
+                variant.position_pct, variant.max_per_market_usd
+            ),
+        );
+        let artifact = PromotionArtifact {
+            schema_version: 1,
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            source_report_hash: "source".to_string(),
+            source_label: "test".to_string(),
+            source_window: "test".to_string(),
+            selected_strategy,
+            strategy_params: serde_json::to_value(&variant).unwrap(),
+            data_manifest_hash: "data".to_string(),
+            market_count: 1,
+            trades: 30,
+            win_rate: 0.7,
+            total_pnl: 10.0,
+            avg_pnl: 0.33,
+            total_fees: 0.0,
+            sharpe_like: 0.1,
+            dominant_zone: Some("early".to_string()),
+            dominant_zone_trade_share: Some(1.0),
+            risk_notes: vec![],
+            promotion_gate: PromotionGate::default(),
+        };
+        let path = root.join("promotion.json");
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        path
     }
 }

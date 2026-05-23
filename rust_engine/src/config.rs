@@ -284,7 +284,7 @@ impl Settings {
                 "CANDLE_MICROSTRUCTURE_MIN_BOOK_PRESSURE",
                 -1.0,
             ),
-            candle_window_minutes: env_f64("CANDLE_WINDOW_MINUTES", 0.0),
+            candle_window_minutes: env_f64("CANDLE_WINDOW_MINUTES", 5.0),
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
             candle_position_pct: env_f64("CANDLE_POSITION_PCT", 0.10),
