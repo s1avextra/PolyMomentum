@@ -96,6 +96,10 @@ pub struct PromotionGate {
     pub max_unresolved_fills: usize,
     #[serde(default)]
     pub max_failed_fills: usize,
+    #[serde(default)]
+    pub max_passive_failed_fills: usize,
+    #[serde(default)]
+    pub min_fill_rate: f64,
     #[serde(default = "default_max_zone_trade_share")]
     pub max_zone_trade_share: f64,
     #[serde(default = "default_require_complete_data")]
@@ -128,6 +132,8 @@ impl Default for PromotionGate {
             min_sharpe_like: 0.0,
             max_unresolved_fills: 0,
             max_failed_fills: 0,
+            max_passive_failed_fills: 0,
+            min_fill_rate: 0.0,
             max_zone_trade_share: default_max_zone_trade_share(),
             require_complete_data: default_require_complete_data(),
         }
@@ -331,10 +337,18 @@ impl PromotionArtifact {
                 selected.unresolved_fills
             ));
         }
-        if selected.fills_failed > 0 {
+        let passive_failed = passive_failed_fills(selected);
+        let non_passive_failed = selected.fills_failed.saturating_sub(passive_failed);
+        if non_passive_failed > 0 {
             risk_notes.push(format!(
-                "selected variant has {} failed execution attempts: {:?}",
-                selected.fills_failed, selected.reject_reasons
+                "selected variant has {} non-passive failed execution attempts: {:?}",
+                non_passive_failed, selected.reject_reasons
+            ));
+        }
+        if passive_failed > 0 {
+            risk_notes.push(format!(
+                "selected variant has {} passive maker non-fills/post-only rejects: {:?}",
+                passive_failed, selected.reject_reasons
             ));
         }
         if selected.breaker_tripped {
@@ -847,10 +861,24 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
             selected.unresolved_fills, gate.max_unresolved_fills
         ));
     }
-    if selected.fills_failed > gate.max_failed_fills {
+    let passive_failed = passive_failed_fills(selected);
+    let non_passive_failed = selected.fills_failed.saturating_sub(passive_failed);
+    if non_passive_failed > gate.max_failed_fills {
         reasons.push(format!(
-            "fills_failed {} above maximum {} ({:?})",
-            selected.fills_failed, gate.max_failed_fills, selected.reject_reasons
+            "non_passive_fills_failed {} above maximum {} ({:?})",
+            non_passive_failed, gate.max_failed_fills, selected.reject_reasons
+        ));
+    }
+    if passive_failed > gate.max_passive_failed_fills {
+        reasons.push(format!(
+            "passive_fills_failed {} above maximum {} ({:?})",
+            passive_failed, gate.max_passive_failed_fills, selected.reject_reasons
+        ));
+    }
+    if selected.execution_attempts > 0 && selected.fill_rate < gate.min_fill_rate {
+        reasons.push(format!(
+            "fill_rate {:.4} below minimum {:.4}",
+            selected.fill_rate, gate.min_fill_rate
         ));
     }
     if selected.trades > 0 && gate.max_zone_trade_share < 1.0 {
@@ -866,6 +894,19 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
         }
     }
     reasons
+}
+
+fn passive_failed_fills(selected: &VariantReport) -> usize {
+    selected
+        .reject_reasons
+        .iter()
+        .filter(|(reason, _)| is_passive_failed_fill_reason(reason))
+        .map(|(_, count)| *count)
+        .sum()
+}
+
+fn is_passive_failed_fill_reason(reason: &str) -> bool {
+    matches!(reason, "maker_unfilled" | "post_only_cross")
 }
 
 fn active_zone_count(selected: &VariantReport) -> usize {
@@ -1353,6 +1394,93 @@ mod tests {
         assert!(err
             .to_string()
             .contains("unresolved_fills 1 above maximum 0"));
+    }
+
+    #[test]
+    fn promotion_distinguishes_passive_maker_nonfills_from_execution_failures() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 22,
+            losses: 8,
+            unresolved_fills: 0,
+            execution_attempts: 40,
+            fills_success: 30,
+            fills_failed: 10,
+            fill_rate: 0.75,
+            reject_reasons: BTreeMap::from([
+                ("maker_unfilled".to_string(), 7),
+                ("post_only_cross".to_string(), 3),
+            ]),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
+            win_rate: 22.0 / 30.0,
+            total_pnl: 10.0,
+            avg_pnl: 10.0 / 30.0,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let artifact = PromotionArtifact::from_report(
+            &report,
+            PromotionGate {
+                max_passive_failed_fills: 10,
+                min_fill_rate: 0.70,
+                ..PromotionGate::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(artifact.trades, 30);
+        assert!(artifact
+            .risk_notes
+            .iter()
+            .any(|note| note.contains("10 passive maker")));
+    }
+
+    #[test]
+    fn promotion_rejects_non_passive_execution_failures() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 30,
+            wins: 22,
+            losses: 8,
+            unresolved_fills: 0,
+            execution_attempts: 31,
+            fills_success: 30,
+            fills_failed: 1,
+            fill_rate: 30.0 / 31.0,
+            reject_reasons: BTreeMap::from([("invalid book".to_string(), 1)]),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
+            win_rate: 22.0 / 30.0,
+            total_pnl: 10.0,
+            avg_pnl: 10.0 / 30.0,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(15, 15),
+        });
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("non_passive_fills_failed 1 above maximum 0"));
     }
 
     #[test]

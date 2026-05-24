@@ -278,10 +278,10 @@ pub async fn run_live_replay(
     );
 
     let loader = PMXTv2Loader::new(&cfg.cache_dir);
-    let token_filter = cfg.universe.condition_id_set();
     let mut all_events = Vec::new();
     for &hour in &cfg.hours {
         eprintln!("live-replay: loading PMXT hour {hour}");
+        let token_filter = cfg.universe.condition_id_set_for_hour(hour);
         let mut events = load_replay_hour(
             &loader,
             hour,

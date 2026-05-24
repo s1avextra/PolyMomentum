@@ -562,9 +562,15 @@ enum ExperimentCommand {
         /// Maximum unresolved fills allowed in the selected variant.
         #[arg(long, default_value_t = 0)]
         max_unresolved_fills: usize,
-        /// Maximum failed execution attempts allowed in the selected variant.
+        /// Maximum non-passive failed execution attempts allowed in the selected variant.
         #[arg(long, default_value_t = 0)]
         max_failed_fills: usize,
+        /// Maximum passive maker non-fills/post-only rejects allowed in the selected variant.
+        #[arg(long, default_value_t = 0)]
+        max_passive_failed_fills: usize,
+        /// Minimum selected-variant fill rate across execution attempts.
+        #[arg(long, default_value_t = 0.0)]
+        min_fill_rate: f64,
         /// Maximum share of selected trades allowed from one timing zone.
         #[arg(long, default_value_t = 0.70)]
         max_zone_trade_share: f64,
@@ -605,9 +611,15 @@ enum ExperimentCommand {
         /// Maximum unresolved fills allowed in the selected aggregate variant.
         #[arg(long, default_value_t = 0)]
         max_unresolved_fills: usize,
-        /// Maximum failed execution attempts allowed in the selected aggregate variant.
+        /// Maximum non-passive failed execution attempts allowed in the selected aggregate variant.
         #[arg(long, default_value_t = 0)]
         max_failed_fills: usize,
+        /// Maximum passive maker non-fills/post-only rejects allowed in the selected aggregate variant.
+        #[arg(long, default_value_t = 0)]
+        max_passive_failed_fills: usize,
+        /// Minimum selected aggregate fill rate across execution attempts.
+        #[arg(long, default_value_t = 0.0)]
+        min_fill_rate: f64,
         /// Maximum share of selected aggregate trades allowed from one timing zone.
         #[arg(long, default_value_t = 0.70)]
         max_zone_trade_share: f64,
@@ -1882,6 +1894,8 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_sharpe_like,
             max_unresolved_fills,
             max_failed_fills,
+            max_passive_failed_fills,
+            min_fill_rate,
             max_zone_trade_share,
             allow_incomplete_data,
         } => {
@@ -1902,6 +1916,8 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_sharpe_like,
                 max_unresolved_fills,
                 max_failed_fills,
+                max_passive_failed_fills,
+                min_fill_rate,
                 max_zone_trade_share,
                 require_complete_data: !allow_incomplete_data,
             };
@@ -1946,6 +1962,8 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_sharpe_like,
             max_unresolved_fills,
             max_failed_fills,
+            max_passive_failed_fills,
+            min_fill_rate,
             max_zone_trade_share,
             min_reports,
             min_profitable_reports,
@@ -1974,6 +1992,8 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_sharpe_like,
                 max_unresolved_fills,
                 max_failed_fills,
+                max_passive_failed_fills,
+                min_fill_rate,
                 max_zone_trade_share,
                 require_complete_data: !allow_incomplete_data,
             };
