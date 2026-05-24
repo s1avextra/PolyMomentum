@@ -146,3 +146,24 @@ Next production-grade gate:
   breaker trip, and positive post-fee PnL.
 - Keep paper mode only for venue plumbing; offline backtest/live-replay remains
   the validation path.
+
+## Follow-up Completed
+
+Implemented and validated a feed-forward projected stressed-drawdown cap. See
+`docs/stress_drawdown_cap_validation_2026-05-24.md`.
+
+At `max_projected_stressed_drawdown_pct=0.24`, the former Window 3 veto fold is
+breaker-free and positive:
+
+- Fills: 98
+- Wins/losses: 67 / 31
+- PnL: +7.92
+- Breaker: no
+
+Aggregate promotion across Window 3, Window 1, and current-day passed with:
+
+- Fills: 208
+- Wins/losses: 154 / 54
+- PnL: +121.36
+- Breakers: 0 / 3
+- Artifact: `deploy/promotions/promotion_candidate_stresscap024_aggregate_20260520_24.json`

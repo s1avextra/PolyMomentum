@@ -141,6 +141,7 @@ pub struct Settings {
 
     pub candle_noise_z_threshold: f64,
     pub candle_position_pct: f64,
+    pub candle_max_projected_stressed_drawdown_pct: f64,
     pub candle_vol_high_multiplier: f64,
     pub candle_vol_extreme_multiplier: f64,
     pub candle_cross_asset_enabled: bool,
@@ -288,6 +289,10 @@ impl Settings {
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
             candle_position_pct: env_f64("CANDLE_POSITION_PCT", 0.10),
+            candle_max_projected_stressed_drawdown_pct: env_f64(
+                "CANDLE_MAX_PROJECTED_STRESSED_DRAWDOWN_PCT",
+                0.0,
+            ),
             candle_vol_high_multiplier: env_f64("CANDLE_VOL_HIGH_MULTIPLIER", 1.5),
             candle_vol_extreme_multiplier: env_f64("CANDLE_VOL_EXTREME_MULTIPLIER", 2.0),
             candle_cross_asset_enabled: env_bool("CANDLE_CROSS_ASSET_ENABLED", false),

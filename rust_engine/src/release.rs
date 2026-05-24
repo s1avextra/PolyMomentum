@@ -183,6 +183,7 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "max_total_exposure_usd": settings.max_total_exposure_usd,
         "max_position_per_market_usd": settings.max_position_per_market_usd,
         "candle_position_pct": settings.candle_position_pct,
+        "candle_max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
         "candle_prefer_maker": settings.candle_prefer_maker,
         "candle_maker_timeout_s": settings.candle_maker_timeout_s,
         "candle_window_minutes": settings.candle_window_minutes,
@@ -963,10 +964,7 @@ mod tests {
             "candle_momentum",
             "1",
             &variant,
-            format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                variant.position_pct, variant.max_per_market_usd
-            ),
+            variant.risk_profile(),
         );
         let artifact = PromotionArtifact {
             schema_version: 1,

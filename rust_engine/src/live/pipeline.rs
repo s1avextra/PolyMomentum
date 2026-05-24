@@ -213,6 +213,7 @@ struct RuntimeStrategy {
     min_edge: f64,
     position_pct: f64,
     max_per_market_usd: f64,
+    max_projected_stressed_drawdown_pct: f64,
     prefer_maker: bool,
     default_fee_rate: f64,
     microstructure: MicrostructureConfig,
@@ -289,6 +290,7 @@ impl RuntimeStrategy {
             min_edge: variant.min_edge,
             position_pct: variant.position_pct,
             max_per_market_usd: variant.max_per_market_usd,
+            max_projected_stressed_drawdown_pct: variant.max_projected_stressed_drawdown_pct,
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
             microstructure: variant.microstructure,
@@ -311,6 +313,7 @@ impl RuntimeStrategy {
             "min_edge": DEFAULT_MIN_EDGE,
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
+            "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": 0.072,
             "microstructure": microstructure,
@@ -321,8 +324,10 @@ impl RuntimeStrategy {
                 "1",
                 &params,
                 format!(
-                    "position_pct={:.4};max_per_market_usd={:.2}",
-                    settings.candle_position_pct, settings.max_position_per_market_usd
+                    "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
+                    settings.candle_position_pct,
+                    settings.max_position_per_market_usd,
+                    settings.candle_max_projected_stressed_drawdown_pct
                 ),
             ),
             zone_config,
@@ -331,6 +336,8 @@ impl RuntimeStrategy {
             min_edge: DEFAULT_MIN_EDGE,
             position_pct: settings.candle_position_pct,
             max_per_market_usd: settings.max_position_per_market_usd,
+            max_projected_stressed_drawdown_pct: settings
+                .candle_max_projected_stressed_drawdown_pct,
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: 0.072,
             microstructure,
@@ -1462,7 +1469,18 @@ impl Pipeline {
         let max_per_market = self.risk.max_per_market().await;
         let avail = self.risk.available_capital().await;
         position = position.min(max_per_market).min(avail);
-        if 0.0 < position && position < 1.0 && avail >= 1.0 {
+        let open_exposure = self.risk.total_exposure().await;
+        let breaker_state = *self.breaker.lock().await;
+        let mut stress_capped = false;
+        if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
+            open_exposure,
+            self.settings.bankroll_usd.max(1.0),
+            self.runtime_strategy.max_projected_stressed_drawdown_pct,
+        ) {
+            position = position.min(stress_headroom);
+            stress_capped = true;
+        }
+        if 0.0 < position && position < 1.0 && avail >= 1.0 && !stress_capped {
             position = 1.0;
         }
         if position < 1.0 {

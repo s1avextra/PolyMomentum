@@ -147,6 +147,31 @@ impl BreakerState {
         }
         None
     }
+
+    /// Remaining exposure headroom before projected stressed drawdown crosses
+    /// `max_projected_stressed_drawdown_pct`.
+    ///
+    /// This is a feed-forward sizing guard: it uses only realized breaker
+    /// state plus currently open exposure. Callers can cap a new order by the
+    /// returned value to slow down before the hard breaker trips.
+    pub fn stressed_drawdown_exposure_headroom(
+        &self,
+        open_exposure: f64,
+        initial_bankroll: f64,
+        max_projected_stressed_drawdown_pct: f64,
+    ) -> Option<f64> {
+        if !(max_projected_stressed_drawdown_pct.is_finite()
+            && max_projected_stressed_drawdown_pct > 0.0)
+        {
+            return None;
+        }
+        let initial_bankroll = initial_bankroll.max(1.0);
+        let peak_equity = (initial_bankroll + self.peak_pnl).max(initial_bankroll);
+        let max_stressed_drawdown = max_projected_stressed_drawdown_pct * peak_equity;
+        let current_stressed_pnl = self.realized_pnl - open_exposure.max(0.0);
+        let current_stressed_drawdown = (self.peak_pnl - current_stressed_pnl).max(0.0);
+        Some((max_stressed_drawdown - current_stressed_drawdown).max(0.0))
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +261,21 @@ mod tests {
         }
         let trip = s.should_trip(&BreakerConfig::default(), 50.0, 100.0);
         assert_eq!(trip, Some("open_exposure_stress"));
+    }
+
+    #[test]
+    fn stressed_drawdown_headroom_caps_projected_exposure_feed_forward() {
+        let mut s = BreakerState::default();
+        s.peak_pnl = 20.0;
+        s.realized_pnl = 5.0;
+
+        let headroom = s
+            .stressed_drawdown_exposure_headroom(5.0, 100.0, 0.25)
+            .unwrap();
+
+        // Peak equity is 120, so 25% allows 30 of stressed drawdown. Current
+        // stressed drawdown is peak 20 - stressed pnl 0 = 20, leaving 10.
+        assert!((headroom - 10.0).abs() < 1e-9);
     }
 
     #[test]

@@ -265,6 +265,9 @@ enum Command {
         /// Hard USD cap across unresolved candle exposure.
         #[arg(long)]
         max_total_exposure_usd: Option<f64>,
+        /// Soft cap on projected stressed drawdown before adding a new order; 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        max_projected_stressed_drawdown_pct: f64,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -973,6 +976,7 @@ async fn main() {
             position_pct,
             max_per_market_usd,
             max_total_exposure_usd,
+            max_projected_stressed_drawdown_pct,
             also_maker,
             zone_mode,
             top,
@@ -1022,6 +1026,7 @@ async fn main() {
                 position_pct,
                 max_per_market_usd,
                 max_total_exposure_usd.unwrap_or(settings.max_total_exposure_usd),
+                max_projected_stressed_drawdown_pct,
                 also_maker,
                 zone_mode,
                 top,
@@ -2536,6 +2541,7 @@ async fn cmd_harness_sweep(
     position_pct: f64,
     max_per_market_usd: f64,
     max_total_exposure_usd: f64,
+    max_projected_stressed_drawdown_pct: f64,
     also_maker: bool,
     zone_mode: backtest::sweep::ZoneMode,
     top: usize,
@@ -2584,6 +2590,13 @@ async fn cmd_harness_sweep(
         eprintln!("--max-total-exposure-usd must be a positive finite number");
         std::process::exit(2);
     }
+    if !(max_projected_stressed_drawdown_pct.is_finite()
+        && max_projected_stressed_drawdown_pct >= 0.0
+        && max_projected_stressed_drawdown_pct <= 1.0)
+    {
+        eprintln!("--max-projected-stressed-drawdown-pct must be a finite value in [0, 1]");
+        std::process::exit(2);
+    }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
         m if !m.is_finite() || m < 0.0 => {
             eprintln!("--adaptive-health-rearm-minutes must be a finite non-negative number");
@@ -2597,6 +2610,7 @@ async fn cmd_harness_sweep(
     let mut base = backtest::strategies::StrategyVariant::baseline();
     base.position_pct = position_pct;
     base.max_per_market_usd = max_per_market_usd;
+    base.max_projected_stressed_drawdown_pct = max_projected_stressed_drawdown_pct;
     let grid = backtest::sweep::SweepGrid {
         base,
         conf,

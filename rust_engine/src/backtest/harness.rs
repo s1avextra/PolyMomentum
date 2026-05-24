@@ -237,10 +237,7 @@ impl CandleBacktestStrategy {
             "candle_momentum",
             "1",
             &variant,
-            format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                variant.position_pct, variant.max_per_market_usd
-            ),
+            variant.risk_profile(),
         );
         Self {
             variant,
@@ -572,10 +569,22 @@ impl Strategy for CandleBacktestStrategy {
         } else {
             base_position
         };
-        let position = base_position.min(exposure_available);
+        let mut position = base_position.min(exposure_available);
+        if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
+            used_exposure,
+            self.bankroll_usd.max(1.0),
+            self.variant.max_projected_stressed_drawdown_pct,
+        ) {
+            position = position.min(stress_headroom);
+        }
         if position < 1.0 {
             self.skipped_decision += 1;
-            let key = format!("exposure_cap_{}", decision.zone);
+            let reason = if exposure_available < 1.0 {
+                "exposure_cap"
+            } else {
+                "stress_drawdown_cap"
+            };
+            let key = format!("{}_{}", reason, decision.zone);
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }

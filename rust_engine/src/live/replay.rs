@@ -23,6 +23,7 @@ use crate::backtest::strategies::StrategyVariant;
 use crate::config::Settings;
 use crate::data::scanner::CandleContract;
 use crate::execution::order_manager::OrderManager;
+use crate::live::breaker::BreakerState;
 use crate::monitoring::session::{OrderFilled, OrderPlaced, SessionMonitor, SignalEvaluation};
 use crate::release::ReleaseManifest;
 use crate::strategy::decision::{decide_candle_trade, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE};
@@ -132,6 +133,8 @@ impl ReplayStrategy {
         variant.min_edge = DEFAULT_MIN_EDGE;
         variant.position_pct = settings.candle_position_pct;
         variant.max_per_market_usd = settings.max_position_per_market_usd;
+        variant.max_projected_stressed_drawdown_pct =
+            settings.candle_max_projected_stressed_drawdown_pct;
         variant.prefer_maker = settings.candle_prefer_maker;
         variant.default_fee_rate = 0.072;
         variant.maker_fee_rate = 0.0;
@@ -149,6 +152,7 @@ impl ReplayStrategy {
             "min_edge": DEFAULT_MIN_EDGE,
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
+            "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": 0.072,
             "microstructure": variant.microstructure,
@@ -158,8 +162,10 @@ impl ReplayStrategy {
             "1",
             &params,
             format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                settings.candle_position_pct, settings.max_position_per_market_usd
+                "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
+                settings.candle_position_pct,
+                settings.max_position_per_market_usd,
+                settings.candle_max_projected_stressed_drawdown_pct
             ),
         );
 
@@ -306,8 +312,8 @@ pub async fn run_live_replay(
         &mut strategy,
         cfg.strategy.variant.default_fee_rate,
     );
+    strategy.settle_all_positions();
     strategy.record_shadow_resolutions();
-    strategy.record_fills(&engine.fills).await;
     monitor.save_summary()?;
 
     let summary = engine.summary();
@@ -372,9 +378,11 @@ struct LiveReplayStrategy {
     btc_history: Arc<BTCHistory>,
     monitor: Arc<SessionMonitor>,
     traded: HashSet<String>,
+    submitted_positions: BTreeMap<String, ReplayPosition>,
     replay_positions: BTreeMap<String, ReplayPosition>,
     shadow_positions: BTreeMap<String, ShadowReplayPosition>,
     lifecycle: ReplayLifecycle,
+    breaker_state: BreakerState,
     last_tick_ts_s: f64,
     last_skip_log_bucket: BTreeMap<String, i64>,
     orders_submitted: usize,
@@ -387,6 +395,9 @@ struct ReplayPosition {
     direction: String,
     open_btc: f64,
     close_ts_s: f64,
+    entry_price: f64,
+    size: f64,
+    fee: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -432,9 +443,11 @@ impl LiveReplayStrategy {
             btc_history,
             monitor,
             traded: HashSet::new(),
+            submitted_positions: BTreeMap::new(),
             replay_positions: BTreeMap::new(),
             shadow_positions: BTreeMap::new(),
             lifecycle: ReplayLifecycle::default(),
+            breaker_state: BreakerState::default(),
             last_tick_ts_s: 0.0,
             last_skip_log_bucket: BTreeMap::new(),
             orders_submitted: 0,
@@ -442,7 +455,7 @@ impl LiveReplayStrategy {
         }
     }
 
-    async fn record_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
+    fn record_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
         self.record_risk_state(0.0, 0);
         for fill in fills {
             let order_id = replay_order_id(&fill.order.intent_id);
@@ -474,8 +487,8 @@ impl LiveReplayStrategy {
                     n_trades: 1,
                 });
                 self.record_open_position(fill);
-                self.record_resolution(fill);
             } else {
+                self.submitted_positions.remove(&fill.order.intent_id);
                 self.monitor.record_order_rejected(
                     &fill.order.token_id,
                     &fill.reason,
@@ -484,6 +497,40 @@ impl LiveReplayStrategy {
                 );
             }
         }
+    }
+
+    fn open_exposure(&self) -> f64 {
+        self.replay_positions
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum()
+    }
+
+    fn submitted_exposure(&self) -> f64 {
+        self.submitted_positions
+            .values()
+            .map(|p| p.entry_price * p.size)
+            .sum()
+    }
+
+    fn settle_due_positions(&mut self, timestamp_s: f64) {
+        let due: Vec<String> = self
+            .replay_positions
+            .iter()
+            .filter(|(_, p)| p.close_ts_s <= timestamp_s)
+            .map(|(intent_id, _)| intent_id.clone())
+            .collect();
+        for intent_id in due {
+            let Some(pos) = self.replay_positions.remove(&intent_id) else {
+                continue;
+            };
+            self.record_resolution(&pos);
+        }
+        self.record_risk_state(self.open_exposure(), self.replay_positions.len() as u64);
+    }
+
+    fn settle_all_positions(&mut self) {
+        self.settle_due_positions(f64::MAX);
     }
 
     fn record_shadow_resolutions(&mut self) {
@@ -540,7 +587,20 @@ impl LiveReplayStrategy {
         self.record_risk_state(0.0, 0);
     }
 
-    fn record_open_position(&self, fill: &crate::backtest::l2_replay::BacktestFill) {
+    fn record_open_position(&mut self, fill: &crate::backtest::l2_replay::BacktestFill) {
+        let Some(mut pos) = self.submitted_positions.remove(&fill.order.intent_id) else {
+            self.monitor.record_error(
+                "live_replay_open_position",
+                "missing submitted replay position for fill intent",
+                true,
+            );
+            return;
+        };
+        pos.entry_price = fill.fill_price;
+        pos.size = fill.filled_size;
+        pos.fee = fill.fee;
+        self.replay_positions
+            .insert(fill.order.intent_id.clone(), pos);
         let exposure = fill.cost.abs();
         self.monitor.record_risk_state(
             self.bankroll_usd + self.lifecycle.realized_pnl,
@@ -553,15 +613,7 @@ impl LiveReplayStrategy {
         );
     }
 
-    fn record_resolution(&mut self, fill: &crate::backtest::l2_replay::BacktestFill) {
-        let Some(pos) = self.replay_positions.get(&fill.order.intent_id).cloned() else {
-            self.monitor.record_error(
-                "live_replay_resolution",
-                "missing replay position for fill intent",
-                true,
-            );
-            return;
-        };
+    fn record_resolution(&mut self, pos: &ReplayPosition) {
         let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
         if close_btc <= 0.0 || pos.open_btc <= 0.0 {
             self.monitor.record_error(
@@ -578,14 +630,14 @@ impl LiveReplayStrategy {
             "down"
         };
         let won = actual == pos.direction;
-        let pnl = paper_outcome_pnl(won, fill.fill_price, fill.filled_size, fill.fee);
+        let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
         self.monitor.record_resolution(
             &pos.condition_id,
             &pos.direction,
             actual,
             won,
             pnl,
-            fill.fill_price,
+            pos.entry_price,
             pos.open_btc,
             close_btc,
         );
@@ -606,6 +658,7 @@ impl LiveReplayStrategy {
         self.lifecycle.resolutions += 1;
         self.lifecycle.oracle_checks += 1;
         self.lifecycle.realized_pnl += pnl;
+        self.breaker_state.record_resolution(won, pnl);
         if won {
             self.lifecycle.wins += 1;
         } else {
@@ -722,6 +775,10 @@ impl LiveReplayStrategy {
 }
 
 impl Strategy for LiveReplayStrategy {
+    fn on_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
+        self.record_fills(fills);
+    }
+
     fn on_event(
         &mut self,
         timestamp_s: f64,
@@ -730,6 +787,7 @@ impl Strategy for LiveReplayStrategy {
         _history: &BTreeMap<String, Vec<(f64, f64)>>,
     ) -> Vec<BacktestOrder> {
         self.books.insert(token_id.to_string(), book.clone());
+        self.settle_due_positions(timestamp_s);
         let Some(contract) = self.universe_by_token.get(token_id).cloned() else {
             return Vec::new();
         };
@@ -904,7 +962,7 @@ impl Strategy for LiveReplayStrategy {
             return Vec::new();
         }
 
-        let order = self.build_order(
+        let Some(order) = self.build_order(
             timestamp_s,
             &contract,
             &signal,
@@ -914,7 +972,9 @@ impl Strategy for LiveReplayStrategy {
             down_price,
             implied_vol,
             &micro,
-        );
+        ) else {
+            return Vec::new();
+        };
         self.orders_submitted += 1;
         self.traded.insert(cid);
         vec![order]
@@ -934,9 +994,39 @@ impl LiveReplayStrategy {
         down_price: f64,
         implied_vol: f64,
         micro: &BookMicrostructure,
-    ) -> BacktestOrder {
-        let variant = &self.replay_strategy.variant;
-        let position = (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
+    ) -> Option<BacktestOrder> {
+        let variant = self.replay_strategy.variant.clone();
+        let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let mut position =
+            (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
+        if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
+            used_exposure,
+            self.bankroll_usd.max(1.0),
+            variant.max_projected_stressed_drawdown_pct,
+        ) {
+            position = position.min(stress_headroom);
+        }
+        if position < 1.0 {
+            self.record_skip(
+                timestamp_s,
+                contract,
+                signal,
+                up_price,
+                down_price,
+                implied_vol,
+                micro,
+                decision.zone.clone(),
+                "stress_drawdown_cap".to_string(),
+                format!(
+                    "used_exposure={:.2} cap={:.4}",
+                    used_exposure, variant.max_projected_stressed_drawdown_pct
+                ),
+                true,
+                decision.fair_value,
+                decision.edge,
+            );
+            return None;
+        }
         let (order_type, limit_price, sizing_price) = if variant.prefer_maker {
             let lp = resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
                 .expect("maker book preflight should run before build_order");
@@ -974,13 +1064,16 @@ impl LiveReplayStrategy {
             .ok()
             .map(|d| d.timestamp() as f64)
             .unwrap_or(0.0);
-        self.replay_positions.insert(
+        self.submitted_positions.insert(
             intent.intent_id.clone(),
             ReplayPosition {
                 condition_id: contract.market.condition_id.clone(),
                 direction: decision.direction.clone(),
                 open_btc: signal.open_price,
                 close_ts_s,
+                entry_price: sizing_price,
+                size,
+                fee: 0.0,
             },
         );
         let _ = self
@@ -1042,7 +1135,7 @@ impl LiveReplayStrategy {
             submit_latency_ms: Some(0.0),
         });
 
-        BacktestOrder {
+        Some(BacktestOrder {
             intent_id: intent.intent_id,
             timestamp_s,
             condition_id: contract.market.condition_id.clone(),
@@ -1053,7 +1146,7 @@ impl LiveReplayStrategy {
             limit_price,
             fee_rate: variant.default_fee_rate,
             maker_fee_rate: variant.maker_fee_rate,
-        }
+        })
     }
 }
 
@@ -1168,10 +1261,7 @@ mod tests {
             "candle_momentum",
             "1",
             &variant,
-            format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                variant.position_pct, variant.max_per_market_usd
-            ),
+            variant.risk_profile(),
         );
         let artifact = crate::backtest::experiment::PromotionArtifact {
             schema_version: 1,
@@ -1223,10 +1313,7 @@ mod tests {
             "candle_momentum",
             "1",
             &variant,
-            format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                variant.position_pct, variant.max_per_market_usd
-            ),
+            variant.risk_profile(),
         );
         let artifact = crate::backtest::experiment::PromotionArtifact {
             schema_version: 1,

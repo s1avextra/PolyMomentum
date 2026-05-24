@@ -213,6 +213,9 @@ impl SweepGrid {
                                                                 max_per_market_usd: self
                                                                     .base
                                                                     .max_per_market_usd,
+                                                                max_projected_stressed_drawdown_pct:
+                                                                    self.base
+                                                                        .max_projected_stressed_drawdown_pct,
                                                                 prefer_maker: maker,
                                                                 maker_fill_prob: self
                                                                     .base

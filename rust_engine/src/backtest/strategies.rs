@@ -7,6 +7,10 @@
 use crate::strategy::decision::ZoneConfig;
 use crate::strategy::microstructure::MicrostructureConfig;
 
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
 /// Tunable knobs the harness varies. The variant name is what shows up in
 /// the report.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -20,6 +24,11 @@ pub struct StrategyVariant {
     pub position_pct: f64,
     /// Hard cap on position size (USD).
     pub max_per_market_usd: f64,
+    /// Optional soft cap on projected stressed drawdown. When positive, the
+    /// runtime caps or skips a new order if current unresolved exposure plus
+    /// the new order would push stressed drawdown above this fraction.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub max_projected_stressed_drawdown_pct: f64,
     /// Use resting maker limit orders instead of one-tick taker.
     pub prefer_maker: bool,
     /// Probability that a resting maker order fills before cancel/market move;
@@ -41,6 +50,13 @@ pub struct StrategyVariant {
 }
 
 impl StrategyVariant {
+    pub fn risk_profile(&self) -> String {
+        format!(
+            "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
+            self.position_pct, self.max_per_market_usd, self.max_projected_stressed_drawdown_pct
+        )
+    }
+
     pub fn baseline() -> Self {
         Self {
             name: "baseline".into(),
@@ -50,6 +66,7 @@ impl StrategyVariant {
             min_edge: 0.07,
             position_pct: 0.10,
             max_per_market_usd: 20.0,
+            max_projected_stressed_drawdown_pct: 0.0,
             prefer_maker: false,
             maker_fill_prob: 0.65,
             maker_seed: Some(42),
@@ -150,6 +167,7 @@ impl StrategyVariant {
             min_edge: 0.0,
             position_pct: 0.10,
             max_per_market_usd: 20.0,
+            max_projected_stressed_drawdown_pct: 0.0,
             prefer_maker: false,
             maker_fill_prob: 0.65,
             maker_seed: Some(42),

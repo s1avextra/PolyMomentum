@@ -241,10 +241,7 @@ impl VariantReport {
             "candle_momentum",
             "1",
             &run.variant,
-            format!(
-                "position_pct={:.4};max_per_market_usd={:.2}",
-                run.variant.position_pct, run.variant.max_per_market_usd
-            ),
+            run.variant.risk_profile(),
         );
         let by_zone = run
             .results
@@ -592,8 +589,21 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
             stats.wins as f64 / resolved as f64
         };
     }
+    let strategy = serde_json::from_value::<crate::backtest::strategies::StrategyVariant>(
+        first.strategy_params.clone(),
+    )
+    .map(|variant| {
+        StrategySpec::from_serializable_params(
+            first.strategy.name.clone(),
+            first.strategy.version.clone(),
+            &variant,
+            variant.risk_profile(),
+        )
+    })
+    .unwrap_or_else(|_| first.strategy.clone());
+
     VariantReport {
-        strategy: first.strategy.clone(),
+        strategy,
         strategy_params: first.strategy_params.clone(),
         trades,
         wins,
