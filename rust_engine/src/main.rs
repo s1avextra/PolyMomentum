@@ -370,6 +370,12 @@ enum Command {
         /// Bankroll used to size hypothetical trades.
         #[arg(long, default_value_t = 100.0)]
         bankroll: f64,
+        /// Fraction of bankroll risked per hypothetical trade.
+        #[arg(long, default_value_t = 0.10)]
+        position_pct: f64,
+        /// Maximum USD risked per hypothetical market.
+        #[arg(long, default_value_t = 20.0)]
+        max_per_market_usd: f64,
         /// Minimum trades for a variant before its numbers are considered
         /// statistically meaningful.
         #[arg(long, default_value_t = 30)]
@@ -837,6 +843,8 @@ async fn main() {
         Command::Sweep {
             session,
             bankroll,
+            position_pct,
+            max_per_market_usd,
             min_trades,
             zones,
             grid,
@@ -884,6 +892,8 @@ async fn main() {
             cmd_sweep(
                 &session,
                 bankroll,
+                position_pct,
+                max_per_market_usd,
                 min_trades,
                 zones,
                 grid_config,
@@ -3230,6 +3240,8 @@ async fn cmd_harness(
 fn cmd_sweep(
     sessions: &[String],
     bankroll: f64,
+    position_pct: f64,
+    max_per_market_usd: f64,
     min_trades: u64,
     show_zones: bool,
     grid: Option<sweep::strategy::GridConfig>,
@@ -3249,7 +3261,14 @@ fn cmd_sweep(
         eprintln!("empty sweep strategy set (check --conf/--z/--edge/--ev-buffer)");
         std::process::exit(2);
     }
-    let runs = match sweep::run_sweep(&paths, &strats, bankroll, min_trades) {
+    let runs = match sweep::run_sweep(
+        &paths,
+        &strats,
+        bankroll,
+        position_pct,
+        max_per_market_usd,
+        min_trades,
+    ) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("sweep failed: {e}");
@@ -3279,7 +3298,7 @@ fn cmd_sweep(
     let shown_runs: Vec<_> = shown.into_iter().cloned().collect();
 
     println!(
-        "\nSweep over {} session file(s) — bankroll=${bankroll:.0}, min_trades={min_trades}, variants={}\n",
+        "\nSweep over {} session file(s) — bankroll=${bankroll:.0}, position_pct={position_pct:.4}, max_per_market=${max_per_market_usd:.2}, min_trades={min_trades}, variants={}\n",
         paths.len(),
         strats.len()
     );

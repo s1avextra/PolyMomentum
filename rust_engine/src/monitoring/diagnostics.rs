@@ -616,8 +616,10 @@ fn record_breaker_state(out: &mut SessionDiagnostics, v: &Value) {
         .and_then(|x| x.as_str())
         .unwrap_or("unknown")
         .to_string();
-    if matches!(state.as_str(), "tripped" | "restored_tripped") {
-        out.risk.breaker_tripped = true;
+    match state.as_str() {
+        "tripped" | "restored_tripped" => out.risk.breaker_tripped = true,
+        "paper_rearmed" => out.risk.breaker_tripped = false,
+        _ => {}
     }
     out.risk.last_breaker_state = Some(state);
     out.risk.last_breaker_reason = Some(reason);
@@ -1387,6 +1389,88 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("because the circuit breaker is tripped")));
+    }
+
+    #[test]
+    fn session_diagnostics_treats_paper_rearm_as_untripped() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "cat": "system",
+                "type": "release_manifest",
+                "mode": "paper",
+                "promotion": {
+                    "status": "ok",
+                    "source_report_hash": "report",
+                    "data_manifest_hash": "data",
+                    "strategy": {"params_hash": "strategy"}
+                }
+            }),
+            serde_json::json!({
+                "cat": "risk",
+                "type": "breaker",
+                "state": "tripped",
+                "reason": "win_rate_low"
+            }),
+            serde_json::json!({
+                "cat": "risk",
+                "type": "breaker",
+                "state": "paper_rearmed",
+                "reason": "paper_cooldown_elapsed"
+            }),
+            serde_json::json!({
+                "cat": "signal",
+                "type": "evaluation",
+                "cid": "0xabc",
+                "open": 100.0,
+                "px": 101.0,
+                "chg": 1.0,
+                "chg_pct": 0.01,
+                "cons": 1.0,
+                "z": 1.0,
+                "conf": 0.5,
+                "elapsed_min": 2.0,
+                "remaining_min": 3.0,
+                "dir": "up",
+                "vol_fast": 0.3,
+                "vol_slow": 0.3,
+                "implied_vol": 0.3,
+                "cross_boost": 0.0,
+                "up_price": 0.5,
+                "down_price": 0.5,
+                "book_spread": 0.01,
+                "book_bid_depth": 10.0,
+                "book_ask_depth": 10.0,
+                "book_pressure": 0.0,
+                "zone": "primary",
+                "fair": 0.5,
+                "edge": 0.0,
+                "decision_trade": false,
+                "execution_attempted": false,
+                "traded": false
+            }),
+        ];
+        let payload = lines
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, payload).unwrap();
+
+        let diag = analyze_session(&path).unwrap();
+
+        assert!(diag.ok);
+        assert_eq!(diag.risk.breaker_events, 2);
+        assert!(!diag.risk.breaker_tripped);
+        assert_eq!(
+            diag.risk.last_breaker_state.as_deref(),
+            Some("paper_rearmed")
+        );
+        assert!(!diag
+            .warnings
+            .iter()
+            .any(|w| w.contains("circuit breaker is tripped")));
     }
 
     #[test]

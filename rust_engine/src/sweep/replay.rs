@@ -138,6 +138,8 @@ pub fn run_strategy(
     resolutions: &[ResolutionRow],
     strat: &Strategy,
     bankroll_usd: f64,
+    position_pct: f64,
+    max_per_market_usd: f64,
 ) -> SweepRun {
     // Group evaluations by cid in time order.
     let mut by_cid: HashMap<String, Vec<&EvaluationRow>> = HashMap::new();
@@ -158,6 +160,8 @@ pub fn run_strategy(
 
     let mut run = SweepRun {
         strategy_name: strat.name.clone(),
+        position_pct,
+        max_per_market_usd,
         ..Default::default()
     };
     let mut total_entry_price = 0.0;
@@ -201,9 +205,7 @@ pub fn run_strategy(
         };
 
         // Position sizing — same shape as the live pipeline.
-        let position_pct = 0.10_f64;
-        let max_per_market = 20.0_f64;
-        let position = (bankroll_usd * position_pct).min(max_per_market);
+        let position = (bankroll_usd * position_pct).min(max_per_market_usd);
         let market_price = if entry.direction == "up" {
             entry.up_price
         } else {
@@ -318,7 +320,7 @@ mod tests {
     #[test]
     fn empty_inputs_produce_zero_trades() {
         let strat = crate::sweep::strategy::baseline();
-        let run = run_strategy(&[], &[], &strat, 100.0);
+        let run = run_strategy(&[], &[], &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
     }
 
@@ -327,7 +329,7 @@ mod tests {
         let evals = vec![mk_eval("c1", 1, 0.75, 2.0, "up")];
         let res = vec![mk_res("c1", "up")];
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 1);
         assert_eq!(run.wins, 1);
         assert!(run.realized_pnl > 0.0);
@@ -339,7 +341,7 @@ mod tests {
         let evals = vec![mk_eval("missing", 1, 0.75, 2.0, "up")];
         let res = vec![];
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
     }
 
@@ -348,7 +350,7 @@ mod tests {
         let evals = vec![mk_eval("c1", 1, 0.75, 2.0, "up")];
         let res = vec![mk_res("c1", "down")]; // we predicted up, actual down → loss
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 1);
         assert_eq!(run.losses, 1);
         assert!(run.realized_pnl < 0.0);
@@ -366,7 +368,7 @@ mod tests {
         let res = vec![mk_res("c1", "up")];
         let mut strat = crate::sweep::strategy::ev_off();
         strat.microstructure.max_spread = 0.02;
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
     }
 }
