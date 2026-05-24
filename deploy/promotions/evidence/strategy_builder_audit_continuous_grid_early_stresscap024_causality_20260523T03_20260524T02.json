@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "a_plus_ready": false,
+  "grade": "A-",
+  "checks": [
+    {
+      "name": "report.load",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window3_20260520_21.json variants=24 complete=true"
+    },
+    {
+      "name": "report.data_manifest",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window3_20260520_21.json complete data manifest"
+    },
+    {
+      "name": "report.best_variant",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window3_20260520_21.json trades=97 attempts=168 fill_rate=0.577 failed=71 passive_failures_only=true win_rate=0.773 wilson95=0.680 pnl=60.82 unresolved=0 per_report_gates[min_trades=60, min_pnl=33.33]"
+    },
+    {
+      "name": "report.best_variant_health",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window3_20260520_21.json breaker_tripped=false breaker_reason=none adaptive_rearms=0 breaker_paused_events=0"
+    },
+    {
+      "name": "report.load",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window1_20260521_22.json variants=24 complete=true"
+    },
+    {
+      "name": "report.data_manifest",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window1_20260521_22.json complete data manifest"
+    },
+    {
+      "name": "report.best_variant",
+      "status": "warn",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window1_20260521_22.json trades=45 attempts=65 fill_rate=0.692 failed=20 passive_failures_only=true win_rate=0.867 wilson95=0.738 pnl=72.69 unresolved=0 per_report_gates[min_trades=60, min_pnl=33.33]"
+    },
+    {
+      "name": "report.best_variant_health",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_window1_20260521_22.json breaker_tripped=false breaker_reason=none adaptive_rearms=0 breaker_paused_events=0"
+    },
+    {
+      "name": "report.load",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_current_20260523_24.json variants=24 complete=true"
+    },
+    {
+      "name": "report.data_manifest",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_current_20260523_24.json complete data manifest"
+    },
+    {
+      "name": "report.best_variant",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_current_20260523_24.json trades=70 attempts=126 fill_rate=0.556 failed=56 passive_failures_only=true win_rate=0.814 wilson95=0.708 pnl=51.43 unresolved=0 per_report_gates[min_trades=60, min_pnl=33.33]"
+    },
+    {
+      "name": "report.best_variant_health",
+      "status": "ok",
+      "detail": "deploy/promotions/evidence/harness_sweep_continuous_grid_early_stresscap024_current_20260523_24.json breaker_tripped=false breaker_reason=none adaptive_rearms=0 breaker_paused_events=0"
+    },
+    {
+      "name": "a_plus.research_reports",
+      "status": "ok",
+      "detail": "reports=3 min_research_reports=3"
+    },
+    {
+      "name": "adaptive_probe.reports",
+      "status": "warn",
+      "detail": "no adaptive breaker probe reports supplied; A+ requires checking whether rearm-only runs change the picture"
+    },
+    {
+      "name": "promotion.load",
+      "status": "ok",
+      "detail": "deploy/promotions/promotion_candidate_continuous_grid_early_stresscap024_aggregate_20260520_24.json trades=224 win_rate=0.772 pnl=154.59"
+    },
+    {
+      "name": "promotion.params_hash",
+      "status": "ok",
+      "detail": "params hash verified: a40d2eb7bc3f1747636f9dfbf4790f3ad4d2c745483d5a6e07da2284b6789df9"
+    },
+    {
+      "name": "promotion.robustness",
+      "status": "ok",
+      "detail": "trades=224 win_rate=0.772 wilson95~=0.713 pnl=154.59 gates[min_trades=180, min_wr=0.700, min_wilson=0.650, min_pnl=100.00]"
+    },
+    {
+      "name": "adaptive.drift",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl baseline_wr=0.772 baseline_avg_pnl=0.6901 resolved=70 wins=57 losses=13 pnl=51.43; forward performance inside adaptive band: win_rate=0.814 avg_pnl=0.7347"
+    },
+    {
+      "name": "a_plus.replay_sessions",
+      "status": "ok",
+      "detail": "replay_sessions=1 min_replay_sessions=1"
+    },
+    {
+      "name": "replay.session",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl ok=true events=68497 resolved=70 shadow=0 oracle=70 disagreements=0 actionable_disagreements=0 below_floor_disagreements=0 errors=0"
+    },
+    {
+      "name": "replay.shadow_oracle",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl resolved=70 shadow=0 samples=70 min_samples=50 oracle=70 ties=0 disagreements=0 actionable_disagreements=0 below_floor_disagreements=0 errors=0"
+    },
+    {
+      "name": "replay.settlement_alignment",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl settlement_alignment_ready=Some(true); executable order-path parity requires true"
+    },
+    {
+      "name": "replay.below_floor_oracle",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl below_floor_disagreements=0 excluded_from_executable_gate=true"
+    },
+    {
+      "name": "replay.causality",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl ok=true order_timings=126 placed=126 filled=70 resolution_timings=70 violations=0"
+    },
+    {
+      "name": "replay.a_plus_sample",
+      "status": "ok",
+      "detail": "/private/tmp/polymomentum_causality_replay_20260524T_local/sessions/session_20260524_142707.jsonl samples=70 resolved=70 shadow=0 a_plus_min_samples=50"
+    }
+  ],
+  "next_steps": [
+    "Review warnings and document why they are acceptable for the current gate.",
+    "Run fresh feed-forward live-replay/backtest diagnostics before using paper mode for irreducible venue plumbing."
+  ]
+}
