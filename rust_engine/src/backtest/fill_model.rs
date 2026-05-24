@@ -10,6 +10,7 @@
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 
 pub const DEFAULT_TICK: f64 = 0.01;
 
@@ -251,6 +252,7 @@ impl BookWalkTaker {
 pub struct Maker {
     pub fill_prob: f64,
     pub tick_size: f64,
+    seed: Option<u64>,
     rng: StdRng,
 }
 
@@ -263,10 +265,12 @@ impl Maker {
         Self {
             fill_prob,
             tick_size,
+            seed,
             rng,
         }
     }
 
+    #[allow(dead_code)]
     pub fn fill(
         &mut self,
         side: Side,
@@ -275,6 +279,27 @@ impl Maker {
         best_ask: f64,
         order_type: OrderType,
         limit_price: Option<f64>,
+    ) -> FillResult {
+        self.fill_with_key(
+            side,
+            size,
+            best_bid,
+            best_ask,
+            order_type,
+            limit_price,
+            None,
+        )
+    }
+
+    pub fn fill_with_key(
+        &mut self,
+        side: Side,
+        size: f64,
+        best_bid: f64,
+        best_ask: f64,
+        order_type: OrderType,
+        limit_price: Option<f64>,
+        deterministic_key: Option<&str>,
     ) -> FillResult {
         if size <= 0.0 {
             return failed(FillReason::Empty);
@@ -310,7 +335,11 @@ impl Maker {
                 _ => {}
             }
 
-            if self.rng.gen::<f64>() >= self.fill_prob {
+            let draw = match (self.seed, deterministic_key) {
+                (Some(seed), Some(key)) => deterministic_unit_interval(seed, key),
+                _ => self.rng.gen::<f64>(),
+            };
+            if draw >= self.fill_prob {
                 return failed(FillReason::MakerUnfilled);
             }
 
@@ -329,6 +358,17 @@ impl Maker {
             }
         }
     }
+}
+
+fn deterministic_unit_interval(seed: u64, key: &str) -> f64 {
+    let mut hasher = Sha256::new();
+    hasher.update(seed.to_le_bytes());
+    hasher.update(key.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    let n = u64::from_le_bytes(bytes);
+    (n as f64) / ((u64::MAX as f64) + 1.0)
 }
 
 /// Sanity baseline — fills at touch with zero slippage.
@@ -433,6 +473,54 @@ mod tests {
         let rb = b.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
         assert!((ra.fill_price - rb.fill_price).abs() < 1e-12);
         assert_eq!(ra.reason, rb.reason);
+    }
+
+    #[test]
+    fn seeded_maker_fill_key_is_independent_of_call_order() {
+        let mut a = Maker::new(0.65, DEFAULT_TICK, Some(42));
+        let a_first = a.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-a"),
+        );
+        let a_second = a.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-b"),
+        );
+
+        let mut b = Maker::new(0.65, DEFAULT_TICK, Some(42));
+        let b_second = b.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-b"),
+        );
+        let b_first = b.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-a"),
+        );
+
+        assert_eq!(a_first.success, b_first.success);
+        assert_eq!(a_first.reason, b_first.reason);
+        assert_eq!(a_second.success, b_second.success);
+        assert_eq!(a_second.reason, b_second.reason);
     }
 
     #[test]

@@ -305,6 +305,9 @@ enum Command {
         /// are still rejected by promotion gates.
         #[arg(long, default_value_t = 0.0)]
         adaptive_health_rearm_minutes: f64,
+        /// Preserve strategy/fill/book state across hours to mirror live-replay.
+        #[arg(long, default_value_t = false)]
+        continuous: bool,
     },
     /// Run the full L2-backtest harness over PMXT v2 archives. Loads candle
     /// markets from Gamma, downloads/streams the requested UTC hours,
@@ -363,6 +366,9 @@ enum Command {
         /// are still rejected by promotion gates.
         #[arg(long, default_value_t = 0.0)]
         adaptive_health_rearm_minutes: f64,
+        /// Preserve strategy/fill/book state across hours to mirror live-replay.
+        #[arg(long, default_value_t = false)]
+        continuous: bool,
     },
     /// Replay one or more captured session JSONLs through a grid of strategy
     /// variants and report synthetic P&L per variant.
@@ -986,6 +992,7 @@ async fn main() {
             report_json,
             window_minutes,
             adaptive_health_rearm_minutes,
+            continuous,
         } => {
             let conf = parse_csv_floats(&conf);
             let zs = parse_csv_floats(&z);
@@ -1036,6 +1043,7 @@ async fn main() {
                 report_json.as_deref(),
                 window_minutes,
                 adaptive_health_rearm_minutes,
+                continuous,
             )
             .await;
         }
@@ -1055,6 +1063,7 @@ async fn main() {
             allow_gamma_fetch,
             report_json,
             adaptive_health_rearm_minutes,
+            continuous,
         } => {
             cmd_harness(
                 &settings,
@@ -1073,6 +1082,7 @@ async fn main() {
                 allow_gamma_fetch,
                 report_json.as_deref(),
                 adaptive_health_rearm_minutes,
+                continuous,
             )
             .await;
         }
@@ -2551,6 +2561,7 @@ async fn cmd_harness_sweep(
     report_json: Option<&str>,
     window_minutes: Option<f64>,
     adaptive_health_rearm_minutes: f64,
+    continuous: bool,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -2813,6 +2824,7 @@ async fn cmd_harness_sweep(
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag.clone()),
+        continuous,
     };
 
     eprintln!(
@@ -2897,6 +2909,7 @@ async fn cmd_harness(
     allow_gamma_fetch: bool,
     report_json: Option<&str>,
     adaptive_health_rearm_minutes: f64,
+    continuous: bool,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -3212,6 +3225,7 @@ async fn cmd_harness(
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag),
+        continuous,
     };
 
     let variants = backtest::strategies::default_variants();

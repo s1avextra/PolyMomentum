@@ -195,6 +195,7 @@ pub enum FillModel {
 impl FillModel {
     pub fn fill(
         &mut self,
+        order_key: &str,
         side: Side,
         size: f64,
         book: &TokenBook,
@@ -210,13 +211,14 @@ impl FillModel {
                 order_type,
                 limit_price,
             ),
-            FillModel::Maker(m) => m.fill(
+            FillModel::Maker(m) => m.fill_with_key(
                 side,
                 size,
                 book.best_bid,
                 book.best_ask,
                 order_type,
                 limit_price,
+                Some(order_key),
             ),
             FillModel::Perfect(m) => m.fill(side, size, book.best_bid, book.best_ask),
         }
@@ -384,9 +386,15 @@ impl L2BacktestEngine {
                 "limit" => OrderType::Limit,
                 _ => OrderType::Market,
             };
-            let result: FillResult =
-                self.fill_model
-                    .fill(side, order.size, &book, order_type, order.limit_price);
+            let fill_key = maker_fill_key(&order);
+            let result: FillResult = self.fill_model.fill(
+                &fill_key,
+                side,
+                order.size,
+                &book,
+                order_type,
+                order.limit_price,
+            );
             let book_age_ms = ((fill_ts - book.last_update_ts_s) * 1000.0).max(0.0);
             if !result.success {
                 let fill = BacktestFill {
@@ -456,6 +464,19 @@ impl L2BacktestEngine {
             tokens_tracked: self.books.len() as u64,
         }
     }
+}
+
+fn maker_fill_key(order: &BacktestOrder) -> String {
+    format!(
+        "{}:{:.6}:{}:{}:{}:{:.8}:{:.8}",
+        order.condition_id,
+        order.timestamp_s,
+        order.token_id,
+        order.side,
+        order.order_type,
+        order.limit_price.unwrap_or(0.0),
+        order.size,
+    )
 }
 
 #[derive(Debug, Clone, Copy, Default)]

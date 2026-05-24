@@ -1087,6 +1087,7 @@ mod tests {
             threads: Some(1),
             checkpoint_dir: None,
             stop_flag: None,
+            continuous: false,
         }
     }
 

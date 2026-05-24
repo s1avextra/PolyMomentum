@@ -728,6 +728,16 @@ pub struct HarnessConfig {
     /// checked between hours; on set, the harness returns whatever it has
     /// so far. Persists checkpoints first if `checkpoint_dir` is set.
     pub stop_flag: Option<Arc<AtomicBool>>,
+    /// Preserve strategy, fill-model, order-book, and breaker state across
+    /// requested hours. This mirrors live/live-replay semantics and avoids
+    /// hour-boundary double entries.
+    pub continuous: bool,
+}
+
+struct ContinuousVariantState {
+    variant: StrategyVariant,
+    engine: L2BacktestEngine,
+    strategy: CandleBacktestStrategy,
 }
 
 /// Run every variant over the requested hours. Streams one hour at a time
@@ -751,6 +761,10 @@ pub async fn run_harness(
     cfg: &HarnessConfig,
     variants: &[StrategyVariant],
 ) -> Result<Vec<HarnessRun>> {
+    if cfg.continuous {
+        return run_harness_continuous(cfg, variants).await;
+    }
+
     let loader = PMXTv2Loader::new(&cfg.cache_dir);
     let all_condition_ids = cfg.universe.condition_id_set();
     let windows = cfg.universe.windows();
@@ -1000,6 +1014,158 @@ pub async fn run_harness(
         .cloned()
         .zip(variant_state)
         .map(|(variant, results)| HarnessRun { variant, results })
+        .collect())
+}
+
+async fn run_harness_continuous(
+    cfg: &HarnessConfig,
+    variants: &[StrategyVariant],
+) -> Result<Vec<HarnessRun>> {
+    if cfg.checkpoint_dir.is_some() {
+        anyhow::bail!("continuous harness mode does not support --checkpoint yet");
+    }
+
+    let loader = PMXTv2Loader::new(&cfg.cache_dir);
+    let all_condition_ids = cfg.universe.condition_id_set();
+    let windows = cfg.universe.windows();
+
+    let local_pool = match cfg.threads {
+        Some(n) if n > 0 => Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .thread_name(|i| format!("harness-continuous-{i}"))
+                .build()
+                .map_err(|e| anyhow::anyhow!("rayon ThreadPoolBuilder: {e}"))?,
+        ),
+        _ => None,
+    };
+
+    let mut states: Vec<ContinuousVariantState> = variants
+        .iter()
+        .cloned()
+        .map(|variant| {
+            let engine = L2BacktestEngine::new(build_fill_model(&variant), cfg.latency);
+            let strategy = CandleBacktestStrategy::new_with_breaker(
+                variant.clone(),
+                &cfg.universe,
+                cfg.bankroll_usd,
+                cfg.max_total_exposure_usd,
+                Arc::clone(&cfg.btc_history),
+                BacktestBreakerReport::default(),
+                cfg.breaker_cfg,
+                cfg.adaptive_rearm_after_s,
+            );
+            ContinuousVariantState {
+                variant,
+                engine,
+                strategy,
+            }
+        })
+        .collect();
+
+    let total_hours = cfg.hours.len();
+    for (i, &h) in cfg.hours.iter().enumerate() {
+        if should_pause(cfg) {
+            tracing::warn!(
+                hour = %h,
+                completed = i,
+                remaining = total_hours - i,
+                "pause requested — exiting continuous harness between hours",
+            );
+            break;
+        }
+
+        loader.download_hour(h, false).await?;
+        let load_t0 = std::time::Instant::now();
+        let hour_filter = cfg.universe.condition_id_set_for_hour(h);
+        eprintln!(
+            "harness-continuous: hour {}/{} {} loading {} overlapping condition_id(s) ({} total)",
+            i + 1,
+            total_hours,
+            h,
+            hour_filter.len(),
+            all_condition_ids.len(),
+        );
+
+        let mut events_vec: Vec<L2Event> = Vec::new();
+        let mut source = "parquet";
+        if let Some(shared_dir) = &cfg.shared_distilled_dir {
+            let path = crate::backtest::distill::shared_cache_path_for_hour(shared_dir, h);
+            if path.exists() {
+                match crate::backtest::distill::read_distilled(&path) {
+                    Ok((mut shared_events, _)) => {
+                        shared_events.retain(|e| hour_filter.contains(&e.market_id));
+                        events_vec = shared_events;
+                        source = "shared_distilled";
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, ?path, "shared distilled cache unreadable; falling back");
+                    }
+                }
+            }
+        }
+        if events_vec.is_empty() {
+            events_vec = loader.load_with_sidecar(h, &hour_filter)?;
+        }
+        events_vec.sort_by(|a, b| {
+            a.timestamp_s
+                .partial_cmp(&b.timestamp_s)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let load_ms = load_t0.elapsed().as_millis() as u64;
+        let events: Arc<Vec<L2Event>> = Arc::new(events_vec);
+        eprintln!(
+            "harness-continuous: hour {}/{} {} loaded {} event(s) from {} in {:.2}s",
+            i + 1,
+            total_hours,
+            h,
+            events.len(),
+            source,
+            load_ms as f64 / 1000.0,
+        );
+
+        let replay_t0 = std::time::Instant::now();
+        let replay_state = |state: &mut ContinuousVariantState| {
+            state.engine.replay(
+                events.iter().cloned(),
+                &mut state.strategy,
+                state.variant.default_fee_rate,
+            );
+        };
+        if let Some(pool) = &local_pool {
+            pool.install(|| states.par_iter_mut().for_each(replay_state));
+        } else {
+            states.par_iter_mut().for_each(replay_state);
+        }
+        let replay_ms = replay_t0.elapsed().as_millis() as u64;
+        eprintln!(
+            "harness-continuous: hour {}/{} {} replayed {} variant(s) in {:.2}s (done {}/{})",
+            i + 1,
+            total_hours,
+            h,
+            states.len(),
+            replay_ms as f64 / 1000.0,
+            i + 1,
+            total_hours,
+        );
+    }
+
+    Ok(states
+        .into_iter()
+        .map(|mut state| {
+            state.strategy.settle_all_positions();
+            let breaker = state.strategy.breaker_report();
+            let diagnostics = state.strategy.diagnostics();
+            let decisions = state.strategy.decisions;
+            let mut results =
+                resolve_fills(&state.engine.fills, &decisions, &windows, &cfg.btc_history);
+            results.breaker = breaker;
+            results.diagnostics = diagnostics;
+            HarnessRun {
+                variant: state.variant,
+                results,
+            }
+        })
         .collect())
 }
 
@@ -1293,6 +1459,7 @@ mod tests {
             threads: None,
             checkpoint_dir: None,
             stop_flag: None,
+            continuous: false,
         };
         (cfg, variants)
     }

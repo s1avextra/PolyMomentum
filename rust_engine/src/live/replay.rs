@@ -4,7 +4,7 @@
 //! runtime: PMXT L2 events become the market-book feed, a cached BTC tape
 //! becomes the exchange-price feed, and the output is a normal session JSONL.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -384,6 +384,7 @@ struct LiveReplayStrategy {
     lifecycle: ReplayLifecycle,
     breaker_state: BreakerState,
     last_tick_ts_s: f64,
+    last_eval_bucket_by_token: HashMap<String, i64>,
     last_skip_log_bucket: BTreeMap<String, i64>,
     orders_submitted: usize,
     settlement_alignment_ready: bool,
@@ -449,6 +450,7 @@ impl LiveReplayStrategy {
             lifecycle: ReplayLifecycle::default(),
             breaker_state: BreakerState::default(),
             last_tick_ts_s: 0.0,
+            last_eval_bucket_by_token: HashMap::new(),
             last_skip_log_bucket: BTreeMap::new(),
             orders_submitted: 0,
             settlement_alignment_ready,
@@ -520,6 +522,9 @@ impl LiveReplayStrategy {
             .filter(|(_, p)| p.close_ts_s <= timestamp_s)
             .map(|(intent_id, _)| intent_id.clone())
             .collect();
+        if due.is_empty() {
+            return;
+        }
         for intent_id in due {
             let Some(pos) = self.replay_positions.remove(&intent_id) else {
                 continue;
@@ -775,6 +780,10 @@ impl LiveReplayStrategy {
 }
 
 impl Strategy for LiveReplayStrategy {
+    fn needs_l2_history(&self) -> bool {
+        false
+    }
+
     fn on_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
         self.record_fills(fills);
     }
@@ -814,6 +823,17 @@ impl Strategy for LiveReplayStrategy {
         if minutes_elapsed < 0.5 {
             return Vec::new();
         }
+        let eval_bucket = (timestamp_s * 10.0).floor() as i64;
+        if self
+            .last_eval_bucket_by_token
+            .get(token_id)
+            .copied()
+            .is_some_and(|last| last == eval_bucket)
+        {
+            return Vec::new();
+        }
+        self.last_eval_bucket_by_token
+            .insert(token_id.to_string(), eval_bucket);
 
         let asset_price = self.btc_history.price_at_seconds(timestamp_s);
         if asset_price <= 0.0 {
@@ -1423,5 +1443,60 @@ mod tests {
 
         let open_and_nonterminal = replay_resolution_contract(0.51, 0.49, false);
         assert!(replay_polymarket_resolution(&open_and_nonterminal).is_none());
+    }
+
+    #[test]
+    fn replay_settle_due_positions_is_silent_when_nothing_is_due() {
+        let tmp = TempDir::new().unwrap();
+        let monitor = Arc::new(SessionMonitor::open(tmp.path()).unwrap());
+        let strategy = ReplayStrategy {
+            variant: StrategyVariant::maker_first(),
+            strategy_spec: StrategySpec::from_serializable_params(
+                "candle_momentum",
+                "1",
+                &StrategyVariant::maker_first(),
+                StrategyVariant::maker_first().risk_profile(),
+            ),
+            source: "test".to_string(),
+        };
+        let mut replay = LiveReplayStrategy::new(
+            strategy,
+            &CandleUniverse { contracts: vec![] },
+            100.0,
+            Arc::new(BTCHistory::new()),
+            monitor.clone(),
+            true,
+        );
+
+        replay.settle_due_positions(1_779_600_000.0);
+
+        let events = std::fs::read_to_string(monitor.events_path()).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn replay_strategy_does_not_request_unused_l2_history() {
+        let tmp = TempDir::new().unwrap();
+        let monitor = Arc::new(SessionMonitor::open(tmp.path()).unwrap());
+        let strategy = ReplayStrategy {
+            variant: StrategyVariant::maker_first(),
+            strategy_spec: StrategySpec::from_serializable_params(
+                "candle_momentum",
+                "1",
+                &StrategyVariant::maker_first(),
+                StrategyVariant::maker_first().risk_profile(),
+            ),
+            source: "test".to_string(),
+        };
+        let replay = LiveReplayStrategy::new(
+            strategy,
+            &CandleUniverse { contracts: vec![] },
+            100.0,
+            Arc::new(BTCHistory::new()),
+            monitor,
+            true,
+        );
+
+        assert!(!replay.needs_l2_history());
     }
 }
