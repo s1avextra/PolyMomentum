@@ -35,7 +35,9 @@ use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
 use crate::monitoring::alerter::Alerter;
-use crate::monitoring::session::{OrderFilled, OrderReconciled, SessionMonitor, SignalEvaluation};
+use crate::monitoring::session::{
+    OrderFilled, OrderReconciled, OrderTiming, ResolutionTiming, SessionMonitor, SignalEvaluation,
+};
 use crate::polymarket_ws::{
     new_shared_book, new_subscription_notify, polymarket_book_feed, SharedBookState,
 };
@@ -1492,6 +1494,12 @@ impl Pipeline {
         } else {
             &contract.down_token_id
         };
+        let end_ts = parse_end(&contract.end_date)?.timestamp() as f64;
+        let window_minutes =
+            crate::live::window::estimate_window_minutes(&contract.window_description)
+                .max(signal.minutes_elapsed + signal.minutes_remaining);
+        let market_start_ts_s = end_ts - window_minutes * 60.0;
+        let decision_ts_s = end_ts - signal.minutes_remaining * 60.0;
         let market_price = decision.market_price;
 
         match self.mode {
@@ -1571,6 +1579,18 @@ impl Pipeline {
                     minutes_left = signal.minutes_remaining,
                     "candle.trade.paper"
                 );
+                self.monitor.record_order_timing(&OrderTiming {
+                    intent_id: intent.intent_id.clone(),
+                    condition_id: contract.market.condition_id.clone(),
+                    token_id: token_id.clone(),
+                    source: self.mode.as_str().to_string(),
+                    signal_source_ts_s: decision_ts_s,
+                    decision_ts_s,
+                    order_ts_s: now_ts,
+                    market_start_ts_s,
+                    market_end_ts_s: end_ts,
+                    latency_model_ms: Some(0.0),
+                });
                 self.monitor
                     .record_order_placed(&crate::monitoring::session::OrderPlaced {
                         intent_id: intent.intent_id.clone(),
@@ -1626,7 +1646,6 @@ impl Pipeline {
                     })
                     .await?;
 
-                let end_ts = parse_end(&contract.end_date)?.timestamp() as f64;
                 let pp = PaperPosition {
                     direction: signal.direction.clone(),
                     entry_price: fill.fill_price,
@@ -1739,6 +1758,18 @@ impl Pipeline {
                         .submit(&intent.intent_id, None, t_start)
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
+                self.monitor.record_order_timing(&OrderTiming {
+                    intent_id: intent.intent_id.clone(),
+                    condition_id: contract.market.condition_id.clone(),
+                    token_id: token_id.clone(),
+                    source: self.mode.as_str().to_string(),
+                    signal_source_ts_s: decision_ts_s,
+                    decision_ts_s,
+                    order_ts_s: t_start,
+                    market_start_ts_s,
+                    market_end_ts_s: end_ts,
+                    latency_model_ms: None,
+                });
                 let result = if prefer_maker {
                     clob.write()
                         .await
@@ -1872,6 +1903,12 @@ impl Pipeline {
                 let won = actual == pos.direction;
                 let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
                 if pos.shadow {
+                    self.monitor.record_resolution_timing(&ResolutionTiming {
+                        condition_id: cid.clone(),
+                        source: "paper_shadow".to_string(),
+                        market_end_ts_s: pos.end_time,
+                        resolution_ts_s: now,
+                    });
                     self.monitor.record_shadow_resolution(
                         cid,
                         &pos.direction,
@@ -1912,6 +1949,12 @@ impl Pipeline {
                 drop(bs);
                 self.persist_breaker_state().await;
 
+                self.monitor.record_resolution_timing(&ResolutionTiming {
+                    condition_id: cid.clone(),
+                    source: self.mode.as_str().to_string(),
+                    market_end_ts_s: pos.end_time,
+                    resolution_ts_s: now,
+                });
                 self.monitor.record_resolution(
                     cid,
                     &pos.direction,

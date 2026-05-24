@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::strategies::StrategyVariant;
-use crate::monitoring::diagnostics;
+use crate::monitoring::{causality, diagnostics};
 use crate::strategy::spec::stable_json_hash;
 
 #[derive(Debug, Clone)]
@@ -252,6 +252,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
                 "live-replay runs with --settlement-alignment-ready so executable order mechanics are validated offline".to_string(),
                 "live-replay report has resolved fills or shadow resolutions".to_string(),
                 "session diagnostics have oracle.checks >= resolved/shadow samples and zero actionable disagreements".to_string(),
+                "causality diagnostics prove signal_source <= decision <= order <= fill < market_end".to_string(),
             ],
             resource_policy:
                 "Can be short on the VPS, but full feed-forward replays should run on a dev box first."
@@ -276,6 +277,24 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
                 "diagnostics ok=true".to_string(),
                 "warnings are explainable; no oracle disagreement on executable candidates"
                     .to_string(),
+            ],
+            resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
+        });
+        stages.push(StrategyBuilderStage {
+            name: format!("feed_forward_causality_{}", holdout_idx),
+            purpose:
+                "Falsify timestamp leakage by auditing order/fill/resolution chronology."
+                    .to_string(),
+            command: shell_command(&[
+                "polymomentum-engine".to_string(),
+                "diagnostics".to_string(),
+                "causality".to_string(),
+                diagnostic_session.clone(),
+            ]),
+            outputs: Vec::new(),
+            verify: vec![
+                "causality ok=true".to_string(),
+                "no future_signal_source, order_before_decision, fill_after_market_end, or resolution_before_market_end violations".to_string(),
             ],
             resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
         });
@@ -323,6 +342,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             verify: vec![
                 "audit ok=true before treating the fold as validation evidence".to_string(),
                 "adaptive.drift is based on the holdout replay session only".to_string(),
+                "replay.causality is ok for every replay session".to_string(),
             ],
             resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
         });
@@ -433,6 +453,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         verify: vec![
             "adaptive.drift checks are ok before increasing size".to_string(),
             "any warning starts a rolling re-scout; any failure freezes live promotion".to_string(),
+            "replay.causality is ok; otherwise treat the strategy as possibly timestamp-leaked"
+                .to_string(),
         ],
         resource_policy: "Lightweight; safe on the VPS after each replay or bounded integration session.".to_string(),
     });
@@ -729,6 +751,32 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         session, diag.oracle.below_floor_disagreements
                     ),
                 ));
+                match causality::audit_session(session, causality::CausalityAuditConfig::default())
+                {
+                    Ok(audit) => checks.push(check(
+                        "replay.causality",
+                        if audit.ok {
+                            StrategyBuilderCheckStatus::Ok
+                        } else {
+                            StrategyBuilderCheckStatus::Fail
+                        },
+                        format!(
+                            "{} ok={} order_timings={} placed={} filled={} resolution_timings={} violations={}",
+                            session,
+                            audit.ok,
+                            audit.order_timings,
+                            audit.order_placed,
+                            audit.order_filled,
+                            audit.resolution_timings,
+                            audit.violations.len()
+                        ),
+                    )),
+                    Err(e) => checks.push(check(
+                        "replay.causality",
+                        StrategyBuilderCheckStatus::Fail,
+                        format!("{session}: {e:#}"),
+                    )),
+                }
                 checks.push(check(
                     "replay.a_plus_sample",
                     if oracle_samples >= input.a_plus_min_shadow_resolutions {
@@ -1628,7 +1676,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 24);
+        assert_eq!(plan.stages.len(), 26);
         assert_eq!(plan.zone_mode, "primary");
         assert_eq!(plan.fold_hours, 24);
         assert!(plan
@@ -1665,6 +1713,10 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.name == "adaptive_health_audit"));
+        assert!(plan.stages.iter().any(|s| {
+            s.name.starts_with("feed_forward_causality_")
+                && s.command.contains("diagnostics causality")
+        }));
         assert!(!plan
             .stages
             .iter()
@@ -1848,9 +1900,27 @@ mod tests {
                 "book_spread": 0.01
             }),
             serde_json::json!({
+                "cat": "causality",
+                "type": "order_timing",
+                "intent_id": "intent_1",
+                "condition_id": "0xabc",
+                "token_id": "token",
+                "signal_source_ts_s": 100.0,
+                "decision_ts_s": 100.0,
+                "order_ts_s": 100.05,
+                "market_start_ts_s": 0.0,
+                "market_end_ts_s": 300.0
+            }),
+            serde_json::json!({
+                "cat": "order",
+                "type": "placed",
+                "intent_id": "intent_1"
+            }),
+            serde_json::json!({
                 "cat": "order",
                 "type": "filled",
-                "intent_id": "intent_1"
+                "intent_id": "intent_1",
+                "fill_time_s": 0.05
             }),
             serde_json::json!({
                 "cat": "resolution",
@@ -1858,6 +1928,13 @@ mod tests {
                 "won": true,
                 "pnl": 2.0,
                 "btc_move": 44.0
+            }),
+            serde_json::json!({
+                "cat": "causality",
+                "type": "resolution_timing",
+                "condition_id": "0xabc",
+                "market_end_ts_s": 300.0,
+                "resolution_ts_s": 301.0
             }),
             serde_json::json!({
                 "cat": "oracle",
@@ -1894,6 +1971,9 @@ mod tests {
         }));
         assert!(audit.checks.iter().any(|c| {
             c.name == "replay.settlement_alignment" && c.status == StrategyBuilderCheckStatus::Ok
+        }));
+        assert!(audit.checks.iter().any(|c| {
+            c.name == "replay.causality" && c.status == StrategyBuilderCheckStatus::Ok
         }));
     }
 

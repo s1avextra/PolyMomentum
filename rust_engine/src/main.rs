@@ -660,6 +660,23 @@ enum DiagnosticsCommand {
         #[arg(long)]
         right: String,
     },
+    /// Audit timestamp causality for signal, order, fill, and resolution events.
+    Causality {
+        /// Path to a session JSONL file.
+        path: String,
+        /// Maximum tolerated clock skew between related timestamps.
+        #[arg(long, default_value_t = 0.5)]
+        max_clock_skew_s: f64,
+        /// Maximum tolerated fill delay after market end.
+        #[arg(long, default_value_t = 0.0)]
+        max_post_end_fill_s: f64,
+        /// Minimum executable order timing records required.
+        #[arg(long, default_value_t = 0)]
+        min_order_timings: u64,
+        /// Minimum resolution timing records required.
+        #[arg(long, default_value_t = 0)]
+        min_resolution_timings: u64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2067,6 +2084,36 @@ fn cmd_diagnostics(command: DiagnosticsCommand) {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("serialize diagnostics comparison")
+            );
+            if !report.ok {
+                std::process::exit(2);
+            }
+        }
+        DiagnosticsCommand::Causality {
+            path,
+            max_clock_skew_s,
+            max_post_end_fill_s,
+            min_order_timings,
+            min_resolution_timings,
+        } => {
+            let report = match monitoring::causality::audit_session(
+                &path,
+                monitoring::causality::CausalityAuditConfig {
+                    max_clock_skew_s,
+                    max_post_end_fill_s,
+                    min_order_timings,
+                    min_resolution_timings,
+                },
+            ) {
+                Ok(report) => report,
+                Err(e) => {
+                    eprintln!("causality audit failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize causality report")
             );
             if !report.ok {
                 std::process::exit(2);

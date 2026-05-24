@@ -177,6 +177,22 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_order_timing(&self, evt: &OrderTiming) {
+        self.write_event(
+            "causality",
+            "order_timing",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
+    }
+
+    pub fn record_resolution_timing(&self, evt: &ResolutionTiming) {
+        self.write_event(
+            "causality",
+            "resolution_timing",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
+    }
+
     pub fn record_order_rejected(&self, token_id: &str, reason: &str, price: f64, size: f64) {
         self.counters.lock().unwrap().reject_count += 1;
         self.write_event(
@@ -613,6 +629,29 @@ pub struct OrderFilled {
     pub fill_time_s: f64,
     pub fee: f64,
     pub n_trades: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderTiming {
+    pub intent_id: String,
+    pub condition_id: String,
+    pub token_id: String,
+    pub source: String,
+    pub signal_source_ts_s: f64,
+    pub decision_ts_s: f64,
+    pub order_ts_s: f64,
+    pub market_start_ts_s: f64,
+    pub market_end_ts_s: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_model_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolutionTiming {
+    pub condition_id: String,
+    pub source: String,
+    pub market_end_ts_s: f64,
+    pub resolution_ts_s: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

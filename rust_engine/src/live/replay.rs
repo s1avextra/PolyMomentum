@@ -24,7 +24,9 @@ use crate::config::Settings;
 use crate::data::scanner::CandleContract;
 use crate::execution::order_manager::OrderManager;
 use crate::live::breaker::BreakerState;
-use crate::monitoring::session::{OrderFilled, OrderPlaced, SessionMonitor, SignalEvaluation};
+use crate::monitoring::session::{
+    OrderFilled, OrderPlaced, OrderTiming, ResolutionTiming, SessionMonitor, SignalEvaluation,
+};
 use crate::release::ReleaseManifest;
 use crate::strategy::decision::{decide_candle_trade, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE};
 use crate::strategy::decision::{CandleDecision, DecisionResult, ZoneConfig};
@@ -529,13 +531,23 @@ impl LiveReplayStrategy {
             let Some(pos) = self.replay_positions.remove(&intent_id) else {
                 continue;
             };
-            self.record_resolution(&pos);
+            self.record_resolution(&pos, timestamp_s.max(pos.close_ts_s));
         }
         self.record_risk_state(self.open_exposure(), self.replay_positions.len() as u64);
     }
 
     fn settle_all_positions(&mut self) {
-        self.settle_due_positions(f64::MAX);
+        let due: Vec<String> = self.replay_positions.keys().cloned().collect();
+        if due.is_empty() {
+            return;
+        }
+        for intent_id in due {
+            let Some(pos) = self.replay_positions.remove(&intent_id) else {
+                continue;
+            };
+            self.record_resolution(&pos, pos.close_ts_s);
+        }
+        self.record_risk_state(self.open_exposure(), self.replay_positions.len() as u64);
     }
 
     fn record_shadow_resolutions(&mut self) {
@@ -557,6 +569,12 @@ impl LiveReplayStrategy {
             } else {
                 "down"
             };
+            self.monitor.record_resolution_timing(&ResolutionTiming {
+                condition_id: pos.contract.market.condition_id.clone(),
+                source: "live_replay_shadow".to_string(),
+                market_end_ts_s: pos.close_ts_s,
+                resolution_ts_s: pos.close_ts_s,
+            });
             self.monitor.record_shadow_resolution(
                 &pos.contract.market.condition_id,
                 &pos.direction,
@@ -618,7 +636,7 @@ impl LiveReplayStrategy {
         );
     }
 
-    fn record_resolution(&mut self, pos: &ReplayPosition) {
+    fn record_resolution(&mut self, pos: &ReplayPosition, resolution_ts_s: f64) {
         let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
         if close_btc <= 0.0 || pos.open_btc <= 0.0 {
             self.monitor.record_error(
@@ -628,6 +646,12 @@ impl LiveReplayStrategy {
             );
             return;
         }
+        self.monitor.record_resolution_timing(&ResolutionTiming {
+            condition_id: pos.condition_id.clone(),
+            source: "live_replay".to_string(),
+            market_end_ts_s: pos.close_ts_s,
+            resolution_ts_s,
+        });
 
         let actual = if close_btc >= pos.open_btc {
             "up"
@@ -1084,6 +1108,22 @@ impl LiveReplayStrategy {
             .ok()
             .map(|d| d.timestamp() as f64)
             .unwrap_or(0.0);
+        let window_minutes =
+            crate::live::window::estimate_window_minutes(&contract.window_description)
+                .max(signal.minutes_elapsed + decision.minutes_remaining);
+        let market_start_ts_s = close_ts_s - window_minutes * 60.0;
+        self.monitor.record_order_timing(&OrderTiming {
+            intent_id: intent.intent_id.clone(),
+            condition_id: contract.market.condition_id.clone(),
+            token_id: traded_token.to_string(),
+            source: "live_replay".to_string(),
+            signal_source_ts_s: timestamp_s,
+            decision_ts_s: timestamp_s,
+            order_ts_s: timestamp_s,
+            market_start_ts_s,
+            market_end_ts_s: close_ts_s,
+            latency_model_ms: Some(0.0),
+        });
         self.submitted_positions.insert(
             intent.intent_id.clone(),
             ReplayPosition {
