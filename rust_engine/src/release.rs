@@ -1011,6 +1011,7 @@ mod tests {
             dominant_zone_trade_share: Some(1.0),
             risk_notes: vec![],
             promotion_gate: PromotionGate::default(),
+            robust_diagnostics: None,
         };
         let path = root.join("promotion.json");
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();

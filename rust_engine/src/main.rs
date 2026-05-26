@@ -1629,8 +1629,27 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
         }
 
         if input.execute {
-            run_child(&exe, &hydrate_args)?;
-            run_child(&exe, &sweep_args)?;
+            let fold_result =
+                run_child(&exe, &hydrate_args).and_then(|_| run_child(&exe, &sweep_args));
+            if let Err(err) = fold_result {
+                if input.delete_after_process && fold_cache.exists() {
+                    delete_fold_cache(&cache_root, &fold_cache).with_context(|| {
+                        format!(
+                            "fold {} failed, then cleanup failed for {}",
+                            idx + 1,
+                            fold_cache.display()
+                        )
+                    })?;
+                }
+                return Err(err).with_context(|| {
+                    format!(
+                        "fold {} failed for {} through {}",
+                        idx + 1,
+                        fold_start.to_rfc3339(),
+                        fold_end.to_rfc3339()
+                    )
+                });
+            }
         }
 
         let mut cache_deleted = false;
@@ -4539,5 +4558,22 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("0.50,0.70,0.90,1.10")));
+    }
+
+    #[test]
+    fn rolling_history_delete_fold_cache_is_scoped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_root = tmp.path().join("cache");
+        let fold_cache = cache_root.join("fold_001_test");
+        std::fs::create_dir_all(&fold_cache).unwrap();
+        std::fs::write(fold_cache.join("sample.parquet"), b"owned by test").unwrap();
+
+        delete_fold_cache(&cache_root, &fold_cache).unwrap();
+        assert!(!fold_cache.exists());
+
+        let not_fold = cache_root.join("not_a_fold");
+        std::fs::create_dir_all(&not_fold).unwrap();
+        assert!(delete_fold_cache(&cache_root, &not_fold).is_err());
+        assert!(not_fold.exists());
     }
 }

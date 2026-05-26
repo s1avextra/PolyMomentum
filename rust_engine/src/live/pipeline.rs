@@ -2782,6 +2782,7 @@ mod tests {
             dominant_zone_trade_share: Some(0.5),
             risk_notes: Vec::new(),
             promotion_gate: PromotionGate::default(),
+            robust_diagnostics: None,
         }
     }
 

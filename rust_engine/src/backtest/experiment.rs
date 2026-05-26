@@ -242,6 +242,8 @@ pub struct PromotionArtifact {
     pub dominant_zone_trade_share: Option<f64>,
     pub risk_notes: Vec<String>,
     pub promotion_gate: PromotionGate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robust_diagnostics: Option<RobustPromotionDiagnostics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,6 +477,7 @@ impl PromotionArtifact {
             dominant_zone_trade_share,
             risk_notes,
             promotion_gate: gate,
+            robust_diagnostics: None,
         })
     }
 
@@ -638,6 +641,7 @@ impl PromotionArtifact {
                 .take(10)
                 .collect(),
         };
+        artifact.robust_diagnostics = Some(diagnostics.clone());
         Ok((artifact, diagnostics))
     }
 }
@@ -2392,6 +2396,13 @@ mod tests {
         );
         assert_eq!(diagnostics.selected.neighbor_count, 2);
         assert_eq!(diagnostics.selected.worst_window_pnl, 10.0);
+        assert_eq!(
+            artifact
+                .robust_diagnostics
+                .as_ref()
+                .map(|d| d.selected.strategy_name.as_str()),
+            Some("robust")
+        );
         assert!(artifact
             .risk_notes
             .iter()
