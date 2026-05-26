@@ -1603,7 +1603,7 @@ impl StrategyBuilderProfile {
             "a_plus5m" => Ok(Self {
                 name: "a_plus5m",
                 conf: "0.30,0.35,0.40",
-                z: "0.50,0.70",
+                z: "0.50,0.70,0.90,1.10",
                 edge: "0.03",
                 ev_buffer: "-1.0",
                 min_price: "0.10",

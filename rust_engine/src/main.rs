@@ -841,6 +841,66 @@ enum StrategyBuilderCommand {
         #[arg(long, default_value_t = 50)]
         a_plus_min_shadow_resolutions: u64,
     },
+    /// Execute a storage-bounded rolling PMXT backtest loop, one fold cache at a time.
+    RollingHistory {
+        /// Inclusive UTC start hour (RFC3339).
+        #[arg(long)]
+        start: String,
+        /// Inclusive UTC end hour (RFC3339).
+        #[arg(long)]
+        end: String,
+        /// Output directory for compact reports, artifacts, and run manifest.
+        #[arg(long)]
+        out_dir: String,
+        /// Root for per-fold temporary PMXT caches. Defaults to <out-dir>/cache.
+        #[arg(long)]
+        cache_root: Option<String>,
+        /// BTC tick/kline CSV used as the virtual exchange price feed.
+        #[arg(long)]
+        btc_csv: Option<String>,
+        /// Replay/backtest bankroll used for sizing.
+        #[arg(long, default_value_t = 100.0)]
+        bankroll: f64,
+        /// Simulated insert latency in milliseconds.
+        #[arg(long, default_value_t = 50)]
+        latency_ms: u64,
+        /// Variant-fan-out thread count for harness-sweep.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+        /// Candle frame length to isolate.
+        #[arg(long, default_value_t = 5.0)]
+        window_minutes: f64,
+        /// Fold length in inclusive UTC hours.
+        #[arg(long, default_value_t = 8)]
+        fold_hours: i64,
+        /// Limit number of folds for bounded smoke runs.
+        #[arg(long)]
+        max_folds: Option<usize>,
+        /// Rolling lab profile: a_plus5m or highz5m.
+        #[arg(long, default_value = "a_plus5m")]
+        profile: String,
+        /// Restrict sweeps to one timing zone: all, early, primary, late, terminal.
+        #[arg(long, default_value = "early")]
+        zone_mode: String,
+        /// Override promotion artifact output path.
+        #[arg(long)]
+        promotion_output: Option<String>,
+        /// Execute the generated loop. Without this flag, prints a dry-run manifest.
+        #[arg(long, default_value_t = false)]
+        execute: bool,
+        /// Delete each per-fold cache after its compact report is written.
+        #[arg(long, default_value_t = false)]
+        delete_after_process: bool,
+        /// Abort before the next fold if cache-root size exceeds this budget. 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        max_cache_gb: f64,
+        /// Minimum neighbor positive rate passed to robust-promote.
+        #[arg(long, default_value_t = 0.60)]
+        min_neighbor_positive_rate: f64,
+        /// Maximum PBO passed to robust-promote.
+        #[arg(long, default_value_t = 0.50)]
+        max_pbo: f64,
+    },
 }
 
 #[tokio::main]
@@ -1286,7 +1346,507 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 std::process::exit(2);
             }
         }
+        StrategyBuilderCommand::RollingHistory {
+            start,
+            end,
+            out_dir,
+            cache_root,
+            btc_csv,
+            bankroll,
+            latency_ms,
+            threads,
+            window_minutes,
+            fold_hours,
+            max_folds,
+            profile,
+            zone_mode,
+            promotion_output,
+            execute,
+            delete_after_process,
+            max_cache_gb,
+            min_neighbor_positive_rate,
+            max_pbo,
+        } => {
+            let input = RollingHistoryInput {
+                start,
+                end,
+                out_dir: std::path::PathBuf::from(out_dir),
+                cache_root: cache_root.map(std::path::PathBuf::from),
+                btc_csv,
+                bankroll,
+                latency_ms,
+                threads,
+                window_minutes,
+                fold_hours,
+                max_folds,
+                profile,
+                zone_mode,
+                promotion_output: promotion_output.map(std::path::PathBuf::from),
+                execute,
+                delete_after_process,
+                max_cache_gb,
+                min_neighbor_positive_rate,
+                max_pbo,
+            };
+            match run_rolling_history(input) {
+                Ok(summary) => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&summary)
+                        .expect("serialize rolling history summary")
+                ),
+                Err(e) => {
+                    eprintln!("rolling-history failed: {e:#}");
+                    std::process::exit(2);
+                }
+            }
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+struct RollingHistoryInput {
+    start: String,
+    end: String,
+    out_dir: std::path::PathBuf,
+    cache_root: Option<std::path::PathBuf>,
+    btc_csv: Option<String>,
+    bankroll: f64,
+    latency_ms: u64,
+    threads: usize,
+    window_minutes: f64,
+    fold_hours: i64,
+    max_folds: Option<usize>,
+    profile: String,
+    zone_mode: String,
+    promotion_output: Option<std::path::PathBuf>,
+    execute: bool,
+    delete_after_process: bool,
+    max_cache_gb: f64,
+    min_neighbor_positive_rate: f64,
+    max_pbo: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RollingHistoryProfile {
+    name: String,
+    conf: String,
+    z: String,
+    edge: String,
+    ev_buffer: String,
+    min_price: String,
+    max_price: String,
+    settlement_floor: String,
+    settlement_guard_minutes: String,
+    settlement_sigma_buffer: String,
+    micro_max_spread: String,
+    micro_min_depth: String,
+    micro_min_pressure: String,
+    position_pct: String,
+    max_per_market_usd: String,
+    max_total_exposure_usd: String,
+    max_projected_stressed_drawdown_pct: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RollingFoldSummary {
+    index: usize,
+    start: String,
+    end: String,
+    cache_dir: String,
+    hydrate_report: String,
+    sweep_report: String,
+    hydrate_args: Vec<String>,
+    sweep_args: Vec<String>,
+    cache_deleted: bool,
+}
+
+fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{bail, Context};
+    use chrono::{DateTime, Duration as ChronoDuration, Utc};
+
+    let start = DateTime::parse_from_rfc3339(&input.start)
+        .context("--start must be RFC3339")?
+        .with_timezone(&Utc);
+    let end = DateTime::parse_from_rfc3339(&input.end)
+        .context("--end must be RFC3339")?
+        .with_timezone(&Utc);
+    if end < start {
+        bail!("--end must be >= --start");
+    }
+    if input.fold_hours <= 0 {
+        bail!("--fold-hours must be > 0");
+    }
+    if input.window_minutes <= 0.0 {
+        bail!("--window-minutes must be > 0");
+    }
+    if input.max_cache_gb < 0.0 || !input.max_cache_gb.is_finite() {
+        bail!("--max-cache-gb must be finite and non-negative");
+    }
+
+    let profile = rolling_history_profile(&input.profile)?;
+    let zone_mode = backtest::sweep::ZoneMode::parse(&input.zone_mode)
+        .with_context(|| format!("unknown --zone-mode `{}`", input.zone_mode))?;
+    let out_dir = input.out_dir;
+    let cache_root = input.cache_root.unwrap_or_else(|| out_dir.join("cache"));
+    let reports_dir = out_dir.join("reports");
+    let hydrate_dir = out_dir.join("hydrate_reports");
+    let promotions_dir = out_dir.join("promotions");
+    let promotion_output = input.promotion_output.unwrap_or_else(|| {
+        promotions_dir.join(format!(
+            "rolling_{}_{}_robust.json",
+            start.format("%Y%m%dT%H%M%SZ"),
+            end.format("%Y%m%dT%H%M%SZ")
+        ))
+    });
+
+    let mut folds = Vec::new();
+    let mut fold_start = start;
+    let fold_span = ChronoDuration::hours(input.fold_hours);
+    while fold_start <= end {
+        let fold_end = (fold_start + fold_span - ChronoDuration::hours(1)).min(end);
+        folds.push((fold_start, fold_end));
+        fold_start = fold_end + ChronoDuration::hours(1);
+        if let Some(max_folds) = input.max_folds {
+            if folds.len() >= max_folds {
+                break;
+            }
+        }
+    }
+    if folds.is_empty() {
+        bail!("no folds generated");
+    }
+
+    let exe = std::env::current_exe().context("locate current executable")?;
+    let mut fold_summaries = Vec::new();
+    let mut sweep_reports = Vec::new();
+
+    for (idx, (fold_start, fold_end)) in folds.iter().copied().enumerate() {
+        if input.execute {
+            std::fs::create_dir_all(&reports_dir)
+                .with_context(|| format!("create {}", reports_dir.display()))?;
+            std::fs::create_dir_all(&hydrate_dir)
+                .with_context(|| format!("create {}", hydrate_dir.display()))?;
+            std::fs::create_dir_all(&promotions_dir)
+                .with_context(|| format!("create {}", promotions_dir.display()))?;
+            std::fs::create_dir_all(&cache_root)
+                .with_context(|| format!("create {}", cache_root.display()))?;
+            enforce_cache_budget(&cache_root, input.max_cache_gb)?;
+        }
+
+        let stamp = format!(
+            "{}_{}",
+            fold_start.format("%Y%m%dT%H%M%SZ"),
+            fold_end.format("%Y%m%dT%H%M%SZ")
+        );
+        let fold_cache = cache_root.join(format!("fold_{:03}_{stamp}", idx + 1));
+        let hydrate_report = hydrate_dir.join(format!("fold_{:03}_{stamp}_hydrate.json", idx + 1));
+        let sweep_report = reports_dir.join(format!("fold_{:03}_{stamp}_sweep.json", idx + 1));
+
+        let mut hydrate_args = vec![
+            "harness".to_string(),
+            "--start".to_string(),
+            fold_start.to_rfc3339(),
+            "--end".to_string(),
+            fold_end.to_rfc3339(),
+            "--cache-dir".to_string(),
+            fold_cache.display().to_string(),
+            "--bankroll".to_string(),
+            cli_money_arg(input.bankroll),
+            "--max-total-exposure-usd".to_string(),
+            profile.max_total_exposure_usd.clone(),
+            "--latency-ms".to_string(),
+            input.latency_ms.to_string(),
+            "--threads".to_string(),
+            input.threads.to_string(),
+            "--max-contracts".to_string(),
+            "1".to_string(),
+            "--window-minutes".to_string(),
+            cli_float_arg(input.window_minutes),
+            "--allow-gamma-fetch".to_string(),
+            "--continuous".to_string(),
+            "--report-json".to_string(),
+            hydrate_report.display().to_string(),
+        ];
+        if let Some(btc_csv) = &input.btc_csv {
+            hydrate_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+        }
+
+        let mut sweep_args = vec![
+            "harness-sweep".to_string(),
+            "--start".to_string(),
+            fold_start.to_rfc3339(),
+            "--end".to_string(),
+            fold_end.to_rfc3339(),
+            "--cache-dir".to_string(),
+            fold_cache.display().to_string(),
+            "--bankroll".to_string(),
+            cli_money_arg(input.bankroll),
+            "--position-pct".to_string(),
+            profile.position_pct.clone(),
+            "--max-total-exposure-usd".to_string(),
+            profile.max_total_exposure_usd.clone(),
+            "--max-per-market-usd".to_string(),
+            profile.max_per_market_usd.clone(),
+            "--max-projected-stressed-drawdown-pct".to_string(),
+            profile.max_projected_stressed_drawdown_pct.clone(),
+            "--conf".to_string(),
+            profile.conf.clone(),
+            "--z".to_string(),
+            profile.z.clone(),
+            "--edge".to_string(),
+            profile.edge.clone(),
+            format!("--ev-buffer={}", profile.ev_buffer),
+            "--min-price".to_string(),
+            profile.min_price.clone(),
+            "--max-price".to_string(),
+            profile.max_price.clone(),
+            "--settlement-floor".to_string(),
+            profile.settlement_floor.clone(),
+            "--settlement-guard-minutes".to_string(),
+            profile.settlement_guard_minutes.clone(),
+            "--settlement-sigma-buffer".to_string(),
+            profile.settlement_sigma_buffer.clone(),
+            "--micro-max-spread".to_string(),
+            profile.micro_max_spread.clone(),
+            "--micro-min-depth".to_string(),
+            profile.micro_min_depth.clone(),
+            format!("--micro-min-pressure={}", profile.micro_min_pressure),
+            "--also-maker".to_string(),
+            "--zone-mode".to_string(),
+            zone_mode_string(zone_mode).to_string(),
+            "--top".to_string(),
+            "20".to_string(),
+            "--threads".to_string(),
+            input.threads.to_string(),
+            "--window-minutes".to_string(),
+            cli_float_arg(input.window_minutes),
+            "--continuous".to_string(),
+            "--report-json".to_string(),
+            sweep_report.display().to_string(),
+        ];
+        if let Some(btc_csv) = &input.btc_csv {
+            sweep_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
+        }
+
+        if input.execute {
+            run_child(&exe, &hydrate_args)?;
+            run_child(&exe, &sweep_args)?;
+        }
+
+        let mut cache_deleted = false;
+        if input.execute && input.delete_after_process {
+            delete_fold_cache(&cache_root, &fold_cache)?;
+            cache_deleted = true;
+        }
+
+        sweep_reports.push(sweep_report.clone());
+        fold_summaries.push(RollingFoldSummary {
+            index: idx + 1,
+            start: fold_start.to_rfc3339(),
+            end: fold_end.to_rfc3339(),
+            cache_dir: fold_cache.display().to_string(),
+            hydrate_report: hydrate_report.display().to_string(),
+            sweep_report: sweep_report.display().to_string(),
+            hydrate_args,
+            sweep_args,
+            cache_deleted,
+        });
+    }
+
+    let mut promote_args = vec![
+        "experiment".to_string(),
+        "robust-promote".to_string(),
+        "--output".to_string(),
+        promotion_output.display().to_string(),
+        "--min-reports".to_string(),
+        fold_summaries.len().to_string(),
+        "--min-profitable-reports".to_string(),
+        fold_summaries.len().to_string(),
+        "--min-trades".to_string(),
+        (20 * fold_summaries.len()).to_string(),
+        "--min-losses".to_string(),
+        "5".to_string(),
+        "--min-zone-count".to_string(),
+        if zone_mode == backtest::sweep::ZoneMode::All {
+            "2".to_string()
+        } else {
+            "1".to_string()
+        },
+        "--max-zone-trade-share".to_string(),
+        if zone_mode == backtest::sweep::ZoneMode::All {
+            "0.85".to_string()
+        } else {
+            "1.0".to_string()
+        },
+        "--min-win-rate".to_string(),
+        "0.70".to_string(),
+        "--min-wilson-win-rate-lower".to_string(),
+        "0.60".to_string(),
+        "--min-total-pnl".to_string(),
+        "0".to_string(),
+        "--max-passive-failed-fills".to_string(),
+        (80 * fold_summaries.len()).to_string(),
+        "--min-fill-rate".to_string(),
+        "0.55".to_string(),
+        "--min-daily-trades".to_string(),
+        "20".to_string(),
+        "--min-daily-pnl".to_string(),
+        "0".to_string(),
+        "--min-neighbor-count".to_string(),
+        "2".to_string(),
+        "--min-neighbor-positive-rate".to_string(),
+        input.min_neighbor_positive_rate.to_string(),
+        "--max-pbo".to_string(),
+        input.max_pbo.to_string(),
+        "--min-worst-window-pnl".to_string(),
+        "0".to_string(),
+    ];
+    for report in &sweep_reports {
+        promote_args.extend(["--report".to_string(), report.display().to_string()]);
+    }
+    if input.execute {
+        run_child(&exe, &promote_args)?;
+    }
+
+    let summary = serde_json::json!({
+        "schema_version": 1,
+        "mode": if input.execute { "executed" } else { "dry_run" },
+        "profile": profile,
+        "fold_hours": input.fold_hours,
+        "window_minutes": input.window_minutes,
+        "delete_after_process": input.delete_after_process,
+        "cache_root": cache_root.display().to_string(),
+        "out_dir": out_dir.display().to_string(),
+        "folds": fold_summaries,
+        "promotion_output": promotion_output.display().to_string(),
+        "promotion_args": promote_args,
+        "storage_policy": "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write",
+    });
+    if input.execute {
+        std::fs::create_dir_all(&out_dir)
+            .with_context(|| format!("create {}", out_dir.display()))?;
+        let manifest = out_dir.join("rolling_history_manifest.json");
+        write_json_atomic(&manifest, &summary, false)
+            .with_context(|| format!("write {}", manifest.display()))?;
+    }
+    Ok(summary)
+}
+
+fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> {
+    match name {
+        "a_plus5m" | "highz5m" => Ok(RollingHistoryProfile {
+            name: name.to_string(),
+            conf: "0.30,0.35,0.40".to_string(),
+            z: "0.50,0.70,0.90,1.10".to_string(),
+            edge: "0.03".to_string(),
+            ev_buffer: "-1.0".to_string(),
+            min_price: "0.10".to_string(),
+            max_price: "0.75,0.90".to_string(),
+            settlement_floor: "10.0".to_string(),
+            settlement_guard_minutes: "1.0".to_string(),
+            settlement_sigma_buffer: "0.0".to_string(),
+            micro_max_spread: "1.0".to_string(),
+            micro_min_depth: "0.0".to_string(),
+            micro_min_pressure: "-1.0".to_string(),
+            position_pct: "0.05".to_string(),
+            max_per_market_usd: "20".to_string(),
+            max_total_exposure_usd: "15".to_string(),
+            max_projected_stressed_drawdown_pct: "0.24".to_string(),
+        }),
+        other => anyhow::bail!("unknown rolling-history profile `{other}`"),
+    }
+}
+
+fn cli_money_arg(value: f64) -> String {
+    format!("{value:.2}")
+}
+
+fn cli_float_arg(value: f64) -> String {
+    if (value.fract()).abs() <= f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn zone_mode_string(mode: backtest::sweep::ZoneMode) -> &'static str {
+    match mode {
+        backtest::sweep::ZoneMode::All => "all",
+        backtest::sweep::ZoneMode::Early => "early",
+        backtest::sweep::ZoneMode::Primary => "primary",
+        backtest::sweep::ZoneMode::Late => "late",
+        backtest::sweep::ZoneMode::Terminal => "terminal",
+    }
+}
+
+fn run_child(exe: &std::path::Path, args: &[String]) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let status = std::process::Command::new(exe)
+        .args(args)
+        .status()
+        .with_context(|| format!("run {} {}", exe.display(), args.join(" ")))?;
+    if !status.success() {
+        anyhow::bail!("child command failed with {status}: {}", args.join(" "));
+    }
+    Ok(())
+}
+
+fn enforce_cache_budget(cache_root: &std::path::Path, max_cache_gb: f64) -> anyhow::Result<()> {
+    if max_cache_gb <= 0.0 {
+        return Ok(());
+    }
+    let bytes = dir_size_bytes(cache_root)?;
+    let budget = (max_cache_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+    if bytes > budget {
+        anyhow::bail!(
+            "cache root {} is {:.2} GiB, above budget {:.2} GiB",
+            cache_root.display(),
+            bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+            max_cache_gb
+        );
+    }
+    Ok(())
+}
+
+fn dir_size_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            total += dir_size_bytes(&entry.path())?;
+        } else {
+            total += meta.len();
+        }
+    }
+    Ok(total)
+}
+
+fn delete_fold_cache(
+    cache_root: &std::path::Path,
+    fold_cache: &std::path::Path,
+) -> anyhow::Result<()> {
+    let root = cache_root.canonicalize()?;
+    let target = fold_cache.canonicalize()?;
+    if target == root || !target.starts_with(&root) {
+        anyhow::bail!(
+            "refusing to delete {}; it is not a child of cache root {}",
+            target.display(),
+            root.display()
+        );
+    }
+    let Some(name) = target.file_name().and_then(|n| n.to_str()) else {
+        anyhow::bail!("refusing to delete cache with invalid final path component");
+    };
+    if !name.starts_with("fold_") {
+        anyhow::bail!("refusing to delete non-fold cache {}", target.display());
+    }
+    std::fs::remove_dir_all(&target)?;
+    Ok(())
 }
 
 fn filter_contracts_by_window_minutes(
@@ -3940,5 +4500,44 @@ mod replay_validation_tests {
 
         assert_eq!(required, 22.0);
         assert!(!live_wallet_covers_budget(&balances, required));
+    }
+
+    #[test]
+    fn rolling_history_dry_run_builds_fold_manifest() {
+        let summary = run_rolling_history(RollingHistoryInput {
+            start: "2026-05-24T00:00:00Z".to_string(),
+            end: "2026-05-24T03:00:00Z".to_string(),
+            out_dir: std::path::PathBuf::from("/tmp/poly_rolling_test"),
+            cache_root: None,
+            btc_csv: Some("/tmp/btc.csv".to_string()),
+            bankroll: 100.0,
+            latency_ms: 50,
+            threads: 1,
+            window_minutes: 5.0,
+            fold_hours: 2,
+            max_folds: None,
+            profile: "a_plus5m".to_string(),
+            zone_mode: "early".to_string(),
+            promotion_output: None,
+            execute: false,
+            delete_after_process: true,
+            max_cache_gb: 1.0,
+            min_neighbor_positive_rate: 0.60,
+            max_pbo: 0.50,
+        })
+        .unwrap();
+
+        assert_eq!(summary["mode"], "dry_run");
+        assert_eq!(summary["folds"].as_array().unwrap().len(), 2);
+        assert!(summary["promotion_args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str() == Some("--max-pbo")));
+        assert!(summary["folds"][0]["sweep_args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str() == Some("0.50,0.70,0.90,1.10")));
     }
 }

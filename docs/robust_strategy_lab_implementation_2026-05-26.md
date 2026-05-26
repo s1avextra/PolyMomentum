@@ -43,7 +43,7 @@ The selected score combines:
 The `a_plus5m` profile is aligned with the current May evidence:
 
 - confidence: `0.30,0.35,0.40`
-- z-score: `0.50,0.70`
+- z-score: `0.50,0.70,0.90,1.10`
 - edge: `0.03`
 - price buckets: `0.10-0.75` and `0.10-0.90`
 - settlement floor/guard: `10 USD`, `1 minute`
@@ -156,6 +156,30 @@ This lets us build a broad fold matrix across PMXT history while keeping disk
 bounded. The output we need for robust promotion is the variant x window return
 matrix, not the raw parquet archive after the fold has been scored.
 
-Next implementation target: add a dedicated rolling-history driver that accepts
-a date range, fold size, disk budget, and output directory, then performs this
-hydrate-run-summarize-delete loop automatically.
+Implemented follow-up: `polymomentum-engine strategy-builder rolling-history`
+accepts a date range, fold size, disk budget, and output directory. It dry-runs
+by default and executes only with `--execute`, using one session-owned fold
+cache at a time.
+
+Example dry run:
+
+```text
+polymomentum-engine strategy-builder rolling-history \
+  --start 2026-05-24T00:00:00Z \
+  --end 2026-05-25T23:00:00Z \
+  --out-dir /private/tmp/polymomentum_rolling_history \
+  --fold-hours 8 \
+  --profile a_plus5m \
+  --zone-mode early \
+  --delete-after-process \
+  --max-cache-gb 40
+```
+
+Add `--execute` only after inspecting the manifest. During execution each fold:
+
+1. creates `<out-dir>/cache/fold_*`;
+2. hydrates Gamma metadata with a one-contract harness pass;
+3. runs the full continuous high-z maker/taker harness sweep;
+4. writes compact JSON reports under `<out-dir>/reports`;
+5. optionally deletes only that `fold_*` cache;
+6. runs `experiment robust-promote` across the fold reports.
