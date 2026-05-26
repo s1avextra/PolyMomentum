@@ -221,3 +221,10 @@ Frozen artifact metrics:
 This is now the best frozen offline candidate for paper/live plumbing tests,
 but not the final A+ live candidate. The A+ gate still requires additional
 complete post-May-23 folds that pass the stricter per-fold sample floor.
+
+Second archive recheck:
+
+- Rechecked May 25 tail from `2026-05-25T08` through `2026-05-25T23`.
+- PMXT still exposes only `2026-05-25T08`; no complete 8-hour fold is available.
+- Rechecked May 26 from `2026-05-26T00`; the first hour is still missing.
+- Preflight-only output directories were `0B`; no raw cache was retained.
