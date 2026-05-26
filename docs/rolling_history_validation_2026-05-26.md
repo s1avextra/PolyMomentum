@@ -188,3 +188,36 @@ Current status:
   pass.
 - Next A+ step: collect more post-May-23 complete folds, then require both
   `min_fold_trades >= 15` and 7+ profitable folds before canary.
+
+## 2026-05-26 Continuation
+
+Fresh archive preflight:
+
+- May 25 still exposes only one complete 8-hour fold. The PMXT archive stops at
+  `2026-05-25T08`, with `2026-05-25T09` missing.
+- May 26 has no PMXT v2 hours available yet; `2026-05-26T00` is missing.
+- No new strict `min_fold_trades >= 15` validation folds are available yet.
+
+Action taken:
+
+- Frozen the best strict six-fold artifact at
+  `deploy/promotions/promotion_candidate_rolling_may23_24_min15_20260526.json`.
+- Paper preflight with the artifact passes when `BANKROLL_USD=100` is supplied.
+- Local `.env` currently has paper bankroll unset/zero, so preflight without the
+  env override correctly fails the `paper_bankroll` check.
+
+Frozen artifact metrics:
+
+- selected: `early_c0.30_z0.50_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk`
+- trades: `155`
+- total PnL: `+99.04`
+- win rate: `81.29%`
+- Wilson 95% lower bound: `0.744`
+- fill rate: `55.76%`
+- worst fold PnL: `+3.68`
+- neighbor-positive rate: `72.7%` over `11` neighbors
+- PBO: `0.250` over `20` split tests
+
+This is now the best frozen offline candidate for paper/live plumbing tests,
+but not the final A+ live candidate. The A+ gate still requires additional
+complete post-May-23 folds that pass the stricter per-fold sample floor.
