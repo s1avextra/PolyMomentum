@@ -118,10 +118,73 @@ Remaining blockers:
 Do not promote this directly to live. Use it as the current best candidate for
 the next broader rolling-history pass:
 
-1. Add PMXT availability preflight or an archive-lag tolerant stop mode.
+1. Use `--preflight-pmxt-hours --stop-at-first-missing-hour
+   --require-full-folds` for current-date runs so PMXT archive lag truncates to
+   the last complete fold instead of failing or scoring a tiny partial fold.
 2. Run the same rolling driver over more complete PMXT days, deleting each
    session-owned fold cache.
 3. Require the robust artifact to pass stricter stability before canary:
    `neighbor_positive_rate >= 0.70`, more than `3` PBO splits, and positive
    fold-level fill behavior.
 4. Only after that, run cached live-replay/parity against the selected artifact.
+
+## Follow-Up Loop: May 23-25
+
+Driver improvements added after the first broader run:
+
+- `--preflight-pmxt-hours --stop-at-first-missing-hour --require-full-folds`
+  probes archive availability before downloads and truncates to complete folds.
+- PMXT downloads now retry transient chunk-read failures before failing a fold.
+- `--min-fold-trades` makes the per-fold promotion sample floor explicit.
+- The rolling driver writes `rolling_history_manifest.json` before promotion and
+  rewrites it with `promotion_passed` or `promotion_failed`.
+- A zero-target-event fold is now treated as data coverage failure, not strategy
+  evidence.
+
+Results:
+
+| Set | Reports | Gate | Result |
+| --- | ---: | --- | --- |
+| May 23 only | 3 | `neighbor>=0.70`, `PBO<=0.50` | rejected: PBO `0.667` |
+| May 23 + May 24 | 6 | `min_fold_trades=15` | passed: PBO `0.250`, selected z=0.50 maker |
+| May 23 + May 24 + May 25 prefix | 7 | `min_fold_trades=15` | rejected: no variant had 7/7 profitable folds with >=15 trades |
+| May 23 + May 24 + May 25 prefix | 7 | `min_fold_trades=8` | passed: PBO `0.400`, selected z=0.90 maker |
+
+The strongest 7-fold candidate is:
+
+```text
+early_c0.35_z0.90_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk
+```
+
+Seven-fold metrics:
+
+- trades: `96`
+- total PnL: `+53.85`
+- win rate: `86.46%`
+- Wilson 95% lower bound: `0.782`
+- fill rate: `59.26%`
+- worst fold PnL: `+3.86`
+- neighbor-positive rate: `82.4%` over `17` neighbors
+- PBO: `0.400` over `35` split tests
+- passive maker non-fills / post-only rejects: `66`
+
+The 7-fold artifact is useful research evidence, but still not an A+ live
+artifact because it needs `min_fold_trades=8`. The stricter
+`min_fold_trades=15` gate correctly rejects the search once the current May 25
+prefix is included.
+
+May 22 note:
+
+- PMXT archive HEAD checks passed for all 24 hours.
+- The first two 8-hour folds produced zero target BTC L2 events despite Gamma
+  returning 96 markets.
+- The interrupted session-owned cache was removed; final cache size was `0B`.
+- Treat May 22 as a source coverage boundary, not a negative strategy day.
+
+Current status:
+
+- Best production-grade evidence: May 23-24, 6 folds, strict PBO pass.
+- Best current-aware evidence: May 23-25 prefix, 7 folds, lower sample floor
+  pass.
+- Next A+ step: collect more post-May-23 complete folds, then require both
+  `min_fold_trades >= 15` and 7+ profitable folds before canary.

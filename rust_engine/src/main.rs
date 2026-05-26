@@ -29,6 +29,7 @@ mod strategy;
 mod strategy_builder;
 mod sweep;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use config::RuntimeMode;
 
@@ -891,6 +892,18 @@ enum StrategyBuilderCommand {
         /// Delete each per-fold cache after its compact report is written.
         #[arg(long, default_value_t = false)]
         delete_after_process: bool,
+        /// Probe PMXT archive-hour availability before generating folds.
+        #[arg(long, default_value_t = false)]
+        preflight_pmxt_hours: bool,
+        /// With PMXT preflight, stop at the first missing hour instead of failing.
+        #[arg(long, default_value_t = false)]
+        stop_at_first_missing_hour: bool,
+        /// Drop a final fold that is shorter than --fold-hours.
+        #[arg(long, default_value_t = false)]
+        require_full_folds: bool,
+        /// Minimum trades required in every fold during robust promotion.
+        #[arg(long, default_value_t = 20)]
+        min_fold_trades: usize,
         /// Abort before the next fold if cache-root size exceeds this budget. 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_cache_gb: f64,
@@ -1014,7 +1027,7 @@ async fn main() {
         Command::Clob { command } => cmd_clob(&settings, command).await,
         Command::Experiment { command } => cmd_experiment(command),
         Command::Diagnostics { command } => cmd_diagnostics(command),
-        Command::StrategyBuilder { command } => cmd_strategy_builder(command),
+        Command::StrategyBuilder { command } => cmd_strategy_builder(command).await,
         Command::Ctf { condition_id } => cmd_ctf(&settings, &condition_id).await,
         Command::ValidateReplay { path } => cmd_validate_replay(&path).await,
         Command::Sweep {
@@ -1266,7 +1279,7 @@ fn apply_promotion_override(settings: &mut config::Settings, path: Option<String
     }
 }
 
-fn cmd_strategy_builder(command: StrategyBuilderCommand) {
+async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
     match command {
         StrategyBuilderCommand::Plan {
             start,
@@ -1363,6 +1376,10 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             promotion_output,
             execute,
             delete_after_process,
+            preflight_pmxt_hours,
+            stop_at_first_missing_hour,
+            require_full_folds,
+            min_fold_trades,
             max_cache_gb,
             min_neighbor_positive_rate,
             max_pbo,
@@ -1384,11 +1401,15 @@ fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 promotion_output: promotion_output.map(std::path::PathBuf::from),
                 execute,
                 delete_after_process,
+                preflight_pmxt_hours,
+                stop_at_first_missing_hour,
+                require_full_folds,
+                min_fold_trades,
                 max_cache_gb,
                 min_neighbor_positive_rate,
                 max_pbo,
             };
-            match run_rolling_history(input) {
+            match run_rolling_history(input).await {
                 Ok(summary) => println!(
                     "{}",
                     serde_json::to_string_pretty(&summary)
@@ -1421,6 +1442,10 @@ struct RollingHistoryInput {
     promotion_output: Option<std::path::PathBuf>,
     execute: bool,
     delete_after_process: bool,
+    preflight_pmxt_hours: bool,
+    stop_at_first_missing_hour: bool,
+    require_full_folds: bool,
+    min_fold_trades: usize,
     max_cache_gb: f64,
     min_neighbor_positive_rate: f64,
     max_pbo: f64,
@@ -1460,21 +1485,24 @@ struct RollingFoldSummary {
     cache_deleted: bool,
 }
 
-fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
+async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
     use anyhow::{bail, Context};
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
     let start = DateTime::parse_from_rfc3339(&input.start)
         .context("--start must be RFC3339")?
         .with_timezone(&Utc);
-    let end = DateTime::parse_from_rfc3339(&input.end)
+    let requested_end = DateTime::parse_from_rfc3339(&input.end)
         .context("--end must be RFC3339")?
         .with_timezone(&Utc);
-    if end < start {
+    if requested_end < start {
         bail!("--end must be >= --start");
     }
     if input.fold_hours <= 0 {
         bail!("--fold-hours must be > 0");
+    }
+    if input.min_fold_trades == 0 {
+        bail!("--min-fold-trades must be > 0");
     }
     if input.window_minutes <= 0.0 {
         bail!("--window-minutes must be > 0");
@@ -1491,6 +1519,38 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
     let reports_dir = out_dir.join("reports");
     let hydrate_dir = out_dir.join("hydrate_reports");
     let promotions_dir = out_dir.join("promotions");
+    let preflight_enabled = input.preflight_pmxt_hours || input.stop_at_first_missing_hour;
+    let mut end = requested_end;
+    let mut archive_preflight = serde_json::Value::Null;
+    if preflight_enabled {
+        let (effective_end, preflight) = preflight_pmxt_hours(
+            start,
+            requested_end,
+            &cache_root,
+            input.stop_at_first_missing_hour,
+        )
+        .await?;
+        end = effective_end;
+        archive_preflight = preflight;
+    }
+    let mut partial_final_fold_dropped = false;
+    if input.require_full_folds {
+        let available_hours = (end - start).num_hours() + 1;
+        let full_hours = (available_hours / input.fold_hours) * input.fold_hours;
+        if full_hours <= 0 {
+            bail!(
+                "no complete {}h fold available between {} and {}",
+                input.fold_hours,
+                start.to_rfc3339(),
+                end.to_rfc3339()
+            );
+        }
+        let full_fold_end = start + ChronoDuration::hours(full_hours - 1);
+        if full_fold_end < end {
+            partial_final_fold_dropped = true;
+            end = full_fold_end;
+        }
+    }
     let promotion_output = input.promotion_output.unwrap_or_else(|| {
         promotions_dir.join(format!(
             "rolling_{}_{}_robust.json",
@@ -1650,6 +1710,24 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
                     )
                 });
             }
+            let events_seen = sweep_report_events_seen(&sweep_report)?;
+            if events_seen == 0 {
+                if input.delete_after_process && fold_cache.exists() {
+                    delete_fold_cache(&cache_root, &fold_cache).with_context(|| {
+                        format!(
+                            "fold {} had zero target events, then cleanup failed for {}",
+                            idx + 1,
+                            fold_cache.display()
+                        )
+                    })?;
+                }
+                anyhow::bail!(
+                    "fold {} for {} through {} produced zero target PMXT events; treat this as data coverage failure, not strategy evidence",
+                    idx + 1,
+                    fold_start.to_rfc3339(),
+                    fold_end.to_rfc3339()
+                );
+            }
         }
 
         let mut cache_deleted = false;
@@ -1682,7 +1760,7 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
         "--min-profitable-reports".to_string(),
         fold_summaries.len().to_string(),
         "--min-trades".to_string(),
-        (20 * fold_summaries.len()).to_string(),
+        (input.min_fold_trades * fold_summaries.len()).to_string(),
         "--min-losses".to_string(),
         "5".to_string(),
         "--min-zone-count".to_string(),
@@ -1708,7 +1786,7 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
         "--min-fill-rate".to_string(),
         "0.55".to_string(),
         "--min-daily-trades".to_string(),
-        "20".to_string(),
+        input.min_fold_trades.to_string(),
         "--min-daily-pnl".to_string(),
         "0".to_string(),
         "--min-neighbor-count".to_string(),
@@ -1723,32 +1801,123 @@ fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json:
     for report in &sweep_reports {
         promote_args.extend(["--report".to_string(), report.display().to_string()]);
     }
-    if input.execute {
-        run_child(&exe, &promote_args)?;
-    }
 
-    let summary = serde_json::json!({
-        "schema_version": 1,
-        "mode": if input.execute { "executed" } else { "dry_run" },
-        "profile": profile,
-        "fold_hours": input.fold_hours,
-        "window_minutes": input.window_minutes,
-        "delete_after_process": input.delete_after_process,
-        "cache_root": cache_root.display().to_string(),
-        "out_dir": out_dir.display().to_string(),
-        "folds": fold_summaries,
-        "promotion_output": promotion_output.display().to_string(),
-        "promotion_args": promote_args,
-        "storage_policy": "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write",
-    });
+    let build_summary = |promotion_status: &str, promotion_error: Option<String>| {
+        serde_json::json!({
+            "schema_version": 1,
+            "mode": if input.execute { "executed" } else { "dry_run" },
+            "promotion_status": promotion_status,
+            "promotion_error": promotion_error,
+            "profile": profile,
+            "fold_hours": input.fold_hours,
+            "min_fold_trades": input.min_fold_trades,
+            "window_minutes": input.window_minutes,
+            "delete_after_process": input.delete_after_process,
+            "require_full_folds": input.require_full_folds,
+            "partial_final_fold_dropped": partial_final_fold_dropped,
+            "requested_start": start.to_rfc3339(),
+            "requested_end": requested_end.to_rfc3339(),
+            "effective_end": end.to_rfc3339(),
+            "archive_preflight": archive_preflight,
+            "cache_root": cache_root.display().to_string(),
+            "out_dir": out_dir.display().to_string(),
+            "folds": fold_summaries,
+            "promotion_output": promotion_output.display().to_string(),
+            "promotion_args": promote_args,
+            "storage_policy": "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write",
+        })
+    };
     if input.execute {
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("create {}", out_dir.display()))?;
         let manifest = out_dir.join("rolling_history_manifest.json");
+        let pending_summary = build_summary("promotion_pending", None);
+        write_json_atomic(&manifest, &pending_summary, false)
+            .with_context(|| format!("write {}", manifest.display()))?;
+        if let Err(err) = run_child(&exe, &promote_args) {
+            let failed_summary = build_summary("promotion_failed", Some(err.to_string()));
+            write_json_atomic(&manifest, &failed_summary, false)
+                .with_context(|| format!("write {}", manifest.display()))?;
+            return Err(err);
+        }
+        let summary = build_summary("promotion_passed", None);
         write_json_atomic(&manifest, &summary, false)
             .with_context(|| format!("write {}", manifest.display()))?;
+        return Ok(summary);
     }
+
+    let summary = build_summary("dry_run", None);
     Ok(summary)
+}
+
+async fn preflight_pmxt_hours(
+    start: chrono::DateTime<chrono::Utc>,
+    requested_end: chrono::DateTime<chrono::Utc>,
+    cache_root: &std::path::Path,
+    stop_at_first_missing_hour: bool,
+) -> anyhow::Result<(chrono::DateTime<chrono::Utc>, serde_json::Value)> {
+    use anyhow::{bail, Context};
+    use chrono::Duration as ChronoDuration;
+
+    let loader = backtest::pmxt::PMXTv2Loader::new(cache_root);
+    let mut cur = start;
+    let mut checked_hours = 0_u64;
+    let mut available_hours = 0_u64;
+    let mut cached_hours = 0_u64;
+    let mut remote_available_hours = 0_u64;
+    let mut missing_hour = None;
+    let mut effective_end = requested_end;
+
+    while cur <= requested_end {
+        checked_hours += 1;
+        if loader.is_cached(cur) {
+            available_hours += 1;
+            cached_hours += 1;
+        } else if loader
+            .remote_hour_available(cur)
+            .await
+            .with_context(|| format!("preflight PMXT hour {}", cur.to_rfc3339()))?
+        {
+            available_hours += 1;
+            remote_available_hours += 1;
+        } else {
+            missing_hour = Some(cur);
+            if stop_at_first_missing_hour {
+                effective_end = cur - ChronoDuration::hours(1);
+                break;
+            }
+            bail!(
+                "PMXT hour {} is missing; pass --stop-at-first-missing-hour to run only the contiguous available prefix",
+                cur.to_rfc3339()
+            );
+        }
+        cur += ChronoDuration::hours(1);
+    }
+
+    if effective_end < start {
+        let missing = missing_hour
+            .map(|h| h.to_rfc3339())
+            .unwrap_or_else(|| start.to_rfc3339());
+        bail!(
+            "no available PMXT hours from {}; first missing hour {}",
+            start,
+            missing
+        );
+    }
+
+    let preflight = serde_json::json!({
+        "enabled": true,
+        "requested_start": start.to_rfc3339(),
+        "requested_end": requested_end.to_rfc3339(),
+        "effective_end": effective_end.to_rfc3339(),
+        "checked_hours": checked_hours,
+        "available_hours": available_hours,
+        "cached_hours": cached_hours,
+        "remote_available_hours": remote_available_hours,
+        "missing_hour": missing_hour.map(|h| h.to_rfc3339()),
+        "stopped_at_first_missing_hour": stop_at_first_missing_hour && missing_hour.is_some(),
+    });
+    Ok((effective_end, preflight))
 }
 
 fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> {
@@ -1843,6 +2012,17 @@ fn dir_size_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
         }
     }
     Ok(total)
+}
+
+fn sweep_report_events_seen(path: &std::path::Path) -> anyhow::Result<u64> {
+    let report = backtest::experiment::read_report(path)
+        .with_context(|| format!("read sweep report {}", path.display()))?;
+    Ok(report
+        .variants
+        .iter()
+        .map(|variant| variant.diagnostics.events_seen)
+        .max()
+        .unwrap_or(0))
 }
 
 fn delete_fold_cache(
@@ -4521,8 +4701,8 @@ mod replay_validation_tests {
         assert!(!live_wallet_covers_budget(&balances, required));
     }
 
-    #[test]
-    fn rolling_history_dry_run_builds_fold_manifest() {
+    #[tokio::test]
+    async fn rolling_history_dry_run_builds_fold_manifest() {
         let summary = run_rolling_history(RollingHistoryInput {
             start: "2026-05-24T00:00:00Z".to_string(),
             end: "2026-05-24T03:00:00Z".to_string(),
@@ -4540,10 +4720,15 @@ mod replay_validation_tests {
             promotion_output: None,
             execute: false,
             delete_after_process: true,
+            preflight_pmxt_hours: false,
+            stop_at_first_missing_hour: false,
+            require_full_folds: false,
+            min_fold_trades: 20,
             max_cache_gb: 1.0,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
         })
+        .await
         .unwrap();
 
         assert_eq!(summary["mode"], "dry_run");
@@ -4558,6 +4743,41 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("0.50,0.70,0.90,1.10")));
+    }
+
+    #[tokio::test]
+    async fn rolling_history_require_full_folds_drops_partial_tail() {
+        let summary = run_rolling_history(RollingHistoryInput {
+            start: "2026-05-24T00:00:00Z".to_string(),
+            end: "2026-05-24T04:00:00Z".to_string(),
+            out_dir: std::path::PathBuf::from("/tmp/poly_rolling_full_fold_test"),
+            cache_root: None,
+            btc_csv: None,
+            bankroll: 100.0,
+            latency_ms: 50,
+            threads: 1,
+            window_minutes: 5.0,
+            fold_hours: 2,
+            max_folds: None,
+            profile: "a_plus5m".to_string(),
+            zone_mode: "early".to_string(),
+            promotion_output: None,
+            execute: false,
+            delete_after_process: true,
+            preflight_pmxt_hours: false,
+            stop_at_first_missing_hour: false,
+            require_full_folds: true,
+            min_fold_trades: 20,
+            max_cache_gb: 1.0,
+            min_neighbor_positive_rate: 0.60,
+            max_pbo: 0.50,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(summary["effective_end"], "2026-05-24T03:00:00+00:00");
+        assert_eq!(summary["partial_final_fold_dropped"], true);
+        assert_eq!(summary["folds"].as_array().unwrap().len(), 2);
     }
 
     #[test]
