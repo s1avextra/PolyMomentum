@@ -309,6 +309,9 @@ enum Command {
         /// Preserve strategy/fill/book state across hours to mirror live-replay.
         #[arg(long, default_value_t = false)]
         continuous: bool,
+        /// Download/replay/delete each PMXT parquet hour inside the harness loop.
+        #[arg(long, default_value_t = false)]
+        atomic_parquet: bool,
     },
     /// Run the full L2-backtest harness over PMXT v2 archives. Loads candle
     /// markets from Gamma, downloads/streams the requested UTC hours,
@@ -359,6 +362,9 @@ enum Command {
         /// Permit archive-wide condition-id scans and Gamma fetches for missing historical metadata.
         #[arg(long, default_value_t = false)]
         allow_gamma_fetch: bool,
+        /// Fetch/write Gamma metadata and exit before any PMXT replay.
+        #[arg(long, default_value_t = false)]
+        metadata_only: bool,
         /// Write a reproducible JSON experiment report to this path.
         #[arg(long)]
         report_json: Option<String>,
@@ -370,6 +376,9 @@ enum Command {
         /// Preserve strategy/fill/book state across hours to mirror live-replay.
         #[arg(long, default_value_t = false)]
         continuous: bool,
+        /// Download/replay/delete each PMXT parquet hour inside the harness loop.
+        #[arg(long, default_value_t = false)]
+        atomic_parquet: bool,
     },
     /// Replay one or more captured session JSONLs through a grid of strategy
     /// variants and report synthetic P&L per variant.
@@ -892,6 +901,9 @@ enum StrategyBuilderCommand {
         /// Delete each per-fold cache after its compact report is written.
         #[arg(long, default_value_t = false)]
         delete_after_process: bool,
+        /// Within each fold, keep at most one downloaded raw PMXT parquet at a time.
+        #[arg(long, default_value_t = false)]
+        atomic_parquet: bool,
         /// Probe PMXT archive-hour availability before generating folds.
         #[arg(long, default_value_t = false)]
         preflight_pmxt_hours: bool,
@@ -1174,6 +1186,7 @@ async fn main() {
             window_minutes,
             adaptive_health_rearm_minutes,
             continuous,
+            atomic_parquet,
         } => {
             let conf = parse_csv_floats(&conf);
             let zs = parse_csv_floats(&z);
@@ -1225,6 +1238,7 @@ async fn main() {
                 window_minutes,
                 adaptive_health_rearm_minutes,
                 continuous,
+                atomic_parquet,
             )
             .await;
         }
@@ -1242,9 +1256,11 @@ async fn main() {
             max_contracts,
             window_minutes,
             allow_gamma_fetch,
+            metadata_only,
             report_json,
             adaptive_health_rearm_minutes,
             continuous,
+            atomic_parquet,
         } => {
             cmd_harness(
                 &settings,
@@ -1261,9 +1277,11 @@ async fn main() {
                 max_contracts,
                 window_minutes,
                 allow_gamma_fetch,
+                metadata_only,
                 report_json.as_deref(),
                 adaptive_health_rearm_minutes,
                 continuous,
+                atomic_parquet,
             )
             .await;
         }
@@ -1376,6 +1394,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             promotion_output,
             execute,
             delete_after_process,
+            atomic_parquet,
             preflight_pmxt_hours,
             stop_at_first_missing_hour,
             require_full_folds,
@@ -1401,6 +1420,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 promotion_output: promotion_output.map(std::path::PathBuf::from),
                 execute,
                 delete_after_process,
+                atomic_parquet,
                 preflight_pmxt_hours,
                 stop_at_first_missing_hour,
                 require_full_folds,
@@ -1449,6 +1469,7 @@ struct RollingHistoryInput {
     max_cache_gb: f64,
     min_neighbor_positive_rate: f64,
     max_pbo: f64,
+    atomic_parquet: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1623,10 +1644,14 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--window-minutes".to_string(),
             cli_float_arg(input.window_minutes),
             "--allow-gamma-fetch".to_string(),
+            "--metadata-only".to_string(),
             "--continuous".to_string(),
             "--report-json".to_string(),
             hydrate_report.display().to_string(),
         ];
+        if input.atomic_parquet {
+            hydrate_args.push("--atomic-parquet".to_string());
+        }
         if let Some(btc_csv) = &input.btc_csv {
             hydrate_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
         }
@@ -1684,6 +1709,9 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--report-json".to_string(),
             sweep_report.display().to_string(),
         ];
+        if input.atomic_parquet {
+            sweep_args.push("--atomic-parquet".to_string());
+        }
         if let Some(btc_csv) = &input.btc_csv {
             sweep_args.extend(["--btc-csv".to_string(), btc_csv.clone()]);
         }
@@ -1813,6 +1841,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "min_fold_trades": input.min_fold_trades,
             "window_minutes": input.window_minutes,
             "delete_after_process": input.delete_after_process,
+            "atomic_parquet": input.atomic_parquet,
             "require_full_folds": input.require_full_folds,
             "partial_final_fold_dropped": partial_final_fold_dropped,
             "requested_start": start.to_rfc3339(),
@@ -1824,7 +1853,11 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "folds": fold_summaries,
             "promotion_output": promotion_output.display().to_string(),
             "promotion_args": promote_args,
-            "storage_policy": "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write",
+            "storage_policy": if input.atomic_parquet {
+                "per-fold cache is session-owned; atomic_parquet downloads one raw PMXT hour at a time and deletes only parquets downloaded by this process after replay; delete_after_process removes fold_* dirs under cache_root after report write"
+            } else {
+                "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write"
+            },
         })
     };
     if input.execute {
@@ -3570,6 +3603,7 @@ async fn cmd_harness_sweep(
     window_minutes: Option<f64>,
     adaptive_health_rearm_minutes: f64,
     continuous: bool,
+    atomic_parquet: bool,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -3658,11 +3692,15 @@ async fn cmd_harness_sweep(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
-    for &h in &hours {
-        eprintln!("pmxt: ensuring archive hour {h}");
-        if let Err(e) = loader.download_hour(h, false).await {
-            eprintln!("download {} failed: {e}", h);
-            std::process::exit(1);
+    if atomic_parquet {
+        eprintln!("pmxt: atomic parquet mode enabled; hours download/replay/delete inside harness");
+    } else {
+        for &h in &hours {
+            eprintln!("pmxt: ensuring archive hour {h}");
+            if let Err(e) = loader.download_hour(h, false).await {
+                eprintln!("download {} failed: {e}", h);
+                std::process::exit(1);
+            }
         }
     }
     let cache_dir_path_for_meta = cache_dir_path.clone();
@@ -3833,6 +3871,7 @@ async fn cmd_harness_sweep(
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag.clone()),
         continuous,
+        delete_downloaded_parquet_after_hour: atomic_parquet,
     };
 
     eprintln!(
@@ -3915,9 +3954,11 @@ async fn cmd_harness(
     max_contracts: Option<usize>,
     window_minutes: Option<f64>,
     allow_gamma_fetch: bool,
+    metadata_only: bool,
     report_json: Option<&str>,
     adaptive_health_rearm_minutes: f64,
     continuous: bool,
+    atomic_parquet: bool,
 ) {
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
 
@@ -3970,11 +4011,17 @@ async fn cmd_harness(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
     let loader = backtest::pmxt::PMXTv2Loader::new(&cache_dir_path);
-    for &h in &hours {
-        eprintln!("pmxt: ensuring archive hour {h}");
-        if let Err(e) = loader.download_hour(h, false).await {
-            eprintln!("download {} failed: {e}", h);
-            std::process::exit(1);
+    if metadata_only {
+        eprintln!("pmxt: metadata-only mode enabled; skipping archive downloads and replay");
+    } else if atomic_parquet {
+        eprintln!("pmxt: atomic parquet mode enabled; hours download/replay/delete inside harness");
+    } else {
+        for &h in &hours {
+            eprintln!("pmxt: ensuring archive hour {h}");
+            if let Err(e) = loader.download_hour(h, false).await {
+                eprintln!("download {} failed: {e}", h);
+                std::process::exit(1);
+            }
         }
     }
 
@@ -4057,6 +4104,27 @@ async fn cmd_harness(
             gamma_cache_path.display()
         );
         std::process::exit(1);
+    }
+    if metadata_only {
+        let summary = serde_json::json!({
+            "mode": "metadata_only",
+            "gamma_cache_path": gamma_cache_path.display().to_string(),
+            "markets": cached_markets.len(),
+            "start": start_dt.to_rfc3339(),
+            "end": end_dt.to_rfc3339(),
+            "window_minutes": window_minutes,
+        });
+        if let Some(path) = report_json {
+            if let Err(e) = write_json_atomic(path, &summary, true) {
+                eprintln!("write metadata-only report {path}: {e}");
+                std::process::exit(1);
+            }
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary).expect("serialize metadata-only summary")
+        );
+        return;
     }
     let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
     tracing::info!(markets = markets.len(), "Gamma metadata loaded");
@@ -4235,6 +4303,7 @@ async fn cmd_harness(
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag),
         continuous,
+        delete_downloaded_parquet_after_hour: atomic_parquet,
     };
 
     let variants = backtest::strategies::default_variants();
@@ -4720,6 +4789,7 @@ mod replay_validation_tests {
             promotion_output: None,
             execute: false,
             delete_after_process: true,
+            atomic_parquet: true,
             preflight_pmxt_hours: false,
             stop_at_first_missing_hour: false,
             require_full_folds: false,
@@ -4732,7 +4802,18 @@ mod replay_validation_tests {
         .unwrap();
 
         assert_eq!(summary["mode"], "dry_run");
+        assert_eq!(summary["atomic_parquet"], true);
         assert_eq!(summary["folds"].as_array().unwrap().len(), 2);
+        assert!(summary["folds"][0]["hydrate_args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str() == Some("--atomic-parquet")));
+        assert!(summary["folds"][0]["sweep_args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str() == Some("--atomic-parquet")));
         assert!(summary["promotion_args"]
             .as_array()
             .unwrap()
@@ -4764,6 +4845,7 @@ mod replay_validation_tests {
             promotion_output: None,
             execute: false,
             delete_after_process: true,
+            atomic_parquet: false,
             preflight_pmxt_hours: false,
             stop_at_first_missing_hour: false,
             require_full_folds: true,

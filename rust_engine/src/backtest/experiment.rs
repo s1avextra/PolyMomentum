@@ -1646,6 +1646,7 @@ mod tests {
             checkpoint_dir: None,
             stop_flag: None,
             continuous: false,
+            delete_downloaded_parquet_after_hour: false,
         }
     }
 

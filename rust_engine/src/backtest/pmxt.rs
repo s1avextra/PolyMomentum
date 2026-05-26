@@ -163,9 +163,21 @@ impl PMXTv2Loader {
 
     /// Download a single hour's parquet to the cache directory.
     pub async fn download_hour(&self, hour: DateTime<Utc>, force: bool) -> Result<PathBuf> {
+        let (path, _) = self.download_hour_with_status(hour, force).await?;
+        Ok(path)
+    }
+
+    /// Download a single hour and report whether this call created/replaced
+    /// the parquet. Callers use the boolean to avoid deleting pre-existing
+    /// shared or peer-owned cache files.
+    pub async fn download_hour_with_status(
+        &self,
+        hour: DateTime<Utc>,
+        force: bool,
+    ) -> Result<(PathBuf, bool)> {
         let path = self.cache_path_for_hour(hour);
         if !force && self.is_cached(hour) {
-            return Ok(path);
+            return Ok((path, false));
         }
         let url = Self::url_for_hour(hour);
         tracing::info!(%url, ?path, "downloading PMXT v2 hour");
@@ -180,7 +192,7 @@ impl PMXTv2Loader {
             }
 
             match self.download_hour_once(&url, &path, &tmp).await {
-                Ok(()) => return Ok(path),
+                Ok(()) => return Ok((path, true)),
                 Err(err) => {
                     let _ = std::fs::remove_file(&tmp);
                     last_err = Some(err);
@@ -236,6 +248,18 @@ impl PMXTv2Loader {
         drop(f);
         std::fs::rename(&tmp, &path).context("rename tmp to final")?;
         Ok(())
+    }
+
+    /// Remove the raw cached parquet for an hour. This must only be called
+    /// when `download_hour_with_status` returned `downloaded=true` for the
+    /// same process/session.
+    pub fn remove_cached_hour_parquet(&self, hour: DateTime<Utc>) -> Result<()> {
+        let path = self.cache_path_for_hour(hour);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err).with_context(|| format!("remove {}", path.display())),
+        }
     }
 
     /// Read one hour's events from cache (the file must already be cached).

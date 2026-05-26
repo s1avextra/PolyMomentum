@@ -750,6 +750,9 @@ pub struct HarnessConfig {
     /// requested hours. This mirrors live/live-replay semantics and avoids
     /// hour-boundary double entries.
     pub continuous: bool,
+    /// Delete an hourly parquet after this process downloaded, loaded, and
+    /// replayed it. Pre-existing cached parquets are never removed.
+    pub delete_downloaded_parquet_after_hour: bool,
 }
 
 struct ContinuousVariantState {
@@ -873,7 +876,7 @@ pub async fn run_harness(
             continue;
         }
 
-        loader.download_hour(h, false).await?;
+        let (_, downloaded_hour) = loader.download_hour_with_status(h, false).await?;
         let load_t0 = std::time::Instant::now();
         let hour_filter = cfg.universe.condition_id_set_for_hour(h);
         eprintln!(
@@ -1017,6 +1020,15 @@ pub async fn run_harness(
             total = total_hours,
             "variants replayed",
         );
+        if cfg.delete_downloaded_parquet_after_hour && downloaded_hour {
+            loader.remove_cached_hour_parquet(h)?;
+            eprintln!(
+                "harness: hour {}/{} {} deleted downloaded parquet",
+                i + 1,
+                total_hours,
+                h
+            );
+        }
     }
 
     if let Some(h) = paused_at {
@@ -1095,7 +1107,7 @@ async fn run_harness_continuous(
             break;
         }
 
-        loader.download_hour(h, false).await?;
+        let (_, downloaded_hour) = loader.download_hour_with_status(h, false).await?;
         let load_t0 = std::time::Instant::now();
         let hour_filter = cfg.universe.condition_id_set_for_hour(h);
         eprintln!(
@@ -1168,6 +1180,15 @@ async fn run_harness_continuous(
             i + 1,
             total_hours,
         );
+        if cfg.delete_downloaded_parquet_after_hour && downloaded_hour {
+            loader.remove_cached_hour_parquet(h)?;
+            eprintln!(
+                "harness-continuous: hour {}/{} {} deleted downloaded parquet",
+                i + 1,
+                total_hours,
+                h
+            );
+        }
     }
 
     Ok(states
@@ -1481,6 +1502,7 @@ mod tests {
             checkpoint_dir: None,
             stop_flag: None,
             continuous: false,
+            delete_downloaded_parquet_after_hour: false,
         };
         (cfg, variants)
     }
