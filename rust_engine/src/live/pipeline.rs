@@ -31,6 +31,7 @@ use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
 use crate::execution::order_manager::OrderManager;
+use crate::execution::sizing::shares_from_budget;
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
@@ -623,25 +624,23 @@ impl Pipeline {
             stop: Arc::new(Notify::new()),
             cycle_count: Mutex::new(0),
         });
-        if breaker_tripped {
-            if !p.maybe_rearm_paper_breaker().await {
-                let metrics =
-                    breaker_state.metrics(restored_open_exposure, p.settings.bankroll_usd.max(1.0));
-                p.monitor.record_breaker_state(
-                    "restored_tripped",
-                    "state_db",
-                    breaker_state.wins,
-                    breaker_state.losses,
-                    breaker_state.realized_pnl,
-                    breaker_state.peak_pnl,
-                    metrics.open_exposure,
-                    metrics.stressed_pnl,
-                    metrics.realized_drawdown,
-                    metrics.realized_drawdown_pct,
-                    metrics.stressed_drawdown,
-                    metrics.stressed_drawdown_pct,
-                );
-            }
+        if breaker_tripped && !p.maybe_rearm_paper_breaker().await {
+            let metrics =
+                breaker_state.metrics(restored_open_exposure, p.settings.bankroll_usd.max(1.0));
+            p.monitor.record_breaker_state(
+                "restored_tripped",
+                "state_db",
+                breaker_state.wins,
+                breaker_state.losses,
+                breaker_state.realized_pnl,
+                breaker_state.peak_pnl,
+                metrics.open_exposure,
+                metrics.stressed_pnl,
+                metrics.realized_drawdown,
+                metrics.realized_drawdown_pct,
+                metrics.stressed_drawdown,
+                metrics.stressed_drawdown_pct,
+            );
         }
 
         Ok(p)
@@ -1507,6 +1506,7 @@ impl Pipeline {
                 let cfg = PaperFillCfg {
                     prefer_maker: self.runtime_strategy.prefer_maker,
                     default_taker_rate: self.runtime_strategy.default_fee_rate,
+                    min_order_size_shares: self.settings.live_min_order_size_shares,
                     ..Default::default()
                 };
                 let Some(fill) = simulate_paper_fill(market_price, position, &cfg) else {
@@ -1572,7 +1572,7 @@ impl Pipeline {
                 let order_value = fill.fill_price * fill.shares;
                 tracing::info!(
                     direction = %signal.direction,
-                    cost = position,
+                    cost = order_value,
                     fee = fill.fee,
                     profit = expected_profit,
                     edge = decision.edge,
@@ -1639,7 +1639,7 @@ impl Pipeline {
                         side: "buy".into(),
                         size: fill.shares,
                         price: fill.fill_price,
-                        cost: position,
+                        cost: order_value,
                         event_id: contract.market.event_id.clone(),
                         pnl: 0.0,
                         paper: true,
@@ -1697,18 +1697,16 @@ impl Pipeline {
                 } else {
                     round_price_to_tick(market_price, tick)
                 };
-                let shares = ((position / limit_price) * 100.0).floor() / 100.0;
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
-                if shares < min_order_size {
+                let Some(shares) = shares_from_budget(position, limit_price, min_order_size) else {
                     tracing::warn!(
-                        shares,
                         min_order_size,
                         limit_price,
                         position,
                         "live order skipped: below configured minimum order size"
                     );
                     return Ok(());
-                }
+                };
                 let neg_risk = contract.market.neg_risk;
                 let order_signal = Signal::from_candle_decision(
                     contract.market.condition_id.clone(),
@@ -2731,11 +2729,12 @@ mod tests {
 
     #[test]
     fn paper_breaker_auto_rearms_flat_policy_clear_only_in_paper() {
-        let mut state = BreakerState::default();
-        state.realized_pnl = 39.1973;
-        state.peak_pnl = 67.8299;
-        state.wins = 26;
-        state.losses = 12;
+        let state = BreakerState {
+            realized_pnl: 39.1973,
+            peak_pnl: 67.8299,
+            wins: 26,
+            losses: 12,
+        };
 
         assert_eq!(
             paper_breaker_rearm_reason(

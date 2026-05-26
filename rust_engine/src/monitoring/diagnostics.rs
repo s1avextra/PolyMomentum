@@ -1080,7 +1080,7 @@ mod tests {
             }),
         ];
         let write_session = |path: &std::path::Path, reason: &str| {
-            let mut lines = base.iter().cloned().collect::<Vec<_>>();
+            let mut lines = base.to_vec();
             lines.push(serde_json::json!({
                 "cat": "order",
                 "type": "rejected",

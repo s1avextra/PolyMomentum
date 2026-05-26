@@ -500,6 +500,14 @@ fn check_live_credentials(settings: &Settings, checks: &mut Vec<PreflightCheck>)
             CheckStatus::Fail,
             "PRIVATE_KEY is present but is not a valid secp256k1 hex key".to_string(),
         );
+    } else if missing.is_empty() && !crate::signing::api_secret_is_valid(&settings.poly_api_secret)
+    {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Fail,
+            "POLY_API_SECRET is present but is not valid URL-safe base64".to_string(),
+        );
     } else if missing.is_empty() {
         push(
             checks,
@@ -852,7 +860,7 @@ mod tests {
         s.clob_v2_ready = false;
         s.private_key = "0xabc".to_string();
         s.poly_api_key = "key".to_string();
-        s.poly_api_secret = "secret".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
         s.poly_api_passphrase = "pass".to_string();
 
         let report = run_preflight(&s, RuntimeMode::Live, true);
@@ -875,7 +883,7 @@ mod tests {
         s.alert_required = true;
         s.private_key = "0xabc".to_string();
         s.poly_api_key = "key".to_string();
-        s.poly_api_secret = "secret".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
         s.poly_api_passphrase = "pass".to_string();
 
         let report = run_preflight(&s, RuntimeMode::Live, true);
@@ -883,6 +891,23 @@ mod tests {
         assert!(report
             .failure_summary()
             .contains("POLYMOMENTUM_LIVE_RECONCILIATION_READY=1"));
+    }
+
+    #[test]
+    fn live_credentials_reject_malformed_api_secret() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.private_key =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "not base64!".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let mut checks = Vec::new();
+        check_live_credentials(&s, &mut checks);
+
+        assert!(matches!(checks[0].status, CheckStatus::Fail));
+        assert!(checks[0].detail.contains("POLY_API_SECRET"));
     }
 
     #[test]
@@ -949,7 +974,7 @@ mod tests {
         s.private_key =
             "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
         s.poly_api_key = "key".to_string();
-        s.poly_api_secret = "secret".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
         s.poly_api_passphrase = "pass".to_string();
 
         let report = run_preflight(&s, RuntimeMode::Live, true);

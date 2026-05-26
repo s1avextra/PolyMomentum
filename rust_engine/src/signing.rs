@@ -26,11 +26,11 @@ pub struct Order {
     pub salt: u128,
     pub maker: [u8; 20],
     pub signer: [u8; 20],
-    pub token_id: String,    // uint256 as decimal string
-    pub maker_amount: u128,  // pUSD amount (6 decimals) for BUY
-    pub taker_amount: u128,  // conditional token amount (6 decimals)
-    pub side: u8,            // 0 = BUY, 1 = SELL
-    pub signature_type: u8,  // 0 = EOA
+    pub token_id: String,   // uint256 as decimal string
+    pub maker_amount: u128, // pUSD amount (6 decimals) for BUY
+    pub taker_amount: u128, // conditional token amount (6 decimals)
+    pub side: u8,           // 0 = BUY, 1 = SELL
+    pub signature_type: u8, // 0 = EOA
     pub timestamp_ms: u128,
     pub metadata: [u8; 32],
     pub builder: [u8; 32],
@@ -40,7 +40,7 @@ pub struct Order {
 #[derive(Debug, Clone)]
 pub struct SignedOrder {
     pub order: Order,
-    pub signature: String,  // hex-encoded 65-byte signature (r+s+v)
+    pub signature: String, // hex-encoded 65-byte signature (r+s+v)
 }
 
 /// Build an order from trade parameters.
@@ -50,9 +50,9 @@ pub fn build_order(
     token_id: &str,
     price: f64,
     size: f64,
-    side: &str,       // "BUY" or "SELL"
+    side: &str, // "BUY" or "SELL"
     neg_risk: bool,
-    tick_size: f64,   // price grid step (0.01 or 0.001)
+    tick_size: f64, // price grid step (0.01 or 0.001)
 ) -> Order {
     let maker = address_from_key(signing_key);
     let signer = maker;
@@ -254,7 +254,11 @@ fn hex_to_address(hex_str: &str) -> [u8; 20] {
     let cleaned = hex_str.strip_prefix("0x").unwrap_or(hex_str);
     let bytes = hex::decode(cleaned).unwrap_or_else(|_| vec![0u8; 20]);
     let mut addr = [0u8; 20];
-    let start = if bytes.len() >= 20 { bytes.len() - 20 } else { 0 };
+    let start = if bytes.len() >= 20 {
+        bytes.len() - 20
+    } else {
+        0
+    };
     addr[..].copy_from_slice(&bytes[start..start + 20]);
     addr
 }
@@ -280,6 +284,23 @@ pub fn parse_private_key(hex_key: &str) -> Option<SigningKey> {
     SigningKey::from_bytes(bytes.as_slice().into()).ok()
 }
 
+pub fn decode_api_secret(api_secret: &str) -> Option<Vec<u8>> {
+    let trimmed = api_secret.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE, trimmed)
+        .or_else(|_| {
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, trimmed)
+        })
+        .ok()
+        .filter(|bytes| !bytes.is_empty())
+}
+
+pub fn api_secret_is_valid(api_secret: &str) -> bool {
+    decode_api_secret(api_secret).is_some()
+}
+
 /// Build HMAC-SHA256 request authentication headers.
 ///
 /// Returns (timestamp, signature) for the POLY-TIMESTAMP and POLY-SIGNATURE headers.
@@ -294,11 +315,7 @@ pub fn hmac_sign_request(
     use sha2::Sha256;
 
     // Decode the base64-encoded API secret
-    let secret_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE,
-        api_secret,
-    )
-    .unwrap_or_default();
+    let secret_bytes = decode_api_secret(api_secret).unwrap_or_default();
 
     // Build the message: timestamp + method + path [+ body]
     let mut message = format!("{}{}{}", timestamp, method, request_path);
@@ -306,8 +323,7 @@ pub fn hmac_sign_request(
         message.push_str(body);
     }
 
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(&secret_bytes).expect("HMAC key length error");
+    let mut mac = Hmac::<Sha256>::new_from_slice(&secret_bytes).expect("HMAC key length error");
     mac.update(message.as_bytes());
     let result = mac.finalize().into_bytes();
 
@@ -336,12 +352,18 @@ mod tests {
     }
 
     #[test]
+    fn validates_url_safe_api_secret() {
+        assert!(api_secret_is_valid("c2VjcmV0"));
+        assert!(!api_secret_is_valid("not base64!"));
+        assert!(!api_secret_is_valid(""));
+    }
+
+    #[test]
     fn test_address_derivation_deterministic() {
         // Use a known test key
-        let key = parse_private_key(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        )
-        .unwrap();
+        let key =
+            parse_private_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
         let addr = address_from_key(&key);
         // Hardhat account #0
         assert_eq!(
@@ -359,15 +381,16 @@ mod tests {
 
     #[test]
     fn test_sign_order_produces_65_byte_hex() {
-        let key = parse_private_key(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        )
-        .unwrap();
+        let key =
+            parse_private_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
         let order = Order {
             salt: 12345,
             maker: address_from_key(&key),
             signer: address_from_key(&key),
-            token_id: "71321045679252212594626385532706912750332728571942532289631379312455583992563".to_string(),
+            token_id:
+                "71321045679252212594626385532706912750332728571942532289631379312455583992563"
+                    .to_string(),
             maker_amount: 5_000_000,
             taker_amount: 10_000_000,
             side: 0,
@@ -397,7 +420,10 @@ mod tests {
         let tid = "71321045679252212594626385532706912750332728571942532289631379312455583992563";
         let bytes = decimal_to_u256(tid);
         // Must not be all zeros (would indicate overflow/truncation)
-        assert!(bytes.iter().any(|&b| b != 0), "token_id encoded as all zeros!");
+        assert!(
+            bytes.iter().any(|&b| b != 0),
+            "token_id encoded as all zeros!"
+        );
         // Re-encode back to decimal and verify round-trip
         let mut val = [0u8; 32];
         val.copy_from_slice(&bytes);

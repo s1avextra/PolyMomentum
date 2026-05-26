@@ -174,10 +174,12 @@ impl ClobClient {
         })
         .collect();
 
-        if missing.is_empty() {
-            Ok(())
-        } else {
+        if !missing.is_empty() {
             Err(format!("missing L2 auth material: {}", missing.join(", ")))
+        } else if !signing::api_secret_is_valid(&self.api_secret) {
+            Err("POLY_API_SECRET is not valid URL-safe base64".to_string())
+        } else {
+            Ok(())
         }
     }
 
@@ -361,6 +363,7 @@ impl ClobClient {
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
+        self.require_l2_auth()?;
         let key = self
             .signing_key
             .as_ref()
@@ -529,6 +532,16 @@ mod tests {
             path_with_query("/trades", &[("market", ""), ("after", "123")]),
             "/trades?after=123"
         );
+    }
+
+    #[test]
+    fn l2_auth_rejects_malformed_api_secret() {
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "not base64!", "pass");
+        client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
+
+        let err = client.require_l2_auth().unwrap_err();
+        assert!(err.contains("POLY_API_SECRET"));
     }
 
     #[test]

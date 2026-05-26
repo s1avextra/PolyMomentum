@@ -950,9 +950,7 @@ fn audit_adaptive_probe_reports(
                     .iter()
                     .filter(|v| v.diagnostics.adaptive_rearms > 0)
                     .count();
-                let status = if best.is_none() {
-                    StrategyBuilderCheckStatus::Fail
-                } else if best_breaker || best_rearms > 0 {
+                let status = if best.is_none() || best_breaker || best_rearms > 0 {
                     StrategyBuilderCheckStatus::Fail
                 } else if variants_with_rearms > 0 {
                     StrategyBuilderCheckStatus::Warn
@@ -1985,9 +1983,11 @@ mod tests {
         let path = tmp.path().join("report.json");
         let mut src = crate::data::manifest::DataSourceManifest::new("pmxt", "order_book_l2");
         src.complete = true;
-        let mut diagnostics = crate::backtest::resolver::BacktestDiagnostics::default();
-        diagnostics.adaptive_rearms = 1;
-        diagnostics.breaker_paused_events = 42;
+        let diagnostics = crate::backtest::resolver::BacktestDiagnostics {
+            adaptive_rearms: 1,
+            breaker_paused_events: 42,
+            ..Default::default()
+        };
         let report = crate::backtest::experiment::ExperimentReport {
             schema_version: 1,
             generated_at: "2026-05-22T00:00:00Z".to_string(),
@@ -2057,9 +2057,11 @@ mod tests {
         let path = tmp.path().join("adaptive_report.json");
         let mut src = crate::data::manifest::DataSourceManifest::new("pmxt", "order_book_l2");
         src.complete = true;
-        let mut diagnostics = crate::backtest::resolver::BacktestDiagnostics::default();
-        diagnostics.adaptive_rearms = 2;
-        diagnostics.breaker_paused_events = 100;
+        let diagnostics = crate::backtest::resolver::BacktestDiagnostics {
+            adaptive_rearms: 2,
+            breaker_paused_events: 100,
+            ..Default::default()
+        };
         let report = crate::backtest::experiment::ExperimentReport {
             schema_version: 1,
             generated_at: "2026-05-22T00:00:00Z".to_string(),

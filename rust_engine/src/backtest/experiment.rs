@@ -1120,6 +1120,7 @@ mod tests {
             btc_history: std::sync::Arc::new(btc),
             bankroll_usd: 100.0,
             max_total_exposure_usd: 80.0,
+            min_order_size_shares: 0.0,
             cache_dir: std::path::PathBuf::from("/tmp/pmxt"),
             latency: StaticLatencyConfig { insert_ms: 50 },
             breaker_cfg: crate::live::breaker::BreakerConfig::default(),
@@ -1324,8 +1325,10 @@ mod tests {
     fn promotion_rejects_adaptive_rearm_diagnostics() {
         let cfg = cfg();
         let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
-        let mut diagnostics = BacktestDiagnostics::default();
-        diagnostics.adaptive_rearms = 1;
+        let diagnostics = BacktestDiagnostics {
+            adaptive_rearms: 1,
+            ..Default::default()
+        };
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),

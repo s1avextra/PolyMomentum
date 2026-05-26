@@ -291,6 +291,7 @@ impl Maker {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn fill_with_key(
         &mut self,
         side: Side,

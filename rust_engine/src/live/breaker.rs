@@ -231,11 +231,12 @@ mod tests {
 
     #[test]
     fn profitable_giveback_uses_equity_drawdown_not_pnl_peak() {
-        let mut s = BreakerState::default();
-        s.realized_pnl = 39.1973;
-        s.peak_pnl = 67.8299;
-        s.wins = 26;
-        s.losses = 12;
+        let s = BreakerState {
+            realized_pnl: 39.1973,
+            peak_pnl: 67.8299,
+            wins: 26,
+            losses: 12,
+        };
 
         let metrics = s.metrics(0.0, 100.0);
 
@@ -265,9 +266,11 @@ mod tests {
 
     #[test]
     fn stressed_drawdown_headroom_caps_projected_exposure_feed_forward() {
-        let mut s = BreakerState::default();
-        s.peak_pnl = 20.0;
-        s.realized_pnl = 5.0;
+        let s = BreakerState {
+            peak_pnl: 20.0,
+            realized_pnl: 5.0,
+            ..Default::default()
+        };
 
         let headroom = s
             .stressed_drawdown_exposure_headroom(5.0, 100.0, 0.25)

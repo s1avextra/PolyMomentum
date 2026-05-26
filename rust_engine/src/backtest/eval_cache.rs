@@ -140,6 +140,7 @@ impl EvalCacheGenerator {
             .unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_evaluation(
         &mut self,
         timestamp_s: f64,

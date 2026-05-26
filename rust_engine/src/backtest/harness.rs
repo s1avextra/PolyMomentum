@@ -32,6 +32,7 @@ use crate::backtest::resolver::{
 };
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
+use crate::execution::sizing::shares_from_budget;
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::strategy::decision::{decide_candle_trade, CandleDecision, DecisionResult};
 use crate::strategy::microstructure::{BookLevelView, BookMicrostructure};
@@ -175,6 +176,7 @@ pub struct CandleBacktestStrategy {
     momentum: MomentumDetector,
     bankroll_usd: f64,
     max_total_exposure_usd: f64,
+    min_order_size_shares: f64,
     btc_history: Arc<BTCHistory>,
     breaker_cfg: BreakerConfig,
     breaker_state: BreakerState,
@@ -219,11 +221,13 @@ struct BacktestOpenPosition {
 }
 
 impl CandleBacktestStrategy {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_breaker(
         variant: StrategyVariant,
         universe: &CandleUniverse,
         bankroll_usd: f64,
         max_total_exposure_usd: f64,
+        min_order_size_shares: f64,
         btc_history: Arc<BTCHistory>,
         breaker: BacktestBreakerReport,
         breaker_cfg: BreakerConfig,
@@ -247,6 +251,7 @@ impl CandleBacktestStrategy {
             momentum: MomentumDetector::new(None, mom_cfg),
             bankroll_usd,
             max_total_exposure_usd,
+            min_order_size_shares,
             btc_history,
             breaker_cfg,
             breaker_state: breaker.state,
@@ -608,10 +613,16 @@ impl Strategy for CandleBacktestStrategy {
         if sizing_price <= 0.0 {
             return Vec::new();
         }
+        let Some(size) = shares_from_budget(position, sizing_price, self.min_order_size_shares)
+        else {
+            self.skipped_decision += 1;
+            let key = format!("min_order_size_{}", decision.zone);
+            *self.skip_reasons.entry(key).or_insert(0) += 1;
+            return Vec::new();
+        };
         self.traded.insert(cid.to_string());
         self.decisions.push(decision.clone());
 
-        let size = (position / sizing_price).round().max(1.0);
         let signal_contract = Signal::from_candle_decision(
             cid.to_string(),
             traded_token.to_string(),
@@ -696,6 +707,7 @@ pub struct HarnessConfig {
     pub btc_history: Arc<BTCHistory>,
     pub bankroll_usd: f64,
     pub max_total_exposure_usd: f64,
+    pub min_order_size_shares: f64,
     pub cache_dir: PathBuf,
     pub latency: StaticLatencyConfig,
     pub breaker_cfg: BreakerConfig,
@@ -928,6 +940,7 @@ pub async fn run_harness(
                 &cfg.universe,
                 cfg.bankroll_usd,
                 cfg.max_total_exposure_usd,
+                cfg.min_order_size_shares,
                 Arc::clone(&cfg.btc_history),
                 starting_breakers[idx].clone(),
                 cfg.breaker_cfg,
@@ -1050,6 +1063,7 @@ async fn run_harness_continuous(
                 &cfg.universe,
                 cfg.bankroll_usd,
                 cfg.max_total_exposure_usd,
+                cfg.min_order_size_shares,
                 Arc::clone(&cfg.btc_history),
                 BacktestBreakerReport::default(),
                 cfg.breaker_cfg,
@@ -1451,6 +1465,7 @@ mod tests {
             btc_history: Arc::new(btc),
             bankroll_usd: 100.0,
             max_total_exposure_usd: 80.0,
+            min_order_size_shares: 0.0,
             cache_dir: PathBuf::from("/tmp"),
             latency: StaticLatencyConfig::default(),
             breaker_cfg: BreakerConfig::default(),
@@ -1553,6 +1568,7 @@ mod tests {
             &cfg.universe,
             100.0,
             80.0,
+            0.0,
             Arc::new(btc),
             BacktestBreakerReport::default(),
             breaker_cfg,
@@ -1584,14 +1600,17 @@ mod tests {
     #[test]
     fn adaptive_rearm_only_resets_win_rate_breaker_after_cooldown() {
         let (cfg, variants) = synthetic_cfg();
-        let mut breaker_state = BreakerState::default();
-        breaker_state.losses = 2;
-        breaker_state.realized_pnl = -10.0;
+        let breaker_state = BreakerState {
+            losses: 2,
+            realized_pnl: -10.0,
+            ..Default::default()
+        };
         let mut strategy = CandleBacktestStrategy::new_with_breaker(
             variants[0].clone(),
             &cfg.universe,
             100.0,
             80.0,
+            0.0,
             Arc::new(BTCHistory::default()),
             BacktestBreakerReport {
                 tripped: true,
@@ -1630,6 +1649,7 @@ mod tests {
             &cfg.universe,
             100.0,
             80.0,
+            0.0,
             Arc::new(BTCHistory::default()),
             BacktestBreakerReport {
                 tripped: true,

@@ -1681,6 +1681,7 @@ async fn cmd_live_replay(
         universe,
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
+        min_order_size_shares: settings.live_min_order_size_shares,
         cache_dir: cache_dir_path,
         session_log_dir,
         latency: backtest::l2_replay::StaticLatencyConfig {
@@ -2669,8 +2670,7 @@ async fn cmd_harness_sweep(
         std::process::exit(2);
     }
     if !(max_projected_stressed_drawdown_pct.is_finite()
-        && max_projected_stressed_drawdown_pct >= 0.0
-        && max_projected_stressed_drawdown_pct <= 1.0)
+        && (0.0..=1.0).contains(&max_projected_stressed_drawdown_pct))
     {
         eprintln!("--max-projected-stressed-drawdown-pct must be a finite value in [0, 1]");
         std::process::exit(2);
@@ -2881,6 +2881,7 @@ async fn cmd_harness_sweep(
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         max_total_exposure_usd,
+        min_order_size_shares: settings.live_min_order_size_shares,
         cache_dir: cache_dir_path,
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,
@@ -3282,6 +3283,7 @@ async fn cmd_harness(
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         max_total_exposure_usd,
+        min_order_size_shares: settings.live_min_order_size_shares,
         cache_dir: cache_dir_path,
         latency: backtest::l2_replay::StaticLatencyConfig {
             insert_ms: latency_ms,
@@ -3332,6 +3334,7 @@ async fn cmd_harness(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_sweep(
     sessions: &[String],
     bankroll: f64,
@@ -3413,6 +3416,7 @@ fn cmd_sweep(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_eval_cache(
     settings: &config::Settings,
     start: &str,

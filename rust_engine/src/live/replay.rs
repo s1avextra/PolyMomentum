@@ -23,6 +23,7 @@ use crate::backtest::strategies::StrategyVariant;
 use crate::config::Settings;
 use crate::data::scanner::CandleContract;
 use crate::execution::order_manager::OrderManager;
+use crate::execution::sizing::shares_from_budget;
 use crate::live::breaker::BreakerState;
 use crate::monitoring::session::{
     OrderFilled, OrderPlaced, OrderTiming, ResolutionTiming, SessionMonitor, SignalEvaluation,
@@ -40,6 +41,7 @@ pub struct LiveReplayConfig {
     pub universe: CandleUniverse,
     pub btc_history: Arc<BTCHistory>,
     pub bankroll_usd: f64,
+    pub min_order_size_shares: f64,
     pub cache_dir: PathBuf,
     pub session_log_dir: PathBuf,
     pub latency: StaticLatencyConfig,
@@ -304,6 +306,7 @@ pub async fn run_live_replay(
         cfg.strategy.clone(),
         &cfg.universe,
         cfg.bankroll_usd,
+        cfg.min_order_size_shares,
         cfg.btc_history.clone(),
         monitor.clone(),
         settings.candle_settlement_alignment_ready,
@@ -377,6 +380,7 @@ struct LiveReplayStrategy {
     momentum: MomentumDetector,
     order_manager: OrderManager,
     bankroll_usd: f64,
+    min_order_size_shares: f64,
     btc_history: Arc<BTCHistory>,
     monitor: Arc<SessionMonitor>,
     traded: HashSet<String>,
@@ -426,6 +430,7 @@ impl LiveReplayStrategy {
         replay_strategy: ReplayStrategy,
         universe: &CandleUniverse,
         bankroll_usd: f64,
+        min_order_size_shares: f64,
         btc_history: Arc<BTCHistory>,
         monitor: Arc<SessionMonitor>,
         settlement_alignment_ready: bool,
@@ -443,6 +448,7 @@ impl LiveReplayStrategy {
             ),
             order_manager: OrderManager::new(),
             bankroll_usd,
+            min_order_size_shares,
             btc_history,
             monitor,
             traded: HashSet::new(),
@@ -1078,7 +1084,28 @@ impl LiveReplayStrategy {
         } else {
             ("market", None, decision.market_price)
         };
-        let size = (position / sizing_price).round().max(1.0);
+        let Some(size) = shares_from_budget(position, sizing_price, self.min_order_size_shares)
+        else {
+            self.record_skip(
+                timestamp_s,
+                contract,
+                signal,
+                up_price,
+                down_price,
+                implied_vol,
+                micro,
+                decision.zone.clone(),
+                "min_order_size".to_string(),
+                format!(
+                    "position={position:.2} price={sizing_price:.4} min_shares={:.2}",
+                    self.min_order_size_shares
+                ),
+                true,
+                decision.fair_value,
+                decision.edge,
+            );
+            return None;
+        };
         let order_signal = Signal::from_candle_decision(
             contract.market.condition_id.clone(),
             traded_token.to_string(),
@@ -1503,6 +1530,7 @@ mod tests {
             strategy,
             &CandleUniverse { contracts: vec![] },
             100.0,
+            0.0,
             Arc::new(BTCHistory::new()),
             monitor.clone(),
             true,
@@ -1532,6 +1560,7 @@ mod tests {
             strategy,
             &CandleUniverse { contracts: vec![] },
             100.0,
+            0.0,
             Arc::new(BTCHistory::new()),
             monitor,
             true,
