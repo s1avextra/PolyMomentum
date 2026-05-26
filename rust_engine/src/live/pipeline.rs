@@ -30,7 +30,7 @@ use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
-use crate::execution::order_manager::OrderManager;
+use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
 use crate::execution::sizing::shares_from_budget;
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
@@ -91,6 +91,7 @@ struct PaperPosition {
     end_time: f64,
     asset: String,
     contract_id: String,
+    event_id: String,
     shadow: bool,
 }
 
@@ -105,6 +106,7 @@ impl PaperPosition {
             "end_time": self.end_time,
             "asset": self.asset,
             "contract_id": self.contract_id,
+            "event_id": self.event_id,
             "shadow": self.shadow,
         })
     }
@@ -123,9 +125,36 @@ impl PaperPosition {
                 .unwrap_or("BTC")
                 .to_string(),
             contract_id: cid,
+            event_id: v
+                .get("event_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
             shadow: v.get("shadow").and_then(|x| x.as_bool()).unwrap_or(false),
         })
     }
+}
+
+fn outcome_idx_for_direction(direction: &str) -> i64 {
+    if direction.eq_ignore_ascii_case("down") {
+        1
+    } else {
+        0
+    }
+}
+
+fn live_position_from_fill(
+    template: &PaperPosition,
+    order: &ManagedOrder,
+) -> Option<PaperPosition> {
+    if !(order.filled_size > 0.0 && order.avg_fill_price > 0.0) {
+        return None;
+    }
+    let mut pos = template.clone();
+    pos.entry_price = order.avg_fill_price;
+    pos.size = order.filled_size;
+    pos.fee = order.total_fees;
+    Some(pos)
 }
 
 #[derive(Debug, Clone)]
@@ -418,6 +447,7 @@ pub struct Pipeline {
     momentum: Mutex<HashMap<String, MomentumDetector>>,
     contracts: RwLock<Vec<CandleContract>>,
     traded: Mutex<HashSet<String>>,
+    live_pending_positions: Mutex<HashMap<String, PaperPosition>>,
     paper_positions: Mutex<HashMap<String, PaperPosition>>,
     oracle_pending: Mutex<HashMap<String, OraclePending>>,
     breaker: Mutex<BreakerState>,
@@ -608,6 +638,7 @@ impl Pipeline {
             momentum: Mutex::new(momentum_map),
             contracts: RwLock::new(Vec::new()),
             traded: Mutex::new(HashSet::new()),
+            live_pending_positions: Mutex::new(HashMap::new()),
             paper_positions: Mutex::new(paper_positions),
             oracle_pending: Mutex::new(oracle_pending),
             breaker: Mutex::new(breaker_state),
@@ -814,7 +845,7 @@ impl Pipeline {
                     return Ok(());
                 }
                 let ts = nonzero_ts_or_now(order.timestamp_s());
-                let reconciled = {
+                let (reconciled, canceled_intent_id) = {
                     let mut orders = self.order_manager.lock().await;
                     let res = if order.is_canceled() {
                         orders.cancel_by_venue_order_id(&order.id, ts)
@@ -822,29 +853,35 @@ impl Pipeline {
                         orders.reconcile_live_by_venue_order_id(&order.id, ts)
                     };
                     match res {
-                        Ok(o) => Some(OrderReconciled {
-                            intent_id: o.intent.intent_id.clone(),
-                            order_id: order.id.clone(),
-                            source: "clob_user_ws.order".to_string(),
-                            venue_state: if order.is_canceled() {
-                                "canceled".to_string()
-                            } else {
-                                order.status.clone()
-                            },
-                            filled: o.filled_size.max(order.size_matched()),
-                            requested: o.requested_size.max(order.original_size()),
-                            fill_price: order.price.parse::<f64>().unwrap_or(0.0),
-                            fee: o.total_fees,
-                            detail: order.event_kind.clone(),
-                        }),
+                        Ok(o) => (
+                            Some(OrderReconciled {
+                                intent_id: o.intent.intent_id.clone(),
+                                order_id: order.id.clone(),
+                                source: "clob_user_ws.order".to_string(),
+                                venue_state: if order.is_canceled() {
+                                    "canceled".to_string()
+                                } else {
+                                    order.status.clone()
+                                },
+                                filled: o.filled_size.max(order.size_matched()),
+                                requested: o.requested_size.max(order.original_size()),
+                                fill_price: order.price.parse::<f64>().unwrap_or(0.0),
+                                fee: o.total_fees,
+                                detail: order.event_kind.clone(),
+                            }),
+                            order.is_canceled().then(|| o.intent.intent_id.clone()),
+                        ),
                         Err(e) => {
                             tracing::debug!(order_id = %short_cid(&order.id), error = %e, "unmatched user-channel order event");
-                            None
+                            (None, None)
                         }
                     }
                 };
                 if let Some(evt) = reconciled {
                     self.monitor.record_order_reconciled(&evt);
+                }
+                if let Some(intent_id) = canceled_intent_id {
+                    self.live_pending_positions.lock().await.remove(&intent_id);
                 }
             }
             UserEvent::Trade(trade) => {
@@ -915,6 +952,8 @@ impl Pipeline {
                             fee: trade.fee(),
                             n_trades: 1,
                         });
+                        self.record_live_fill_position(&order, ts, trade.size(), trade.price())
+                            .await?;
                     } else {
                         self.monitor.record_order_rejected(
                             &trade.asset_id,
@@ -928,6 +967,69 @@ impl Pipeline {
                 tracing::debug!(trade_id = %trade.id, "user-channel trade did not match a managed order");
             }
         }
+        Ok(())
+    }
+
+    async fn record_live_fill_position(
+        &self,
+        order: &ManagedOrder,
+        ts: f64,
+        fill_size: f64,
+        fill_price: f64,
+    ) -> Result<()> {
+        if !matches!(self.mode, Mode::Live) {
+            return Ok(());
+        }
+        let template = {
+            self.live_pending_positions
+                .lock()
+                .await
+                .get(&order.intent.intent_id)
+                .cloned()
+        };
+        let Some(template) = template else {
+            tracing::warn!(
+                intent_id = %order.intent.intent_id,
+                venue_order_id = ?order.venue_order_id,
+                "live fill has no pending position metadata; cannot attach PnL lifecycle"
+            );
+            return Ok(());
+        };
+        let Some(position) = live_position_from_fill(&template, order) else {
+            return Ok(());
+        };
+        {
+            let mut positions = self.paper_positions.lock().await;
+            positions.insert(position.contract_id.clone(), position.clone());
+        }
+        self.persist_paper_positions().await;
+        self.risk
+            .record_trade(TradeRecord {
+                timestamp: ts,
+                market_condition_id: position.contract_id.clone(),
+                outcome_idx: outcome_idx_for_direction(&position.direction),
+                side: "buy".to_string(),
+                size: fill_size,
+                price: fill_price,
+                cost: fill_size * fill_price,
+                event_id: position.event_id.clone(),
+                pnl: 0.0,
+                paper: false,
+            })
+            .await?;
+        if matches!(order.state, OrderState::Filled) {
+            self.live_pending_positions
+                .lock()
+                .await
+                .remove(&order.intent.intent_id);
+        }
+        tracing::info!(
+            cid = short_cid(&position.contract_id),
+            size = position.size,
+            entry_price = position.entry_price,
+            fee = position.fee,
+            "live fill attached to resolution lifecycle"
+        );
         Ok(())
     }
 
@@ -1322,6 +1424,7 @@ impl Pipeline {
                                 end_time: end.timestamp() as f64,
                                 asset: c.asset.clone(),
                                 contract_id: c.market.condition_id.clone(),
+                                event_id: c.market.event_id.clone(),
                                 shadow: true,
                             };
                             let mut positions = self.paper_positions.lock().await;
@@ -1512,7 +1615,7 @@ impl Pipeline {
                 let Some(fill) = simulate_paper_fill(market_price, position, &cfg) else {
                     return Ok(());
                 };
-                let expected_profit =
+                let expected_edge_value =
                     fill.shares * (decision.fair_value - fill.fill_price) - fill.fee;
                 let now_ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1574,7 +1677,7 @@ impl Pipeline {
                     direction = %signal.direction,
                     cost = order_value,
                     fee = fill.fee,
-                    profit = expected_profit,
+                    expected_ev = expected_edge_value,
                     edge = decision.edge,
                     minutes_left = signal.minutes_remaining,
                     "candle.trade.paper"
@@ -1655,6 +1758,7 @@ impl Pipeline {
                     end_time: end_ts,
                     asset: contract.asset.clone(),
                     contract_id: contract.market.condition_id.clone(),
+                    event_id: contract.market.event_id.clone(),
                     shadow: false,
                 };
                 self.paper_positions
@@ -1731,6 +1835,18 @@ impl Pipeline {
                         contract.market.condition_id
                     ),
                 );
+                let pending_position = PaperPosition {
+                    direction: signal.direction.clone(),
+                    entry_price: limit_price,
+                    fee: 0.0,
+                    size: 0.0,
+                    open_btc: signal.open_price,
+                    end_time: end_ts,
+                    asset: contract.asset.clone(),
+                    contract_id: contract.market.condition_id.clone(),
+                    event_id: contract.market.event_id.clone(),
+                    shadow: false,
+                };
 
                 let t_start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1756,6 +1872,10 @@ impl Pipeline {
                         .submit(&intent.intent_id, None, t_start)
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
+                self.live_pending_positions
+                    .lock()
+                    .await
+                    .insert(intent.intent_id.clone(), pending_position);
                 self.monitor.record_order_timing(&OrderTiming {
                     intent_id: intent.intent_id.clone(),
                     condition_id: contract.market.condition_id.clone(),
@@ -1836,6 +1956,10 @@ impl Pipeline {
                                 t_start + submit_latency_s,
                             );
                         }
+                        self.live_pending_positions
+                            .lock()
+                            .await
+                            .remove(&intent.intent_id);
                         self.monitor.record_order_rejected(
                             token_id,
                             truncated,
@@ -2938,6 +3062,7 @@ mod tests {
             end_time: 10.0,
             asset: "BTC".to_string(),
             contract_id: "cid".to_string(),
+            event_id: "event".to_string(),
             shadow: true,
         };
         let encoded = pos.to_json();
@@ -2946,7 +3071,57 @@ mod tests {
 
         let mut legacy = encoded;
         legacy.as_object_mut().unwrap().remove("shadow");
+        legacy.as_object_mut().unwrap().remove("event_id");
         let decoded_legacy = PaperPosition::from_json("cid".to_string(), &legacy).unwrap();
         assert!(!decoded_legacy.shadow);
+        assert!(decoded_legacy.event_id.is_empty());
+    }
+
+    #[test]
+    fn live_position_from_fill_uses_actual_fill_economics() {
+        let template = PaperPosition {
+            direction: "up".to_string(),
+            entry_price: 0.60,
+            fee: 0.0,
+            size: 0.0,
+            open_btc: 100.0,
+            end_time: 10.0,
+            asset: "BTC".to_string(),
+            contract_id: "cid".to_string(),
+            event_id: "event".to_string(),
+            shadow: false,
+        };
+        let intent = OrderIntent {
+            intent_id: "intent-1".to_string(),
+            strategy: StrategySpec::new("test", "1", "hash", "risk"),
+            market_id: "cid".to_string(),
+            token_id: "tok".to_string(),
+            side: "buy".to_string(),
+            order_type: "market".to_string(),
+            limit_price: Some(0.60),
+            size: 10.0,
+            reason: "test".to_string(),
+        };
+        let order = ManagedOrder {
+            intent,
+            state: OrderState::PartiallyFilled,
+            venue_order_id: Some("0xorder".to_string()),
+            requested_size: 10.0,
+            filled_size: 4.0,
+            avg_fill_price: 0.57,
+            total_fees: 0.00735,
+            reject_reason: None,
+            created_ts: 1.0,
+            updated_ts: 2.0,
+        };
+
+        let pos = live_position_from_fill(&template, &order).unwrap();
+
+        assert_eq!(pos.size, 4.0);
+        assert_eq!(pos.entry_price, 0.57);
+        assert_eq!(pos.fee, 0.00735);
+        assert!(
+            (paper_outcome_pnl(true, pos.entry_price, pos.size, pos.fee) - 1.71265).abs() < 1e-9
+        );
     }
 }

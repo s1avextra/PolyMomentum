@@ -14,6 +14,8 @@ use tokio::time::{timeout, Instant};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::execution::fees::polymarket_fee;
+
 pub const POLYMARKET_USER_WS_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 const STALE_AFTER: Duration = Duration::from_secs(60);
@@ -156,7 +158,11 @@ impl UserTradeEvent {
     }
 
     pub fn fee(&self) -> f64 {
-        self.size() * self.price() * parse_number(&self.fee_rate_bps) / 10_000.0
+        polymarket_fee(
+            self.size(),
+            self.price(),
+            parse_number(&self.fee_rate_bps) / 10_000.0,
+        )
     }
 
     pub fn is_fill_status(&self) -> bool {
@@ -409,6 +415,6 @@ mod tests {
             trade.candidate_order_ids(),
             vec!["0xtaker".to_string(), "0xmaker".to_string()]
         );
-        assert!((trade.fee() - 0.0171).abs() < 1e-9);
+        assert!((trade.fee() - 0.00735).abs() < 1e-9);
     }
 }
