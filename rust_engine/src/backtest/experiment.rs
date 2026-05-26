@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backtest::harness::{HarnessConfig, HarnessRun};
 use crate::backtest::resolver::BacktestDiagnostics;
+use crate::backtest::strategies::StrategyVariant;
 use crate::data::catalog::MarketCatalog;
 use crate::data::manifest::{DataManifest, DataSourceManifest};
 use crate::strategy::spec::StrategySpec;
@@ -120,6 +121,20 @@ pub struct MultiReportPromotionGate {
     pub max_daily_loss: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobustPromotionGate {
+    #[serde(default = "default_min_neighbor_count")]
+    pub min_neighbor_count: usize,
+    #[serde(default = "default_min_neighbor_positive_rate")]
+    pub min_neighbor_positive_rate: f64,
+    #[serde(default = "default_max_pbo")]
+    pub max_pbo: f64,
+    #[serde(default)]
+    pub min_worst_window_pnl: f64,
+    #[serde(default)]
+    pub min_robust_score: f64,
+}
+
 impl Default for PromotionGate {
     fn default() -> Self {
         Self {
@@ -152,6 +167,18 @@ impl Default for MultiReportPromotionGate {
     }
 }
 
+impl Default for RobustPromotionGate {
+    fn default() -> Self {
+        Self {
+            min_neighbor_count: default_min_neighbor_count(),
+            min_neighbor_positive_rate: default_min_neighbor_positive_rate(),
+            max_pbo: default_max_pbo(),
+            min_worst_window_pnl: 0.0,
+            min_robust_score: 0.0,
+        }
+    }
+}
+
 fn default_min_trades() -> usize {
     30
 }
@@ -170,6 +197,18 @@ fn default_min_reports() -> usize {
 
 fn default_min_profitable_reports() -> usize {
     2
+}
+
+fn default_min_neighbor_count() -> usize {
+    2
+}
+
+fn default_min_neighbor_positive_rate() -> f64 {
+    0.60
+}
+
+fn default_max_pbo() -> f64 {
+    0.50
 }
 
 fn default_max_zone_trade_share() -> f64 {
@@ -203,6 +242,52 @@ pub struct PromotionArtifact {
     pub dominant_zone_trade_share: Option<f64>,
     pub risk_notes: Vec<String>,
     pub promotion_gate: PromotionGate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobustPromotionDiagnostics {
+    pub schema_version: u32,
+    pub trial_ledger: TrialLedger,
+    pub pbo: PboDiagnostic,
+    pub selected: RobustVariantDiagnostics,
+    pub top_candidates: Vec<RobustVariantDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrialLedger {
+    pub report_count: usize,
+    pub variant_count: usize,
+    pub comparable_variant_count: usize,
+    pub total_variant_report_trials: usize,
+    pub windows: Vec<String>,
+    pub report_hashes: Vec<String>,
+    pub selection_objective: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PboDiagnostic {
+    pub splits: usize,
+    pub pbo: f64,
+    pub median_oos_percentile: f64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobustVariantDiagnostics {
+    pub strategy_name: String,
+    pub params_hash: String,
+    pub total_pnl: f64,
+    pub trades: usize,
+    pub worst_window_pnl: f64,
+    pub median_window_pnl: f64,
+    pub worst_window_expectancy: f64,
+    pub median_window_expectancy: f64,
+    pub wilson_win_rate_lower: f64,
+    pub neighbor_count: usize,
+    pub neighbor_positive_rate: f64,
+    pub fill_rate: f64,
+    pub max_stressed_drawdown_pct: f64,
+    pub robust_score: f64,
 }
 
 impl ExperimentReport {
@@ -446,12 +531,114 @@ impl PromotionArtifact {
         };
 
         let mut selected_report = aggregate.clone();
-        selected_report.variants = vec![selected.clone()];
+        selected_report.variants = vec![(*selected).clone()];
         let mut artifact = Self::from_report(&selected_report, gate)?;
         artifact
             .risk_notes
             .extend(multi_report_risk_notes(reports, selected, &multi_gate));
         Ok(artifact)
+    }
+
+    pub fn from_reports_robust(
+        reports: &[ExperimentReport],
+        gate: PromotionGate,
+        multi_gate: MultiReportPromotionGate,
+        robust_gate: RobustPromotionGate,
+    ) -> Result<(Self, RobustPromotionDiagnostics)> {
+        let aggregate = aggregate_reports(reports, &multi_gate)?;
+        if gate.require_complete_data && !aggregate.data_manifest.complete {
+            bail!("promotion rejected: aggregate data manifest is incomplete");
+        }
+        if aggregate.variants.is_empty() {
+            bail!("promotion rejected: aggregate report has no variants");
+        }
+
+        let pbo = estimate_pbo(reports);
+        if pbo.splits > 0 && pbo.pbo > robust_gate.max_pbo {
+            bail!(
+                "robust promotion rejected: PBO {:.4} above maximum {:.4}",
+                pbo.pbo,
+                robust_gate.max_pbo
+            );
+        }
+
+        let mut scored = Vec::new();
+        let mut rejection_samples = Vec::new();
+        for variant in &aggregate.variants {
+            let mut reasons = promotion_rejection_reasons(variant, &gate);
+            reasons.extend(multi_report_rejection_reasons(
+                reports,
+                variant,
+                &gate,
+                &multi_gate,
+            ));
+            let diagnostic = robust_variant_diagnostics(reports, &aggregate, variant);
+            reasons.extend(robust_rejection_reasons(&diagnostic, &robust_gate));
+            if reasons.is_empty() {
+                scored.push((variant, diagnostic));
+            } else if rejection_samples.len() < 3 {
+                rejection_samples.push(format!(
+                    "{} failed: {}",
+                    variant_label(variant),
+                    reasons.join("; ")
+                ));
+            }
+        }
+
+        scored.sort_by(|(_, a), (_, b)| {
+            b.robust_score
+                .partial_cmp(&a.robust_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.total_pnl
+                        .partial_cmp(&a.total_pnl)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+
+        let Some((selected, selected_diag)) = scored.first().cloned() else {
+            let suffix = if rejection_samples.is_empty() {
+                "no comparable variants".to_string()
+            } else {
+                rejection_samples.join(" | ")
+            };
+            bail!("robust promotion rejected: no variants passed robust gates; {suffix}");
+        };
+
+        let mut selected_report = aggregate.clone();
+        selected_report.variants = vec![selected.clone()];
+        let mut artifact = Self::from_report(&selected_report, gate)?;
+        artifact
+            .risk_notes
+            .extend(multi_report_risk_notes(reports, selected, &multi_gate));
+        artifact.risk_notes.push(format!(
+            "robust score {:.4}; worst_window_pnl {:.2}; median_window_pnl {:.2}; neighbor_positive_rate {:.1}% over {} neighbor(s)",
+            selected_diag.robust_score,
+            selected_diag.worst_window_pnl,
+            selected_diag.median_window_pnl,
+            100.0 * selected_diag.neighbor_positive_rate,
+            selected_diag.neighbor_count,
+        ));
+        artifact.risk_notes.push(format!(
+            "PBO estimate {:.3} across {} split(s); median OOS percentile {:.3}",
+            pbo.pbo, pbo.splits, pbo.median_oos_percentile
+        ));
+        artifact
+            .risk_notes
+            .push(format!("trial ledger: {}", trial_ledger_note(reports)));
+
+        let diagnostics = RobustPromotionDiagnostics {
+            schema_version: 1,
+            trial_ledger: build_trial_ledger(reports),
+            pbo,
+            selected: selected_diag.clone(),
+            top_candidates: scored
+                .into_iter()
+                .map(|(_, diagnostic)| diagnostic)
+                .take(10)
+                .collect(),
+        };
+        Ok((artifact, diagnostics))
     }
 }
 
@@ -659,6 +846,328 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
         sharpe_like: daily_sharpe(group),
         by_zone,
     }
+}
+
+fn build_trial_ledger(reports: &[ExperimentReport]) -> TrialLedger {
+    let comparable_variant_count = comparable_variant_groups(reports).len();
+    TrialLedger {
+        report_count: reports.len(),
+        variant_count: reports.iter().map(|r| r.variants.len()).sum(),
+        comparable_variant_count,
+        total_variant_report_trials: reports.iter().map(|r| r.variants.len()).sum(),
+        windows: reports
+            .iter()
+            .map(|r| format!("{}..{}", r.start, r.end))
+            .collect(),
+        report_hashes: reports
+            .iter()
+            .map(crate::strategy::spec::stable_json_hash)
+            .collect(),
+        selection_objective:
+            "robust_score with hard vetoes, neighbor stability, worst-window pnl, and PBO"
+                .to_string(),
+    }
+}
+
+fn trial_ledger_note(reports: &[ExperimentReport]) -> String {
+    let ledger = build_trial_ledger(reports);
+    format!(
+        "reports={} comparable_variants={} variant_report_trials={} windows={}",
+        ledger.report_count,
+        ledger.comparable_variant_count,
+        ledger.total_variant_report_trials,
+        ledger.windows.join(",")
+    )
+}
+
+fn robust_variant_diagnostics(
+    reports: &[ExperimentReport],
+    aggregate: &ExperimentReport,
+    selected: &VariantReport,
+) -> RobustVariantDiagnostics {
+    let daily = matching_daily_variants(reports, selected);
+    let mut pnls: Vec<f64> = daily.iter().map(|v| v.total_pnl).collect();
+    pnls.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let worst_window_pnl = pnls.first().copied().unwrap_or(0.0);
+    let median_window_pnl = median_sorted(&pnls);
+
+    let mut expectancies: Vec<f64> = daily
+        .iter()
+        .map(|v| {
+            if v.trades == 0 {
+                0.0
+            } else {
+                v.total_pnl / v.trades as f64
+            }
+        })
+        .collect();
+    expectancies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let worst_window_expectancy = expectancies.first().copied().unwrap_or(0.0);
+    let median_window_expectancy = median_sorted(&expectancies);
+
+    let (neighbor_count, neighbor_positive_rate) = neighbor_stability(reports, aggregate, selected);
+    let wilson = wilson_win_rate_lower(selected.wins, selected.trades);
+    let drawdown_inverse = (1.0 - selected.breaker_stressed_drawdown_pct).clamp(0.0, 1.0);
+    let simplicity = simplicity_score(selected);
+    let robust_score = 0.30 * worst_window_expectancy
+        + 0.20 * median_window_expectancy
+        + 0.15 * wilson
+        + 0.15 * neighbor_positive_rate
+        + 0.10 * selected.fill_rate
+        + 0.05 * drawdown_inverse
+        + 0.05 * simplicity;
+
+    RobustVariantDiagnostics {
+        strategy_name: variant_label(selected),
+        params_hash: selected.strategy.params_hash.clone(),
+        total_pnl: selected.total_pnl,
+        trades: selected.trades,
+        worst_window_pnl,
+        median_window_pnl,
+        worst_window_expectancy,
+        median_window_expectancy,
+        wilson_win_rate_lower: wilson,
+        neighbor_count,
+        neighbor_positive_rate,
+        fill_rate: selected.fill_rate,
+        max_stressed_drawdown_pct: selected.breaker_stressed_drawdown_pct,
+        robust_score,
+    }
+}
+
+fn robust_rejection_reasons(
+    diagnostic: &RobustVariantDiagnostics,
+    gate: &RobustPromotionGate,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if diagnostic.worst_window_pnl < gate.min_worst_window_pnl {
+        reasons.push(format!(
+            "worst_window_pnl {:.4} below minimum {:.4}",
+            diagnostic.worst_window_pnl, gate.min_worst_window_pnl
+        ));
+    }
+    if diagnostic.neighbor_count < gate.min_neighbor_count {
+        reasons.push(format!(
+            "neighbor_count {} below minimum {}",
+            diagnostic.neighbor_count, gate.min_neighbor_count
+        ));
+    }
+    if diagnostic.neighbor_positive_rate < gate.min_neighbor_positive_rate {
+        reasons.push(format!(
+            "neighbor_positive_rate {:.4} below minimum {:.4}",
+            diagnostic.neighbor_positive_rate, gate.min_neighbor_positive_rate
+        ));
+    }
+    if diagnostic.robust_score < gate.min_robust_score {
+        reasons.push(format!(
+            "robust_score {:.4} below minimum {:.4}",
+            diagnostic.robust_score, gate.min_robust_score
+        ));
+    }
+    reasons
+}
+
+fn neighbor_stability(
+    reports: &[ExperimentReport],
+    aggregate: &ExperimentReport,
+    selected: &VariantReport,
+) -> (usize, f64) {
+    let Some(selected_knobs) = VariantKnobs::from_variant(selected) else {
+        return (0, 0.0);
+    };
+    let mut neighbor_count = 0_usize;
+    let mut positive = 0_usize;
+    let mut total = 0_usize;
+    for candidate in &aggregate.variants {
+        if candidate.strategy.params_hash == selected.strategy.params_hash {
+            continue;
+        }
+        let Some(candidate_knobs) = VariantKnobs::from_variant(candidate) else {
+            continue;
+        };
+        if !selected_knobs.is_neighbor(&candidate_knobs) {
+            continue;
+        }
+        let daily = matching_daily_variants(reports, candidate);
+        if daily.len() != reports.len() {
+            continue;
+        }
+        neighbor_count += 1;
+        for variant in daily {
+            total += 1;
+            if variant.total_pnl > 0.0 {
+                positive += 1;
+            }
+        }
+    }
+    if total == 0 {
+        (neighbor_count, 0.0)
+    } else {
+        (neighbor_count, positive as f64 / total as f64)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VariantKnobs {
+    conf: f64,
+    z: f64,
+    edge: f64,
+    min_price: f64,
+    max_price: f64,
+    prefer_maker: bool,
+}
+
+impl VariantKnobs {
+    fn from_variant(variant: &VariantReport) -> Option<Self> {
+        let params =
+            serde_json::from_value::<StrategyVariant>(variant.strategy_params.clone()).ok()?;
+        Some(Self {
+            conf: params.min_confidence,
+            z: params
+                .zone_config
+                .early_min_z
+                .min(params.zone_config.primary_min_z)
+                .min(params.zone_config.late_min_z)
+                .min(params.zone_config.terminal_min_z),
+            edge: params.min_edge,
+            min_price: params.zone_config.min_price,
+            max_price: params.zone_config.max_price,
+            prefer_maker: params.prefer_maker,
+        })
+    }
+
+    fn is_neighbor(&self, other: &Self) -> bool {
+        self.prefer_maker == other.prefer_maker
+            && (self.conf - other.conf).abs() <= 0.101
+            && (self.z - other.z).abs() <= 0.251
+            && (self.edge - other.edge).abs() <= 0.051
+            && (self.min_price - other.min_price).abs() <= 0.051
+            && (self.max_price - other.max_price).abs() <= 0.201
+    }
+}
+
+fn simplicity_score(selected: &VariantReport) -> f64 {
+    let Some(knobs) = VariantKnobs::from_variant(selected) else {
+        return 0.5;
+    };
+    let strictness = (knobs.conf + knobs.z.min(2.0) / 2.0 + knobs.edge.min(0.10) * 10.0) / 3.0;
+    (1.0 - (strictness - 0.5).abs()).clamp(0.0, 1.0)
+}
+
+fn estimate_pbo(reports: &[ExperimentReport]) -> PboDiagnostic {
+    let groups = comparable_variant_groups(reports);
+    let n = reports.len();
+    if n < 2 || groups.len() < 2 {
+        return PboDiagnostic {
+            splits: 0,
+            pbo: 0.0,
+            median_oos_percentile: 1.0,
+            truncated: false,
+        };
+    }
+    let train_size = (n / 2).max(1);
+    let max_splits = 4096_usize;
+    let mut splits = 0_usize;
+    let mut overfit = 0_usize;
+    let mut percentiles = Vec::new();
+    let mut truncated = false;
+    for mask in 1_usize..(1_usize << n) {
+        if mask.count_ones() as usize != train_size {
+            continue;
+        }
+        if splits >= max_splits {
+            truncated = true;
+            break;
+        }
+        let train_idxs: Vec<usize> = (0..n).filter(|i| (mask & (1_usize << i)) != 0).collect();
+        let test_idxs: Vec<usize> = (0..n).filter(|i| (mask & (1_usize << i)) == 0).collect();
+        if test_idxs.is_empty() {
+            continue;
+        }
+        let mut train_scores = Vec::with_capacity(groups.len());
+        let mut test_scores = Vec::with_capacity(groups.len());
+        for group in &groups {
+            train_scores.push(sum_group_pnl(group, &train_idxs));
+            test_scores.push(sum_group_pnl(group, &test_idxs));
+        }
+        let Some((winner_idx, _)) = train_scores
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        else {
+            continue;
+        };
+        let winner_oos = test_scores[winner_idx];
+        let rank = test_scores
+            .iter()
+            .filter(|score| **score <= winner_oos)
+            .count();
+        let percentile = rank as f64 / test_scores.len() as f64;
+        if percentile < 0.5 {
+            overfit += 1;
+        }
+        percentiles.push(percentile);
+        splits += 1;
+    }
+    percentiles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    PboDiagnostic {
+        splits,
+        pbo: if splits == 0 {
+            0.0
+        } else {
+            overfit as f64 / splits as f64
+        },
+        median_oos_percentile: median_sorted(&percentiles),
+        truncated,
+    }
+}
+
+fn comparable_variant_groups(reports: &[ExperimentReport]) -> Vec<Vec<&VariantReport>> {
+    if reports.is_empty() {
+        return Vec::new();
+    }
+    let mut groups: BTreeMap<String, Vec<&VariantReport>> = BTreeMap::new();
+    for report in reports {
+        for variant in &report.variants {
+            groups
+                .entry(variant_key(variant))
+                .or_default()
+                .push(variant);
+        }
+    }
+    groups
+        .into_values()
+        .filter(|group| group.len() == reports.len())
+        .collect()
+}
+
+fn sum_group_pnl(group: &[&VariantReport], indexes: &[usize]) -> f64 {
+    indexes
+        .iter()
+        .filter_map(|idx| group.get(*idx))
+        .map(|variant| variant.total_pnl)
+        .sum()
+}
+
+fn median_sorted(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
+fn variant_label(variant: &VariantReport) -> String {
+    variant
+        .strategy_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&variant.strategy.params_hash)
+        .to_string()
 }
 
 fn daily_sharpe(group: &[&VariantReport]) -> f64 {
@@ -1159,6 +1668,55 @@ mod tests {
                 },
             ),
         ])
+    }
+
+    fn robust_variant(
+        name: &str,
+        _hash: &str,
+        pnl: f64,
+        conf: f64,
+        z: f64,
+        max_price: f64,
+    ) -> VariantReport {
+        let mut variant = StrategyVariant::baseline();
+        variant.name = name.to_string();
+        variant.prefer_maker = true;
+        variant.min_confidence = conf;
+        variant.min_edge = 0.03;
+        variant.zone_config.early_min_confidence = conf;
+        variant.zone_config.early_min_z = z;
+        variant.zone_config.primary_min_z = z;
+        variant.zone_config.late_min_z = z;
+        variant.zone_config.terminal_min_z = z;
+        variant.zone_config.min_price = 0.10;
+        variant.zone_config.max_price = max_price;
+        let strategy =
+            StrategySpec::from_serializable_params("s", "1", &variant, variant.risk_profile());
+        VariantReport {
+            strategy,
+            strategy_params: serde_json::to_value(&variant).unwrap(),
+            trades: 30,
+            wins: 22,
+            losses: 8,
+            unresolved_fills: 0,
+            execution_attempts: 45,
+            fills_success: 30,
+            fills_failed: 15,
+            fill_rate: 30.0 / 45.0,
+            reject_reasons: BTreeMap::from([("maker_unfilled".to_string(), 15)]),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
+            win_rate: 22.0 / 30.0,
+            total_pnl: pnl,
+            avg_pnl: pnl / 30.0,
+            total_fees: 0.0,
+            sharpe_like: 0.1,
+            by_zone: zone_split(30, 0),
+        }
     }
 
     #[test]
@@ -1756,7 +2314,87 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(artifact.selected_strategy.params_hash, "robust");
+        assert_eq!(
+            artifact
+                .strategy_params
+                .get("name")
+                .and_then(|v| v.as_str()),
+            Some("robust")
+        );
         assert_eq!(artifact.total_pnl, 60.0);
+    }
+
+    #[test]
+    fn robust_promotion_prefers_plateau_over_spike() {
+        let cfg = cfg();
+        let mut reports = Vec::new();
+        for (i, (robust_pnl, spike_pnl)) in [(10.0, 80.0), (10.0, 1.0), (10.0, 1.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            report.variants = vec![
+                robust_variant("spike", "spike", spike_pnl, 0.80, 1.50, 0.90),
+                robust_variant("robust", "robust", robust_pnl, 0.40, 0.70, 0.90),
+                robust_variant(
+                    "robust_neighbor_conf",
+                    "robust_neighbor_conf",
+                    8.0,
+                    0.35,
+                    0.70,
+                    0.90,
+                ),
+                robust_variant(
+                    "robust_neighbor_z",
+                    "robust_neighbor_z",
+                    7.0,
+                    0.40,
+                    0.50,
+                    0.90,
+                ),
+            ];
+            reports.push(report);
+        }
+
+        let (artifact, diagnostics) = PromotionArtifact::from_reports_robust(
+            &reports,
+            PromotionGate {
+                min_trades: 90,
+                min_zone_count: 1,
+                max_zone_trade_share: 1.0,
+                max_passive_failed_fills: 200,
+                min_fill_rate: 0.50,
+                ..PromotionGate::default()
+            },
+            MultiReportPromotionGate {
+                min_reports: 3,
+                min_profitable_reports: 3,
+                min_daily_trades: 30,
+                min_daily_pnl: 0.0,
+                max_daily_loss: 0.0,
+            },
+            RobustPromotionGate {
+                min_neighbor_count: 2,
+                min_neighbor_positive_rate: 1.0,
+                max_pbo: 1.0,
+                min_worst_window_pnl: 5.0,
+                min_robust_score: 0.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            artifact
+                .strategy_params
+                .get("name")
+                .and_then(|v| v.as_str()),
+            Some("robust")
+        );
+        assert_eq!(diagnostics.selected.neighbor_count, 2);
+        assert_eq!(diagnostics.selected.worst_window_pnl, 10.0);
+        assert!(artifact
+            .risk_notes
+            .iter()
+            .any(|note| note.contains("PBO estimate")));
     }
 }

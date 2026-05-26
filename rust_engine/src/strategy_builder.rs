@@ -530,6 +530,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
             "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
             "Use backtest/live-replay validation first; paper mode is only for live venue plumbing that cannot be reproduced offline.".to_string(),
+            "Promotion uses robust-promote: hard gates first, then worst-window expectancy, neighbor stability, Wilson lower bound, maker fill reliability, and PBO diagnostics.".to_string(),
+            "For broad PMXT history, scan gradually in time-boxed local caches: hydrate one rolling window, emit reports/artifacts, then delete only the parquets downloaded by that session.".to_string(),
         ],
     })
 }
@@ -1307,6 +1309,10 @@ fn push_calibration_window_stages(
         eval_cache_path.display().to_string(),
         "--bankroll".to_string(),
         money_arg(bankroll),
+        "--position-pct".to_string(),
+        profile.position_pct.to_string(),
+        "--max-per-market-usd".to_string(),
+        profile.max_per_market_usd.to_string(),
         "--min-trades".to_string(),
         "30".to_string(),
         "--grid".to_string(),
@@ -1370,6 +1376,14 @@ fn push_calibration_window_stages(
         latency_ms.to_string(),
         "--window-minutes".to_string(),
         float_arg(window_minutes),
+        "--position-pct".to_string(),
+        profile.position_pct.to_string(),
+        "--max-per-market-usd".to_string(),
+        profile.max_per_market_usd.to_string(),
+        "--max-total-exposure-usd".to_string(),
+        profile.max_total_exposure_usd.to_string(),
+        "--max-projected-stressed-drawdown-pct".to_string(),
+        profile.max_projected_stressed_drawdown_pct.to_string(),
         "--zone-mode".to_string(),
         zone_mode.to_string(),
         "--conf".to_string(),
@@ -1449,7 +1463,7 @@ fn push_calibration_window_stages(
         command: shell_command(&adaptive_args),
         outputs: vec![adaptive_report_path.display().to_string()],
         verify: vec![
-            "diagnostic report is never passed to aggregate-promote".to_string(),
+            "diagnostic report is never passed to robust-promote".to_string(),
             "compare diagnostics.adaptive_rearms and breaker_paused_events against the static harness report".to_string(),
             "adaptive_rearms > 0 is research evidence for regime instability, not promotion evidence".to_string(),
         ],
@@ -1475,7 +1489,7 @@ fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> Str
     let mut args = vec![
         "polymomentum-engine".to_string(),
         "experiment".to_string(),
-        "aggregate-promote".to_string(),
+        "robust-promote".to_string(),
     ];
     for report in reports {
         args.extend(["--report".to_string(), report.display().to_string()]);
@@ -1509,6 +1523,14 @@ fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> Str
         "50".to_string(),
         "--min-daily-pnl".to_string(),
         "50".to_string(),
+        "--min-neighbor-count".to_string(),
+        "2".to_string(),
+        "--min-neighbor-positive-rate".to_string(),
+        "0.60".to_string(),
+        "--max-pbo".to_string(),
+        "0.50".to_string(),
+        "--min-worst-window-pnl".to_string(),
+        "0".to_string(),
     ]);
     shell_command(&args)
 }
@@ -1528,6 +1550,10 @@ struct StrategyBuilderProfile {
     micro_max_spread: &'static str,
     micro_min_depth: &'static str,
     micro_min_pressure: &'static str,
+    position_pct: &'static str,
+    max_per_market_usd: &'static str,
+    max_total_exposure_usd: &'static str,
+    max_projected_stressed_drawdown_pct: &'static str,
     also_maker: bool,
 }
 
@@ -1548,6 +1574,10 @@ impl StrategyBuilderProfile {
                 micro_max_spread: "1.0",
                 micro_min_depth: "0.0",
                 micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "20",
+                max_total_exposure_usd: "15",
+                max_projected_stressed_drawdown_pct: "0.24",
                 also_maker: true,
             }),
             "guarded5m" => Ok(Self {
@@ -1564,22 +1594,30 @@ impl StrategyBuilderProfile {
                 micro_max_spread: "0.02",
                 micro_min_depth: "20.0",
                 micro_min_pressure: "0.0,0.10",
+                position_pct: "0.05",
+                max_per_market_usd: "20",
+                max_total_exposure_usd: "15",
+                max_projected_stressed_drawdown_pct: "0.24",
                 also_maker: true,
             }),
             "a_plus5m" => Ok(Self {
                 name: "a_plus5m",
-                conf: "0.35,0.45,0.55",
-                z: "0.50,1.00,1.25",
-                edge: "0.02,0.05,0.07",
-                ev_buffer: "-1.0,0.05",
+                conf: "0.30,0.35,0.40",
+                z: "0.50,0.70",
+                edge: "0.03",
+                ev_buffer: "-1.0",
                 min_price: "0.10",
-                max_price: "0.75",
-                settlement_floor: "25.0,35.0",
-                settlement_guard_minutes: "5.0",
-                settlement_sigma_buffer: "0.20",
-                micro_max_spread: "0.02",
-                micro_min_depth: "20.0",
-                micro_min_pressure: "0.0,0.10",
+                max_price: "0.75,0.90",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "1.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "20",
+                max_total_exposure_usd: "15",
+                max_projected_stressed_drawdown_pct: "0.24",
                 also_maker: true,
             }),
             _ => bail!(
@@ -1692,7 +1730,7 @@ mod tests {
         assert!(plan
             .stages
             .iter()
-            .any(|s| s.command.contains("aggregate-promote")));
+            .any(|s| s.command.contains("robust-promote") && s.command.contains("--max-pbo")));
         assert!(plan.stages.iter().any(|s| {
             s.name.starts_with("calibration_adaptive_breaker_probe_")
                 && s.command.contains("--adaptive-health-rearm-minutes 15")
@@ -1705,6 +1743,9 @@ mod tests {
             .all(|s| {
                 s.command.contains("--also-maker")
                     && s.command.contains("--zone-mode primary")
+                    && s.command.contains("--position-pct 0.05")
+                    && s.command
+                        .contains("--max-projected-stressed-drawdown-pct 0.24")
                     && !s.command.contains("--also-maker true")
             }));
         assert!(plan
