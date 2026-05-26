@@ -293,7 +293,7 @@ impl ClobClient {
     }
 
     pub async fn get_market(&self, condition_id: &str) -> Result<Value, String> {
-        self.get_public_json("/market", &[("condition_id", condition_id)])
+        self.get_public_json(&format!("/clob-markets/{condition_id}"), &[])
             .await
     }
 

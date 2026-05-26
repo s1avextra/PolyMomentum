@@ -332,6 +332,7 @@ pub fn resolve_fills(
 mod tests {
     use super::*;
     use crate::backtest::l2_replay::{BacktestFill, BacktestOrder};
+    use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 
     fn mk_history() -> BTCHistory {
         let mut h = BTCHistory::default();
@@ -368,7 +369,7 @@ mod tests {
                 size,
                 order_type: "market".to_string(),
                 limit_price: None,
-                fee_rate: 0.072,
+                fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
                 maker_fee_rate: 0.0,
             },
             fill_timestamp_s: 1_700_000_001.0,

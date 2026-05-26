@@ -192,6 +192,9 @@ mod tests {
             neg_risk: false,
             neg_risk_augmented: false,
             minimum_tick_size: None,
+            fees_enabled: None,
+            taker_fee_rate: None,
+            maker_fee_rate: None,
         }
     }
 

@@ -264,6 +264,68 @@ fn parse_f64(v: &Value) -> Option<f64> {
     }
 }
 
+fn parse_bool(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => n.as_u64().map(|x| x != 0),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_fee_rate_decimal(v: &Value) -> Option<f64> {
+    let rate = parse_f64(v)?;
+    if rate.is_finite() && (0.0..=1.0).contains(&rate) {
+        Some(rate)
+    } else {
+        None
+    }
+}
+
+fn parse_fee_rate_bps(v: &Value) -> Option<f64> {
+    let bps = parse_f64(v)?;
+    if bps.is_finite() && bps >= 0.0 {
+        Some(bps / 10_000.0)
+    } else {
+        None
+    }
+}
+
+fn parse_taker_fee_rate(raw: &Value) -> Option<f64> {
+    raw.get("fd")
+        .and_then(|fd| fd.get("r"))
+        .and_then(parse_fee_rate_decimal)
+        .or_else(|| raw.get("feeRate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("takerFeeRate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("taker_fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("feeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("takerFeeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("taker_fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("tbf").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("base_fee").and_then(parse_fee_rate_bps))
+}
+
+fn parse_maker_fee_rate(raw: &Value) -> Option<f64> {
+    raw.get("makerFeeRate")
+        .and_then(parse_fee_rate_decimal)
+        .or_else(|| raw.get("maker_fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("makerFeeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("maker_fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("mbf").and_then(parse_fee_rate_bps))
+}
+
+fn parse_fees_enabled(raw: &Value) -> Option<bool> {
+    raw.get("feesEnabled")
+        .or_else(|| raw.get("fees_enabled"))
+        .and_then(parse_bool)
+}
+
 fn parse_json_or_csv(v: Option<&Value>) -> Vec<String> {
     let Some(v) = v else { return Vec::new() };
     if let Value::Array(arr) = v {
@@ -434,6 +496,9 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
             .get("minimum_tick_size")
             .or_else(|| raw.get("minimumTickSize"))
             .and_then(parse_f64),
+        fees_enabled: parse_fees_enabled(raw),
+        taker_fee_rate: parse_taker_fee_rate(raw),
+        maker_fee_rate: parse_maker_fee_rate(raw),
     })
 }
 
@@ -501,6 +566,9 @@ mod tests {
             "closed": false,
             "endDate": "2026-04-04T07:00:00Z",
             "minimum_tick_size": "0.001",
+            "feesEnabled": true,
+            "fd": {"r": 0.07, "e": 2, "to": true},
+            "mbf": 0,
         });
         let m = parse_gamma_market(&raw).unwrap();
         assert_eq!(m.condition_id, "0xabc");
@@ -509,5 +577,21 @@ mod tests {
         assert_eq!(m.outcomes[0].name, "Up");
         assert!((m.outcomes[0].price - 0.5).abs() < 1e-9);
         assert_eq!(m.minimum_tick_size, Some(0.001));
+        assert_eq!(m.fees_enabled, Some(true));
+        assert_eq!(m.taker_fee_rate, Some(0.07));
+        assert_eq!(m.maker_fee_rate, Some(0.0));
+    }
+
+    #[test]
+    fn parses_basis_point_fee_fields() {
+        let raw = serde_json::json!({
+            "conditionId": "0xabc",
+            "question": "Bitcoin Up or Down - April 4, 3AM ET?",
+            "tbf": 700,
+            "makerFeeRateBps": "0",
+        });
+        let m = parse_gamma_market(&raw).unwrap();
+        assert_eq!(m.taker_fee_rate, Some(0.07));
+        assert_eq!(m.maker_fee_rate, Some(0.0));
     }
 }

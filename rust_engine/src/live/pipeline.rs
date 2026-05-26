@@ -29,6 +29,7 @@ use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
+use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
 use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
 use crate::execution::sizing::shares_from_budget;
@@ -347,7 +348,7 @@ impl RuntimeStrategy {
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
             "prefer_maker": settings.candle_prefer_maker,
-            "default_fee_rate": 0.072,
+            "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
             "microstructure": microstructure,
         });
         Self {
@@ -371,7 +372,7 @@ impl RuntimeStrategy {
             max_projected_stressed_drawdown_pct: settings
                 .candle_max_projected_stressed_drawdown_pct,
             prefer_maker: settings.candle_prefer_maker,
-            default_fee_rate: 0.072,
+            default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             microstructure,
             source: "settings".to_string(),
         }
@@ -1606,9 +1607,12 @@ impl Pipeline {
 
         match self.mode {
             Mode::Paper => {
+                let taker_fee_rate = contract
+                    .market
+                    .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
                 let cfg = PaperFillCfg {
                     prefer_maker: self.runtime_strategy.prefer_maker,
-                    default_taker_rate: self.runtime_strategy.default_fee_rate,
+                    default_taker_rate: taker_fee_rate,
                     min_order_size_shares: self.settings.live_min_order_size_shares,
                     ..Default::default()
                 };

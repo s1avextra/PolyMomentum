@@ -4,6 +4,7 @@
 //! `ZoneConfig`. The harness loops one variant at a time over the same PMXT
 //! v2 + BTC tape so per-strategy P&L is comparable.
 
+use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
 use crate::strategy::decision::ZoneConfig;
 use crate::strategy::microstructure::MicrostructureConfig;
 
@@ -71,8 +72,8 @@ impl StrategyVariant {
             maker_fill_prob: 0.65,
             maker_seed: Some(42),
             use_perfect_fill: false,
-            default_fee_rate: 0.072,
-            maker_fee_rate: 0.0,
+            default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
+            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
         }
     }
@@ -172,8 +173,8 @@ impl StrategyVariant {
             maker_fill_prob: 0.65,
             maker_seed: Some(42),
             use_perfect_fill: false,
-            default_fee_rate: 0.072,
-            maker_fee_rate: 0.0,
+            default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
+            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
         }
     }

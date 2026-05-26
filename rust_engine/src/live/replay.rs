@@ -21,6 +21,7 @@ use crate::backtest::l2_replay::{
 use crate::backtest::pmxt::{L2Event, PMXTv2Loader};
 use crate::backtest::strategies::StrategyVariant;
 use crate::config::Settings;
+use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
 use crate::data::scanner::CandleContract;
 use crate::execution::order_manager::OrderManager;
 use crate::execution::sizing::shares_from_budget;
@@ -140,8 +141,8 @@ impl ReplayStrategy {
         variant.max_projected_stressed_drawdown_pct =
             settings.candle_max_projected_stressed_drawdown_pct;
         variant.prefer_maker = settings.candle_prefer_maker;
-        variant.default_fee_rate = 0.072;
-        variant.maker_fee_rate = 0.0;
+        variant.default_fee_rate = DEFAULT_CRYPTO_TAKER_FEE_RATE;
+        variant.maker_fee_rate = DEFAULT_MAKER_FEE_RATE;
         variant.microstructure = MicrostructureConfig::disabled();
         variant.microstructure.apply_safety_floor(
             settings.candle_microstructure_max_spread,
@@ -158,7 +159,7 @@ impl ReplayStrategy {
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
             "prefer_maker": settings.candle_prefer_maker,
-            "default_fee_rate": 0.072,
+            "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
             "microstructure": variant.microstructure,
         });
         let strategy_spec = StrategySpec::from_serializable_params(
@@ -1221,6 +1222,12 @@ impl LiveReplayStrategy {
             balance_usd: self.bankroll_usd,
             submit_latency_ms: Some(0.0),
         });
+        let fee_rate = contract
+            .market
+            .effective_taker_fee_rate(variant.default_fee_rate);
+        let maker_fee_rate = contract
+            .market
+            .effective_maker_fee_rate(variant.maker_fee_rate);
 
         Some(BacktestOrder {
             intent_id: intent.intent_id,
@@ -1231,8 +1238,8 @@ impl LiveReplayStrategy {
             size,
             order_type: order_type.to_string(),
             limit_price,
-            fee_rate: variant.default_fee_rate,
-            maker_fee_rate: variant.maker_fee_rate,
+            fee_rate,
+            maker_fee_rate,
         })
     }
 }

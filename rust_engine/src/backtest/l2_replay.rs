@@ -497,6 +497,7 @@ mod tests {
     use super::*;
     use crate::backtest::fill_model::{Maker, DEFAULT_TICK};
     use crate::backtest::pmxt::{BookSnapshot, L2Level};
+    use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 
     struct NoopStrategy;
     impl Strategy for NoopStrategy {
@@ -540,7 +541,11 @@ mod tests {
             StaticLatencyConfig::default(),
         );
         let mut s = NoopStrategy;
-        e.replay(std::iter::empty::<L2Event>(), &mut s, 0.072);
+        e.replay(
+            std::iter::empty::<L2Event>(),
+            &mut s,
+            DEFAULT_CRYPTO_TAKER_FEE_RATE,
+        );
         assert_eq!(e.fills.len(), 0);
     }
 
@@ -551,7 +556,11 @@ mod tests {
             StaticLatencyConfig::default(),
         );
         let mut s = NoopStrategy;
-        e.replay(vec![snap_event("t", 1.0, 0.50, 0.52)], &mut s, 0.072);
+        e.replay(
+            vec![snap_event("t", 1.0, 0.50, 0.52)],
+            &mut s,
+            DEFAULT_CRYPTO_TAKER_FEE_RATE,
+        );
         let book = e.books.get("t").unwrap();
         assert!((book.best_bid - 0.50).abs() < 1e-9);
         assert!((book.best_ask - 0.52).abs() < 1e-9);
@@ -581,7 +590,7 @@ mod tests {
                 size: 10.0,
                 order_type: "market".into(),
                 limit_price: None,
-                fee_rate: 0.072,
+                fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
                 maker_fee_rate: 0.0,
             }]
         }
@@ -599,7 +608,7 @@ mod tests {
             snap_event("t", 1.04, 0.50, 0.52), // 40ms later — still within latency, no fill
             snap_event("t", 1.10, 0.50, 0.52), // 100ms after order — past 50ms, flush should fire
         ];
-        e.replay(events, &mut s, 0.072);
+        e.replay(events, &mut s, DEFAULT_CRYPTO_TAKER_FEE_RATE);
         assert_eq!(e.fills.len(), 1);
         let f = &e.fills[0];
         assert!(f.success);
@@ -644,7 +653,7 @@ mod tests {
                 snap_event("t", 1.10, 0.50, 0.52),
             ],
             &mut s,
-            0.072,
+            DEFAULT_CRYPTO_TAKER_FEE_RATE,
         );
         assert_eq!(e.fills.len(), 1);
         assert_eq!(s.seen_fills, 1);
@@ -674,7 +683,7 @@ mod tests {
                 size: 10.0,
                 order_type: "limit".into(),
                 limit_price: Some(book.best_ask - DEFAULT_TICK),
-                fee_rate: 0.072,
+                fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
                 maker_fee_rate: 0.0,
             }]
         }
@@ -692,7 +701,7 @@ mod tests {
             snap_event("t", 1.04, 0.50, 0.51),
             snap_event("t", 1.10, 0.50, 0.51),
         ];
-        e.replay(events, &mut s, 0.072);
+        e.replay(events, &mut s, DEFAULT_CRYPTO_TAKER_FEE_RATE);
 
         assert_eq!(e.fills.len(), 1);
         let f = &e.fills[0];

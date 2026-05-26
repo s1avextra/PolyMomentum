@@ -656,6 +656,12 @@ impl Strategy for CandleBacktestStrategy {
                 fee: 0.0,
             },
         );
+        let fee_rate = contract
+            .market
+            .effective_taker_fee_rate(self.variant.default_fee_rate);
+        let maker_fee_rate = contract
+            .market
+            .effective_maker_fee_rate(self.variant.maker_fee_rate);
 
         vec![BacktestOrder {
             intent_id: intent.intent_id,
@@ -666,8 +672,8 @@ impl Strategy for CandleBacktestStrategy {
             size,
             order_type: order_type.into(),
             limit_price,
-            fee_rate: self.variant.default_fee_rate,
-            maker_fee_rate: self.variant.maker_fee_rate,
+            fee_rate,
+            maker_fee_rate,
         }]
     }
 }

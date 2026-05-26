@@ -1,9 +1,10 @@
 //! Paper-mode fill model.
 //!
 //! Mirrors `candle_pipeline.py::_execute_candle_trade` paper branch:
-//! adverse 30 bps slippage on top-of-book + crypto-category fee. Maker mode
+//! adverse 30 bps slippage on top-of-book + market/category fee. Maker mode
 //! flips to a -10 bps improvement and a maker rebate (0% fee).
 
+use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 use crate::execution::fees::polymarket_fee;
 use crate::execution::sizing::shares_from_budget;
 
@@ -20,7 +21,7 @@ impl Default for PaperFillCfg {
     fn default() -> Self {
         Self {
             prefer_maker: false,
-            default_taker_rate: 0.072,
+            default_taker_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             slippage_bps_taker: 30,
             slippage_bps_maker: -10,
             min_order_size_shares: 0.0,

@@ -8,7 +8,7 @@
 //! NautilusTrader Polymarket adapter.
 
 /// Compute the trade fee for a binary outcome at fill price `price` with
-/// `shares` shares and the given `fee_rate` (as a decimal, e.g. 0.072).
+/// `shares` shares and the given `fee_rate` (as a decimal, e.g. 0.07).
 ///
 /// Returns 0 when `fee_rate` or `shares` is non-positive. Floors tiny
 /// positive fees to 0.00001 so they remain non-zero in JSONL logs.
@@ -37,9 +37,9 @@ mod tests {
 
     #[test]
     fn fee_max_at_half() {
-        let f50 = polymarket_fee(100.0, 0.5, 0.072);
-        let f25 = polymarket_fee(100.0, 0.25, 0.072);
-        let f75 = polymarket_fee(100.0, 0.75, 0.072);
+        let f50 = polymarket_fee(100.0, 0.5, 0.07);
+        let f25 = polymarket_fee(100.0, 0.25, 0.07);
+        let f75 = polymarket_fee(100.0, 0.75, 0.07);
         assert!(f50 > f25);
         assert!(f50 > f75);
         // Symmetric around 0.5
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn fee_floor_for_tiny_positive() {
-        let f = polymarket_fee(0.001, 0.5, 0.072);
+        let f = polymarket_fee(0.001, 0.5, 0.07);
         assert!(f >= 0.00001);
     }
 }
