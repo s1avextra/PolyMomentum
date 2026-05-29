@@ -32,12 +32,17 @@ pub struct SweepGrid {
     pub min_price: Vec<f64>,
     /// Maximum executable token price.
     pub max_price: Vec<f64>,
+    /// Hard cutoff before settlement; entries at or before this remaining
+    /// time are skipped.
+    pub settlement_cutoff_minutes: Vec<f64>,
     /// Settlement-basis floor applied inside the final guard window.
     pub settlement_min_abs_move_usd: Vec<f64>,
     /// Final-window duration where settlement-basis guard is active.
     pub settlement_guard_minutes: Vec<f64>,
     /// Volatility-scaled settlement-basis buffer multiplier.
     pub settlement_sigma_buffer: Vec<f64>,
+    /// Maximum feed-forward reversion count allowed; 0 disables the cap.
+    pub max_reversion_count: Vec<u64>,
     /// Whether to include a maker variant for each (conf, z, edge) cell.
     pub also_maker: bool,
     /// Maximum executable spread, in binary-option price points.
@@ -98,6 +103,7 @@ impl SweepGrid {
     #[cfg(test)]
     pub fn small_default(base: StrategyVariant) -> Self {
         let settlement_min_abs_move_usd = base.zone_config.settlement_min_abs_move_usd;
+        let settlement_cutoff_minutes = base.zone_config.settlement_cutoff_minutes;
         let settlement_guard_minutes = base.zone_config.settlement_guard_minutes;
         let settlement_sigma_buffer = base.zone_config.settlement_sigma_buffer;
         let min_price = base.zone_config.min_price;
@@ -114,9 +120,11 @@ impl SweepGrid {
             ev_buffer: vec![-1.0, 0.05],
             min_price: vec![min_price],
             max_price: vec![max_price],
+            settlement_cutoff_minutes: vec![settlement_cutoff_minutes],
             settlement_min_abs_move_usd: vec![settlement_min_abs_move_usd],
             settlement_guard_minutes: vec![settlement_guard_minutes],
             settlement_sigma_buffer: vec![settlement_sigma_buffer],
+            max_reversion_count: vec![0],
             also_maker: true,
             micro_max_spread: vec![micro_max_spread],
             micro_min_depth: vec![micro_min_depth],
@@ -146,9 +154,11 @@ impl SweepGrid {
                 * self.ev_buffer.len()
                 * self.min_price.len()
                 * self.max_price.len()
+                * self.settlement_cutoff_minutes.len()
                 * self.settlement_min_abs_move_usd.len()
                 * self.settlement_guard_minutes.len()
                 * self.settlement_sigma_buffer.len()
+                * self.max_reversion_count.len()
                 * self.micro_max_spread.len()
                 * self.micro_min_depth.len()
                 * self.micro_min_pressure.len()
@@ -168,26 +178,31 @@ impl SweepGrid {
                                 if min_price > max_price {
                                     continue;
                                 }
-                                for &floor in &self.settlement_min_abs_move_usd {
-                                    for &guard in &self.settlement_guard_minutes {
-                                        for &sigma in &self.settlement_sigma_buffer {
-                                            for &micro_spread in &self.micro_max_spread {
-                                                for &micro_depth in &self.micro_min_depth {
-                                                    for &micro_pressure in &self.micro_min_pressure
-                                                    {
-                                                        for &stress_dd_cap in &self
-                                                            .max_projected_stressed_drawdown_pct
-                                                        {
-                                                            for &degraded_after_losses in
-                                                                &self.degraded_after_losses
+                                for &cutoff in &self.settlement_cutoff_minutes {
+                                    for &floor in &self.settlement_min_abs_move_usd {
+                                        for &guard in &self.settlement_guard_minutes {
+                                            for &sigma in &self.settlement_sigma_buffer {
+                                                for &max_reversion_count in
+                                                    &self.max_reversion_count
+                                                {
+                                                    for &micro_spread in &self.micro_max_spread {
+                                                        for &micro_depth in &self.micro_min_depth {
+                                                            for &micro_pressure in
+                                                                &self.micro_min_pressure
                                                             {
-                                                                for &degraded_drawdown in &self
-                                                                    .degraded_after_drawdown_pct
+                                                                for &stress_dd_cap in &self
+                                                                .max_projected_stressed_drawdown_pct
+                                                            {
+                                                                for &degraded_after_losses in
+                                                                    &self.degraded_after_losses
                                                                 {
-                                                                    for &degraded_min_z in
-                                                                        &self.degraded_min_z
+                                                                    for &degraded_drawdown in &self
+                                                                        .degraded_after_drawdown_pct
                                                                     {
-                                                                        for &degraded_max_price in
+                                                                        for &degraded_min_z in
+                                                                            &self.degraded_min_z
+                                                                        {
+                                                                            for &degraded_max_price in
                                                                             &self.degraded_max_price
                                                                         {
                                                                             for &maker in
@@ -202,9 +217,11 @@ impl SweepGrid {
                                                                                         ev,
                                                                                         min_price,
                                                                                         max_price,
+                                                                                        cutoff,
                                                                                         floor,
                                                                                         guard,
                                                                                         sigma,
+                                                                                        max_reversion_count,
                                                                                         micro_spread,
                                                                                         micro_depth,
                                                                                         micro_pressure,
@@ -218,8 +235,10 @@ impl SweepGrid {
                                                                                 );
                                                                             }
                                                                         }
+                                                                        }
                                                                     }
                                                                 }
+                                                            }
                                                             }
                                                         }
                                                     }
@@ -252,9 +271,15 @@ impl SweepGrid {
             min_price: cell.min_price,
             max_price: cell.max_price,
             min_ev_buffer: cell.ev,
+            settlement_cutoff_minutes: cell.cutoff,
             settlement_min_abs_move_usd: cell.floor,
             settlement_guard_minutes: cell.guard,
             settlement_sigma_buffer: cell.sigma,
+            max_reversion_count: if cell.max_reversion_count == 0 {
+                ZoneConfig::default().max_reversion_count
+            } else {
+                cell.max_reversion_count
+            },
             ..ZoneConfig::default()
         };
         apply_zone_mode(&mut cfg, self.zone_mode);
@@ -282,8 +307,20 @@ impl SweepGrid {
             String::new()
         };
 
+        let cutoff_suffix =
+            if (cell.cutoff - ZoneConfig::default().settlement_cutoff_minutes).abs() > 1e-9 {
+                format!("_sc{:.1}", cell.cutoff)
+            } else {
+                String::new()
+            };
+        let reversion_suffix = if cell.max_reversion_count > 0 {
+            format!("_rv{}", cell.max_reversion_count)
+        } else {
+            String::new()
+        };
+
         let label = format!(
-            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
+            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
             self.zone_mode.as_str(),
             cell.conf,
             cell.z,
@@ -291,6 +328,8 @@ impl SweepGrid {
             cell.ev,
             cell.min_price,
             cell.max_price,
+            cutoff_suffix,
+            reversion_suffix,
             cell.floor,
             cell.guard,
             cell.sigma,
@@ -338,9 +377,11 @@ struct SweepCell {
     ev: f64,
     min_price: f64,
     max_price: f64,
+    cutoff: f64,
     floor: f64,
     guard: f64,
     sigma: f64,
+    max_reversion_count: u64,
     micro_spread: f64,
     micro_depth: f64,
     micro_pressure: f64,
@@ -485,6 +526,38 @@ mod tests {
         assert!(variants.iter().all(|v| v.zone_config.min_price == 0.12));
         assert!(variants.iter().all(|v| v.zone_config.max_price == 0.75));
         assert!(variants.iter().any(|v| v.name.contains("_p0.12-0.75_")));
+    }
+
+    #[test]
+    fn settlement_cutoff_dimension_applies_to_zone_config() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.settlement_cutoff_minutes = vec![0.30, 2.0];
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2 * 2 * 2);
+        assert!(variants
+            .iter()
+            .any(
+                |v| (v.zone_config.settlement_cutoff_minutes - 2.0).abs() < 1e-9
+                    && v.name.contains("_sc2.0_")
+            ));
+    }
+
+    #[test]
+    fn max_reversion_count_dimension_applies_to_zone_config() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.max_reversion_count = vec![0, 2];
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2 * 2 * 2);
+        assert!(variants
+            .iter()
+            .any(|v| v.zone_config.max_reversion_count == 2 && v.name.contains("_rv2_")));
+        assert!(variants
+            .iter()
+            .any(|v| v.zone_config.max_reversion_count == u64::MAX));
     }
 
     #[test]

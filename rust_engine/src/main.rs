@@ -239,6 +239,9 @@ enum Command {
         /// Comma-separated maximum executable token prices.
         #[arg(long, default_value = "0.90")]
         max_price: String,
+        /// Comma-separated hard settlement cutoffs in minutes.
+        #[arg(long, default_value = "0.30")]
+        settlement_cutoff_minutes: String,
         /// Comma-separated settlement floors in USD for the final-window guard.
         #[arg(long, default_value = "10.0")]
         settlement_floor: String,
@@ -248,6 +251,9 @@ enum Command {
         /// Comma-separated volatility-scaled settlement buffer multipliers.
         #[arg(long, default_value = "0.0")]
         settlement_sigma_buffer: String,
+        /// Comma-separated max reversion counts; 0 disables the cap.
+        #[arg(long, default_value = "0")]
+        max_reversion_count: String,
         /// Comma-separated executable spread ceilings for microstructure gates.
         #[arg(long, default_value = "1.0")]
         micro_max_spread: String,
@@ -438,6 +444,9 @@ enum Command {
         /// Comma-separated maximum executable token prices for --grid.
         #[arg(long, default_value = "0.75")]
         max_price: String,
+        /// Comma-separated hard settlement cutoffs in minutes for --grid.
+        #[arg(long, default_value = "0.30")]
+        settlement_cutoff_minutes: String,
         /// Comma-separated settlement floors in USD for --grid.
         #[arg(long, default_value = "25.0")]
         settlement_floor: String,
@@ -447,6 +456,9 @@ enum Command {
         /// Comma-separated volatility-scaled settlement buffers for --grid.
         #[arg(long, default_value = "0.20")]
         settlement_sigma_buffer: String,
+        /// Comma-separated max reversion counts for --grid; 0 disables the cap.
+        #[arg(long, default_value = "0")]
+        max_reversion_count: String,
         /// Comma-separated executable spread ceilings for --grid.
         #[arg(long, default_value = "0.02")]
         micro_max_spread: String,
@@ -916,7 +928,7 @@ enum StrategyBuilderCommand {
         /// Limit number of folds for bounded smoke runs.
         #[arg(long)]
         max_folds: Option<usize>,
-        /// Rolling lab profile: a_plus5m or highz5m.
+        /// Rolling lab profile, e.g. a_plus5m, a_plus5m_adaptive, or a_plus5m_causal_guard.
         #[arg(long, default_value = "a_plus5m")]
         profile: String,
         /// Restrict sweeps to one timing zone: all, early, primary, late, terminal.
@@ -1086,9 +1098,11 @@ async fn main() {
             ev_buffer,
             min_price,
             max_price,
+            settlement_cutoff_minutes,
             settlement_floor,
             settlement_guard_minutes,
             settlement_sigma_buffer,
+            max_reversion_count,
             micro_max_spread,
             micro_min_depth,
             micro_min_pressure,
@@ -1109,9 +1123,11 @@ async fn main() {
                     ev_buffer: parse_csv_floats(&ev_buffer),
                     min_price: parse_csv_floats(&min_price),
                     max_price: parse_csv_floats(&max_price),
+                    settlement_cutoff_minutes: parse_csv_floats(&settlement_cutoff_minutes),
                     settlement_min_abs_move_usd: parse_csv_floats(&settlement_floor),
                     settlement_guard_minutes: parse_csv_floats(&settlement_guard_minutes),
                     settlement_sigma_buffer: parse_csv_floats(&settlement_sigma_buffer),
+                    max_reversion_count: parse_csv_u64s(&max_reversion_count),
                     micro_max_spread: parse_csv_floats(&micro_max_spread),
                     micro_min_depth: parse_csv_floats(&micro_min_depth),
                     micro_min_pressure: parse_csv_floats(&micro_min_pressure),
@@ -1196,9 +1212,11 @@ async fn main() {
             ev_buffer,
             min_price,
             max_price,
+            settlement_cutoff_minutes,
             settlement_floor,
             settlement_guard_minutes,
             settlement_sigma_buffer,
+            max_reversion_count,
             micro_max_spread,
             micro_min_depth,
             micro_min_pressure,
@@ -1229,9 +1247,11 @@ async fn main() {
             let evs = parse_csv_floats(&ev_buffer);
             let min_prices = parse_csv_floats(&min_price);
             let max_prices = parse_csv_floats(&max_price);
+            let settlement_cutoffs = parse_csv_floats(&settlement_cutoff_minutes);
             let settlement_floors = parse_csv_floats(&settlement_floor);
             let settlement_guards = parse_csv_floats(&settlement_guard_minutes);
             let settlement_sigmas = parse_csv_floats(&settlement_sigma_buffer);
+            let max_reversion_count = parse_csv_u64s(&max_reversion_count);
             let micro_spreads = parse_csv_floats(&micro_max_spread);
             let micro_depths = parse_csv_floats(&micro_min_depth);
             let micro_pressures = parse_csv_floats(&micro_min_pressure);
@@ -1258,9 +1278,11 @@ async fn main() {
                 evs,
                 min_prices,
                 max_prices,
+                settlement_cutoffs,
                 settlement_floors,
                 settlement_guards,
                 settlement_sigmas,
+                max_reversion_count,
                 micro_spreads,
                 micro_depths,
                 micro_pressures,
@@ -1526,9 +1548,11 @@ struct RollingHistoryProfile {
     ev_buffer: String,
     min_price: String,
     max_price: String,
+    settlement_cutoff_minutes: String,
     settlement_floor: String,
     settlement_guard_minutes: String,
     settlement_sigma_buffer: String,
+    max_reversion_count: String,
     micro_max_spread: String,
     micro_min_depth: String,
     micro_min_pressure: String,
@@ -1743,12 +1767,16 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             profile.min_price.clone(),
             "--max-price".to_string(),
             profile.max_price.clone(),
+            "--settlement-cutoff-minutes".to_string(),
+            profile.settlement_cutoff_minutes.clone(),
             "--settlement-floor".to_string(),
             profile.settlement_floor.clone(),
             "--settlement-guard-minutes".to_string(),
             profile.settlement_guard_minutes.clone(),
             "--settlement-sigma-buffer".to_string(),
             profile.settlement_sigma_buffer.clone(),
+            "--max-reversion-count".to_string(),
+            profile.max_reversion_count.clone(),
             "--micro-max-spread".to_string(),
             profile.micro_max_spread.clone(),
             "--micro-min-depth".to_string(),
@@ -2034,9 +2062,11 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             ev_buffer: "-1.0".to_string(),
             min_price: "0.10".to_string(),
             max_price: "0.75,0.90".to_string(),
+            settlement_cutoff_minutes: "0.30".to_string(),
             settlement_floor: "10.0".to_string(),
             settlement_guard_minutes: "1.0".to_string(),
             settlement_sigma_buffer: "0.0".to_string(),
+            max_reversion_count: "0".to_string(),
             micro_max_spread: "1.0".to_string(),
             micro_min_depth: "0.0".to_string(),
             micro_min_pressure: "-1.0".to_string(),
@@ -2088,6 +2118,16 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.degraded_min_z = "0.90".to_string();
             profile.degraded_max_price = "0.0".to_string();
             profile.degraded_force_taker = true;
+            profile
+        }
+        "a_plus5m_causal_guard" => {
+            let mut profile = rolling_history_profile("a_plus5m_adaptive")?;
+            profile.name = name.to_string();
+            profile.edge = "0.07,0.10".to_string();
+            profile.max_price = "0.75,0.85".to_string();
+            profile.settlement_cutoff_minutes = "2.0".to_string();
+            profile.settlement_guard_minutes = "2.0".to_string();
+            profile.max_reversion_count = "2".to_string();
             profile
         }
         other => anyhow::bail!("unknown rolling-history profile `{other}`"),
@@ -3716,9 +3756,11 @@ async fn cmd_harness_sweep(
     ev_buffer: Vec<f64>,
     min_price: Vec<f64>,
     max_price: Vec<f64>,
+    settlement_cutoff_minutes: Vec<f64>,
     settlement_min_abs_move_usd: Vec<f64>,
     settlement_guard_minutes: Vec<f64>,
     settlement_sigma_buffer: Vec<f64>,
+    max_reversion_count: Vec<u64>,
     micro_max_spread: Vec<f64>,
     micro_min_depth: Vec<f64>,
     micro_min_pressure: Vec<f64>,
@@ -3813,6 +3855,18 @@ async fn cmd_harness_sweep(
         eprintln!("--degraded-max-price must contain finite values in [0, 1]");
         std::process::exit(2);
     }
+    if settlement_cutoff_minutes.is_empty()
+        || settlement_cutoff_minutes
+            .iter()
+            .any(|v| !(v.is_finite() && *v >= 0.0))
+    {
+        eprintln!("--settlement-cutoff-minutes must contain finite non-negative values");
+        std::process::exit(2);
+    }
+    if max_reversion_count.is_empty() {
+        eprintln!("--max-reversion-count must contain at least one integer");
+        std::process::exit(2);
+    }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
         m if !m.is_finite() || m < 0.0 => {
             eprintln!("--adaptive-health-rearm-minutes must be a finite non-negative number");
@@ -3835,9 +3889,11 @@ async fn cmd_harness_sweep(
         ev_buffer,
         min_price,
         max_price,
+        settlement_cutoff_minutes,
         settlement_min_abs_move_usd,
         settlement_guard_minutes,
         settlement_sigma_buffer,
+        max_reversion_count,
         micro_max_spread,
         micro_min_depth,
         micro_min_pressure,

@@ -24,9 +24,11 @@ pub struct GridConfig {
     pub ev_buffer: Vec<f64>,
     pub min_price: Vec<f64>,
     pub max_price: Vec<f64>,
+    pub settlement_cutoff_minutes: Vec<f64>,
     pub settlement_min_abs_move_usd: Vec<f64>,
     pub settlement_guard_minutes: Vec<f64>,
     pub settlement_sigma_buffer: Vec<f64>,
+    pub max_reversion_count: Vec<u64>,
     pub micro_max_spread: Vec<f64>,
     pub micro_min_depth: Vec<f64>,
     pub micro_min_pressure: Vec<f64>,
@@ -277,39 +279,71 @@ pub fn grid_strategies(grid: &GridConfig) -> Vec<Strategy> {
                             if min_price > max_price {
                                 continue;
                             }
-                            for &floor in &grid.settlement_min_abs_move_usd {
-                                for &guard in &grid.settlement_guard_minutes {
-                                    for &sigma in &grid.settlement_sigma_buffer {
-                                        for &micro_spread in &grid.micro_max_spread {
-                                            for &micro_depth in &grid.micro_min_depth {
-                                                for &micro_pressure in &grid.micro_min_pressure {
-                                                    for &maker in &maker_sides {
-                                                        let mut zone_config = ZoneConfig {
-                                                            early_min_confidence: conf,
-                                                            late_min_confidence: conf,
-                                                            terminal_min_confidence: conf,
-                                                            early_min_z: z,
-                                                            primary_min_z: z,
-                                                            late_min_z: z,
-                                                            terminal_min_z: z,
-                                                            early_min_edge: edge,
-                                                            late_min_edge: edge,
-                                                            terminal_min_edge: edge,
-                                                            min_price,
-                                                            max_price,
-                                                            min_ev_buffer: ev,
-                                                            settlement_min_abs_move_usd: floor,
-                                                            settlement_guard_minutes: guard,
-                                                            settlement_sigma_buffer: sigma,
-                                                            ..ZoneConfig::default()
-                                                        };
-                                                        apply_zone_mode(
-                                                            &mut zone_config,
-                                                            grid.zone_mode,
-                                                        );
-                                                        out.push(Strategy {
+                            for &cutoff in &grid.settlement_cutoff_minutes {
+                                for &floor in &grid.settlement_min_abs_move_usd {
+                                    for &guard in &grid.settlement_guard_minutes {
+                                        for &sigma in &grid.settlement_sigma_buffer {
+                                            for &max_reversion_count in &grid.max_reversion_count {
+                                                for &micro_spread in &grid.micro_max_spread {
+                                                    for &micro_depth in &grid.micro_min_depth {
+                                                        for &micro_pressure in
+                                                            &grid.micro_min_pressure
+                                                        {
+                                                            for &maker in &maker_sides {
+                                                                let mut zone_config = ZoneConfig {
+                                                                    early_min_confidence: conf,
+                                                                    late_min_confidence: conf,
+                                                                    terminal_min_confidence: conf,
+                                                                    early_min_z: z,
+                                                                    primary_min_z: z,
+                                                                    late_min_z: z,
+                                                                    terminal_min_z: z,
+                                                                    early_min_edge: edge,
+                                                                    late_min_edge: edge,
+                                                                    terminal_min_edge: edge,
+                                                                    min_price,
+                                                                    max_price,
+                                                                    min_ev_buffer: ev,
+                                                                    settlement_cutoff_minutes:
+                                                                        cutoff,
+                                                                    settlement_min_abs_move_usd:
+                                                                        floor,
+                                                                    settlement_guard_minutes: guard,
+                                                                    settlement_sigma_buffer: sigma,
+                                                                    max_reversion_count:
+                                                                        if max_reversion_count == 0
+                                                                        {
+                                                                            ZoneConfig::default()
+                                                                                .max_reversion_count
+                                                                        } else {
+                                                                            max_reversion_count
+                                                                        },
+                                                                    ..ZoneConfig::default()
+                                                                };
+                                                                apply_zone_mode(
+                                                                    &mut zone_config,
+                                                                    grid.zone_mode,
+                                                                );
+                                                                let cutoff_suffix = if (cutoff
+                                                                    - ZoneConfig::default()
+                                                                        .settlement_cutoff_minutes)
+                                                                    .abs()
+                                                                    > 1e-9
+                                                                {
+                                                                    format!("_sc{cutoff:.1}")
+                                                                } else {
+                                                                    String::new()
+                                                                };
+                                                                let reversion_suffix =
+                                                                    if max_reversion_count > 0 {
+                                                                        format!("_rv{max_reversion_count}")
+                                                                    } else {
+                                                                        String::new()
+                                                                    };
+
+                                                                out.push(Strategy {
                                                             name: format!(
-                                                                "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
+                                                                "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
                                                                 grid.zone_mode.as_str(),
                                                                 conf,
                                                                 z,
@@ -317,6 +351,8 @@ pub fn grid_strategies(grid: &GridConfig) -> Vec<Strategy> {
                                                                 ev,
                                                                 min_price,
                                                                 max_price,
+                                                                cutoff_suffix,
+                                                                reversion_suffix,
                                                                 floor,
                                                                 guard,
                                                                 sigma,
@@ -336,6 +372,8 @@ pub fn grid_strategies(grid: &GridConfig) -> Vec<Strategy> {
                                                                 min_book_pressure: micro_pressure,
                                                             },
                                                         });
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -412,9 +450,11 @@ mod tests {
             ev_buffer: vec![-1.0],
             min_price: vec![0.10],
             max_price: vec![0.75],
+            settlement_cutoff_minutes: vec![0.30],
             settlement_min_abs_move_usd: vec![25.0],
             settlement_guard_minutes: vec![5.0],
             settlement_sigma_buffer: vec![0.20],
+            max_reversion_count: vec![0],
             micro_max_spread: vec![0.02],
             micro_min_depth: vec![20.0],
             micro_min_pressure: vec![0.0],
@@ -437,6 +477,36 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             strategies.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names.len(), strategies.len());
+    }
+
+    #[test]
+    fn grid_applies_settlement_cutoff_dimension() {
+        let mut grid = small_grid();
+        grid.settlement_cutoff_minutes = vec![0.30, 2.0];
+        let strategies = grid_strategies(&grid);
+
+        assert_eq!(strategies.len(), 2 * 2 * 2 * 2);
+        assert!(strategies
+            .iter()
+            .any(
+                |s| (s.zone_config.settlement_cutoff_minutes - 2.0).abs() < 1e-9
+                    && s.name.contains("_sc2.0_")
+            ));
+    }
+
+    #[test]
+    fn grid_applies_max_reversion_count_dimension() {
+        let mut grid = small_grid();
+        grid.max_reversion_count = vec![0, 2];
+        let strategies = grid_strategies(&grid);
+
+        assert_eq!(strategies.len(), 2 * 2 * 2 * 2);
+        assert!(strategies
+            .iter()
+            .any(|s| s.zone_config.max_reversion_count == 2 && s.name.contains("_rv2_")));
+        assert!(strategies
+            .iter()
+            .any(|s| s.zone_config.max_reversion_count == u64::MAX));
     }
 
     #[test]

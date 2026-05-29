@@ -246,3 +246,82 @@ near-`0.90` weakness but exposes a low-edge/reversion weakness and a negative
 walk-forward fold. The next full sweep should add search dimensions for a
 two-minute settlement guard and stricter edge/causal-bucket constraints instead
 of only narrowing the price band.
+
+## Causal Guard Profile
+
+Implemented a guarded profile, `a_plus5m_causal_guard`, with:
+
+- hard settlement cutoff: `2.0` minutes;
+- settlement margin guard: `2.0` minutes;
+- edge grid: `0.07,0.10`;
+- max-price grid: `0.75,0.85`;
+- causal-bucket veto still enabled during robust promotion.
+
+To support this, `settlement_cutoff_minutes` became a sweep dimension for both
+strategy sweep paths. This is the correct primitive for "do not enter in the
+last two minutes"; `settlement_guard_minutes` is only a margin-distance guard.
+
+Atomic May 23-24 validation:
+
+- window: `2026-05-23T00:00:00Z..2026-05-24T23:00:00Z`;
+- folds: `6` feed-forward 8h windows;
+- comparable variants: `192` per fold;
+- raw PMXT parquets retained after run: `0`;
+- cache dir after run: `0B`;
+- report artifacts retained: `27M`.
+
+Strict robust promotion rejected the run. First blocker:
+
+- PBO: `0.650`, above max `0.500`.
+
+With PBO relaxed only, the next blockers were:
+
+- the leading wider-price family had an underfilled or negative fold;
+- `reversion=gte_3` had repeatable negative PnL in several high-trade
+  candidates.
+
+Relaxed diagnostic-only selection, not production-valid:
+
+- strategy: `all_c0.40_z0.50_e0.10_ev-1.00_p0.10-0.75_sc2.0_..._fbL2..._mk`;
+- total PnL: `+82.1354`;
+- trades: `89`;
+- worst fold PnL: `+4.5310`;
+- median fold PnL: `+11.5653`;
+- PBO: `0.650`;
+- median OOS percentile: `0.4453`;
+- neighbor-positive rate: `84.40%`;
+- fill rate: `65.93%`;
+- profit factor: `2.0161`;
+- payoff ratio: `0.4419`;
+- worst-loss / average-win: `2.3123`;
+- negative causal buckets: none.
+
+Per-fold trade counts for this relaxed selection were `14, 11, 14, 19, 16, 15`.
+That is why it still fails production-grade evidence despite attractive PnL:
+two folds are below the `15`-trade minimum, total trades are one below the
+strict `90` aggregate minimum, and PBO remains too high.
+
+## Reversion Cap Implemented
+
+Added a feed-forward `max_reversion_count` gate to `ZoneConfig` and exposed it
+as `--max-reversion-count` in both sweep paths. A value of `0` disables the cap;
+`a_plus5m_causal_guard` now sets `--max-reversion-count 2`.
+
+This directly targets the new repeatable blocker (`reversion=gte_3`) without
+using future outcomes. The decision skip reason is `high_reversion_count`.
+
+One-hour smoke validation on the largest May 24 hour
+(`2026-05-24T23:00:00Z`) passed through the real atomic replay path:
+
+- variants: `192`;
+- event rows loaded: `4,349,625`;
+- replay time: `159.04s`;
+- raw PMXT parquets retained after smoke: `0`;
+- temporary smoke cache: removed.
+
+The smoke report confirmed generated variant names include `_rv2_` and
+serialized strategy params carry `zone_config.max_reversion_count = 2`.
+
+Next required validation: rerun the full May 23-24 six-fold atomic sweep with
+the reversion cap active. The profile is wired and tested, but the full
+reversion-capped promotion result has not yet replaced the pre-cap result.

@@ -19,6 +19,7 @@ pub const DEFAULT_SETTLEMENT_CUTOFF_MINUTES: f64 = 0.30;
 pub const DEFAULT_SETTLEMENT_GUARD_MINUTES: f64 = 1.0;
 pub const DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD: f64 = 10.0;
 pub const DEFAULT_SETTLEMENT_SIGMA_BUFFER: f64 = 0.0;
+pub const DEFAULT_MAX_REVERSION_COUNT: u64 = u64::MAX;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandleDecision {
@@ -168,6 +169,11 @@ pub struct ZoneConfig {
     pub settlement_min_abs_move_usd: f64,
     #[serde(default = "default_settlement_sigma_buffer")]
     pub settlement_sigma_buffer: f64,
+    #[serde(
+        default = "default_max_reversion_count",
+        skip_serializing_if = "is_default_max_reversion_count"
+    )]
+    pub max_reversion_count: u64,
 }
 
 fn default_settlement_guard_minutes() -> f64 {
@@ -188,6 +194,14 @@ fn default_settlement_min_abs_move_usd() -> f64 {
 
 fn default_settlement_sigma_buffer() -> f64 {
     DEFAULT_SETTLEMENT_SIGMA_BUFFER
+}
+
+fn default_max_reversion_count() -> u64 {
+    DEFAULT_MAX_REVERSION_COUNT
+}
+
+fn is_default_max_reversion_count(v: &u64) -> bool {
+    *v == DEFAULT_MAX_REVERSION_COUNT
 }
 
 fn bucket_market_price(price: f64) -> String {
@@ -308,6 +322,7 @@ impl Default for ZoneConfig {
             settlement_guard_minutes: DEFAULT_SETTLEMENT_GUARD_MINUTES,
             settlement_min_abs_move_usd: DEFAULT_SETTLEMENT_MIN_ABS_MOVE_USD,
             settlement_sigma_buffer: DEFAULT_SETTLEMENT_SIGMA_BUFFER,
+            max_reversion_count: DEFAULT_MAX_REVERSION_COUNT,
         }
     }
 }
@@ -335,6 +350,7 @@ impl ZoneConfig {
             settlement_guard_minutes: s.candle_settlement_guard_minutes,
             settlement_min_abs_move_usd: s.candle_settlement_min_abs_move_usd,
             settlement_sigma_buffer: s.candle_settlement_sigma_buffer,
+            max_reversion_count: DEFAULT_MAX_REVERSION_COUNT,
         }
     }
 
@@ -555,6 +571,14 @@ pub fn decide_candle_trade(
     if cross_asset_boost > 0.0 {
         z_min_conf = (z_min_conf - cross_asset_boost).max(0.40);
         z_min_z = (z_min_z - cross_asset_boost).max(0.1);
+    }
+
+    if u64::from(signal.reversion_count) > cfg.max_reversion_count {
+        return DecisionResult::Skip(SkipReason::new(
+            "high_reversion_count",
+            zone,
+            format!("{} > {}", signal.reversion_count, cfg.max_reversion_count),
+        ));
     }
 
     if signal.confidence < z_min_conf {
@@ -805,6 +829,36 @@ mod tests {
         );
         match r {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "settlement_margin"),
+            _ => panic!("expected skip"),
+        }
+    }
+
+    #[test]
+    fn skips_high_reversion_count() {
+        let mut sig = mk_signal(0.75, 2.0, "up");
+        sig.reversion_count = 3;
+        let cfg = ZoneConfig {
+            max_reversion_count: 2,
+            ..ZoneConfig::default()
+        };
+        let r = decide_candle_trade(
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.30,
+            0.70,
+            70_100.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
+        );
+        match r {
+            DecisionResult::Skip(s) => assert_eq!(s.reason, "high_reversion_count"),
             _ => panic!("expected skip"),
         }
     }
