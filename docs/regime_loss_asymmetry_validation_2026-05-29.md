@@ -215,3 +215,34 @@ promoted. A production-safe next search should treat the causal-bucket finding
 as a hard design constraint: avoid the last two minutes, avoid near-`0.90`
 entries unless there is fresh contrary evidence, and require the same
 feed-forward veto checks on every future candidate.
+
+## Max-Price Guard Probe
+
+To avoid a fresh download before deciding the next search shape, the existing
+May 23-24 reports were filtered to variants with `max_price <= 0.75`.
+
+Strict robust promotion still rejected every candidate. The leading filtered
+family failed because:
+
+- daily trades fell below the `15` minimum on at least one fold;
+- worst fold PnL was negative (`-9.6919`);
+- `edge=0.03_0.07` had `20` trades and `-2.9610` PnL.
+
+Relaxed diagnostic-only selection for this subset:
+
+- strategy: `all_c0.35_z0.50_e0.03_ev-1.00_p0.10-0.75_..._fbL2..._mk`;
+- total PnL: `+65.7501`;
+- trades: `118`;
+- worst fold PnL: `-9.6919`;
+- median fold PnL: `+13.5854`;
+- PBO: `0.350`;
+- neighbor-positive rate: `74.24%`;
+- profit factor: `1.5638`;
+- payoff ratio: `0.3786`;
+- worst-loss / average-win: `2.6956`.
+
+Interpretation: simply lowering max price is not enough. It avoids the
+near-`0.90` weakness but exposes a low-edge/reversion weakness and a negative
+walk-forward fold. The next full sweep should add search dimensions for a
+two-minute settlement guard and stricter edge/causal-bucket constraints instead
+of only narrowing the price band.
