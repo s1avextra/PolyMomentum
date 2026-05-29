@@ -369,3 +369,110 @@ turned the previous diagnostic weaknesses into an actually promoted
 feed-forward candidate on the freshest complete May 23-24 window. The next
 A+ requirement is broader atomic walk-forward history using the same profile,
 so we can prove this is not only a two-day market-regime fit.
+
+## Out-of-Sample Extension
+
+Added the next available May fold after the strict May 23-24 pass:
+
+- window: `2026-05-25T00:00:00Z..2026-05-25T07:00:00Z`;
+- fold shape: one feed-forward 8h window, same 96 markets and 192 variants;
+- archive preflight: `8 / 8` remote hours available;
+- raw PMXT parquets retained after run: `0`;
+- cache dir after run: `0B`;
+- report artifacts retained: `3.8M`.
+
+The May 25 fold alone was positive but not promotion-valid as a standalone
+sample. Its top family had `15-16` trades, but failed strict one-fold gates due
+to low loss count, weak neighbor stability, maker fill rate, and early-zone
+concentration. That is a sample-size/robustness failure, not a negative-PnL
+failure.
+
+Seven-report aggregation over May 23-24 plus May 25 `00:00..07:00Z` passed
+strict promotion:
+
+- reports: `7`;
+- total variant-report trials: `1,344`;
+- selected strategy:
+  `all_c0.40_z0.90_e0.07_ev-1.00_p0.10-0.85_sc2.0_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL2d0.00z0.90tk_tk`;
+- trades: `157`;
+- win rate: `88.54%`;
+- total PnL: `+79.4125`;
+- worst fold PnL: `+2.0056`;
+- median fold PnL: `+10.2005`;
+- fill rate: `100.0%`;
+- PBO: `0.114` over `35` combinatorial splits;
+- median OOS percentile: `0.9479`;
+- neighbor-positive rate: `74.85%` over `71` neighbors;
+- Wilson win-rate lower bound: `0.8261`;
+- profit factor: `1.8582`;
+- payoff ratio: `0.2406`;
+- worst-loss / average-win: `4.2060`;
+- max stressed drawdown: `10.33%`;
+- negative causal buckets: none.
+
+Interpretation: adding the available May 25 out-of-sample fold changes the
+selected family from the May 23-24 winner to a stricter-z, lower-edge taker
+family. That is healthy: robust promotion is not clinging to one timestamp
+artifact, and the promoted point remains inside a positive neighbor cluster.
+The margin is thinner than the 48h pass, especially worst fold PnL and
+neighbor-positive rate, but still passes the configured A+ gates.
+
+## Earlier May Coverage Probe
+
+Probed the previous available fold:
+
+- window: `2026-05-22T16:00:00Z..2026-05-22T23:00:00Z`;
+- fold shape: one feed-forward 8h window, same 96 markets and 192 variants;
+- archive preflight: `8 / 8` remote hours available;
+- raw PMXT parquets retained after run: `0`;
+- cache dir after run: `0B`;
+- report artifacts retained: `3.4M`.
+
+The archive was present, but target-event density was uneven:
+
+- `16:00`: `182,754` target events;
+- `17:00`: `0` target events;
+- `18:00`: `0` target events;
+- `19:00`: `1,353,744` target events;
+- `20:00`: `1,533,760` target events;
+- `21:00`: `1,480,343` target events;
+- `22:00`: `1,340,771` target events;
+- `23:00`: `739,648` target events.
+
+The fold is profitable but too sparse for strict evidence. Top variants have
+only `6-7` trades and zero losses, so strict promotion correctly rejects them
+for trades below `15`, losses below `5`, and daily trades below `15`.
+
+Eight-report strict aggregation over May 22 `16:00..23:00Z`, May 23-24, and May
+25 `00:00..07:00Z` also rejected. The leading blockers were:
+
+- one candidate had only `4` trades on the May 22 fold and `-0.6496` worst fold
+  PnL;
+- another had only `5` trades on the May 22 fold;
+- no candidate satisfied `8 / 8` profitable reports plus the `15` trades per
+  fold requirement.
+
+Relaxed diagnostic-only aggregation, not production-valid, shows this is mostly
+a sparse-fold evidence problem rather than a catastrophic strategy break:
+
+- selected strategy:
+  `all_c0.35_z0.90_e0.07_ev-1.00_p0.10-0.85_sc2.0_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL2d0.00z0.90tk_mk`;
+- trades: `113`;
+- win rate: `91.15%`;
+- total PnL: `+100.2470`;
+- worst fold PnL: `+7.0664`;
+- median fold PnL: `+12.0760`;
+- fill rate: `67.26%`;
+- PBO: `0.143` over `70` combinatorial splits;
+- median OOS percentile: `0.9115`;
+- neighbor-positive rate: `87.32%`;
+- profit factor: `2.9900`;
+- payoff ratio: `0.2903`;
+- worst-loss / average-win: `3.5225`;
+- negative causal buckets: none.
+
+Interpretation: May 22 `16:00..23:00Z` should not be used as a strict
+production fold under the current minimum-trade evidence rule. It is useful as
+a liquidity/coverage boundary: before the dense May 23-25 period, the same
+strategy family still looks directionally profitable, but there is not enough
+per-fold trade density to count it as production-grade proof.
