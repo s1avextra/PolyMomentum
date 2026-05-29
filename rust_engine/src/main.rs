@@ -751,6 +751,12 @@ enum ExperimentCommand {
         /// Maximum aggregate worst-loss / average-win ratio; 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_worst_loss_to_avg_win: f64,
+        /// Minimum trades in a causal bucket before bucket-PnL veto applies; 0 disables.
+        #[arg(long, default_value_t = 0)]
+        min_causal_bucket_trades: u64,
+        /// Minimum PnL required for causal buckets at/above --min-causal-bucket-trades.
+        #[arg(long, default_value_t = 0.0)]
+        min_causal_bucket_pnl: f64,
         /// Permit promotion when any data manifest is incomplete.
         #[arg(long, default_value_t = false)]
         allow_incomplete_data: bool,
@@ -1886,6 +1892,10 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         "0.20".to_string(),
         "--max-worst-loss-to-avg-win".to_string(),
         "6.0".to_string(),
+        "--min-causal-bucket-trades".to_string(),
+        "10".to_string(),
+        "--min-causal-bucket-pnl".to_string(),
+        "0".to_string(),
     ];
     for report in &sweep_reports {
         promote_args.extend(["--report".to_string(), report.display().to_string()]);
@@ -3059,6 +3069,8 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_profit_factor,
             min_payoff_ratio,
             max_worst_loss_to_avg_win,
+            min_causal_bucket_trades,
+            min_causal_bucket_pnl,
             allow_incomplete_data,
         } => {
             let mut reports = Vec::new();
@@ -3102,6 +3114,8 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_profit_factor,
                 min_payoff_ratio,
                 max_worst_loss_to_avg_win,
+                min_causal_bucket_trades,
+                min_causal_bucket_pnl,
             };
             let (artifact, diagnostics) =
                 match backtest::experiment::PromotionArtifact::from_reports_robust(

@@ -146,3 +146,72 @@ Add an optional causal-bucket veto for buckets with enough trades and negative
 PnL, then rerun an atomic rolling-history sweep across the freshest complete
 multi-day May window, processing one parquet at a time and deleting it after each
 hour.
+
+## Causal-Bucket Veto Implemented
+
+Robust promotion now supports:
+
+- `--min-causal-bucket-trades`;
+- `--min-causal-bucket-pnl`.
+
+`strategy-builder rolling-history` enables the veto with
+`--min-causal-bucket-trades 10 --min-causal-bucket-pnl 0`.
+
+CLI probe on the May 24 reports, with PBO and neighbor gates relaxed so the new
+gate is isolated, rejected the candidate because:
+
+- `price=0.50_0.75` had `13` trades and `-0.6756` PnL.
+
+That is the exact repeated-regime weakness the diagnostics exposed.
+
+## Atomic Multi-Day Validation
+
+Attempted window: `2026-05-22T00:00:00Z..2026-05-24T23:00:00Z`.
+
+- PMXT hour preflight reported `72 / 72` remote hours available.
+- The first May 22 fold produced zero target BTC 5m PMXT events, so the run
+  stopped as a data-coverage failure, not strategy evidence.
+- Raw PMXT parquets retained after the failed attempt: `0`.
+
+Fresh usable window: `2026-05-23T00:00:00Z..2026-05-24T23:00:00Z`.
+
+- Folds: `6` feed-forward 8h windows.
+- Comparable variants: `96` per fold.
+- Raw PMXT parquets retained after run: `0`.
+- Cache dir after run: `0B`.
+- Report artifacts retained: `18M`.
+
+Strict robust promotion rejected the May 23-24 run because no variant passed all
+hard gates. The leading family was rejected by:
+
+- daily trades below the configured `15` minimum on at least one fold;
+- causal-bucket vetoes, especially `minutes_remaining=1_2` and
+  `price=gte_0.90`.
+
+Relaxed diagnostic-only selection, not production-valid:
+
+- strategy: `all_c0.35_z0.90_e0.03_ev-1.00_p0.10-0.90_..._fbL2..._mk`;
+- total PnL: `+69.4403`;
+- trades: `164`;
+- worst fold PnL: `+1.9629`;
+- median fold PnL: `+13.9875`;
+- PBO: `0.300` over `20` combinatorial splits;
+- median OOS percentile: `0.7708`;
+- neighbor-positive rate: `80.95%` over `35` neighbors;
+- fill rate: `74.89%`;
+- profit factor: `1.7198`;
+- payoff ratio: `0.2253`;
+- worst-loss / average-win: `4.8360`.
+
+Negative causal buckets for the relaxed selection:
+
+- `minutes_remaining=1_2`: `19` trades, `15 / 4` wins/losses, `-6.1115` PnL.
+- `price=gte_0.90`: `16` trades, `14 / 2` wins/losses, `-2.1980` PnL.
+- `volatility=0.40_0.80`: `5` trades, `4 / 1` wins/losses, `-2.8988` PnL.
+
+Interpretation: the candidate is materially closer than the May 24-only run
+because PBO and neighbor stability improved, but it still should not be
+promoted. A production-safe next search should treat the causal-bucket finding
+as a hard design constraint: avoid the last two minutes, avoid near-`0.90`
+entries unless there is fresh contrary evidence, and require the same
+feed-forward veto checks on every future candidate.

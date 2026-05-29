@@ -139,6 +139,10 @@ pub struct RobustPromotionGate {
     pub min_payoff_ratio: f64,
     #[serde(default)]
     pub max_worst_loss_to_avg_win: f64,
+    #[serde(default)]
+    pub min_causal_bucket_trades: u64,
+    #[serde(default)]
+    pub min_causal_bucket_pnl: f64,
 }
 
 impl Default for PromotionGate {
@@ -184,6 +188,8 @@ impl Default for RobustPromotionGate {
             min_profit_factor: 0.0,
             min_payoff_ratio: 0.0,
             max_worst_loss_to_avg_win: 0.0,
+            min_causal_bucket_trades: 0,
+            min_causal_bucket_pnl: 0.0,
         }
     }
 }
@@ -301,7 +307,19 @@ pub struct RobustVariantDiagnostics {
     pub profit_factor: f64,
     pub payoff_ratio: f64,
     pub worst_loss_to_avg_win: f64,
+    #[serde(default)]
+    pub negative_causal_buckets: Vec<CausalBucketDiagnostic>,
     pub robust_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalBucketDiagnostic {
+    pub key: String,
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub pnl: f64,
+    pub profit_factor: f64,
 }
 
 impl ExperimentReport {
@@ -923,6 +941,7 @@ fn robust_variant_diagnostics(
     let wilson = wilson_win_rate_lower(selected.wins, selected.trades);
     let drawdown_inverse = (1.0 - selected.breaker_stressed_drawdown_pct).clamp(0.0, 1.0);
     let trade_pnl = &selected.diagnostics.trade_pnl;
+    let negative_causal_buckets = negative_causal_buckets(selected);
     let simplicity = simplicity_score(selected);
     let robust_score = 0.30 * worst_window_expectancy
         + 0.20 * median_window_expectancy
@@ -949,8 +968,32 @@ fn robust_variant_diagnostics(
         profit_factor: trade_pnl.profit_factor,
         payoff_ratio: trade_pnl.payoff_ratio,
         worst_loss_to_avg_win: trade_pnl.worst_loss_to_avg_win,
+        negative_causal_buckets,
         robust_score,
     }
+}
+
+fn negative_causal_buckets(selected: &VariantReport) -> Vec<CausalBucketDiagnostic> {
+    let mut buckets: Vec<CausalBucketDiagnostic> = selected
+        .diagnostics
+        .by_causal_bucket
+        .iter()
+        .filter(|(_, stats)| stats.total_pnl < 0.0)
+        .map(|(key, stats)| CausalBucketDiagnostic {
+            key: key.clone(),
+            trades: stats.trades,
+            wins: stats.wins,
+            losses: stats.losses,
+            pnl: stats.total_pnl,
+            profit_factor: stats.profit_factor,
+        })
+        .collect();
+    buckets.sort_by(|a, b| {
+        a.pnl
+            .partial_cmp(&b.pnl)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    buckets
 }
 
 fn robust_rejection_reasons(
@@ -1001,6 +1044,26 @@ fn robust_rejection_reasons(
             "worst_loss_to_avg_win {:.4} above maximum {:.4}",
             diagnostic.worst_loss_to_avg_win, gate.max_worst_loss_to_avg_win
         ));
+    }
+    if gate.min_causal_bucket_trades > 0 {
+        let offenders: Vec<&CausalBucketDiagnostic> = diagnostic
+            .negative_causal_buckets
+            .iter()
+            .filter(|bucket| {
+                bucket.trades >= gate.min_causal_bucket_trades
+                    && bucket.pnl < gate.min_causal_bucket_pnl
+            })
+            .collect();
+        if let Some(worst) = offenders.first() {
+            reasons.push(format!(
+                "causal_bucket {} pnl {:.4} below minimum {:.4} with {} trades ({} offending bucket(s))",
+                worst.key,
+                worst.pnl,
+                gate.min_causal_bucket_pnl,
+                worst.trades,
+                offenders.len()
+            ));
+        }
     }
     reasons
 }
@@ -2421,6 +2484,8 @@ mod tests {
                 min_profit_factor: 0.0,
                 min_payoff_ratio: 0.0,
                 max_worst_loss_to_avg_win: 0.0,
+                min_causal_bucket_trades: 0,
+                min_causal_bucket_pnl: 0.0,
             },
         )
         .unwrap();
@@ -2466,6 +2531,14 @@ mod tests {
             profit_factor: 1.10,
             payoff_ratio: 0.10,
             worst_loss_to_avg_win: 8.0,
+            negative_causal_buckets: vec![CausalBucketDiagnostic {
+                key: "price=0.50_0.75".to_string(),
+                trades: 13,
+                wins: 9,
+                losses: 4,
+                pnl: -0.67,
+                profit_factor: 0.97,
+            }],
             robust_score: 0.40,
         };
 
@@ -2475,6 +2548,8 @@ mod tests {
                 min_profit_factor: 1.20,
                 min_payoff_ratio: 0.20,
                 max_worst_loss_to_avg_win: 6.0,
+                min_causal_bucket_trades: 10,
+                min_causal_bucket_pnl: 0.0,
                 ..RobustPromotionGate::default()
             },
         );
@@ -2486,5 +2561,8 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|reason| reason.contains("worst_loss_to_avg_win")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("causal_bucket price=0.50_0.75")));
     }
 }
