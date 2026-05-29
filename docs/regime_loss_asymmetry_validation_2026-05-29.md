@@ -322,6 +322,50 @@ One-hour smoke validation on the largest May 24 hour
 The smoke report confirmed generated variant names include `_rv2_` and
 serialized strategy params carry `zone_config.max_reversion_count = 2`.
 
-Next required validation: rerun the full May 23-24 six-fold atomic sweep with
-the reversion cap active. The profile is wired and tested, but the full
-reversion-capped promotion result has not yet replaced the pre-cap result.
+## Reversion-Capped Full Validation
+
+Full May 23-24 validation with the reversion cap active passed strict robust
+promotion.
+
+- window: `2026-05-23T00:00:00Z..2026-05-24T23:00:00Z`;
+- folds: `6` feed-forward 8h windows;
+- comparable variants: `192` per fold;
+- total variant-report trials: `1,152`;
+- archive preflight: `48 / 48` remote hours available;
+- raw PMXT parquets retained after run: `0`;
+- cache dir after run: `0B`;
+- report artifacts retained: `26M`.
+
+Selected strategy:
+
+- name: `all_c0.40_z0.50_e0.10_ev-1.00_p0.10-0.85_sc2.0_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL1d0.00z0.90tk_tk`;
+- params hash: `75b04fa3c94ecb86c489a58999526d0b74cbd2267ae0d0945c9df5ae59d7a9cc`;
+- trades: `140`;
+- win rate: `88.57%`;
+- total PnL: `+98.6936`;
+- worst fold PnL: `+12.1000`;
+- median fold PnL: `+15.7789`;
+- fill rate: `100.0%`;
+- robust score: `0.7161`;
+- PBO: `0.100` over `20` combinatorial splits;
+- median OOS percentile: `0.8047`;
+- neighbor-positive rate: `89.72%` over `47` neighbors;
+- Wilson win-rate lower bound: `0.8224`;
+- profit factor: `2.1961`;
+- payoff ratio: `0.2834`;
+- worst-loss / average-win: `3.5968`;
+- max stressed drawdown: `8.63%`;
+- negative causal buckets: none.
+
+Risk notes:
+
+- selected trades are still concentrated in the early zone (`75.0%`);
+- payoff geometry is improved enough for the configured gate, but losses remain
+  several times larger than average wins;
+- this is now a valid short-window candidate, not a final live-money approval.
+
+Interpretation: the hard two-minute settlement cutoff plus `reversion_count <= 2`
+turned the previous diagnostic weaknesses into an actually promoted
+feed-forward candidate on the freshest complete May 23-24 window. The next
+A+ requirement is broader atomic walk-forward history using the same profile,
+so we can prove this is not only a two-day market-regime fit.
