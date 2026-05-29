@@ -133,6 +133,12 @@ pub struct RobustPromotionGate {
     pub min_worst_window_pnl: f64,
     #[serde(default)]
     pub min_robust_score: f64,
+    #[serde(default)]
+    pub min_profit_factor: f64,
+    #[serde(default)]
+    pub min_payoff_ratio: f64,
+    #[serde(default)]
+    pub max_worst_loss_to_avg_win: f64,
 }
 
 impl Default for PromotionGate {
@@ -175,6 +181,9 @@ impl Default for RobustPromotionGate {
             max_pbo: default_max_pbo(),
             min_worst_window_pnl: 0.0,
             min_robust_score: 0.0,
+            min_profit_factor: 0.0,
+            min_payoff_ratio: 0.0,
+            max_worst_loss_to_avg_win: 0.0,
         }
     }
 }
@@ -289,6 +298,9 @@ pub struct RobustVariantDiagnostics {
     pub neighbor_positive_rate: f64,
     pub fill_rate: f64,
     pub max_stressed_drawdown_pct: f64,
+    pub profit_factor: f64,
+    pub payoff_ratio: f64,
+    pub worst_loss_to_avg_win: f64,
     pub robust_score: f64,
 }
 
@@ -336,6 +348,10 @@ impl VariantReport {
             &run.variant,
             run.variant.risk_profile(),
         );
+        let mut diagnostics = run.results.diagnostics.clone();
+        diagnostics.trade_pnl = run.results.pnl_diagnostics();
+        diagnostics.by_regime = run.results.by_regime();
+        diagnostics.by_causal_bucket = run.results.by_causal_bucket();
         let by_zone = run
             .results
             .by_zone()
@@ -370,7 +386,7 @@ impl VariantReport {
             breaker_tripped_at_s: run.results.breaker.tripped_at_s,
             breaker_realized_drawdown_pct: run.results.breaker.metrics.realized_drawdown_pct,
             breaker_stressed_drawdown_pct: run.results.breaker.metrics.stressed_drawdown_pct,
-            diagnostics: run.results.diagnostics.clone(),
+            diagnostics,
             win_rate: run.results.win_rate(),
             total_pnl: run.results.total_pnl(),
             avg_pnl: run.results.avg_pnl(),
@@ -623,6 +639,12 @@ impl PromotionArtifact {
             selected_diag.neighbor_count,
         ));
         artifact.risk_notes.push(format!(
+            "loss asymmetry: profit_factor {:.3}; payoff_ratio {:.3}; worst_loss_to_avg_win {:.3}",
+            selected_diag.profit_factor,
+            selected_diag.payoff_ratio,
+            selected_diag.worst_loss_to_avg_win
+        ));
+        artifact.risk_notes.push(format!(
             "PBO estimate {:.3} across {} split(s); median OOS percentile {:.3}",
             pbo.pbo, pbo.splits, pbo.median_oos_percentile
         ));
@@ -754,19 +776,7 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
     }
     let mut diagnostics = BacktestDiagnostics::default();
     for variant in group {
-        diagnostics.events_seen += variant.diagnostics.events_seen;
-        diagnostics.events_for_known_token += variant.diagnostics.events_for_known_token;
-        diagnostics.skipped_resolved += variant.diagnostics.skipped_resolved;
-        diagnostics.skipped_too_early += variant.diagnostics.skipped_too_early;
-        diagnostics.skipped_no_btc += variant.diagnostics.skipped_no_btc;
-        diagnostics.skipped_no_signal += variant.diagnostics.skipped_no_signal;
-        diagnostics.skipped_decision += variant.diagnostics.skipped_decision;
-        diagnostics.skipped_throttled += variant.diagnostics.skipped_throttled;
-        diagnostics.breaker_paused_events += variant.diagnostics.breaker_paused_events;
-        diagnostics.adaptive_rearms += variant.diagnostics.adaptive_rearms;
-        for (reason, count) in &variant.diagnostics.skip_reasons {
-            *diagnostics.skip_reasons.entry(reason.clone()).or_insert(0) += count;
-        }
+        diagnostics.merge_from(variant.diagnostics.clone());
     }
     let total_pnl: f64 = group.iter().map(|v| v.total_pnl).sum();
     let total_fees: f64 = group.iter().map(|v| v.total_fees).sum();
@@ -912,6 +922,7 @@ fn robust_variant_diagnostics(
     let (neighbor_count, neighbor_positive_rate) = neighbor_stability(reports, aggregate, selected);
     let wilson = wilson_win_rate_lower(selected.wins, selected.trades);
     let drawdown_inverse = (1.0 - selected.breaker_stressed_drawdown_pct).clamp(0.0, 1.0);
+    let trade_pnl = &selected.diagnostics.trade_pnl;
     let simplicity = simplicity_score(selected);
     let robust_score = 0.30 * worst_window_expectancy
         + 0.20 * median_window_expectancy
@@ -935,6 +946,9 @@ fn robust_variant_diagnostics(
         neighbor_positive_rate,
         fill_rate: selected.fill_rate,
         max_stressed_drawdown_pct: selected.breaker_stressed_drawdown_pct,
+        profit_factor: trade_pnl.profit_factor,
+        payoff_ratio: trade_pnl.payoff_ratio,
+        worst_loss_to_avg_win: trade_pnl.worst_loss_to_avg_win,
         robust_score,
     }
 }
@@ -966,6 +980,26 @@ fn robust_rejection_reasons(
         reasons.push(format!(
             "robust_score {:.4} below minimum {:.4}",
             diagnostic.robust_score, gate.min_robust_score
+        ));
+    }
+    if gate.min_profit_factor > 0.0 && diagnostic.profit_factor < gate.min_profit_factor {
+        reasons.push(format!(
+            "profit_factor {:.4} below minimum {:.4}",
+            diagnostic.profit_factor, gate.min_profit_factor
+        ));
+    }
+    if gate.min_payoff_ratio > 0.0 && diagnostic.payoff_ratio < gate.min_payoff_ratio {
+        reasons.push(format!(
+            "payoff_ratio {:.4} below minimum {:.4}",
+            diagnostic.payoff_ratio, gate.min_payoff_ratio
+        ));
+    }
+    if gate.max_worst_loss_to_avg_win > 0.0
+        && diagnostic.worst_loss_to_avg_win > gate.max_worst_loss_to_avg_win
+    {
+        reasons.push(format!(
+            "worst_loss_to_avg_win {:.4} above maximum {:.4}",
+            diagnostic.worst_loss_to_avg_win, gate.max_worst_loss_to_avg_win
         ));
     }
     reasons
@@ -2384,6 +2418,9 @@ mod tests {
                 max_pbo: 1.0,
                 min_worst_window_pnl: 5.0,
                 min_robust_score: 0.0,
+                min_profit_factor: 0.0,
+                min_payoff_ratio: 0.0,
+                max_worst_loss_to_avg_win: 0.0,
             },
         )
         .unwrap();
@@ -2408,5 +2445,46 @@ mod tests {
             .risk_notes
             .iter()
             .any(|note| note.contains("PBO estimate")));
+    }
+
+    #[test]
+    fn robust_rejection_reasons_include_loss_asymmetry_gates() {
+        let diagnostic = RobustVariantDiagnostics {
+            strategy_name: "candidate".to_string(),
+            params_hash: "hash".to_string(),
+            total_pnl: 10.0,
+            trades: 50,
+            worst_window_pnl: 1.0,
+            median_window_pnl: 5.0,
+            worst_window_expectancy: 0.02,
+            median_window_expectancy: 0.10,
+            wilson_win_rate_lower: 0.70,
+            neighbor_count: 3,
+            neighbor_positive_rate: 0.80,
+            fill_rate: 0.70,
+            max_stressed_drawdown_pct: 0.05,
+            profit_factor: 1.10,
+            payoff_ratio: 0.10,
+            worst_loss_to_avg_win: 8.0,
+            robust_score: 0.40,
+        };
+
+        let reasons = robust_rejection_reasons(
+            &diagnostic,
+            &RobustPromotionGate {
+                min_profit_factor: 1.20,
+                min_payoff_ratio: 0.20,
+                max_worst_loss_to_avg_win: 6.0,
+                ..RobustPromotionGate::default()
+            },
+        );
+
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("profit_factor")));
+        assert!(reasons.iter().any(|reason| reason.contains("payoff_ratio")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("worst_loss_to_avg_win")));
     }
 }

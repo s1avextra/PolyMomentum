@@ -412,6 +412,7 @@ impl CandleBacktestStrategy {
             breaker_paused_events: self.breaker_paused_events,
             adaptive_rearms: self.adaptive_rearms,
             skip_reasons: self.skip_reasons.clone(),
+            ..BacktestDiagnostics::default()
         }
     }
 }

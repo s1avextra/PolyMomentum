@@ -10,6 +10,8 @@ use crate::backtest::btc_history::BTCHistory;
 use crate::backtest::l2_replay::BacktestFill;
 use crate::live::breaker::{BreakerMetrics, BreakerState};
 use crate::strategy::decision::CandleDecision;
+#[cfg(test)]
+use crate::strategy::decision::DecisionRegime;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedTrade {
@@ -57,6 +59,12 @@ pub struct BacktestDiagnostics {
     pub breaker_paused_events: u64,
     #[serde(default)]
     pub adaptive_rearms: u64,
+    #[serde(default)]
+    pub trade_pnl: TradePnlDiagnostics,
+    #[serde(default)]
+    pub by_regime: BTreeMap<String, TradePnlDiagnostics>,
+    #[serde(default)]
+    pub by_causal_bucket: BTreeMap<String, TradePnlDiagnostics>,
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
@@ -72,9 +80,118 @@ impl BacktestDiagnostics {
         self.skipped_throttled += other.skipped_throttled;
         self.breaker_paused_events += other.breaker_paused_events;
         self.adaptive_rearms += other.adaptive_rearms;
+        self.trade_pnl.merge_from(&other.trade_pnl);
+        merge_trade_pnl_maps(&mut self.by_regime, &other.by_regime);
+        merge_trade_pnl_maps(&mut self.by_causal_bucket, &other.by_causal_bucket);
         for (reason, count) in other.skip_reasons {
             *self.skip_reasons.entry(reason).or_insert(0) += count;
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TradePnlDiagnostics {
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+    pub avg_pnl: f64,
+    pub gross_win_pnl: f64,
+    pub gross_loss_pnl: f64,
+    pub avg_win_pnl: f64,
+    pub avg_loss_pnl: f64,
+    pub max_win_pnl: f64,
+    pub max_loss_pnl: f64,
+    pub profit_factor: f64,
+    pub payoff_ratio: f64,
+    pub worst_loss_to_avg_win: f64,
+}
+
+impl TradePnlDiagnostics {
+    pub fn add_trade(&mut self, t: &ResolvedTrade) {
+        self.trades += 1;
+        self.total_pnl += t.pnl_after_fee;
+        if t.won {
+            if self.wins == 0 || t.pnl_after_fee > self.max_win_pnl {
+                self.max_win_pnl = t.pnl_after_fee;
+            }
+            self.wins += 1;
+            self.gross_win_pnl += t.pnl_after_fee;
+        } else {
+            if self.losses == 0 || t.pnl_after_fee < self.max_loss_pnl {
+                self.max_loss_pnl = t.pnl_after_fee;
+            }
+            self.losses += 1;
+            self.gross_loss_pnl += t.pnl_after_fee;
+        }
+        self.recompute();
+    }
+
+    pub fn merge_from(&mut self, other: &Self) {
+        if other.trades == 0 {
+            return;
+        }
+        if self.wins == 0 || (other.wins > 0 && other.max_win_pnl > self.max_win_pnl) {
+            self.max_win_pnl = other.max_win_pnl;
+        }
+        if self.losses == 0 || (other.losses > 0 && other.max_loss_pnl < self.max_loss_pnl) {
+            self.max_loss_pnl = other.max_loss_pnl;
+        }
+        self.trades += other.trades;
+        self.wins += other.wins;
+        self.losses += other.losses;
+        self.total_pnl += other.total_pnl;
+        self.gross_win_pnl += other.gross_win_pnl;
+        self.gross_loss_pnl += other.gross_loss_pnl;
+        self.recompute();
+    }
+
+    fn recompute(&mut self) {
+        let resolved = self.wins + self.losses;
+        self.win_rate = if resolved == 0 {
+            0.0
+        } else {
+            self.wins as f64 / resolved as f64
+        };
+        self.avg_pnl = if self.trades == 0 {
+            0.0
+        } else {
+            self.total_pnl / self.trades as f64
+        };
+        self.avg_win_pnl = if self.wins == 0 {
+            0.0
+        } else {
+            self.gross_win_pnl / self.wins as f64
+        };
+        self.avg_loss_pnl = if self.losses == 0 {
+            0.0
+        } else {
+            self.gross_loss_pnl / self.losses as f64
+        };
+        let abs_loss = self.gross_loss_pnl.abs();
+        self.profit_factor = finite_ratio(self.gross_win_pnl, abs_loss);
+        self.payoff_ratio = finite_ratio(self.avg_win_pnl, self.avg_loss_pnl.abs());
+        self.worst_loss_to_avg_win = finite_ratio(self.max_loss_pnl.abs(), self.avg_win_pnl);
+    }
+}
+
+fn finite_ratio(numerator: f64, denominator: f64) -> f64 {
+    if denominator > 1e-12 {
+        numerator / denominator
+    } else if numerator > 0.0 {
+        999.0
+    } else {
+        0.0
+    }
+}
+
+fn merge_trade_pnl_maps(
+    dest: &mut BTreeMap<String, TradePnlDiagnostics>,
+    src: &BTreeMap<String, TradePnlDiagnostics>,
+) {
+    for (key, stats) in src {
+        dest.entry(key.clone()).or_default().merge_from(stats);
     }
 }
 
@@ -220,6 +337,34 @@ impl BacktestResults {
         }
         out
     }
+
+    pub fn pnl_diagnostics(&self) -> TradePnlDiagnostics {
+        let mut out = TradePnlDiagnostics::default();
+        for t in &self.trades {
+            out.add_trade(t);
+        }
+        out
+    }
+
+    pub fn by_regime(&self) -> BTreeMap<String, TradePnlDiagnostics> {
+        let mut out: BTreeMap<String, TradePnlDiagnostics> = BTreeMap::new();
+        for t in &self.trades {
+            out.entry(t.decision.regime.key()).or_default().add_trade(t);
+        }
+        out
+    }
+
+    pub fn by_causal_bucket(&self) -> BTreeMap<String, TradePnlDiagnostics> {
+        let mut out: BTreeMap<String, TradePnlDiagnostics> = BTreeMap::new();
+        for t in &self.trades {
+            for (name, value) in t.decision.regime.causal_tags() {
+                out.entry(format!("{name}={value}"))
+                    .or_default()
+                    .add_trade(t);
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -355,6 +500,7 @@ mod tests {
             edge: 0.2,
             minutes_remaining: 0.05,
             yes_no_vig: 0.0,
+            regime: DecisionRegime::default(),
         }
     }
 
@@ -456,5 +602,62 @@ mod tests {
         assert_eq!(res.fills_failed, 1);
         assert_eq!(res.reject_reasons.get("maker_unfilled"), Some(&1));
         assert!(res.unresolved_fills.is_empty());
+    }
+
+    #[test]
+    fn pnl_diagnostics_preserve_win_loss_asymmetry() {
+        let h = mk_history();
+        let windows = vec![CandleWindow {
+            condition_id: "c1".into(),
+            open_ts_s: 1_700_000_000.0,
+            close_ts_s: 1_700_000_300.0,
+        }];
+        let fills = vec![
+            mk_fill("c1", 0.40, 10.0, 0.10),
+            mk_fill("c1", 0.40, 10.0, 0.10),
+        ];
+        let decisions = vec![mk_decision("up"), mk_decision("down")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let pnl = res.pnl_diagnostics();
+
+        assert_eq!(pnl.trades, 2);
+        assert_eq!(pnl.wins, 1);
+        assert_eq!(pnl.losses, 1);
+        assert!((pnl.gross_win_pnl - 5.9).abs() < 1e-9);
+        assert!((pnl.gross_loss_pnl + 4.1).abs() < 1e-9);
+        assert!((pnl.payoff_ratio - (5.9 / 4.1)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn causal_bucket_diagnostics_use_decision_regime() {
+        let h = mk_history();
+        let windows = vec![CandleWindow {
+            condition_id: "c1".into(),
+            open_ts_s: 1_700_000_000.0,
+            close_ts_s: 1_700_000_300.0,
+        }];
+        let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
+        let mut decision = mk_decision("up");
+        decision.regime = DecisionRegime {
+            zone: "terminal".to_string(),
+            direction: "up".to_string(),
+            price_bucket: "0.25_0.50".to_string(),
+            edge_bucket: "0.07_0.15".to_string(),
+            z_bucket: "1.1_1.5".to_string(),
+            confidence_bucket: "0.70_0.85".to_string(),
+            volatility_bucket: "0.40_0.80".to_string(),
+            reversion_bucket: "1_2".to_string(),
+            reversion_count: 1,
+            minutes_remaining_bucket: "lte_1".to_string(),
+        };
+
+        let res = resolve_fills(&fills, &[decision], &windows, &h);
+        let by_regime = res.by_regime();
+        let by_bucket = res.by_causal_bucket();
+
+        assert_eq!(by_regime.len(), 1);
+        assert_eq!(by_bucket["price=0.25_0.50"].trades, 1);
+        assert_eq!(by_bucket["reversion=1_2"].wins, 1);
     }
 }

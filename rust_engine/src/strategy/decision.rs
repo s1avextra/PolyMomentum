@@ -31,6 +31,95 @@ pub struct CandleDecision {
     pub edge: f64,
     pub minutes_remaining: f64,
     pub yes_no_vig: f64,
+    #[serde(default)]
+    pub regime: DecisionRegime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionRegime {
+    pub zone: String,
+    pub direction: String,
+    pub price_bucket: String,
+    pub edge_bucket: String,
+    pub z_bucket: String,
+    pub confidence_bucket: String,
+    pub volatility_bucket: String,
+    pub reversion_bucket: String,
+    pub reversion_count: u32,
+    pub minutes_remaining_bucket: String,
+}
+
+impl Default for DecisionRegime {
+    fn default() -> Self {
+        Self {
+            zone: "unknown".to_string(),
+            direction: "unknown".to_string(),
+            price_bucket: "unknown".to_string(),
+            edge_bucket: "unknown".to_string(),
+            z_bucket: "unknown".to_string(),
+            confidence_bucket: "unknown".to_string(),
+            volatility_bucket: "unknown".to_string(),
+            reversion_bucket: "unknown".to_string(),
+            reversion_count: 0,
+            minutes_remaining_bucket: "unknown".to_string(),
+        }
+    }
+}
+
+impl DecisionRegime {
+    pub fn from_decision_inputs(
+        zone: &str,
+        signal: &MomentumSignal,
+        market_price: f64,
+        edge: f64,
+        implied_vol: f64,
+        minutes_remaining: f64,
+    ) -> Self {
+        Self {
+            zone: zone.to_string(),
+            direction: signal.direction.clone(),
+            price_bucket: bucket_market_price(market_price),
+            edge_bucket: bucket_edge(edge),
+            z_bucket: bucket_z(signal.z_score),
+            confidence_bucket: bucket_confidence(signal.confidence),
+            volatility_bucket: bucket_implied_vol(implied_vol),
+            reversion_bucket: bucket_reversions(signal.reversion_count),
+            reversion_count: signal.reversion_count,
+            minutes_remaining_bucket: bucket_minutes_remaining(minutes_remaining),
+        }
+    }
+
+    pub fn key(&self) -> String {
+        format!(
+            "zone={}|dir={}|price={}|edge={}|z={}|conf={}|vol={}|rev={}|min={}",
+            self.zone,
+            self.direction,
+            self.price_bucket,
+            self.edge_bucket,
+            self.z_bucket,
+            self.confidence_bucket,
+            self.volatility_bucket,
+            self.reversion_bucket,
+            self.minutes_remaining_bucket
+        )
+    }
+
+    pub fn causal_tags(&self) -> Vec<(String, String)> {
+        vec![
+            ("zone".to_string(), self.zone.clone()),
+            ("direction".to_string(), self.direction.clone()),
+            ("price".to_string(), self.price_bucket.clone()),
+            ("edge".to_string(), self.edge_bucket.clone()),
+            ("z".to_string(), self.z_bucket.clone()),
+            ("confidence".to_string(), self.confidence_bucket.clone()),
+            ("volatility".to_string(), self.volatility_bucket.clone()),
+            ("reversion".to_string(), self.reversion_bucket.clone()),
+            (
+                "minutes_remaining".to_string(),
+                self.minutes_remaining_bucket.clone(),
+            ),
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +188,101 @@ fn default_settlement_min_abs_move_usd() -> f64 {
 
 fn default_settlement_sigma_buffer() -> f64 {
     DEFAULT_SETTLEMENT_SIGMA_BUFFER
+}
+
+fn bucket_market_price(price: f64) -> String {
+    if !price.is_finite() {
+        "unknown".to_string()
+    } else if price < 0.25 {
+        "lt_0.25".to_string()
+    } else if price < 0.50 {
+        "0.25_0.50".to_string()
+    } else if price < 0.75 {
+        "0.50_0.75".to_string()
+    } else if price < 0.90 {
+        "0.75_0.90".to_string()
+    } else {
+        "gte_0.90".to_string()
+    }
+}
+
+fn bucket_edge(edge: f64) -> String {
+    if !edge.is_finite() {
+        "unknown".to_string()
+    } else if edge < 0.03 {
+        "lt_0.03".to_string()
+    } else if edge < 0.07 {
+        "0.03_0.07".to_string()
+    } else if edge < 0.15 {
+        "0.07_0.15".to_string()
+    } else {
+        "gte_0.15".to_string()
+    }
+}
+
+fn bucket_z(z: f64) -> String {
+    let z = z.abs();
+    if !z.is_finite() {
+        "unknown".to_string()
+    } else if z < 0.7 {
+        "lt_0.7".to_string()
+    } else if z < 1.1 {
+        "0.7_1.1".to_string()
+    } else if z < 1.5 {
+        "1.1_1.5".to_string()
+    } else {
+        "gte_1.5".to_string()
+    }
+}
+
+fn bucket_confidence(confidence: f64) -> String {
+    if !confidence.is_finite() {
+        "unknown".to_string()
+    } else if confidence < 0.50 {
+        "lt_0.50".to_string()
+    } else if confidence < 0.70 {
+        "0.50_0.70".to_string()
+    } else if confidence < 0.85 {
+        "0.70_0.85".to_string()
+    } else {
+        "gte_0.85".to_string()
+    }
+}
+
+fn bucket_implied_vol(implied_vol: f64) -> String {
+    if !implied_vol.is_finite() {
+        "unknown".to_string()
+    } else if implied_vol < 0.40 {
+        "lt_0.40".to_string()
+    } else if implied_vol < 0.80 {
+        "0.40_0.80".to_string()
+    } else if implied_vol < 1.20 {
+        "0.80_1.20".to_string()
+    } else {
+        "gte_1.20".to_string()
+    }
+}
+
+fn bucket_reversions(reversion_count: u32) -> String {
+    match reversion_count {
+        0 => "0".to_string(),
+        1 | 2 => "1_2".to_string(),
+        _ => "gte_3".to_string(),
+    }
+}
+
+fn bucket_minutes_remaining(minutes_remaining: f64) -> String {
+    if !minutes_remaining.is_finite() {
+        "unknown".to_string()
+    } else if minutes_remaining <= 1.0 {
+        "lte_1".to_string()
+    } else if minutes_remaining <= 2.0 {
+        "1_2".to_string()
+    } else if minutes_remaining <= 4.0 {
+        "2_4".to_string()
+    } else {
+        "gt_4".to_string()
+    }
 }
 
 impl Default for ZoneConfig {
@@ -449,6 +633,15 @@ pub fn decide_candle_trade(
         ));
     }
 
+    let regime = DecisionRegime::from_decision_inputs(
+        zone,
+        signal,
+        market_price,
+        edge,
+        implied_vol,
+        minutes_remaining,
+    );
+
     DecisionResult::Trade(CandleDecision {
         direction: signal.direction.clone(),
         confidence: signal.confidence,
@@ -459,6 +652,7 @@ pub fn decide_candle_trade(
         edge,
         minutes_remaining,
         yes_no_vig,
+        regime,
     })
 }
 
@@ -745,5 +939,22 @@ mod tests {
             DecisionResult::Skip(s) => assert_eq!(s.reason, "negative_ev"),
             _ => panic!("expected skip"),
         }
+    }
+
+    #[test]
+    fn decision_regime_uses_only_pre_trade_inputs() {
+        let sig = mk_signal(0.76, 1.3, "down");
+        let regime = DecisionRegime::from_decision_inputs("terminal", &sig, 0.42, 0.09, 0.75, 0.8);
+
+        assert_eq!(regime.zone, "terminal");
+        assert_eq!(regime.direction, "down");
+        assert_eq!(regime.price_bucket, "0.25_0.50");
+        assert_eq!(regime.edge_bucket, "0.07_0.15");
+        assert_eq!(regime.z_bucket, "1.1_1.5");
+        assert_eq!(regime.confidence_bucket, "0.70_0.85");
+        assert_eq!(regime.volatility_bucket, "0.40_0.80");
+        assert_eq!(regime.reversion_bucket, "1_2");
+        assert_eq!(regime.minutes_remaining_bucket, "lte_1");
+        assert!(regime.key().contains("zone=terminal"));
     }
 }

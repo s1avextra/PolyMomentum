@@ -61,6 +61,18 @@ impl Signal {
         decision: &CandleDecision,
         diagnostics: serde_json::Value,
     ) -> Self {
+        let diagnostics = match diagnostics {
+            serde_json::Value::Object(mut map) => {
+                map.entry("regime".to_string()).or_insert_with(|| {
+                    serde_json::to_value(&decision.regime).unwrap_or(serde_json::Value::Null)
+                });
+                serde_json::Value::Object(map)
+            }
+            other => serde_json::json!({
+                "source": other,
+                "regime": serde_json::to_value(&decision.regime).unwrap_or(serde_json::Value::Null),
+            }),
+        };
         Self {
             market_id: market_id.into(),
             token_id: token_id.into(),
@@ -137,6 +149,7 @@ pub fn stable_json_hash<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strategy::decision::DecisionRegime;
 
     fn decision() -> CandleDecision {
         CandleDecision {
@@ -149,6 +162,7 @@ mod tests {
             edge: 0.08,
             minutes_remaining: 0.5,
             yes_no_vig: 0.01,
+            regime: DecisionRegime::default(),
         }
     }
 
@@ -184,6 +198,7 @@ mod tests {
         assert_eq!(sig.direction, "up");
         assert_eq!(sig.fair_price, 0.66);
         assert_eq!(sig.edge, 0.08);
+        assert!(sig.diagnostics.get("regime").is_some());
     }
 
     #[test]
