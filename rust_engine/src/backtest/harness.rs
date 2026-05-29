@@ -527,6 +527,14 @@ impl Strategy for CandleBacktestStrategy {
         let implied_vol = self
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
+        let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let breaker_metrics = self
+            .breaker_state
+            .metrics(used_exposure, self.bankroll_usd.max(1.0));
+        let effective_zone_config = self.variant.effective_zone_config(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
         let res = decide_candle_trade(
             &signal,
             minutes_elapsed,
@@ -540,7 +548,7 @@ impl Strategy for CandleBacktestStrategy {
             self.variant.min_confidence,
             self.variant.min_edge,
             self.variant.skip_dead_zone,
-            &self.variant.zone_config,
+            &effective_zone_config,
             0.0,
         );
         let decision = match res {
@@ -568,7 +576,6 @@ impl Strategy for CandleBacktestStrategy {
         let base_position =
             (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
         let exposure_cap = self.max_total_exposure_usd.max(0.0);
-        let used_exposure = self.open_exposure() + self.submitted_exposure();
         let exposure_available = if exposure_cap > 0.0 {
             (exposure_cap - used_exposure).max(0.0)
         } else {
@@ -597,7 +604,11 @@ impl Strategy for CandleBacktestStrategy {
         if market_price <= 0.0 {
             return Vec::new();
         }
-        let (order_type, limit_price, sizing_price) = if self.variant.prefer_maker {
+        let prefer_maker = self.variant.effective_prefer_maker(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
+        let (order_type, limit_price, sizing_price) = if prefer_maker {
             let Some(lp) =
                 resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
             else {

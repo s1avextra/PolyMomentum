@@ -267,8 +267,23 @@ enum Command {
         #[arg(long)]
         max_total_exposure_usd: Option<f64>,
         /// Soft cap on projected stressed drawdown before adding a new order; 0 disables.
-        #[arg(long, default_value_t = 0.0)]
-        max_projected_stressed_drawdown_pct: f64,
+        #[arg(long, default_value = "0.0")]
+        max_projected_stressed_drawdown_pct: String,
+        /// Comma-separated realized loss counts that activate degraded execution fallback; 0 disables.
+        #[arg(long, default_value = "0")]
+        degraded_after_losses: String,
+        /// Comma-separated realized drawdown fractions needed for degraded execution fallback.
+        #[arg(long, default_value = "0.0")]
+        degraded_after_drawdown_pct: String,
+        /// Comma-separated z-score floors while degraded execution fallback is active.
+        #[arg(long, default_value = "0.0")]
+        degraded_min_z: String,
+        /// Comma-separated max executable token prices while degraded execution fallback is active; 0 disables.
+        #[arg(long, default_value = "0.0")]
+        degraded_max_price: String,
+        /// Force taker execution while degraded execution fallback is active.
+        #[arg(long, default_value_t = false)]
+        degraded_force_taker: bool,
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
@@ -1176,6 +1191,11 @@ async fn main() {
             max_per_market_usd,
             max_total_exposure_usd,
             max_projected_stressed_drawdown_pct,
+            degraded_after_losses,
+            degraded_after_drawdown_pct,
+            degraded_min_z,
+            degraded_max_price,
+            degraded_force_taker,
             also_maker,
             zone_mode,
             top,
@@ -1200,6 +1220,11 @@ async fn main() {
             let micro_spreads = parse_csv_floats(&micro_max_spread);
             let micro_depths = parse_csv_floats(&micro_min_depth);
             let micro_pressures = parse_csv_floats(&micro_min_pressure);
+            let stress_drawdown_caps = parse_csv_floats(&max_projected_stressed_drawdown_pct);
+            let degraded_after_losses = parse_csv_u64s(&degraded_after_losses);
+            let degraded_drawdowns = parse_csv_floats(&degraded_after_drawdown_pct);
+            let degraded_min_z = parse_csv_floats(&degraded_min_z);
+            let degraded_max_price = parse_csv_floats(&degraded_max_price);
             let Some(zone_mode) = backtest::sweep::ZoneMode::parse(&zone_mode) else {
                 eprintln!("--zone-mode must be one of: all, early, primary, late, terminal");
                 std::process::exit(2);
@@ -1227,7 +1252,12 @@ async fn main() {
                 position_pct,
                 max_per_market_usd,
                 max_total_exposure_usd.unwrap_or(settings.max_total_exposure_usd),
-                max_projected_stressed_drawdown_pct,
+                stress_drawdown_caps,
+                degraded_after_losses,
+                degraded_drawdowns,
+                degraded_min_z,
+                degraded_max_price,
+                degraded_force_taker,
                 also_maker,
                 zone_mode,
                 top,
@@ -1491,6 +1521,11 @@ struct RollingHistoryProfile {
     max_per_market_usd: String,
     max_total_exposure_usd: String,
     max_projected_stressed_drawdown_pct: String,
+    degraded_after_losses: String,
+    degraded_after_drawdown_pct: String,
+    degraded_min_z: String,
+    degraded_max_price: String,
+    degraded_force_taker: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1674,6 +1709,14 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             profile.max_per_market_usd.clone(),
             "--max-projected-stressed-drawdown-pct".to_string(),
             profile.max_projected_stressed_drawdown_pct.clone(),
+            "--degraded-after-losses".to_string(),
+            profile.degraded_after_losses.clone(),
+            "--degraded-after-drawdown-pct".to_string(),
+            profile.degraded_after_drawdown_pct.clone(),
+            "--degraded-min-z".to_string(),
+            profile.degraded_min_z.clone(),
+            "--degraded-max-price".to_string(),
+            profile.degraded_max_price.clone(),
             "--conf".to_string(),
             profile.conf.clone(),
             "--z".to_string(),
@@ -1709,6 +1752,9 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--report-json".to_string(),
             sweep_report.display().to_string(),
         ];
+        if profile.degraded_force_taker {
+            sweep_args.push("--degraded-force-taker".to_string());
+        }
         if input.atomic_parquet {
             sweep_args.push("--atomic-parquet".to_string());
         }
@@ -1954,8 +2000,8 @@ async fn preflight_pmxt_hours(
 }
 
 fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> {
-    match name {
-        "a_plus5m" | "highz5m" => Ok(RollingHistoryProfile {
+    let profile = match name {
+        "a_plus5m" | "highz5m" => RollingHistoryProfile {
             name: name.to_string(),
             conf: "0.30,0.35,0.40".to_string(),
             z: "0.50,0.70,0.90,1.10".to_string(),
@@ -1973,9 +2019,55 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             max_per_market_usd: "20".to_string(),
             max_total_exposure_usd: "15".to_string(),
             max_projected_stressed_drawdown_pct: "0.24".to_string(),
-        }),
+            degraded_after_losses: "0".to_string(),
+            degraded_after_drawdown_pct: "0.0".to_string(),
+            degraded_min_z: "0.0".to_string(),
+            degraded_max_price: "0.0".to_string(),
+            degraded_force_taker: false,
+        },
+        "a_plus5m_regime" => {
+            let mut profile = rolling_history_profile("a_plus5m")?;
+            profile.name = name.to_string();
+            profile.max_projected_stressed_drawdown_pct = "0.12,0.16,0.24".to_string();
+            profile
+        }
+        "a_plus5m_adaptive" => {
+            let mut profile = rolling_history_profile("a_plus5m")?;
+            profile.name = name.to_string();
+            profile.degraded_after_losses = "1,2".to_string();
+            profile.degraded_after_drawdown_pct = "0.0".to_string();
+            profile.degraded_min_z = "0.90".to_string();
+            profile.degraded_max_price = "0.0".to_string();
+            profile.degraded_force_taker = true;
+            profile
+        }
+        "a_plus5m_adaptive_price" => {
+            let mut profile = rolling_history_profile("a_plus5m")?;
+            profile.name = name.to_string();
+            profile.degraded_after_losses = "1,2".to_string();
+            profile.degraded_after_drawdown_pct = "0.0".to_string();
+            profile.degraded_min_z = "0.90".to_string();
+            profile.degraded_max_price = "0.75,0.90".to_string();
+            profile.degraded_force_taker = true;
+            profile
+        }
+        "a_plus5m_ev_guard" => {
+            let mut profile = rolling_history_profile("a_plus5m")?;
+            profile.name = name.to_string();
+            profile.conf = "0.40".to_string();
+            profile.edge = "0.03,0.07".to_string();
+            profile.ev_buffer = "0.05".to_string();
+            profile.max_price = "0.90".to_string();
+            profile.degraded_after_losses = "2".to_string();
+            profile.degraded_after_drawdown_pct = "0.0".to_string();
+            profile.degraded_min_z = "0.90".to_string();
+            profile.degraded_max_price = "0.0".to_string();
+            profile.degraded_force_taker = true;
+            profile
+        }
         other => anyhow::bail!("unknown rolling-history profile `{other}`"),
-    }
+    };
+    Ok(profile)
 }
 
 fn cli_money_arg(value: f64) -> String {
@@ -3456,6 +3548,12 @@ fn parse_csv_floats(s: &str) -> Vec<f64> {
         .collect()
 }
 
+fn parse_csv_u64s(s: &str) -> Vec<u64> {
+    s.split(',')
+        .filter_map(|p| p.trim().parse::<u64>().ok())
+        .collect()
+}
+
 fn btc_required_range_ms(
     universe: &backtest::harness::CandleUniverse,
     fallback_start_ms: i64,
@@ -3592,7 +3690,12 @@ async fn cmd_harness_sweep(
     position_pct: f64,
     max_per_market_usd: f64,
     max_total_exposure_usd: f64,
-    max_projected_stressed_drawdown_pct: f64,
+    max_projected_stressed_drawdown_pct: Vec<f64>,
+    degraded_after_losses: Vec<u64>,
+    degraded_after_drawdown_pct: Vec<f64>,
+    degraded_min_z: Vec<f64>,
+    degraded_max_price: Vec<f64>,
+    degraded_force_taker: bool,
     also_maker: bool,
     zone_mode: backtest::sweep::ZoneMode,
     top: usize,
@@ -3643,10 +3746,36 @@ async fn cmd_harness_sweep(
         eprintln!("--max-total-exposure-usd must be a positive finite number");
         std::process::exit(2);
     }
-    if !(max_projected_stressed_drawdown_pct.is_finite()
-        && (0.0..=1.0).contains(&max_projected_stressed_drawdown_pct))
+    if max_projected_stressed_drawdown_pct.is_empty()
+        || max_projected_stressed_drawdown_pct
+            .iter()
+            .any(|cap| !(cap.is_finite() && (0.0..=1.0).contains(cap)))
     {
-        eprintln!("--max-projected-stressed-drawdown-pct must be a finite value in [0, 1]");
+        eprintln!("--max-projected-stressed-drawdown-pct must contain finite values in [0, 1]");
+        std::process::exit(2);
+    }
+    if degraded_after_losses.is_empty() {
+        eprintln!("--degraded-after-losses must contain at least one integer");
+        std::process::exit(2);
+    }
+    if degraded_after_drawdown_pct.is_empty()
+        || degraded_after_drawdown_pct
+            .iter()
+            .any(|v| !(v.is_finite() && (0.0..=1.0).contains(v)))
+    {
+        eprintln!("--degraded-after-drawdown-pct must contain finite values in [0, 1]");
+        std::process::exit(2);
+    }
+    if degraded_min_z.is_empty() || degraded_min_z.iter().any(|v| !(v.is_finite() && *v >= 0.0)) {
+        eprintln!("--degraded-min-z must contain finite non-negative values");
+        std::process::exit(2);
+    }
+    if degraded_max_price.is_empty()
+        || degraded_max_price
+            .iter()
+            .any(|v| !(v.is_finite() && (0.0..=1.0).contains(v)))
+    {
+        eprintln!("--degraded-max-price must contain finite values in [0, 1]");
         std::process::exit(2);
     }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
@@ -3662,7 +3791,7 @@ async fn cmd_harness_sweep(
     let mut base = backtest::strategies::StrategyVariant::baseline();
     base.position_pct = position_pct;
     base.max_per_market_usd = max_per_market_usd;
-    base.max_projected_stressed_drawdown_pct = max_projected_stressed_drawdown_pct;
+    base.max_projected_stressed_drawdown_pct = max_projected_stressed_drawdown_pct[0];
     let grid = backtest::sweep::SweepGrid {
         base,
         conf,
@@ -3677,6 +3806,12 @@ async fn cmd_harness_sweep(
         micro_max_spread,
         micro_min_depth,
         micro_min_pressure,
+        max_projected_stressed_drawdown_pct,
+        degraded_after_losses,
+        degraded_after_drawdown_pct,
+        degraded_min_z,
+        degraded_max_price,
+        degraded_force_taker,
         also_maker,
         zone_mode,
     };

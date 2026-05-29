@@ -46,6 +46,18 @@ pub struct SweepGrid {
     pub micro_min_depth: Vec<f64>,
     /// Minimum microprice pressure toward the intended token.
     pub micro_min_pressure: Vec<f64>,
+    /// Projected stressed-drawdown caps, as fractions of bankroll.
+    pub max_projected_stressed_drawdown_pct: Vec<f64>,
+    /// Loss-count thresholds that enable degraded execution fallback. 0 disables.
+    pub degraded_after_losses: Vec<u64>,
+    /// Realized drawdown thresholds for degraded execution fallback.
+    pub degraded_after_drawdown_pct: Vec<f64>,
+    /// Minimum z-score while degraded execution fallback is active.
+    pub degraded_min_z: Vec<f64>,
+    /// Maximum executable token price while degraded execution fallback is active. 0 disables.
+    pub degraded_max_price: Vec<f64>,
+    /// Force taker execution while degraded execution fallback is active.
+    pub degraded_force_taker: bool,
     /// Timing zone to keep enabled for each variant.
     pub zone_mode: ZoneMode,
 }
@@ -93,6 +105,7 @@ impl SweepGrid {
         let micro_max_spread = base.microstructure.max_spread;
         let micro_min_depth = base.microstructure.min_book_depth;
         let micro_min_pressure = base.microstructure.min_book_pressure;
+        let max_projected_stressed_drawdown_pct = base.max_projected_stressed_drawdown_pct;
         Self {
             base,
             conf: vec![0.30, 0.40, 0.50, 0.60],
@@ -108,6 +121,12 @@ impl SweepGrid {
             micro_max_spread: vec![micro_max_spread],
             micro_min_depth: vec![micro_min_depth],
             micro_min_pressure: vec![micro_min_pressure],
+            max_projected_stressed_drawdown_pct: vec![max_projected_stressed_drawdown_pct],
+            degraded_after_losses: vec![0],
+            degraded_after_drawdown_pct: vec![0.0],
+            degraded_min_z: vec![0.0],
+            degraded_max_price: vec![0.0],
+            degraded_force_taker: false,
             zone_mode: ZoneMode::All,
         }
     }
@@ -133,6 +152,11 @@ impl SweepGrid {
                 * self.micro_max_spread.len()
                 * self.micro_min_depth.len()
                 * self.micro_min_pressure.len()
+                * self.max_projected_stressed_drawdown_pct.len()
+                * self.degraded_after_losses.len()
+                * self.degraded_after_drawdown_pct.len()
+                * self.degraded_min_z.len()
+                * self.degraded_max_price.len()
                 * maker_sides.len(),
         );
         for &conf in &self.conf {
@@ -151,85 +175,52 @@ impl SweepGrid {
                                                 for &micro_depth in &self.micro_min_depth {
                                                     for &micro_pressure in &self.micro_min_pressure
                                                     {
-                                                        for &maker in &maker_sides {
-                                                            let mut cfg = ZoneConfig {
-                                                                early_min_confidence: conf,
-                                                                late_min_confidence: conf,
-                                                                terminal_min_confidence: conf,
-                                                                early_min_z: z,
-                                                                primary_min_z: z,
-                                                                late_min_z: z,
-                                                                terminal_min_z: z,
-                                                                early_min_edge: edge,
-                                                                late_min_edge: edge,
-                                                                terminal_min_edge: edge,
-                                                                min_price,
-                                                                max_price,
-                                                                min_ev_buffer: ev,
-                                                                settlement_min_abs_move_usd: floor,
-                                                                settlement_guard_minutes: guard,
-                                                                settlement_sigma_buffer: sigma,
-                                                                ..ZoneConfig::default()
-                                                            };
-                                                            apply_zone_mode(
-                                                                &mut cfg,
-                                                                self.zone_mode,
-                                                            );
-                                                            let microstructure =
-                                                                MicrostructureConfig {
-                                                                    max_spread: micro_spread,
-                                                                    min_book_depth: micro_depth,
-                                                                    min_book_pressure:
-                                                                        micro_pressure,
-                                                                };
-                                                            let label = format!(
-                                                                "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}_{}",
-                                                                self.zone_mode.as_str(),
-                                                                conf,
-                                                                z,
-                                                                edge,
-                                                                ev,
-                                                                min_price,
-                                                                max_price,
-                                                                floor,
-                                                                guard,
-                                                                sigma,
-                                                                micro_spread,
-                                                                micro_depth,
-                                                                micro_pressure,
-                                                                if maker { "mk" } else { "tk" }
-                                                            );
-                                                            out.push(StrategyVariant {
-                                                                name: label,
-                                                                zone_config: cfg,
-                                                                skip_dead_zone: self
-                                                                    .base
-                                                                    .skip_dead_zone,
-                                                                min_confidence: conf,
-                                                                min_edge: edge,
-                                                                position_pct: self
-                                                                    .base
-                                                                    .position_pct,
-                                                                max_per_market_usd: self
-                                                                    .base
-                                                                    .max_per_market_usd,
-                                                                max_projected_stressed_drawdown_pct:
-                                                                    self.base
-                                                                        .max_projected_stressed_drawdown_pct,
-                                                                prefer_maker: maker,
-                                                                maker_fill_prob: self
-                                                                    .base
-                                                                    .maker_fill_prob,
-                                                                maker_seed: self.base.maker_seed,
-                                                                use_perfect_fill: false,
-                                                                default_fee_rate: self
-                                                                    .base
-                                                                    .default_fee_rate,
-                                                                maker_fee_rate: self
-                                                                    .base
-                                                                    .maker_fee_rate,
-                                                                microstructure,
-                                                            });
+                                                        for &stress_dd_cap in &self
+                                                            .max_projected_stressed_drawdown_pct
+                                                        {
+                                                            for &degraded_after_losses in
+                                                                &self.degraded_after_losses
+                                                            {
+                                                                for &degraded_drawdown in &self
+                                                                    .degraded_after_drawdown_pct
+                                                                {
+                                                                    for &degraded_min_z in
+                                                                        &self.degraded_min_z
+                                                                    {
+                                                                        for &degraded_max_price in
+                                                                            &self.degraded_max_price
+                                                                        {
+                                                                            for &maker in
+                                                                                &maker_sides
+                                                                            {
+                                                                                self.push_variant(
+                                                                                    &mut out,
+                                                                                    SweepCell {
+                                                                                        conf,
+                                                                                        z,
+                                                                                        edge,
+                                                                                        ev,
+                                                                                        min_price,
+                                                                                        max_price,
+                                                                                        floor,
+                                                                                        guard,
+                                                                                        sigma,
+                                                                                        micro_spread,
+                                                                                        micro_depth,
+                                                                                        micro_pressure,
+                                                                                        stress_dd_cap,
+                                                                                        degraded_after_losses,
+                                                                                        degraded_drawdown,
+                                                                                        degraded_min_z,
+                                                                                        degraded_max_price,
+                                                                                        maker,
+                                                                                    },
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -245,6 +236,120 @@ impl SweepGrid {
         }
         out
     }
+
+    fn push_variant(&self, out: &mut Vec<StrategyVariant>, cell: SweepCell) {
+        let mut cfg = ZoneConfig {
+            early_min_confidence: cell.conf,
+            late_min_confidence: cell.conf,
+            terminal_min_confidence: cell.conf,
+            early_min_z: cell.z,
+            primary_min_z: cell.z,
+            late_min_z: cell.z,
+            terminal_min_z: cell.z,
+            early_min_edge: cell.edge,
+            late_min_edge: cell.edge,
+            terminal_min_edge: cell.edge,
+            min_price: cell.min_price,
+            max_price: cell.max_price,
+            min_ev_buffer: cell.ev,
+            settlement_min_abs_move_usd: cell.floor,
+            settlement_guard_minutes: cell.guard,
+            settlement_sigma_buffer: cell.sigma,
+            ..ZoneConfig::default()
+        };
+        apply_zone_mode(&mut cfg, self.zone_mode);
+
+        let stress_dd_suffix =
+            if (cell.stress_dd_cap - self.base.max_projected_stressed_drawdown_pct).abs() > 1e-9 {
+                format!("_dd{:.2}", cell.stress_dd_cap)
+            } else {
+                String::new()
+            };
+        let degraded_suffix = if cell.degraded_after_losses > 0 {
+            let price_suffix = if cell.degraded_max_price > 0.0 {
+                format!("p{:.2}", cell.degraded_max_price)
+            } else {
+                String::new()
+            };
+            format!(
+                "_fbL{}d{:.2}z{:.2}{price_suffix}{}",
+                cell.degraded_after_losses,
+                cell.degraded_drawdown,
+                cell.degraded_min_z,
+                if self.degraded_force_taker { "tk" } else { "" }
+            )
+        } else {
+            String::new()
+        };
+
+        let label = format!(
+            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
+            self.zone_mode.as_str(),
+            cell.conf,
+            cell.z,
+            cell.edge,
+            cell.ev,
+            cell.min_price,
+            cell.max_price,
+            cell.floor,
+            cell.guard,
+            cell.sigma,
+            cell.micro_spread,
+            cell.micro_depth,
+            cell.micro_pressure,
+            stress_dd_suffix,
+            degraded_suffix,
+            if cell.maker { "mk" } else { "tk" }
+        );
+        out.push(StrategyVariant {
+            name: label,
+            zone_config: cfg,
+            skip_dead_zone: self.base.skip_dead_zone,
+            min_confidence: cell.conf,
+            min_edge: cell.edge,
+            position_pct: self.base.position_pct,
+            max_per_market_usd: self.base.max_per_market_usd,
+            max_projected_stressed_drawdown_pct: cell.stress_dd_cap,
+            degraded_after_losses: cell.degraded_after_losses,
+            degraded_after_drawdown_pct: cell.degraded_drawdown,
+            degraded_min_z: cell.degraded_min_z,
+            degraded_max_price: cell.degraded_max_price,
+            degraded_force_taker: self.degraded_force_taker,
+            prefer_maker: cell.maker,
+            maker_fill_prob: self.base.maker_fill_prob,
+            maker_seed: self.base.maker_seed,
+            use_perfect_fill: false,
+            default_fee_rate: self.base.default_fee_rate,
+            maker_fee_rate: self.base.maker_fee_rate,
+            microstructure: MicrostructureConfig {
+                max_spread: cell.micro_spread,
+                min_book_depth: cell.micro_depth,
+                min_book_pressure: cell.micro_pressure,
+            },
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SweepCell {
+    conf: f64,
+    z: f64,
+    edge: f64,
+    ev: f64,
+    min_price: f64,
+    max_price: f64,
+    floor: f64,
+    guard: f64,
+    sigma: f64,
+    micro_spread: f64,
+    micro_depth: f64,
+    micro_pressure: f64,
+    stress_dd_cap: f64,
+    degraded_after_losses: u64,
+    degraded_drawdown: f64,
+    degraded_min_z: f64,
+    degraded_max_price: f64,
+    maker: bool,
 }
 
 fn apply_zone_mode(cfg: &mut ZoneConfig, mode: ZoneMode) {
@@ -330,6 +435,43 @@ mod tests {
         assert!(variants
             .iter()
             .any(|v| v.microstructure.min_book_pressure == 0.1));
+    }
+
+    #[test]
+    fn stressed_drawdown_cap_expands_grid_and_labels_non_base_caps() {
+        let mut base = StrategyVariant::baseline();
+        base.max_projected_stressed_drawdown_pct = 0.24;
+        let mut grid = SweepGrid::small_default(base);
+        grid.max_projected_stressed_drawdown_pct = vec![0.12, 0.24];
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2 * 2 * 2);
+        assert!(variants
+            .iter()
+            .any(|v| v.max_projected_stressed_drawdown_pct == 0.12 && v.name.contains("_dd0.12_")));
+        assert!(
+            variants
+                .iter()
+                .any(|v| v.max_projected_stressed_drawdown_pct == 0.24
+                    && !v.name.contains("_dd0.24_"))
+        );
+    }
+
+    #[test]
+    fn degraded_execution_dimensions_expand_grid() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.degraded_after_losses = vec![1, 2];
+        grid.degraded_min_z = vec![0.90];
+        grid.degraded_max_price = vec![0.75];
+        grid.degraded_force_taker = true;
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2 * 2 * 2);
+        assert!(variants.iter().any(|v| v.degraded_after_losses == 1
+            && v.degraded_force_taker
+            && v.degraded_max_price == 0.75
+            && v.name.contains("_fbL1d0.00z0.90p0.75tk_")));
     }
 
     #[test]

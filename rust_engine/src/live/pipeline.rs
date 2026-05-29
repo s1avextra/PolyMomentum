@@ -247,6 +247,11 @@ struct RuntimeStrategy {
     position_pct: f64,
     max_per_market_usd: f64,
     max_projected_stressed_drawdown_pct: f64,
+    degraded_after_losses: u64,
+    degraded_after_drawdown_pct: f64,
+    degraded_min_z: f64,
+    degraded_max_price: f64,
+    degraded_force_taker: bool,
     prefer_maker: bool,
     default_fee_rate: f64,
     microstructure: MicrostructureConfig,
@@ -324,6 +329,11 @@ impl RuntimeStrategy {
             position_pct: variant.position_pct,
             max_per_market_usd: variant.max_per_market_usd,
             max_projected_stressed_drawdown_pct: variant.max_projected_stressed_drawdown_pct,
+            degraded_after_losses: variant.degraded_after_losses,
+            degraded_after_drawdown_pct: variant.degraded_after_drawdown_pct,
+            degraded_min_z: variant.degraded_min_z,
+            degraded_max_price: variant.degraded_max_price,
+            degraded_force_taker: variant.degraded_force_taker,
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
             microstructure: variant.microstructure,
@@ -347,6 +357,11 @@ impl RuntimeStrategy {
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
+            "degraded_after_losses": 0,
+            "degraded_after_drawdown_pct": 0.0,
+            "degraded_min_z": 0.0,
+            "degraded_max_price": 0.0,
+            "degraded_force_taker": false,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
             "microstructure": microstructure,
@@ -371,10 +386,55 @@ impl RuntimeStrategy {
             max_per_market_usd: settings.max_position_per_market_usd,
             max_projected_stressed_drawdown_pct: settings
                 .candle_max_projected_stressed_drawdown_pct,
+            degraded_after_losses: 0,
+            degraded_after_drawdown_pct: 0.0,
+            degraded_min_z: 0.0,
+            degraded_max_price: 0.0,
+            degraded_force_taker: false,
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             microstructure,
             source: "settings".to_string(),
+        }
+    }
+
+    fn degraded_execution_active(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
+        self.degraded_after_losses > 0
+            && losses >= self.degraded_after_losses
+            && realized_drawdown_pct.is_finite()
+            && realized_drawdown_pct >= self.degraded_after_drawdown_pct.max(0.0)
+    }
+
+    fn effective_zone_config(&self, losses: u64, realized_drawdown_pct: f64) -> ZoneConfig {
+        let mut cfg = self.zone_config;
+        if self.degraded_execution_active(losses, realized_drawdown_pct)
+            && self.degraded_min_z.is_finite()
+            && self.degraded_min_z > 0.0
+        {
+            cfg.early_min_z = cfg.early_min_z.max(self.degraded_min_z);
+            cfg.primary_min_z = cfg.primary_min_z.max(self.degraded_min_z);
+            cfg.late_min_z = cfg.late_min_z.max(self.degraded_min_z);
+            cfg.terminal_min_z = cfg.terminal_min_z.max(self.degraded_min_z);
+        }
+        if self.degraded_execution_active(losses, realized_drawdown_pct)
+            && self.degraded_max_price.is_finite()
+            && self.degraded_max_price > 0.0
+        {
+            cfg.max_price = cfg.max_price.min(self.degraded_max_price);
+            if cfg.min_price > cfg.max_price {
+                cfg.min_price = cfg.max_price;
+            }
+        }
+        cfg
+    }
+
+    fn effective_prefer_maker(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
+        if self.degraded_force_taker
+            && self.degraded_execution_active(losses, realized_drawdown_pct)
+        {
+            false
+        } else {
+            self.prefer_maker
         }
     }
 }
@@ -1299,6 +1359,14 @@ impl Pipeline {
                 };
                 let Some(signal) = signal else { continue };
 
+                let open_exposure = self.risk.total_exposure().await;
+                let breaker_state = *self.breaker.lock().await;
+                let breaker_metrics =
+                    breaker_state.metrics(open_exposure, self.settings.bankroll_usd.max(1.0));
+                let effective_zone_config = self.runtime_strategy.effective_zone_config(
+                    breaker_state.losses,
+                    breaker_metrics.realized_drawdown_pct,
+                );
                 let decision = decide_candle_trade(
                     &signal,
                     minutes_elapsed,
@@ -1312,7 +1380,7 @@ impl Pipeline {
                     self.runtime_strategy.min_confidence,
                     self.runtime_strategy.min_edge,
                     self.runtime_strategy.skip_dead_zone,
-                    &self.runtime_strategy.zone_config,
+                    &effective_zone_config,
                     0.0, // cross-asset boost not yet wired
                 );
                 let signal_token_id = if signal.direction == "up" {
@@ -1576,6 +1644,8 @@ impl Pipeline {
         position = position.min(max_per_market).min(avail);
         let open_exposure = self.risk.total_exposure().await;
         let breaker_state = *self.breaker.lock().await;
+        let breaker_metrics =
+            breaker_state.metrics(open_exposure, self.settings.bankroll_usd.max(1.0));
         let mut stress_capped = false;
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
@@ -1610,8 +1680,12 @@ impl Pipeline {
                 let taker_fee_rate = contract
                     .market
                     .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
+                let prefer_maker = self.runtime_strategy.effective_prefer_maker(
+                    breaker_state.losses,
+                    breaker_metrics.realized_drawdown_pct,
+                );
                 let cfg = PaperFillCfg {
-                    prefer_maker: self.runtime_strategy.prefer_maker,
+                    prefer_maker,
                     default_taker_rate: taker_fee_rate,
                     min_order_size_shares: self.settings.live_min_order_size_shares,
                     ..Default::default()
@@ -1788,7 +1862,10 @@ impl Pipeline {
                     .max(0.0001);
                 let zone = decision.zone.as_str();
                 let prefer_maker = self.settings.live_allow_maker_orders
-                    && self.runtime_strategy.prefer_maker
+                    && self.runtime_strategy.effective_prefer_maker(
+                        breaker_state.losses,
+                        breaker_metrics.realized_drawdown_pct,
+                    )
                     && zone != "terminal";
                 let limit_price = if prefer_maker {
                     let Some(price) =

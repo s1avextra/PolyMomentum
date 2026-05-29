@@ -12,6 +12,14 @@ fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// Tunable knobs the harness varies. The variant name is what shows up in
 /// the report.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -30,6 +38,19 @@ pub struct StrategyVariant {
     /// the new order would push stressed drawdown above this fraction.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub max_projected_stressed_drawdown_pct: f64,
+    /// Optional feed-forward execution fallback. After this many realized
+    /// losses, and once the realized drawdown threshold is met, the runtime can
+    /// tighten z-score gates and optionally stop using maker orders.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub degraded_after_losses: u64,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub degraded_after_drawdown_pct: f64,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub degraded_min_z: f64,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub degraded_max_price: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub degraded_force_taker: bool,
     /// Use resting maker limit orders instead of one-tick taker.
     pub prefer_maker: bool,
     /// Probability that a resting maker order fills before cancel/market move;
@@ -68,6 +89,11 @@ impl StrategyVariant {
             position_pct: 0.10,
             max_per_market_usd: 20.0,
             max_projected_stressed_drawdown_pct: 0.0,
+            degraded_after_losses: 0,
+            degraded_after_drawdown_pct: 0.0,
+            degraded_min_z: 0.0,
+            degraded_max_price: 0.0,
+            degraded_force_taker: false,
             prefer_maker: false,
             maker_fill_prob: 0.65,
             maker_seed: Some(42),
@@ -169,6 +195,11 @@ impl StrategyVariant {
             position_pct: 0.10,
             max_per_market_usd: 20.0,
             max_projected_stressed_drawdown_pct: 0.0,
+            degraded_after_losses: 0,
+            degraded_after_drawdown_pct: 0.0,
+            degraded_min_z: 0.0,
+            degraded_max_price: 0.0,
+            degraded_force_taker: false,
             prefer_maker: false,
             maker_fill_prob: 0.65,
             maker_seed: Some(42),
@@ -212,6 +243,46 @@ impl StrategyVariant {
             ..Self::terminal_only()
         }
     }
+
+    pub fn degraded_execution_active(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
+        self.degraded_after_losses > 0
+            && losses >= self.degraded_after_losses
+            && realized_drawdown_pct.is_finite()
+            && realized_drawdown_pct >= self.degraded_after_drawdown_pct.max(0.0)
+    }
+
+    pub fn effective_zone_config(&self, losses: u64, realized_drawdown_pct: f64) -> ZoneConfig {
+        let mut cfg = self.zone_config;
+        if self.degraded_execution_active(losses, realized_drawdown_pct)
+            && self.degraded_min_z.is_finite()
+            && self.degraded_min_z > 0.0
+        {
+            cfg.early_min_z = cfg.early_min_z.max(self.degraded_min_z);
+            cfg.primary_min_z = cfg.primary_min_z.max(self.degraded_min_z);
+            cfg.late_min_z = cfg.late_min_z.max(self.degraded_min_z);
+            cfg.terminal_min_z = cfg.terminal_min_z.max(self.degraded_min_z);
+        }
+        if self.degraded_execution_active(losses, realized_drawdown_pct)
+            && self.degraded_max_price.is_finite()
+            && self.degraded_max_price > 0.0
+        {
+            cfg.max_price = cfg.max_price.min(self.degraded_max_price);
+            if cfg.min_price > cfg.max_price {
+                cfg.min_price = cfg.max_price;
+            }
+        }
+        cfg
+    }
+
+    pub fn effective_prefer_maker(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
+        if self.degraded_force_taker
+            && self.degraded_execution_active(losses, realized_drawdown_pct)
+        {
+            false
+        } else {
+            self.prefer_maker
+        }
+    }
 }
 
 /// Default sweep set for the harness.
@@ -227,4 +298,29 @@ pub fn default_variants() -> Vec<StrategyVariant> {
         StrategyVariant::microstructure_confirmed(),
         StrategyVariant::terminal_microstructure(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn degraded_execution_tightens_z_and_forces_taker_only_after_threshold() {
+        let mut variant = StrategyVariant::maker_first();
+        variant.zone_config.early_min_z = 0.50;
+        variant.degraded_after_losses = 2;
+        variant.degraded_after_drawdown_pct = 0.05;
+        variant.degraded_min_z = 0.90;
+        variant.degraded_max_price = 0.75;
+        variant.degraded_force_taker = true;
+
+        let healthy = variant.effective_zone_config(1, 0.10);
+        assert_eq!(healthy.early_min_z, 0.50);
+        assert!(variant.effective_prefer_maker(1, 0.10));
+
+        let degraded = variant.effective_zone_config(2, 0.05);
+        assert_eq!(degraded.early_min_z, 0.90);
+        assert_eq!(degraded.max_price, 0.75);
+        assert!(!variant.effective_prefer_maker(2, 0.05));
+    }
 }

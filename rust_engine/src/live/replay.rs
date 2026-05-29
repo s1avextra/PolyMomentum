@@ -904,6 +904,14 @@ impl Strategy for LiveReplayStrategy {
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
         let variant = &self.replay_strategy.variant;
+        let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let breaker_metrics = self
+            .breaker_state
+            .metrics(used_exposure, self.bankroll_usd.max(1.0));
+        let effective_zone_config = variant.effective_zone_config(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
         let decision = match decide_candle_trade(
             &signal,
             minutes_elapsed,
@@ -917,7 +925,7 @@ impl Strategy for LiveReplayStrategy {
             variant.min_confidence,
             variant.min_edge,
             variant.skip_dead_zone,
-            &variant.zone_config,
+            &effective_zone_config,
             0.0,
         ) {
             DecisionResult::Trade(decision) => decision,
@@ -991,7 +999,11 @@ impl Strategy for LiveReplayStrategy {
             );
             return Vec::new();
         }
-        if variant.prefer_maker
+        let prefer_maker = variant.effective_prefer_maker(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
+        if prefer_maker
             && resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
                 .is_none()
         {
@@ -1048,6 +1060,9 @@ impl LiveReplayStrategy {
     ) -> Option<BacktestOrder> {
         let variant = self.replay_strategy.variant.clone();
         let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let breaker_metrics = self
+            .breaker_state
+            .metrics(used_exposure, self.bankroll_usd.max(1.0));
         let mut position =
             (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
         if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
@@ -1078,7 +1093,11 @@ impl LiveReplayStrategy {
             );
             return None;
         }
-        let (order_type, limit_price, sizing_price) = if variant.prefer_maker {
+        let prefer_maker = variant.effective_prefer_maker(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
+        let (order_type, limit_price, sizing_price) = if prefer_maker {
             let lp = resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
                 .expect("maker book preflight should run before build_order");
             ("limit", Some(lp), lp)
