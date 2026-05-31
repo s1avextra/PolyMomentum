@@ -958,6 +958,12 @@ enum StrategyBuilderCommand {
         /// Minimum trades required in every fold during robust promotion.
         #[arg(long, default_value_t = 20)]
         min_fold_trades: usize,
+        /// Minimum target PMXT events required in each fold before treating it as strategy evidence. 0 disables.
+        #[arg(long, default_value_t = 1)]
+        min_fold_target_events: u64,
+        /// Minimum top-variant trades required in each fold before treating it as strategy evidence. Defaults to --min-fold-trades; 0 disables.
+        #[arg(long)]
+        min_fold_top_trades: Option<usize>,
         /// Abort before the next fold if cache-root size exceeds this budget. 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_cache_gb: f64,
@@ -1466,6 +1472,8 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             stop_at_first_missing_hour,
             require_full_folds,
             min_fold_trades,
+            min_fold_target_events,
+            min_fold_top_trades,
             max_cache_gb,
             min_neighbor_positive_rate,
             max_pbo,
@@ -1492,6 +1500,8 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 stop_at_first_missing_hour,
                 require_full_folds,
                 min_fold_trades,
+                min_fold_target_events,
+                min_fold_top_trades,
                 max_cache_gb,
                 min_neighbor_positive_rate,
                 max_pbo,
@@ -1533,6 +1543,8 @@ struct RollingHistoryInput {
     stop_at_first_missing_hour: bool,
     require_full_folds: bool,
     min_fold_trades: usize,
+    min_fold_target_events: u64,
+    min_fold_top_trades: Option<usize>,
     max_cache_gb: f64,
     min_neighbor_positive_rate: f64,
     max_pbo: f64,
@@ -1578,6 +1590,26 @@ struct RollingFoldSummary {
     hydrate_args: Vec<String>,
     sweep_args: Vec<String>,
     cache_deleted: bool,
+    coverage: Option<RollingFoldCoverage>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RollingFoldCoverage {
+    status: String,
+    reason: Option<String>,
+    target_events: u64,
+    target_events_per_hour: f64,
+    top_trades: usize,
+    top_variant: Option<String>,
+    top_variant_pnl: Option<f64>,
+    min_target_events: u64,
+    min_top_trades: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RollingCoveragePolicy {
+    min_fold_target_events: u64,
+    min_fold_top_trades: usize,
 }
 
 async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
@@ -1599,6 +1631,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
     if input.min_fold_trades == 0 {
         bail!("--min-fold-trades must be > 0");
     }
+    let min_fold_top_trades = input.min_fold_top_trades.unwrap_or(input.min_fold_trades);
     if input.window_minutes <= 0.0 {
         bail!("--window-minutes must be > 0");
     }
@@ -1674,8 +1707,48 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
     let exe = std::env::current_exe().context("locate current executable")?;
     let mut fold_summaries = Vec::new();
     let mut sweep_reports = Vec::new();
+    let coverage_policy = RollingCoveragePolicy {
+        min_fold_target_events: input.min_fold_target_events,
+        min_fold_top_trades,
+    };
+
+    let build_summary = |promotion_status: &str,
+                         promotion_error: Option<String>,
+                         fold_summaries: &[RollingFoldSummary],
+                         promote_args: &[String]| {
+        serde_json::json!({
+            "schema_version": 1,
+            "mode": if input.execute { "executed" } else { "dry_run" },
+            "promotion_status": promotion_status,
+            "promotion_error": promotion_error,
+            "profile": profile,
+            "fold_hours": input.fold_hours,
+            "min_fold_trades": input.min_fold_trades,
+            "coverage_policy": coverage_policy,
+            "window_minutes": input.window_minutes,
+            "delete_after_process": input.delete_after_process,
+            "atomic_parquet": input.atomic_parquet,
+            "require_full_folds": input.require_full_folds,
+            "partial_final_fold_dropped": partial_final_fold_dropped,
+            "requested_start": start.to_rfc3339(),
+            "requested_end": requested_end.to_rfc3339(),
+            "effective_end": end.to_rfc3339(),
+            "archive_preflight": archive_preflight,
+            "cache_root": cache_root.display().to_string(),
+            "out_dir": out_dir.display().to_string(),
+            "folds": fold_summaries,
+            "promotion_output": promotion_output.display().to_string(),
+            "promotion_args": promote_args,
+            "storage_policy": if input.atomic_parquet {
+                "per-fold cache is session-owned; atomic_parquet downloads one raw PMXT hour at a time and deletes only parquets downloaded by this process after replay; delete_after_process removes fold_* dirs under cache_root after report write"
+            } else {
+                "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write"
+            },
+        })
+    };
 
     for (idx, (fold_start, fold_end)) in folds.iter().copied().enumerate() {
+        let mut coverage = None;
         if input.execute {
             std::fs::create_dir_all(&reports_dir)
                 .with_context(|| format!("create {}", reports_dir.display()))?;
@@ -1827,24 +1900,58 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
                     )
                 });
             }
-            let events_seen = sweep_report_events_seen(&sweep_report)?;
-            if events_seen == 0 {
+            let fold_hours = (fold_end - fold_start).num_hours() + 1;
+            let fold_coverage = sweep_report_coverage(
+                &sweep_report,
+                fold_hours,
+                input.min_fold_target_events,
+                min_fold_top_trades,
+            )?;
+            if let Some(reason) = fold_coverage.reason.clone() {
+                let mut cache_deleted = false;
                 if input.delete_after_process && fold_cache.exists() {
                     delete_fold_cache(&cache_root, &fold_cache).with_context(|| {
                         format!(
-                            "fold {} had zero target events, then cleanup failed for {}",
+                            "fold {} was coverage-limited, then cleanup failed for {}",
                             idx + 1,
                             fold_cache.display()
                         )
                     })?;
+                    cache_deleted = true;
                 }
-                anyhow::bail!(
-                    "fold {} for {} through {} produced zero target PMXT events; treat this as data coverage failure, not strategy evidence",
+                fold_summaries.push(RollingFoldSummary {
+                    index: idx + 1,
+                    start: fold_start.to_rfc3339(),
+                    end: fold_end.to_rfc3339(),
+                    cache_dir: fold_cache.display().to_string(),
+                    hydrate_report: hydrate_report.display().to_string(),
+                    sweep_report: sweep_report.display().to_string(),
+                    hydrate_args,
+                    sweep_args,
+                    cache_deleted,
+                    coverage: Some(fold_coverage),
+                });
+                std::fs::create_dir_all(&out_dir)
+                    .with_context(|| format!("create {}", out_dir.display()))?;
+                let manifest = out_dir.join("rolling_history_manifest.json");
+                let message = format!(
+                    "fold {} for {} through {} is coverage-limited: {}; treat this as data coverage failure, not strategy evidence",
                     idx + 1,
                     fold_start.to_rfc3339(),
-                    fold_end.to_rfc3339()
+                    fold_end.to_rfc3339(),
+                    reason
                 );
+                let summary = build_summary(
+                    "coverage_limited",
+                    Some(message.clone()),
+                    &fold_summaries,
+                    &[],
+                );
+                write_json_atomic(&manifest, &summary, false)
+                    .with_context(|| format!("write {}", manifest.display()))?;
+                anyhow::bail!("{message}");
             }
+            coverage = Some(fold_coverage);
         }
 
         let mut cache_deleted = false;
@@ -1864,6 +1971,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             hydrate_args,
             sweep_args,
             cache_deleted,
+            coverage,
         });
     }
 
@@ -1929,56 +2037,32 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         promote_args.extend(["--report".to_string(), report.display().to_string()]);
     }
 
-    let build_summary = |promotion_status: &str, promotion_error: Option<String>| {
-        serde_json::json!({
-            "schema_version": 1,
-            "mode": if input.execute { "executed" } else { "dry_run" },
-            "promotion_status": promotion_status,
-            "promotion_error": promotion_error,
-            "profile": profile,
-            "fold_hours": input.fold_hours,
-            "min_fold_trades": input.min_fold_trades,
-            "window_minutes": input.window_minutes,
-            "delete_after_process": input.delete_after_process,
-            "atomic_parquet": input.atomic_parquet,
-            "require_full_folds": input.require_full_folds,
-            "partial_final_fold_dropped": partial_final_fold_dropped,
-            "requested_start": start.to_rfc3339(),
-            "requested_end": requested_end.to_rfc3339(),
-            "effective_end": end.to_rfc3339(),
-            "archive_preflight": archive_preflight,
-            "cache_root": cache_root.display().to_string(),
-            "out_dir": out_dir.display().to_string(),
-            "folds": fold_summaries,
-            "promotion_output": promotion_output.display().to_string(),
-            "promotion_args": promote_args,
-            "storage_policy": if input.atomic_parquet {
-                "per-fold cache is session-owned; atomic_parquet downloads one raw PMXT hour at a time and deletes only parquets downloaded by this process after replay; delete_after_process removes fold_* dirs under cache_root after report write"
-            } else {
-                "per-fold cache is session-owned; delete_after_process removes only fold_* dirs under cache_root after report write"
-            },
-        })
-    };
     if input.execute {
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("create {}", out_dir.display()))?;
         let manifest = out_dir.join("rolling_history_manifest.json");
-        let pending_summary = build_summary("promotion_pending", None);
+        let pending_summary =
+            build_summary("promotion_pending", None, &fold_summaries, &promote_args);
         write_json_atomic(&manifest, &pending_summary, false)
             .with_context(|| format!("write {}", manifest.display()))?;
         if let Err(err) = run_child(&exe, &promote_args) {
-            let failed_summary = build_summary("promotion_failed", Some(err.to_string()));
+            let failed_summary = build_summary(
+                "promotion_failed",
+                Some(err.to_string()),
+                &fold_summaries,
+                &promote_args,
+            );
             write_json_atomic(&manifest, &failed_summary, false)
                 .with_context(|| format!("write {}", manifest.display()))?;
             return Err(err);
         }
-        let summary = build_summary("promotion_passed", None);
+        let summary = build_summary("promotion_passed", None, &fold_summaries, &promote_args);
         write_json_atomic(&manifest, &summary, false)
             .with_context(|| format!("write {}", manifest.display()))?;
         return Ok(summary);
     }
 
-    let summary = build_summary("dry_run", None);
+    let summary = build_summary("dry_run", None, &fold_summaries, &promote_args);
     Ok(summary)
 }
 
@@ -2204,15 +2288,87 @@ fn dir_size_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
     Ok(total)
 }
 
-fn sweep_report_events_seen(path: &std::path::Path) -> anyhow::Result<u64> {
+fn sweep_report_coverage(
+    path: &std::path::Path,
+    fold_hours: i64,
+    min_target_events: u64,
+    min_top_trades: usize,
+) -> anyhow::Result<RollingFoldCoverage> {
     let report = backtest::experiment::read_report(path)
         .with_context(|| format!("read sweep report {}", path.display()))?;
-    Ok(report
+    Ok(sweep_report_coverage_from_report(
+        &report,
+        fold_hours,
+        min_target_events,
+        min_top_trades,
+    ))
+}
+
+fn sweep_report_coverage_from_report(
+    report: &backtest::experiment::ExperimentReport,
+    fold_hours: i64,
+    min_target_events: u64,
+    min_top_trades: usize,
+) -> RollingFoldCoverage {
+    let target_events = report
         .variants
         .iter()
         .map(|variant| variant.diagnostics.events_seen)
         .max()
-        .unwrap_or(0))
+        .unwrap_or(0);
+    let top_variant = report.variants.iter().max_by(|a, b| {
+        a.trades
+            .cmp(&b.trades)
+            .then_with(|| a.total_pnl.total_cmp(&b.total_pnl))
+    });
+    let top_trades = top_variant.map(|v| v.trades).unwrap_or(0);
+    let top_variant_name = top_variant.map(variant_report_name);
+    let top_variant_pnl = top_variant.map(|v| v.total_pnl);
+    let fold_hours = fold_hours.max(1) as f64;
+    let target_events_per_hour = target_events as f64 / fold_hours;
+
+    let mut reasons = Vec::new();
+    if min_target_events > 0 && target_events < min_target_events {
+        reasons.push(format!(
+            "target_events {} below minimum {}",
+            target_events, min_target_events
+        ));
+    }
+    if min_top_trades > 0 && top_trades < min_top_trades {
+        reasons.push(format!(
+            "top variant trades {} below minimum {}",
+            top_trades, min_top_trades
+        ));
+    }
+    let reason = if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
+    };
+    RollingFoldCoverage {
+        status: if reason.is_some() {
+            "coverage_limited".to_string()
+        } else {
+            "ok".to_string()
+        },
+        reason,
+        target_events,
+        target_events_per_hour,
+        top_trades,
+        top_variant: top_variant_name,
+        top_variant_pnl,
+        min_target_events,
+        min_top_trades,
+    }
+}
+
+fn variant_report_name(variant: &backtest::experiment::VariantReport) -> String {
+    variant
+        .strategy_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&variant.strategy.name)
+        .to_string()
 }
 
 fn delete_fold_cache(
@@ -5020,6 +5176,8 @@ mod replay_validation_tests {
             stop_at_first_missing_hour: false,
             require_full_folds: false,
             min_fold_trades: 20,
+            min_fold_target_events: 1,
+            min_fold_top_trades: None,
             max_cache_gb: 1.0,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
@@ -5045,6 +5203,9 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("--max-pbo")));
+        assert_eq!(summary["coverage_policy"]["min_fold_target_events"], 1);
+        assert_eq!(summary["coverage_policy"]["min_fold_top_trades"], 20);
+        assert!(summary["folds"][0]["coverage"].is_null());
         assert!(summary["folds"][0]["sweep_args"]
             .as_array()
             .unwrap()
@@ -5076,6 +5237,8 @@ mod replay_validation_tests {
             stop_at_first_missing_hour: false,
             require_full_folds: true,
             min_fold_trades: 20,
+            min_fold_target_events: 1,
+            min_fold_top_trades: None,
             max_cache_gb: 1.0,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
@@ -5086,6 +5249,40 @@ mod replay_validation_tests {
         assert_eq!(summary["effective_end"], "2026-05-24T03:00:00+00:00");
         assert_eq!(summary["partial_final_fold_dropped"], true);
         assert_eq!(summary["folds"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rolling_history_coverage_marks_sparse_fold() {
+        let report = coverage_test_report(vec![
+            coverage_test_variant("low_trades", 4, 6_631_020, 1.0),
+            coverage_test_variant("fewer_trades", 2, 6_631_020, 2.0),
+        ]);
+
+        let coverage = sweep_report_coverage_from_report(&report, 8, 10_000_000, 15);
+
+        assert_eq!(coverage.status, "coverage_limited");
+        assert_eq!(coverage.target_events, 6_631_020);
+        assert_eq!(coverage.top_trades, 4);
+        assert_eq!(coverage.top_variant.as_deref(), Some("low_trades"));
+        let reason = coverage.reason.unwrap();
+        assert!(reason.contains("target_events 6631020 below minimum 10000000"));
+        assert!(reason.contains("top variant trades 4 below minimum 15"));
+    }
+
+    #[test]
+    fn rolling_history_coverage_accepts_dense_fold() {
+        let report = coverage_test_report(vec![
+            coverage_test_variant("selected", 25, 27_000_000, 12.5),
+            coverage_test_variant("neighbor", 18, 27_000_000, 8.0),
+        ]);
+
+        let coverage = sweep_report_coverage_from_report(&report, 8, 10_000_000, 15);
+
+        assert_eq!(coverage.status, "ok");
+        assert!(coverage.reason.is_none());
+        assert_eq!(coverage.top_trades, 25);
+        assert_eq!(coverage.top_variant.as_deref(), Some("selected"));
+        assert_eq!(coverage.target_events_per_hour, 3_375_000.0);
     }
 
     #[test]
@@ -5103,5 +5300,71 @@ mod replay_validation_tests {
         std::fs::create_dir_all(&not_fold).unwrap();
         assert!(delete_fold_cache(&cache_root, &not_fold).is_err());
         assert!(not_fold.exists());
+    }
+
+    fn coverage_test_report(
+        variants: Vec<backtest::experiment::VariantReport>,
+    ) -> backtest::experiment::ExperimentReport {
+        let mut src = data::manifest::DataSourceManifest::new("pmxt_v2_archive", "order_book_l2");
+        src.complete = true;
+        src.row_count = Some(8);
+        backtest::experiment::ExperimentReport {
+            schema_version: 1,
+            generated_at: "2026-05-31T00:00:00Z".to_string(),
+            label: "coverage-test".to_string(),
+            mode: "harness-sweep".to_string(),
+            start: "2026-05-22T16:00:00Z".to_string(),
+            end: "2026-05-22T23:00:00Z".to_string(),
+            bankroll_usd: 100.0,
+            latency_ms: 50,
+            market_catalog: data::catalog::MarketCatalog::default(),
+            data_manifest: data::manifest::DataManifest::new(vec![src], Vec::new()),
+            variants,
+        }
+    }
+
+    fn coverage_test_variant(
+        name: &str,
+        trades: usize,
+        events_seen: u64,
+        total_pnl: f64,
+    ) -> backtest::experiment::VariantReport {
+        backtest::experiment::VariantReport {
+            strategy: strategy::spec::StrategySpec::new(
+                "candle_momentum",
+                "1",
+                name,
+                "position_pct=0.05",
+            ),
+            strategy_params: serde_json::json!({ "name": name }),
+            trades,
+            wins: trades,
+            losses: 0,
+            unresolved_fills: 0,
+            execution_attempts: trades,
+            fills_success: trades,
+            fills_failed: 0,
+            fill_rate: 1.0,
+            reject_reasons: std::collections::BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: backtest::resolver::BacktestDiagnostics {
+                events_seen,
+                ..backtest::resolver::BacktestDiagnostics::default()
+            },
+            win_rate: if trades > 0 { 1.0 } else { 0.0 },
+            total_pnl,
+            avg_pnl: if trades > 0 {
+                total_pnl / trades as f64
+            } else {
+                0.0
+            },
+            total_fees: 0.0,
+            sharpe_like: 0.0,
+            by_zone: std::collections::BTreeMap::new(),
+        }
     }
 }

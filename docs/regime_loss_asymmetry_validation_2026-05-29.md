@@ -476,3 +476,66 @@ production fold under the current minimum-trade evidence rule. It is useful as
 a liquidity/coverage boundary: before the dense May 23-25 period, the same
 strategy family still looks directionally profitable, but there is not enough
 per-fold trade density to count it as production-grade proof.
+
+## Sparse-Fold Coverage Gate
+
+Implemented on 2026-05-31.
+
+`strategy-builder rolling-history` now has a formal fold-coverage gate before
+robust promotion:
+
+- `--min-fold-target-events <n>`: minimum target PMXT events required in a fold;
+  default `1`, so the old zero-event guard remains active;
+- `--min-fold-top-trades <n>`: minimum trades required from the fold's top
+  variant before the fold is treated as strategy evidence; by default this uses
+  `--min-fold-trades`;
+- `0` disables either coverage threshold.
+
+If a fold fails the coverage gate, rolling-history writes a
+`rolling_history_manifest.json` with:
+
+- `promotion_status: "coverage_limited"`;
+- `coverage_policy`;
+- per-fold `coverage` with target events, target events/hour, top trades, top
+  variant, and rejection reason.
+
+It then exits before robust promotion, so a sparse archive period is classified
+as data/coverage-limited rather than mixed into strategy evidence.
+
+Smoke validation used the known sparse May 22 slice:
+
+```text
+./rust_engine/target/release/polymomentum-engine strategy-builder rolling-history \
+  --start 2026-05-22T17:00:00Z \
+  --end 2026-05-22T18:00:00Z \
+  --out-dir /private/tmp/polymomentum_sparse_gate_smoke_20260531 \
+  --fold-hours 2 \
+  --threads 2 \
+  --profile a_plus5m_causal_guard \
+  --zone-mode all \
+  --atomic-parquet \
+  --delete-after-process \
+  --max-cache-gb 1 \
+  --preflight-pmxt-hours \
+  --require-full-folds \
+  --min-fold-trades 15 \
+  --min-fold-target-events 1 \
+  --execute
+```
+
+Result:
+
+- status: `coverage_limited`;
+- target events: `0`;
+- target events/hour: `0.0`;
+- top trades: `0`;
+- reason: `target_events 0 below minimum 1; top variant trades 0 below minimum 15`;
+- raw PMXT parquets retained after run: `0`;
+- cache dir after run: `0B`.
+
+Recommended A+ broad-history command shape: keep `--min-fold-top-trades`
+implicit so it follows `--min-fold-trades`, and set
+`--min-fold-target-events` explicitly for the historical window being tested.
+For the current 5-minute BTC PMXT archive, `10,000,000` target events per 8h
+fold is a reasonable starting floor because it rejects the sparse May 22 fold
+while accepting the dense May 23-25 folds already validated.
