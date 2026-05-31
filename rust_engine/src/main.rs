@@ -89,6 +89,9 @@ enum Command {
         /// Permit downloading missing PMXT hours. Default is cache-only.
         #[arg(long, default_value_t = false)]
         allow_download: bool,
+        /// Delete raw PMXT parquet files downloaded by this live-replay after completion.
+        #[arg(long, default_value_t = false)]
+        delete_after_process: bool,
         /// Permit Gamma fetches for missing historical metadata.
         #[arg(long, default_value_t = false)]
         allow_gamma_fetch: bool,
@@ -1020,6 +1023,7 @@ async fn main() {
             latency_ms,
             session_log_dir,
             allow_download,
+            delete_after_process,
             allow_gamma_fetch,
             max_contracts,
             window_minutes,
@@ -1042,6 +1046,7 @@ async fn main() {
                 latency_ms,
                 session_log_dir.as_deref(),
                 allow_download,
+                delete_after_process,
                 allow_gamma_fetch,
                 max_contracts,
                 window_minutes,
@@ -2632,6 +2637,7 @@ async fn cmd_live_replay(
     latency_ms: u64,
     session_log_dir: Option<&str>,
     allow_download: bool,
+    delete_after_process: bool,
     allow_gamma_fetch: bool,
     max_contracts: Option<usize>,
     window_minutes: Option<f64>,
@@ -2668,6 +2674,7 @@ async fn cmd_live_replay(
         cur += ChronoDuration::hours(1);
     }
 
+    let mut parquet_cleanup = SessionOwnedParquetCleanup::new(delete_after_process);
     let cache_dir_path = cache_dir
         .map(std::path::PathBuf::from)
         .unwrap_or_else(backtest::pmxt::PMXTv2Loader::default_cache_dir);
@@ -2675,16 +2682,23 @@ async fn cmd_live_replay(
     for &h in &hours {
         if allow_download {
             eprintln!("live-replay: ensuring PMXT archive hour {h}");
-            if let Err(e) = loader.download_hour(h, false).await {
-                eprintln!("download {h} failed: {e}");
-                std::process::exit(1);
+            match loader.download_hour_with_status(h, false).await {
+                Ok((path, downloaded)) => {
+                    if downloaded {
+                        parquet_cleanup.push(path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("download {h} failed: {e}");
+                    live_replay_exit(1, &mut parquet_cleanup);
+                }
             }
         } else if !loader.is_cached(h) {
             eprintln!(
                 "PMXT hour {h} is not cached in {}; pass --allow-download to fetch it",
                 cache_dir_path.display()
             );
-            std::process::exit(1);
+            live_replay_exit(1, &mut parquet_cleanup);
         }
     }
 
@@ -2708,7 +2722,7 @@ async fn cmd_live_replay(
             Ok(markets) => markets,
             Err(e) => {
                 eprintln!("Gamma historical metadata lookup failed: {e}");
-                std::process::exit(1);
+                live_replay_exit(1, &mut parquet_cleanup);
             }
         };
         let fetched = new_markets.len();
@@ -2749,7 +2763,7 @@ async fn cmd_live_replay(
                     "write Gamma cache {} failed: {e}",
                     gamma_cache_path.display()
                 );
-                std::process::exit(1);
+                live_replay_exit(1, &mut parquet_cleanup);
             }
         }
     } else {
@@ -2763,7 +2777,7 @@ async fn cmd_live_replay(
             "live-replay has no cached Gamma metadata at {}; pass --allow-gamma-fetch to build it",
             gamma_cache_path.display()
         );
-        std::process::exit(1);
+        live_replay_exit(1, &mut parquet_cleanup);
     }
 
     let markets: Vec<data::models::Market> = cached_markets.values().cloned().collect();
@@ -2790,7 +2804,7 @@ async fn cmd_live_replay(
             "live-replay found no BTC candle contracts in [{start}, {}]",
             end.unwrap_or(start)
         );
-        std::process::exit(1);
+        live_replay_exit(1, &mut parquet_cleanup);
     }
     contracts.sort_by(|a, b| {
         a.end_date
@@ -2802,7 +2816,7 @@ async fn cmd_live_replay(
     }
     if contracts.is_empty() {
         eprintln!("live-replay --max-contracts must be greater than zero");
-        std::process::exit(2);
+        live_replay_exit(2, &mut parquet_cleanup);
     }
     eprintln!("live-replay: BTC candle contracts={}", contracts.len());
     let universe = backtest::harness::CandleUniverse { contracts };
@@ -2816,7 +2830,7 @@ async fn cmd_live_replay(
     if let Some(path) = btc_csv {
         if let Err(e) = btc.load_csv(path) {
             eprintln!("BTC CSV load failed: {e}");
-            std::process::exit(1);
+            live_replay_exit(1, &mut parquet_cleanup);
         }
     } else {
         let pad_ms = 3_600_000;
@@ -2834,16 +2848,17 @@ async fn cmd_live_replay(
                     .await
                 {
                     eprintln!("Binance fetch failed: {e}");
-                    std::process::exit(1);
+                    live_replay_exit(1, &mut parquet_cleanup);
                 }
             }
         }
     }
-    ensure_btc_history_covers(
+    ensure_btc_history_covers_or_cleanup(
         "live-replay",
         &btc,
         btc_required_start_ms,
         btc_required_end_ms,
+        &mut parquet_cleanup,
     );
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
@@ -2876,7 +2891,7 @@ async fn cmd_live_replay(
             Ok(strategy) => strategy,
             Err(e) => {
                 eprintln!("live-replay strategy load failed: {e:#}");
-                std::process::exit(2);
+                live_replay_exit(2, &mut parquet_cleanup);
             }
         },
     };
@@ -2885,18 +2900,75 @@ async fn cmd_live_replay(
             if let Some(path) = report_json {
                 if let Err(e) = write_json_atomic(path, &report, true) {
                     eprintln!("write live-replay report {path}: {e}");
-                    std::process::exit(1);
+                    live_replay_exit(1, &mut parquet_cleanup);
                 }
             }
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("serialize live replay report")
             );
+            parquet_cleanup.cleanup_best_effort();
         }
         Err(e) => {
             eprintln!("live-replay failed: {e:?}");
-            std::process::exit(1);
+            live_replay_exit(1, &mut parquet_cleanup);
         }
+    }
+}
+
+struct SessionOwnedParquetCleanup {
+    enabled: bool,
+    paths: Vec<std::path::PathBuf>,
+}
+
+impl SessionOwnedParquetCleanup {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            paths: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, path: std::path::PathBuf) {
+        if self.enabled {
+            self.paths.push(path);
+        }
+    }
+
+    fn cleanup_best_effort(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        for path in self.paths.drain(..) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => eprintln!("live-replay: deleted downloaded parquet {}", path.display()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => eprintln!(
+                    "live-replay: failed to delete downloaded parquet {}: {err}",
+                    path.display()
+                ),
+            }
+        }
+    }
+}
+
+fn live_replay_exit(code: i32, cleanup: &mut SessionOwnedParquetCleanup) -> ! {
+    cleanup.cleanup_best_effort();
+    std::process::exit(code);
+}
+
+fn ensure_btc_history_covers_or_cleanup(
+    label: &str,
+    btc: &backtest::btc_history::BTCHistory,
+    required_start_ms: i64,
+    required_end_ms: i64,
+    cleanup: &mut SessionOwnedParquetCleanup,
+) {
+    if let Some(message) =
+        btc_history_coverage_error(label, btc, required_start_ms, required_end_ms)
+    {
+        eprintln!("{message}");
+        live_replay_exit(1, cleanup);
     }
 }
 
@@ -3812,22 +3884,38 @@ fn ensure_btc_history_covers(
     required_start_ms: i64,
     required_end_ms: i64,
 ) {
-    if btc.n_ticks() < 50 {
-        eprintln!("{label}: not enough BTC ticks ({} < 50)", btc.n_ticks());
+    if let Some(message) =
+        btc_history_coverage_error(label, btc, required_start_ms, required_end_ms)
+    {
+        eprintln!("{message}");
         std::process::exit(1);
+    }
+}
+
+fn btc_history_coverage_error(
+    label: &str,
+    btc: &backtest::btc_history::BTCHistory,
+    required_start_ms: i64,
+    required_end_ms: i64,
+) -> Option<String> {
+    if btc.n_ticks() < 50 {
+        return Some(format!(
+            "{label}: not enough BTC ticks ({} < 50)",
+            btc.n_ticks()
+        ));
     }
     let first = btc.first_timestamp_ms();
     let last = btc.last_timestamp_ms();
     if first > required_start_ms + 1_000 || last < required_end_ms {
-        eprintln!(
+        return Some(format!(
             "{label}: BTC tape covers {} → {}, but strategy window needs {} → {}",
             fmt_utc_ms(first),
             fmt_utc_ms(last),
             fmt_utc_ms(required_start_ms),
             fmt_utc_ms(required_end_ms),
-        );
-        std::process::exit(1);
+        ));
     }
+    None
 }
 
 fn fmt_utc_ms(ts_ms: i64) -> String {

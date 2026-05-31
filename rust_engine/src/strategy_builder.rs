@@ -679,12 +679,18 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         ),
     ));
 
+    let mut replay_oracle_samples_total = 0_u64;
+    let mut replay_resolved_total = 0_u64;
+    let mut replay_shadow_total = 0_u64;
     for session in &input.replay_sessions {
         match diagnostics::analyze_session(session) {
             Ok(diag) => {
                 let shadow = *diag.event_counts.get("shadow.resolved").unwrap_or(&0);
                 let resolved = diag.resolutions.resolved;
                 let oracle_samples = shadow.max(resolved);
+                replay_oracle_samples_total += oracle_samples;
+                replay_resolved_total += resolved;
+                replay_shadow_total += shadow;
                 checks.push(check(
                     "replay.session",
                     if diag.ok {
@@ -779,22 +785,6 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
                         format!("{session}: {e:#}"),
                     )),
                 }
-                checks.push(check(
-                    "replay.a_plus_sample",
-                    if oracle_samples >= input.a_plus_min_shadow_resolutions {
-                        StrategyBuilderCheckStatus::Ok
-                    } else {
-                        StrategyBuilderCheckStatus::Warn
-                    },
-                    format!(
-                        "{} samples={} resolved={} shadow={} a_plus_min_samples={}",
-                        session,
-                        oracle_samples,
-                        resolved,
-                        shadow,
-                        input.a_plus_min_shadow_resolutions
-                    ),
-                ));
             }
             Err(e) => checks.push(check(
                 "replay.session",
@@ -809,6 +799,23 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
             "replay.session",
             StrategyBuilderCheckStatus::Warn,
             "no live-replay or bounded integration session supplied".to_string(),
+        ));
+    } else {
+        checks.push(check(
+            "replay.a_plus_sample",
+            if replay_oracle_samples_total >= input.a_plus_min_shadow_resolutions {
+                StrategyBuilderCheckStatus::Ok
+            } else {
+                StrategyBuilderCheckStatus::Warn
+            },
+            format!(
+                "sessions={} samples={} resolved={} shadow={} a_plus_min_samples={}",
+                input.replay_sessions.len(),
+                replay_oracle_samples_total,
+                replay_resolved_total,
+                replay_shadow_total,
+                input.a_plus_min_shadow_resolutions
+            ),
         ));
     }
 
@@ -1008,44 +1015,63 @@ fn audit_adaptive_drift(
     } else {
         artifact.total_pnl / artifact.trades as f64
     };
+    let mut session_count = 0usize;
+    let mut wins = 0_u64;
+    let mut losses = 0_u64;
+    let mut total_pnl = 0.0;
+    let mut breaker_tripped = false;
+    let mut system_errors = 0_u64;
+    let mut failed_sessions = 0usize;
     for session in &input.replay_sessions {
         match diagnostics::analyze_session(session) {
             Ok(diag) => {
-                let resolved = diag.resolutions.wins + diag.resolutions.losses;
-                let (status, reason) = classify_adaptive_drift(
-                    artifact.win_rate,
-                    baseline_avg_pnl,
-                    diag.resolutions.wins,
-                    diag.resolutions.losses,
-                    diag.resolutions.total_pnl,
-                    input.min_shadow_resolutions,
-                    input.min_win_rate,
-                    diag.risk.breaker_tripped,
-                    diag.system.errors,
-                );
+                session_count += 1;
+                wins += diag.resolutions.wins;
+                losses += diag.resolutions.losses;
+                total_pnl += diag.resolutions.total_pnl;
+                breaker_tripped |= diag.risk.breaker_tripped;
+                system_errors += diag.system.errors;
+            }
+            Err(e) => {
+                failed_sessions += 1;
                 checks.push(check(
                     "adaptive.drift",
-                    status,
-                    format!(
-                        "{} baseline_wr={:.3} baseline_avg_pnl={:.4} resolved={} wins={} losses={} pnl={:.2}; {}",
-                        session,
-                        artifact.win_rate,
-                        baseline_avg_pnl,
-                        resolved,
-                        diag.resolutions.wins,
-                        diag.resolutions.losses,
-                        diag.resolutions.total_pnl,
-                        reason
-                    ),
+                    StrategyBuilderCheckStatus::Fail,
+                    format!("{session}: {e:#}"),
                 ));
             }
-            Err(e) => checks.push(check(
-                "adaptive.drift",
-                StrategyBuilderCheckStatus::Fail,
-                format!("{session}: {e:#}"),
-            )),
         }
     }
+    if failed_sessions > 0 {
+        return;
+    }
+    let resolved = wins + losses;
+    let (status, reason) = classify_adaptive_drift(
+        artifact.win_rate,
+        baseline_avg_pnl,
+        wins,
+        losses,
+        total_pnl,
+        input.min_shadow_resolutions,
+        input.min_win_rate,
+        breaker_tripped,
+        system_errors,
+    );
+    checks.push(check(
+        "adaptive.drift",
+        status,
+        format!(
+            "sessions={} baseline_wr={:.3} baseline_avg_pnl={:.4} resolved={} wins={} losses={} pnl={:.2}; {}",
+            session_count,
+            artifact.win_rate,
+            baseline_avg_pnl,
+            resolved,
+            wins,
+            losses,
+            total_pnl,
+            reason
+        ),
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
