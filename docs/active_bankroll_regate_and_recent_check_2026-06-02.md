@@ -136,9 +136,86 @@ loop. The retained scratch roots contain compact reports/manifests only:
 /private/tmp/polymomentum_recent_gate_20260602_may25T08
 ```
 
-## Next Gate
+## Live-Replay Parity Gate
 
-Before canary/live, replay the regenerated active-bankroll artifact through
-`live-replay` across all seven folds and run diagnostics/causality checks. The
-previous May 31 live-replay evidence used the same strategy hash, but the PnL
-accounting artifact has changed.
+Completed after the active-bankroll regate. All seven promotion folds were
+replayed through `live-replay` with the regenerated promotion artifact and
+`--settlement-alignment-ready`.
+
+Persisted replay evidence:
+
+```text
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may23T00_07_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may23T08_15_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may23T16_23_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may24T00_07_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may24T08_15_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may24T16_23_20260602.json
+deploy/promotions/evidence/live_replay_a_plus5m_guard_active_bankroll_may25T00_07_20260602.json
+```
+
+Aggregate replay result:
+
+- events processed: `172,460,260`
+- orders submitted: `157`
+- fills successful: `157`
+- fills failed: `0`
+- oracle checks: `157`
+- oracle disagreements: `0`
+- total cost: `851.46210`
+- total fees: `12.21879`
+- total PnL: `+81.20911`
+
+The aggregate replay totals match the regenerated harness reports exactly:
+
+| Metric | Regenerated Harness | Live-Replay | Delta |
+| --- | ---: | ---: | ---: |
+| Trades / orders | 157 | 157 | 0 |
+| PnL | +81.20911 | +81.20911 | 0.00000 |
+| Fees | 12.21879 | 12.21879 | 0.00000 |
+
+Per-fold replay PnL also matched the selected harness variant exactly:
+
+| Fold | Window | Orders/Fills | Replay PnL | Delta vs Harness |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | 2026-05-23 00-07Z | 16 / 16 | +15.58997 | 0.00000 |
+| 2 | 2026-05-23 08-15Z | 15 / 15 | +20.97455 | 0.00000 |
+| 3 | 2026-05-23 16-23Z | 28 / 28 | +7.01139 | 0.00000 |
+| 4 | 2026-05-24 00-07Z | 28 / 28 | +8.71370 | 0.00000 |
+| 5 | 2026-05-24 08-15Z | 27 / 27 | +17.33278 | 0.00000 |
+| 6 | 2026-05-24 16-23Z | 25 / 25 | +10.10251 | 0.00000 |
+| 7 | 2026-05-25 00-07Z | 18 / 18 | +1.48421 | 0.00000 |
+
+Diagnostics:
+
+- session diagnostics: `ok=true` on all seven sessions
+- malformed lines: `0`
+- system errors / fatal errors: `0 / 0`
+- order rejects: `0`
+- passive rejects: `0`
+- breaker trips: `0`
+- causality checks: `ok=true` on all seven sessions
+- causality timing violations: `0`
+- missing timing records for fills: `0`
+
+Settlement-basis warning:
+
+- four folds had near-threshold resolutions
+- total near-threshold resolutions: `10`
+- minimum observed absolute BTC move: `$0.34`
+- oracle disagreements still remained `0 / 157`
+
+Interpretation: offline order-path parity is restored for the regenerated
+active-bankroll artifact. The exact harness/live-replay match means the
+strategy, sizing, fees, fills, realized PnL, and replayed order lifecycle are
+now aligned across the backtest and live-replay surfaces. The near-threshold
+settlement warnings are not a parity failure, but they remain a production risk
+control input for bounded canary sizing.
+
+## Updated Gate Status
+
+Backtest/live-replay strategy validation is complete for this artifact. Paper
+mode is still not needed for strategy proof; it should only be used for
+deployment plumbing that offline replay cannot validate: credentials, wallet
+state, allowances, CLOB v2 ack/reject/fill behavior, process supervision, and
+VPS alerts.
