@@ -265,6 +265,25 @@ fn pending_requires_realization(entry: &OraclePending) -> bool {
     !entry.shadow && !entry.pnl_recorded
 }
 
+fn permanent_live_order_reject_reason(message: &str) -> Option<&'static str> {
+    let msg = message.to_ascii_lowercase();
+    if msg.contains("not enough balance")
+        || msg.contains("balance is not enough")
+        || msg.contains("insufficient balance")
+        || msg.contains("allowance")
+    {
+        Some("live_balance_allowance_reject")
+    } else if msg.contains("post-only") && (msg.contains("cross") || msg.contains("match")) {
+        Some("live_post_only_cross_reject")
+    } else if msg.contains("marketable") && msg.contains("min size") {
+        Some("live_marketable_min_size_reject")
+    } else if msg.contains("invalid price") || msg.contains("tick") {
+        Some("live_order_shape_reject")
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeStrategy {
     strategy_spec: StrategySpec,
@@ -1094,12 +1113,18 @@ impl Pipeline {
                         self.record_live_fill_position(&order, ts, trade.size(), trade.price())
                             .await?;
                     } else {
+                        self.live_pending_positions
+                            .lock()
+                            .await
+                            .remove(&order.intent.intent_id);
                         self.monitor.record_order_rejected(
                             &trade.asset_id,
                             "clob trade failed",
                             trade.price(),
                             trade.size(),
                         );
+                        self.trip_breaker("live_trade_failed").await;
+                        self.stop.notify_one();
                     }
                     return Ok(());
                 }
@@ -2128,6 +2153,10 @@ impl Pipeline {
                             limit_price,
                             shares,
                         );
+                        if let Some(reason) = permanent_live_order_reject_reason(truncated) {
+                            self.trip_breaker(reason).await;
+                            self.stop.notify_one();
+                        }
                         tracing::warn!(error = %truncated, "candle.trade.live.failed");
                     }
                 }
@@ -3308,6 +3337,31 @@ mod tests {
         assert_eq!(btc_updown_slug_step_seconds(5.0), Some(300));
         assert_eq!(btc_updown_slug_step_seconds(15.0), Some(900));
         assert_eq!(btc_updown_slug_step_seconds(60.0), None);
+    }
+
+    #[test]
+    fn permanent_live_order_rejects_are_fail_closed() {
+        assert_eq!(
+            permanent_live_order_reject_reason(
+                "400 Bad Request: {\"error\":\"not enough balance / allowance\"}"
+            ),
+            Some("live_balance_allowance_reject")
+        );
+        assert_eq!(
+            permanent_live_order_reject_reason("invalid post-only order: order crosses book"),
+            Some("live_post_only_cross_reject")
+        );
+        assert_eq!(
+            permanent_live_order_reject_reason(
+                "invalid amount for a marketable BUY order ($0.05), min size: $1"
+            ),
+            Some("live_marketable_min_size_reject")
+        );
+        assert_eq!(
+            permanent_live_order_reject_reason("invalid price: not on tick size"),
+            Some("live_order_shape_reject")
+        );
+        assert_eq!(permanent_live_order_reject_reason("network timeout"), None);
     }
 
     #[test]

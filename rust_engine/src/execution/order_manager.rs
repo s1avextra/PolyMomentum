@@ -157,14 +157,22 @@ impl OrderManager {
             .orders
             .get_mut(intent_id)
             .ok_or_else(|| format!("unknown intent_id {intent_id}"))?;
-        if order.state.is_terminal() && order.state != OrderState::Filled {
-            return Err(format!("cannot fill terminal order in {}", order.state.as_str()));
+        if !matches!(order.state, OrderState::Acked | OrderState::PartiallyFilled) {
+            return Err(format!("cannot fill order in {}", order.state.as_str()));
+        }
+        let remaining_size = order.requested_size - order.filled_size;
+        if remaining_size <= f64::EPSILON {
+            return Err("order already fully filled".to_string());
+        }
+        if fill_size - remaining_size > 1e-9 {
+            return Err(format!(
+                "fill_size {} exceeds remaining_size {}",
+                fill_size, remaining_size
+            ));
         }
         let prev_notional = order.avg_fill_price * order.filled_size;
-        let new_filled = (order.filled_size + fill_size).min(order.requested_size);
-        let applied_size = new_filled - order.filled_size;
-        let new_notional = prev_notional + applied_size * fill_price;
-        order.filled_size = new_filled;
+        let new_notional = prev_notional + fill_size * fill_price;
+        order.filled_size += fill_size;
         order.avg_fill_price = if order.filled_size > 0.0 {
             new_notional / order.filled_size
         } else {
@@ -285,10 +293,38 @@ impl OrderManager {
                 next.as_str()
             ));
         }
+        if !transition_allowed(order.state, next) {
+            return Err(format!(
+                "illegal order transition {} -> {}",
+                order.state.as_str(),
+                next.as_str()
+            ));
+        }
         order.state = next;
         order.updated_ts = ts;
         Ok(order)
     }
+}
+
+fn transition_allowed(current: OrderState, next: OrderState) -> bool {
+    use OrderState::*;
+    matches!(
+        (current, next),
+        (IntentCreated, RiskAccepted)
+            | (IntentCreated, Rejected)
+            | (RiskAccepted, Submitted)
+            | (RiskAccepted, Rejected)
+            | (RiskAccepted, Canceled)
+            | (Submitted, Acked)
+            | (Submitted, Rejected)
+            | (Submitted, Canceled)
+            | (Submitted, Expired)
+            | (Acked, Rejected)
+            | (Acked, Canceled)
+            | (Acked, Expired)
+            | (PartiallyFilled, Canceled)
+            | (PartiallyFilled, Expired)
+    )
 }
 
 #[cfg(test)]
@@ -342,6 +378,29 @@ mod tests {
     }
 
     #[test]
+    fn fill_requires_ack_and_cannot_overfill_or_duplicate() {
+        let mut manager = OrderManager::new();
+        let intent = intent(10.0);
+        let id = intent.intent_id.clone();
+        manager.create_intent(intent, 1.0).unwrap();
+        manager.risk_accept(&id, 1.1).unwrap();
+        manager
+            .submit(&id, Some("paper-1".to_string()), 1.2)
+            .unwrap();
+
+        let err = manager.fill(&id, 1.0, 0.5, 0.0, 1.25).unwrap_err();
+        assert!(err.contains("submitted"));
+
+        manager.ack(&id, Some("paper-1".to_string()), 1.3).unwrap();
+        let err = manager.fill(&id, 11.0, 0.5, 0.0, 1.35).unwrap_err();
+        assert!(err.contains("exceeds remaining_size"));
+
+        manager.fill(&id, 10.0, 0.5, 0.0, 1.4).unwrap();
+        let err = manager.fill(&id, 1.0, 0.5, 0.0, 1.5).unwrap_err();
+        assert!(err.contains("filled"));
+    }
+
+    #[test]
     fn reject_is_terminal() {
         let mut manager = OrderManager::new();
         let intent = intent(10.0);
@@ -350,6 +409,26 @@ mod tests {
         manager.reject(&id, "no liquidity", 1.1).unwrap();
         let err = manager.risk_accept(&id, 1.2).unwrap_err();
         assert!(err.contains("terminal"));
+    }
+
+    #[test]
+    fn illegal_lifecycle_transitions_are_rejected() {
+        let mut manager = OrderManager::new();
+        let intent = intent(10.0);
+        let id = intent.intent_id.clone();
+        manager.create_intent(intent, 1.0).unwrap();
+
+        let err = manager
+            .submit(&id, Some("paper-1".to_string()), 1.1)
+            .unwrap_err();
+        assert!(err.contains("illegal order transition"));
+
+        manager.risk_accept(&id, 1.2).unwrap();
+        manager
+            .submit(&id, Some("paper-1".to_string()), 1.3)
+            .unwrap();
+        let err = manager.risk_accept(&id, 1.4).unwrap_err();
+        assert!(err.contains("illegal order transition"));
     }
 
     #[test]
