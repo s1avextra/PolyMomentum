@@ -751,6 +751,9 @@ enum ExperimentCommand {
         /// Maximum estimated probability of backtest overfitting for the searched family.
         #[arg(long, default_value_t = 0.50)]
         max_pbo: f64,
+        /// Minimum median out-of-sample percentile across combinatorial purged splits.
+        #[arg(long, default_value_t = 0.0)]
+        min_median_oos_percentile: f64,
         /// Minimum selected-variant PnL in its worst window.
         #[arg(long, default_value_t = 0.0)]
         min_worst_window_pnl: f64,
@@ -976,6 +979,9 @@ enum StrategyBuilderCommand {
         /// Maximum PBO passed to robust-promote.
         #[arg(long, default_value_t = 0.50)]
         max_pbo: f64,
+        /// Minimum median OOS percentile passed to robust-promote.
+        #[arg(long, default_value_t = 0.80)]
+        min_median_oos_percentile: f64,
     },
 }
 
@@ -1482,6 +1488,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             max_cache_gb,
             min_neighbor_positive_rate,
             max_pbo,
+            min_median_oos_percentile,
         } => {
             let input = RollingHistoryInput {
                 start,
@@ -1510,6 +1517,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 max_cache_gb,
                 min_neighbor_positive_rate,
                 max_pbo,
+                min_median_oos_percentile,
             };
             match run_rolling_history(input).await {
                 Ok(summary) => println!(
@@ -1553,6 +1561,7 @@ struct RollingHistoryInput {
     max_cache_gb: f64,
     min_neighbor_positive_rate: f64,
     max_pbo: f64,
+    min_median_oos_percentile: f64,
     atomic_parquet: bool,
 }
 
@@ -2025,6 +2034,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         input.min_neighbor_positive_rate.to_string(),
         "--max-pbo".to_string(),
         input.max_pbo.to_string(),
+        "--min-median-oos-percentile".to_string(),
+        input.min_median_oos_percentile.to_string(),
         "--min-worst-window-pnl".to_string(),
         "0".to_string(),
         "--min-profit-factor".to_string(),
@@ -3333,6 +3344,7 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_neighbor_count,
             min_neighbor_positive_rate,
             max_pbo,
+            min_median_oos_percentile,
             min_worst_window_pnl,
             min_robust_score,
             min_profit_factor,
@@ -3378,6 +3390,7 @@ fn cmd_experiment(command: ExperimentCommand) {
                 min_neighbor_count,
                 min_neighbor_positive_rate,
                 max_pbo,
+                min_median_oos_percentile,
                 min_worst_window_pnl,
                 min_robust_score,
                 min_profit_factor,
@@ -5270,6 +5283,7 @@ mod replay_validation_tests {
             max_cache_gb: 1.0,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
+            min_median_oos_percentile: 0.80,
         })
         .await
         .unwrap();
@@ -5292,6 +5306,14 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("--max-pbo")));
+        assert!(summary["promotion_args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(
+                |pair| pair[0].as_str() == Some("--min-median-oos-percentile")
+                    && pair[1].as_str() == Some("0.8")
+            ));
         assert_eq!(summary["coverage_policy"]["min_fold_target_events"], 1);
         assert_eq!(summary["coverage_policy"]["min_fold_top_trades"], 20);
         assert!(summary["folds"][0]["coverage"].is_null());
@@ -5331,6 +5353,7 @@ mod replay_validation_tests {
             max_cache_gb: 1.0,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
+            min_median_oos_percentile: 0.80,
         })
         .await
         .unwrap();

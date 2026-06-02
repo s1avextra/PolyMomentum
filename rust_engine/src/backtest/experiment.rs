@@ -130,6 +130,8 @@ pub struct RobustPromotionGate {
     #[serde(default = "default_max_pbo")]
     pub max_pbo: f64,
     #[serde(default)]
+    pub min_median_oos_percentile: f64,
+    #[serde(default)]
     pub min_worst_window_pnl: f64,
     #[serde(default)]
     pub min_robust_score: f64,
@@ -183,6 +185,7 @@ impl Default for RobustPromotionGate {
             min_neighbor_count: default_min_neighbor_count(),
             min_neighbor_positive_rate: default_min_neighbor_positive_rate(),
             max_pbo: default_max_pbo(),
+            min_median_oos_percentile: 0.0,
             min_worst_window_pnl: 0.0,
             min_robust_score: 0.0,
             min_profit_factor: 0.0,
@@ -596,6 +599,16 @@ impl PromotionArtifact {
                 "robust promotion rejected: PBO {:.4} above maximum {:.4}",
                 pbo.pbo,
                 robust_gate.max_pbo
+            );
+        }
+        if pbo.splits > 0
+            && robust_gate.min_median_oos_percentile > 0.0
+            && pbo.median_oos_percentile < robust_gate.min_median_oos_percentile
+        {
+            bail!(
+                "robust promotion rejected: median OOS percentile {:.4} below minimum {:.4}",
+                pbo.median_oos_percentile,
+                robust_gate.min_median_oos_percentile
             );
         }
 
@@ -2479,6 +2492,7 @@ mod tests {
                 min_neighbor_count: 2,
                 min_neighbor_positive_rate: 1.0,
                 max_pbo: 1.0,
+                min_median_oos_percentile: 0.0,
                 min_worst_window_pnl: 5.0,
                 min_robust_score: 0.0,
                 min_profit_factor: 0.0,
@@ -2510,6 +2524,40 @@ mod tests {
             .risk_notes
             .iter()
             .any(|note| note.contains("PBO estimate")));
+
+        let err = PromotionArtifact::from_reports_robust(
+            &reports,
+            PromotionGate {
+                min_trades: 90,
+                min_zone_count: 1,
+                max_zone_trade_share: 1.0,
+                max_passive_failed_fills: 200,
+                min_fill_rate: 0.50,
+                ..PromotionGate::default()
+            },
+            MultiReportPromotionGate {
+                min_reports: 3,
+                min_profitable_reports: 3,
+                min_daily_trades: 30,
+                min_daily_pnl: 0.0,
+                max_daily_loss: 0.0,
+            },
+            RobustPromotionGate {
+                min_neighbor_count: 2,
+                min_neighbor_positive_rate: 1.0,
+                max_pbo: 1.0,
+                min_median_oos_percentile: 1.01,
+                min_worst_window_pnl: 5.0,
+                min_robust_score: 0.0,
+                min_profit_factor: 0.0,
+                min_payoff_ratio: 0.0,
+                max_worst_loss_to_avg_win: 0.0,
+                min_causal_bucket_trades: 0,
+                min_causal_bucket_pnl: 0.0,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("median OOS percentile"));
     }
 
     #[test]
