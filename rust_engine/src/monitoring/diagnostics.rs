@@ -82,8 +82,12 @@ pub struct OrderDiagnostics {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResolutionDiagnostics {
     pub resolved: u64,
+    pub realized: u64,
+    pub provisional: u64,
     pub wins: u64,
     pub losses: u64,
+    pub realized_wins: u64,
+    pub realized_losses: u64,
     pub total_pnl: f64,
     pub near_threshold: u64,
     pub min_abs_btc_move: Option<f64>,
@@ -112,6 +116,8 @@ pub struct OracleDiagnostics {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RiskDiagnostics {
     pub snapshots: u64,
+    pub first_starting_bankroll: Option<f64>,
+    pub last_starting_bankroll: Option<f64>,
     pub first_bankroll: Option<f64>,
     pub last_bankroll: Option<f64>,
     pub first_realized_pnl: Option<f64>,
@@ -213,6 +219,7 @@ pub fn analyze_session(path: impl AsRef<Path>) -> Result<SessionDiagnostics> {
             ("order", "filled") => record_order_filled(&mut out, &v),
             ("order", "rejected") => record_order_rejected(&mut out, &v),
             ("resolution", "resolved") => record_resolution(&mut out, &v),
+            ("resolution", "realized") => record_realized_resolution(&mut out, &v),
             ("oracle", "resolution") => record_oracle_resolution(&mut out, &v),
             ("oracle", "correction") => record_oracle_correction(&mut out, &v),
             ("risk", "state") => record_risk_state(&mut out, &v),
@@ -471,12 +478,26 @@ fn record_order_rejected(out: &mut SessionDiagnostics, v: &Value) {
 
 fn record_resolution(out: &mut SessionDiagnostics, v: &Value) {
     out.resolutions.resolved += 1;
+    let realized = v.get("realized").and_then(|x| x.as_bool()).unwrap_or(true);
+    if realized {
+        out.resolutions.realized += 1;
+    } else {
+        out.resolutions.provisional += 1;
+    }
     if v.get("won").and_then(|x| x.as_bool()).unwrap_or(false) {
         out.resolutions.wins += 1;
+        if realized {
+            out.resolutions.realized_wins += 1;
+        }
     } else {
         out.resolutions.losses += 1;
+        if realized {
+            out.resolutions.realized_losses += 1;
+        }
     }
-    out.resolutions.total_pnl += v.get("pnl").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    if realized {
+        out.resolutions.total_pnl += v.get("pnl").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    }
     if let Some(btc_move) = v.get("btc_move").and_then(|x| x.as_f64()) {
         let abs_move = btc_move.abs();
         out.resolutions.min_abs_btc_move = Some(
@@ -489,6 +510,16 @@ fn record_resolution(out: &mut SessionDiagnostics, v: &Value) {
             out.resolutions.near_threshold += 1;
         }
     }
+}
+
+fn record_realized_resolution(out: &mut SessionDiagnostics, v: &Value) {
+    out.resolutions.realized += 1;
+    if v.get("won").and_then(|x| x.as_bool()).unwrap_or(false) {
+        out.resolutions.realized_wins += 1;
+    } else {
+        out.resolutions.realized_losses += 1;
+    }
+    out.resolutions.total_pnl += v.get("pnl").and_then(|x| x.as_f64()).unwrap_or(0.0);
 }
 
 fn record_oracle_resolution(out: &mut SessionDiagnostics, v: &Value) {
@@ -585,6 +616,7 @@ fn record_oracle_correction(out: &mut SessionDiagnostics, v: &Value) {
 
 fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
     out.risk.snapshots += 1;
+    let starting_bankroll = v.get("starting_bankroll").and_then(|x| x.as_f64());
     let bankroll = v.get("bankroll").and_then(|x| x.as_f64());
     let realized_pnl = v.get("realized_pnl").and_then(|x| x.as_f64());
     let wins = v.get("wins").and_then(|x| x.as_u64());
@@ -592,11 +624,13 @@ fn record_risk_state(out: &mut SessionDiagnostics, v: &Value) {
     let positions = v.get("positions").and_then(|x| x.as_u64()).unwrap_or(0);
 
     if out.risk.first_bankroll.is_none() {
+        out.risk.first_starting_bankroll = starting_bankroll;
         out.risk.first_bankroll = bankroll;
         out.risk.first_realized_pnl = realized_pnl;
         out.risk.first_wins = wins;
         out.risk.first_losses = losses;
     }
+    out.risk.last_starting_bankroll = starting_bankroll;
     out.risk.last_bankroll = bankroll;
     out.risk.last_realized_pnl = realized_pnl;
     out.risk.last_wins = wins;

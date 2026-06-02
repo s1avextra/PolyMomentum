@@ -262,6 +262,8 @@ impl SessionMonitor {
         entry_price: f64,
         open_btc: f64,
         close_btc: f64,
+        source: &str,
+        realized: bool,
     ) {
         self.write_event(
             "resolution",
@@ -276,6 +278,29 @@ impl SessionMonitor {
                 "open_btc": round_n(open_btc, 2),
                 "close_btc": round_n(close_btc, 2),
                 "btc_move": round_n(close_btc - open_btc, 2),
+                "source": source,
+                "realized": realized,
+            }),
+        );
+    }
+
+    pub fn record_realized_resolution(
+        &self,
+        contract_id: &str,
+        actual: &str,
+        won: bool,
+        pnl: f64,
+        source: &str,
+    ) {
+        self.write_event(
+            "resolution",
+            "realized",
+            json!({
+                "cid": short(contract_id, 16),
+                "actual": actual,
+                "won": won,
+                "pnl": round_n(pnl, 4),
+                "source": source,
             }),
         );
     }
@@ -364,6 +389,7 @@ impl SessionMonitor {
     #[allow(clippy::too_many_arguments)]
     pub fn record_risk_state(
         &self,
+        starting_bankroll: f64,
         bankroll: f64,
         exposure: f64,
         available: f64,
@@ -377,6 +403,7 @@ impl SessionMonitor {
             "risk",
             "state",
             json!({
+                "starting_bankroll": round_n(starting_bankroll, 2),
                 "bankroll": round_n(bankroll, 2),
                 "exposure": round_n(exposure, 2),
                 "available": round_n(available, 2),
@@ -623,6 +650,7 @@ pub struct OrderFilled {
     pub requested: f64,
     pub fill_pct: f64,
     pub fill_price: f64,
+    pub cost: f64,
     pub limit_price: f64,
     pub slippage: f64,
     pub slippage_bps: f64,

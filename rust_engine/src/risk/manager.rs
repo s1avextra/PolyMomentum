@@ -50,6 +50,7 @@ pub struct RiskConfig {
     pub max_total_exposure_override: f64,
     pub max_per_market_ratio: f64,
     pub max_per_market_override: f64,
+    pub actualize_on_open: bool,
 }
 
 impl Default for RiskConfig {
@@ -60,6 +61,7 @@ impl Default for RiskConfig {
             max_total_exposure_override: 80.0,
             max_per_market_ratio: 0.20,
             max_per_market_override: 20.0,
+            actualize_on_open: false,
         }
     }
 }
@@ -99,7 +101,42 @@ impl RiskManager {
             })),
         };
         mr.load_state().await?;
+        if mr.actualize_on_open().await {
+            mr.save_state().await?;
+        }
         Ok(mr)
+    }
+
+    async fn actualize_on_open(&self) -> bool {
+        let mut i = self.inner.lock().await;
+        if !i.cfg.actualize_on_open {
+            return false;
+        }
+        let active_bankroll = (i.cfg.initial_bankroll + i.total_pnl).max(0.0);
+        if active_bankroll <= 0.0 {
+            return false;
+        }
+        let changed =
+            (active_bankroll - i.cfg.initial_bankroll).abs() > 1e-9 || i.total_pnl.abs() > 1e-9;
+        if changed {
+            tracing::info!(
+                previous_bankroll = i.cfg.initial_bankroll,
+                restored_pnl = i.total_pnl,
+                active_bankroll,
+                "bankroll actualized on restart"
+            );
+            i.cfg.initial_bankroll = active_bankroll;
+            i.total_pnl = 0.0;
+        }
+        changed
+    }
+
+    pub async fn initial_bankroll(&self) -> f64 {
+        self.inner.lock().await.cfg.initial_bankroll
+    }
+
+    pub async fn actualizes_on_open(&self) -> bool {
+        self.inner.lock().await.cfg.actualize_on_open
     }
 
     pub async fn effective_bankroll(&self) -> f64 {
@@ -113,6 +150,7 @@ impl RiskManager {
         (bk * i.cfg.max_per_market_ratio).min(i.cfg.max_per_market_override)
     }
 
+    #[allow(dead_code)]
     pub async fn total_exposure(&self) -> f64 {
         let i = self.inner.lock().await;
         i.positions.values().map(|p| p.notional()).sum()
@@ -120,15 +158,14 @@ impl RiskManager {
 
     pub async fn available_capital(&self) -> f64 {
         let i = self.inner.lock().await;
-        let bk = (i.cfg.initial_bankroll + i.total_pnl).max(0.0);
-        let ratio_cap = bk * i.cfg.exposure_ratio;
-        let max = if i.cfg.max_total_exposure_override > 0.0 {
-            ratio_cap.min(i.cfg.max_total_exposure_override)
-        } else {
-            ratio_cap
-        };
+        let max = exposure_cap(&i);
         let exp: f64 = i.positions.values().map(|p| p.notional()).sum();
         (max - exp).max(0.0)
+    }
+
+    pub async fn available_capital_for_exposure(&self, exposure: f64) -> f64 {
+        let i = self.inner.lock().await;
+        (exposure_cap(&i) - exposure.max(0.0)).max(0.0)
     }
 
     /// Realized P&L since the bankroll baseline. Used by tests + monitoring.
@@ -175,13 +212,13 @@ impl RiskManager {
     pub async fn get_meta(&self, key: &str) -> Result<Option<String>> {
         let conn = self.db.lock().await;
         let mut stmt = conn.prepare("SELECT value FROM meta WHERE key=?")?;
-        let row: Option<String> = stmt
-            .query_row([key], |r| r.get(0))
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                _ => Err(e),
-            })?;
+        let row: Option<String> =
+            stmt.query_row([key], |r| r.get(0))
+                .map(Some)
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    _ => Err(e),
+                })?;
         Ok(row)
     }
 
@@ -204,9 +241,8 @@ impl RiskManager {
         let conn = self.db.lock().await;
         conn.execute_batch("BEGIN; DELETE FROM paper_positions;")?;
         {
-            let mut stmt = conn.prepare(
-                "INSERT INTO paper_positions (contract_id, payload) VALUES (?, ?)",
-            )?;
+            let mut stmt =
+                conn.prepare("INSERT INTO paper_positions (contract_id, payload) VALUES (?, ?)")?;
             for (cid, payload) in positions {
                 stmt.execute(params![cid, payload.to_string()])?;
             }
@@ -237,9 +273,8 @@ impl RiskManager {
         let conn = self.db.lock().await;
         conn.execute_batch("BEGIN; DELETE FROM oracle_pending;")?;
         {
-            let mut stmt = conn.prepare(
-                "INSERT INTO oracle_pending (contract_id, payload) VALUES (?, ?)",
-            )?;
+            let mut stmt =
+                conn.prepare("INSERT INTO oracle_pending (contract_id, payload) VALUES (?, ?)")?;
             for (cid, payload) in entries {
                 stmt.execute(params![cid, payload.to_string()])?;
             }
@@ -271,6 +306,7 @@ impl RiskManager {
         let conn = self.db.lock().await;
         conn.execute_batch("BEGIN")?;
         for (k, v) in [
+            ("bankroll_baseline", inner.cfg.initial_bankroll),
             ("total_pnl", inner.total_pnl),
             ("total_fees_paid", inner.total_fees_paid),
             (
@@ -289,9 +325,7 @@ impl RiskManager {
 
         conn.execute("DELETE FROM positions", [])?;
         {
-            let mut stmt = conn.prepare(
-                "INSERT INTO positions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            )?;
+            let mut stmt = conn.prepare("INSERT INTO positions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")?;
             for (key, p) in inner.positions.iter() {
                 stmt.execute(params![
                     key,
@@ -321,6 +355,7 @@ impl RiskManager {
     async fn load_state(&self) -> Result<()> {
         let conn = self.db.lock().await;
         let mut inner = self.inner.lock().await;
+        let mut persisted_bankroll_baseline: Option<f64> = None;
 
         if let Ok(rows) = conn
             .prepare("SELECT key, value FROM state")?
@@ -335,11 +370,15 @@ impl RiskManager {
                 let parsed: Value = serde_json::from_str(&v).unwrap_or(Value::Null);
                 let f = parsed.as_f64().unwrap_or(0.0);
                 match k.as_str() {
+                    "bankroll_baseline" => persisted_bankroll_baseline = Some(f),
                     "total_pnl" => inner.total_pnl = f,
                     "total_fees_paid" => inner.total_fees_paid = f,
                     _ => {}
                 }
             }
+        }
+        if let Some(baseline) = persisted_bankroll_baseline.filter(|v| *v > 0.0) {
+            inner.cfg.initial_bankroll = baseline;
         }
 
         let mut stmt = conn.prepare("SELECT * FROM positions")?;
@@ -363,9 +402,7 @@ impl RiskManager {
         }
 
         let mut stmt = conn.prepare("SELECT event_id, last_trade_time FROM cooldowns")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
-        })?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?;
         for row in rows {
             let (eid, ts) = row?;
             inner.last_trade_time.insert(eid, ts);
@@ -380,6 +417,16 @@ impl RiskManager {
             );
         }
         Ok(())
+    }
+}
+
+fn exposure_cap(i: &Inner) -> f64 {
+    let bk = (i.cfg.initial_bankroll + i.total_pnl).max(0.0);
+    let ratio_cap = bk * i.cfg.exposure_ratio;
+    if i.cfg.max_total_exposure_override > 0.0 {
+        ratio_cap.min(i.cfg.max_total_exposure_override)
+    } else {
+        ratio_cap
     }
 }
 
@@ -438,7 +485,9 @@ mod tests {
     async fn opens_creates_schema() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("state.db");
-        let mr = RiskManager::open(&path, RiskConfig::default()).await.unwrap();
+        let mr = RiskManager::open(&path, RiskConfig::default())
+            .await
+            .unwrap();
         assert!((mr.total_pnl().await).abs() < 1e-9);
     }
 
@@ -446,18 +495,28 @@ mod tests {
     async fn round_trip_pnl() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("state.db");
-        let mr = RiskManager::open(&path, RiskConfig {
-            initial_bankroll: 100.0,
-            ..Default::default()
-        }).await.unwrap();
+        let mr = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         mr.record_pnl(5.5).await.unwrap();
         assert!((mr.total_pnl().await - 5.5).abs() < 1e-9);
         // Re-open
         drop(mr);
-        let mr2 = RiskManager::open(&path, RiskConfig {
-            initial_bankroll: 100.0,
-            ..Default::default()
-        }).await.unwrap();
+        let mr2 = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!((mr2.total_pnl().await - 5.5).abs() < 1e-9);
     }
 
@@ -465,12 +524,15 @@ mod tests {
     async fn available_capital_respects_total_exposure_override() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("state.db");
-        let mr = RiskManager::open(&path, RiskConfig {
-            initial_bankroll: 100.0,
-            exposure_ratio: 0.80,
-            max_total_exposure_override: 25.0,
-            ..Default::default()
-        })
+        let mr = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                exposure_ratio: 0.80,
+                max_total_exposure_override: 25.0,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -478,12 +540,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn actualize_on_open_promotes_restored_pnl_into_new_baseline() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.db");
+        let mr = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        mr.record_pnl(25.0).await.unwrap();
+        drop(mr);
+
+        let mr2 = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                actualize_on_open: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!((mr2.initial_bankroll().await - 125.0).abs() < 1e-9);
+        assert!((mr2.total_pnl().await).abs() < 1e-9);
+        assert!((mr2.effective_bankroll().await - 125.0).abs() < 1e-9);
+
+        mr2.record_pnl(-5.0).await.unwrap();
+        drop(mr2);
+        let mr3 = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                actualize_on_open: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!((mr3.initial_bankroll().await - 120.0).abs() < 1e-9);
+        assert!((mr3.total_pnl().await).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn available_capital_can_use_external_open_exposure() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.db");
+        let mr = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 100.0,
+                exposure_ratio: 0.80,
+                max_total_exposure_override: 80.0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!((mr.available_capital_for_exposure(35.0).await - 45.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
     async fn paper_positions_round_trip() {
         let tmp = TempDir::new().unwrap();
-        let mr = RiskManager::open(tmp.path().join("s.db"), RiskConfig::default()).await.unwrap();
-        let entries = vec![
-            ("c1".to_string(), serde_json::json!({"size": 5})),
-        ];
+        let mr = RiskManager::open(tmp.path().join("s.db"), RiskConfig::default())
+            .await
+            .unwrap();
+        let entries = vec![("c1".to_string(), serde_json::json!({"size": 5}))];
         mr.save_paper_positions(&entries).await.unwrap();
         let loaded = mr.load_paper_positions().await.unwrap();
         assert_eq!(loaded.len(), 1);

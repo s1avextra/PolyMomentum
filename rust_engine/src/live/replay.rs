@@ -486,6 +486,7 @@ impl LiveReplayStrategy {
                         0.0
                     },
                     fill_price: fill.fill_price,
+                    cost: fill.cost,
                     limit_price,
                     slippage: fill.slippage,
                     slippage_bps: if limit_price > 0.0 {
@@ -633,6 +634,7 @@ impl LiveReplayStrategy {
             .insert(fill.order.intent_id.clone(), pos);
         let exposure = fill.cost.abs();
         self.monitor.record_risk_state(
+            self.bankroll_usd,
             self.bankroll_usd + self.lifecycle.realized_pnl,
             exposure,
             (self.bankroll_usd + self.lifecycle.realized_pnl - exposure).max(0.0),
@@ -676,6 +678,8 @@ impl LiveReplayStrategy {
             pos.entry_price,
             pos.open_btc,
             close_btc,
+            "live_replay",
+            true,
         );
 
         let outcome_prices = replay_outcome_prices(actual);
@@ -706,6 +710,7 @@ impl LiveReplayStrategy {
     fn record_risk_state(&self, exposure: f64, positions: u64) {
         let bankroll = self.bankroll_usd + self.lifecycle.realized_pnl;
         self.monitor.record_risk_state(
+            self.bankroll_usd,
             bankroll,
             exposure,
             (bankroll - exposure).max(0.0),
@@ -1060,11 +1065,14 @@ impl LiveReplayStrategy {
     ) -> Option<BacktestOrder> {
         let variant = self.replay_strategy.variant.clone();
         let used_exposure = self.open_exposure() + self.submitted_exposure();
+        let active_bankroll = (self.bankroll_usd + self.lifecycle.realized_pnl).max(0.0);
         let breaker_metrics = self
             .breaker_state
             .metrics(used_exposure, self.bankroll_usd.max(1.0));
-        let mut position =
-            (self.bankroll_usd * variant.position_pct).min(variant.max_per_market_usd);
+        let available = (active_bankroll - used_exposure).max(0.0);
+        let mut position = (active_bankroll * variant.position_pct)
+            .min(variant.max_per_market_usd)
+            .min(available);
         if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
             used_exposure,
             self.bankroll_usd.max(1.0),
@@ -1238,7 +1246,7 @@ impl LiveReplayStrategy {
             book_best_ask: micro.best_ask,
             book_ask_depth: micro.ask_depth,
             book_bid_depth: micro.bid_depth,
-            balance_usd: self.bankroll_usd,
+            balance_usd: (self.bankroll_usd + self.lifecycle.realized_pnl).max(0.0),
             submit_latency_ms: Some(0.0),
         });
         let fee_rate = contract
