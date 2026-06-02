@@ -156,6 +156,7 @@ impl RiskManager {
         i.positions.values().map(|p| p.notional()).sum()
     }
 
+    #[allow(dead_code)]
     pub async fn available_capital(&self) -> f64 {
         let i = self.inner.lock().await;
         let max = exposure_cap(&i);

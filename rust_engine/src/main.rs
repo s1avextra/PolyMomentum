@@ -2880,6 +2880,7 @@ async fn cmd_live_replay(
         universe,
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
+        max_total_exposure_usd: settings.max_total_exposure_usd,
         min_order_size_shares: settings.live_min_order_size_shares,
         cache_dir: cache_dir_path,
         session_log_dir,

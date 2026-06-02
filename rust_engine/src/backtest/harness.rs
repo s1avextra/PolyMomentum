@@ -39,6 +39,8 @@ use crate::strategy::microstructure::{BookLevelView, BookMicrostructure};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
 
+const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+
 #[derive(Debug, Clone)]
 pub struct CandleUniverse {
     pub contracts: Vec<CandleContract>,
@@ -309,6 +311,28 @@ impl CandleBacktestStrategy {
             .sum()
     }
 
+    fn active_bankroll(&self) -> f64 {
+        (self.bankroll_usd + self.breaker_state.realized_pnl).max(0.0)
+    }
+
+    fn exposure_cap(&self) -> f64 {
+        let ratio_cap = self.active_bankroll() * DEFAULT_EXPOSURE_RATIO;
+        if self.max_total_exposure_usd > 0.0 {
+            ratio_cap.min(self.max_total_exposure_usd)
+        } else {
+            ratio_cap
+        }
+    }
+
+    fn position_budget_before_stress(&self, used_exposure: f64) -> (f64, f64) {
+        let active_bankroll = self.active_bankroll();
+        let base_position = (active_bankroll * self.variant.position_pct)
+            .min(self.variant.max_per_market_usd)
+            .min(active_bankroll);
+        let exposure_available = (self.exposure_cap() - used_exposure.max(0.0)).max(0.0);
+        (base_position.min(exposure_available), exposure_available)
+    }
+
     fn settle_due_positions(&mut self, timestamp_s: f64) {
         let due: Vec<String> = self
             .open_positions
@@ -574,15 +598,7 @@ impl Strategy for CandleBacktestStrategy {
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
-        let base_position =
-            (self.bankroll_usd * self.variant.position_pct).min(self.variant.max_per_market_usd);
-        let exposure_cap = self.max_total_exposure_usd.max(0.0);
-        let exposure_available = if exposure_cap > 0.0 {
-            (exposure_cap - used_exposure).max(0.0)
-        } else {
-            base_position
-        };
-        let mut position = base_position.min(exposure_available);
+        let (mut position, exposure_available) = self.position_budget_before_stress(used_exposure);
         if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
             used_exposure,
             self.bankroll_usd.max(1.0),
@@ -592,7 +608,9 @@ impl Strategy for CandleBacktestStrategy {
         }
         if position < 1.0 {
             self.skipped_decision += 1;
-            let reason = if exposure_available < 1.0 {
+            let reason = if self.active_bankroll() < 1.0 {
+                "bankroll_depleted"
+            } else if exposure_available < 1.0 {
                 "exposure_cap"
             } else {
                 "stress_drawdown_cap"
@@ -1561,6 +1579,36 @@ mod tests {
         assert!(active.contains("0xabc"));
         let inactive = cfg.universe.condition_id_set_for_hour(inactive_hour);
         assert!(!inactive.contains("0xabc"));
+    }
+
+    #[test]
+    fn position_budget_uses_active_bankroll_after_realized_pnl() {
+        let (cfg, mut variants) = synthetic_cfg();
+        let mut variant = variants.remove(0);
+        variant.position_pct = 0.05;
+        variant.max_per_market_usd = 20.0;
+        let strategy = CandleBacktestStrategy::new_with_breaker(
+            variant,
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            cfg.btc_history,
+            BacktestBreakerReport {
+                state: BreakerState {
+                    realized_pnl: -20.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BreakerConfig::default(),
+            None,
+        );
+
+        assert!((strategy.active_bankroll() - 80.0).abs() < 1e-9);
+        let (budget, available) = strategy.position_budget_before_stress(0.0);
+        assert!((budget - 4.0).abs() < 1e-9);
+        assert!((available - 64.0).abs() < 1e-9);
     }
 
     fn mk_test_fill(

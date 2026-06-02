@@ -36,12 +36,15 @@ use crate::strategy::microstructure::{BookLevelView, BookMicrostructure, Microst
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
+const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+
 #[derive(Clone)]
 pub struct LiveReplayConfig {
     pub hours: Vec<DateTime<Utc>>,
     pub universe: CandleUniverse,
     pub btc_history: Arc<BTCHistory>,
     pub bankroll_usd: f64,
+    pub max_total_exposure_usd: f64,
     pub min_order_size_shares: f64,
     pub cache_dir: PathBuf,
     pub session_log_dir: PathBuf,
@@ -307,6 +310,7 @@ pub async fn run_live_replay(
         cfg.strategy.clone(),
         &cfg.universe,
         cfg.bankroll_usd,
+        cfg.max_total_exposure_usd,
         cfg.min_order_size_shares,
         cfg.btc_history.clone(),
         monitor.clone(),
@@ -381,6 +385,7 @@ struct LiveReplayStrategy {
     momentum: MomentumDetector,
     order_manager: OrderManager,
     bankroll_usd: f64,
+    max_total_exposure_usd: f64,
     min_order_size_shares: f64,
     btc_history: Arc<BTCHistory>,
     monitor: Arc<SessionMonitor>,
@@ -431,6 +436,7 @@ impl LiveReplayStrategy {
         replay_strategy: ReplayStrategy,
         universe: &CandleUniverse,
         bankroll_usd: f64,
+        max_total_exposure_usd: f64,
         min_order_size_shares: f64,
         btc_history: Arc<BTCHistory>,
         monitor: Arc<SessionMonitor>,
@@ -449,6 +455,7 @@ impl LiveReplayStrategy {
             ),
             order_manager: OrderManager::new(),
             bankroll_usd,
+            max_total_exposure_usd,
             min_order_size_shares,
             btc_history,
             monitor,
@@ -523,6 +530,19 @@ impl LiveReplayStrategy {
             .values()
             .map(|p| p.entry_price * p.size)
             .sum()
+    }
+
+    fn active_bankroll(&self) -> f64 {
+        (self.bankroll_usd + self.lifecycle.realized_pnl).max(0.0)
+    }
+
+    fn exposure_cap(&self) -> f64 {
+        let ratio_cap = self.active_bankroll() * DEFAULT_EXPOSURE_RATIO;
+        if self.max_total_exposure_usd > 0.0 {
+            ratio_cap.min(self.max_total_exposure_usd)
+        } else {
+            ratio_cap
+        }
     }
 
     fn settle_due_positions(&mut self, timestamp_s: f64) {
@@ -1065,11 +1085,11 @@ impl LiveReplayStrategy {
     ) -> Option<BacktestOrder> {
         let variant = self.replay_strategy.variant.clone();
         let used_exposure = self.open_exposure() + self.submitted_exposure();
-        let active_bankroll = (self.bankroll_usd + self.lifecycle.realized_pnl).max(0.0);
+        let active_bankroll = self.active_bankroll();
         let breaker_metrics = self
             .breaker_state
             .metrics(used_exposure, self.bankroll_usd.max(1.0));
-        let available = (active_bankroll - used_exposure).max(0.0);
+        let available = (self.exposure_cap() - used_exposure.max(0.0)).max(0.0);
         let mut position = (active_bankroll * variant.position_pct)
             .min(variant.max_per_market_usd)
             .min(available);
@@ -1566,6 +1586,7 @@ mod tests {
             strategy,
             &CandleUniverse { contracts: vec![] },
             100.0,
+            80.0,
             0.0,
             Arc::new(BTCHistory::new()),
             monitor.clone(),
@@ -1596,6 +1617,7 @@ mod tests {
             strategy,
             &CandleUniverse { contracts: vec![] },
             100.0,
+            80.0,
             0.0,
             Arc::new(BTCHistory::new()),
             monitor,
