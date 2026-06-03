@@ -3567,7 +3567,7 @@ async fn cmd_validate_replay(path: &str) {
             current_price: f64opt(&v, "px").unwrap_or(0.0),
             open_price: f64opt(&v, "open").unwrap_or(0.0),
             z_score: f64opt(&v, "z").unwrap_or(0.0),
-            reversion_count: 0,
+            reversion_count: u32opt(&v, "reversion_count").unwrap_or(0),
         };
         let res = strategy::decision::decide_candle_trade(
             &signal,
@@ -5140,6 +5140,12 @@ fn f64opt(v: &serde_json::Value, key: &str) -> Option<f64> {
     v.get(key).and_then(|x| x.as_f64())
 }
 
+fn u32opt(v: &serde_json::Value, key: &str) -> Option<u32> {
+    v.get(key)
+        .and_then(|x| x.as_u64())
+        .and_then(|x| u32::try_from(x).ok())
+}
+
 #[cfg(test)]
 mod replay_validation_tests {
     use super::*;
@@ -5179,6 +5185,18 @@ mod replay_validation_tests {
             Some("/tmp/promotion.json")
         );
         assert_eq!(promotion_path_from_runtime_source("settings"), None);
+    }
+
+    #[test]
+    fn replay_validation_reads_logged_reversion_count_as_u32() {
+        let event = serde_json::json!({ "reversion_count": 3 });
+        assert_eq!(u32opt(&event, "reversion_count"), Some(3));
+
+        let too_large = serde_json::json!({ "reversion_count": u64::from(u32::MAX) + 1 });
+        assert_eq!(u32opt(&too_large, "reversion_count"), None);
+
+        let missing = serde_json::json!({});
+        assert_eq!(u32opt(&missing, "reversion_count"), None);
     }
 
     fn wallet_balances(

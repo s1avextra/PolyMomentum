@@ -84,8 +84,24 @@ PREFLIGHT_ARGS=(preflight --mode "$MODE")
 if [ "$MODE" = "live" ]; then
     PREFLIGHT_ARGS+=(--i-understand-live)
 fi
+EXEC_START="$(systemctl show polymomentum-engine.service -p ExecStart --value 2>/dev/null || true)"
+PROMOTION_ARTIFACT="$(printf '%s\n' "$EXEC_START" | awk '{
+    for (i = 1; i <= NF; i++) {
+        if ($i == "--promotion-artifact" && (i + 1) <= NF) {
+            print $(i + 1)
+            exit
+        }
+    }
+}')"
+if [ -n "$PROMOTION_ARTIFACT" ]; then
+    PREFLIGHT_ARGS+=(--promotion-artifact "$PROMOTION_ARTIFACT")
+fi
 capture_json "$TMPDIR/preflight.json" "$ENGINE" "${PREFLIGHT_ARGS[@]}"
-capture_json "$TMPDIR/release.json" "$ENGINE" release-manifest --mode "$MODE"
+RELEASE_ARGS=(release-manifest --mode "$MODE")
+if [ -n "$PROMOTION_ARTIFACT" ]; then
+    RELEASE_ARGS+=(--promotion-artifact "$PROMOTION_ARTIFACT")
+fi
+capture_json "$TMPDIR/release.json" "$ENGINE" "${RELEASE_ARGS[@]}"
 capture_json "$TMPDIR/wallet.json" "$ENGINE" wallet --json
 
 if [ -n "$LATEST_SESSION" ]; then

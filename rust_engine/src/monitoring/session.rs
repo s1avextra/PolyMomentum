@@ -709,6 +709,7 @@ pub struct SignalEvaluation {
     pub cons: f64,
     pub z: f64,
     pub conf: f64,
+    pub reversion_count: u32,
     pub elapsed_min: f64,
     pub remaining_min: f64,
     pub dir: String,

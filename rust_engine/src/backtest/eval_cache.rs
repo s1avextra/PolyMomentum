@@ -199,6 +199,7 @@ impl EvalCacheGenerator {
             cons: signal.consistency,
             z: signal.z_score,
             conf: signal.confidence,
+            reversion_count: signal.reversion_count,
             elapsed_min: signal.minutes_elapsed,
             remaining_min: signal.minutes_remaining,
             dir: signal.direction.clone(),
