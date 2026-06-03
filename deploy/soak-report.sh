@@ -53,8 +53,10 @@ capture_json() {
     else
         rc=$?
     fi
-    if [ "$rc" -eq 0 ] && jq -e . "$raw" >/dev/null 2>&1; then
-        cp "$raw" "$out"
+    if jq -e . "$raw" >/dev/null 2>&1; then
+        jq --argjson exit_code "$rc" \
+            'if type == "object" then . + {exit_code:$exit_code} else {ok:($exit_code == 0), exit_code:$exit_code, result:.} end' \
+            "$raw" >"$out"
     else
         jq -Rs --argjson exit_code "$rc" \
             '{ok:false, exit_code:$exit_code, output:.}' <"$raw" >"$out"
@@ -106,9 +108,11 @@ capture_json "$TMPDIR/wallet.json" "$ENGINE" wallet --json
 
 if [ -n "$LATEST_SESSION" ]; then
     capture_json "$TMPDIR/diagnostics.json" "$ENGINE" diagnostics session "$LATEST_SESSION"
+    capture_json "$TMPDIR/staleness.json" "$ENGINE" diagnostics staleness "$LATEST_SESSION"
     capture_text "$TMPDIR/replay.json" "$ENGINE" validate-replay "$LATEST_SESSION"
 else
     jq -n '{ok:false, error:"no session_*.jsonl found"}' >"$TMPDIR/diagnostics.json"
+    jq -n '{ok:false, status:"unknown", error:"no session_*.jsonl found"}' >"$TMPDIR/staleness.json"
     jq -n '{exit_code:1, output:"no session_*.jsonl found"}' >"$TMPDIR/replay.json"
 fi
 
@@ -139,6 +143,7 @@ jq -n \
     --slurpfile release "$TMPDIR/release.json" \
     --slurpfile wallet "$TMPDIR/wallet.json" \
     --slurpfile diagnostics "$TMPDIR/diagnostics.json" \
+    --slurpfile staleness "$TMPDIR/staleness.json" \
     --slurpfile replay "$TMPDIR/replay.json" \
     --slurpfile systemd "$TMPDIR/systemd.json" \
     --slurpfile disk "$TMPDIR/disk.json" \
@@ -152,12 +157,14 @@ jq -n \
         ok: (
             (($preflight[0].ok // false) == true) and
             (($diagnostics[0].ok // false) == true) and
+            (($staleness[0].ok // true) == true) and
             (($replay[0].exit_code // 1) == 0)
         ),
         preflight: $preflight[0],
         release: $release[0],
         wallet: $wallet[0],
         diagnostics: $diagnostics[0],
+        staleness: $staleness[0],
         replay: $replay[0],
         systemd: $systemd[0],
         disk: $disk[0],

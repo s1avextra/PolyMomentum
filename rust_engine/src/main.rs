@@ -160,6 +160,11 @@ enum Command {
         #[command(subcommand)]
         command: DiagnosticsCommand,
     },
+    /// Telegram operator monitor: read-only status cards and callbacks.
+    Telegram {
+        #[command(subcommand)]
+        command: TelegramCommand,
+    },
     /// Plan and audit the full backtest → promotion → replay strategy-builder loop.
     StrategyBuilder {
         #[command(subcommand)]
@@ -814,6 +819,54 @@ enum DiagnosticsCommand {
         #[arg(long, default_value_t = 0)]
         min_resolution_timings: u64,
     },
+    /// Detect whether the deployed strategy is going stale from resolved outcomes.
+    Staleness {
+        /// Path to a session JSONL file.
+        path: String,
+        /// Minimum resolved outcomes before stale can become a hard verdict.
+        #[arg(long, default_value_t = 30)]
+        min_outcomes: usize,
+        /// Minimum tail window used for change detection.
+        #[arg(long, default_value_t = 10)]
+        min_recent_window: usize,
+        /// Minimum acceptable recent win rate.
+        #[arg(long, default_value_t = 0.55)]
+        min_recent_win_rate: f64,
+        /// False-positive budget for the adaptive window drift test.
+        #[arg(long, default_value_t = 0.01)]
+        delta: f64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TelegramCommand {
+    /// Validate Telegram credentials and optionally register commands/send a card.
+    Probe {
+        /// Register /status, /stale, /preflight, /wallet, /help.
+        #[arg(long, default_value_t = false)]
+        set_commands: bool,
+        /// Send the current status card to TELEGRAM_CHAT_ID.
+        #[arg(long, default_value_t = false)]
+        send_status: bool,
+    },
+    /// Send or print the current operator status card.
+    Status {
+        /// Use a specific soak report JSON instead of the newest one.
+        #[arg(long)]
+        soak_report: Option<String>,
+        /// Send to TELEGRAM_CHAT_ID. Without this flag the card is printed.
+        #[arg(long, default_value_t = false)]
+        send: bool,
+    },
+    /// Run a read-only interactive long-poll loop for commands and buttons.
+    Poll {
+        /// Process one long-poll response and exit.
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        /// Long-poll timeout in seconds.
+        #[arg(long, default_value_t = 30)]
+        timeout_s: u64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1098,6 +1151,7 @@ async fn main() {
         Command::Clob { command } => cmd_clob(&settings, command).await,
         Command::Experiment { command } => cmd_experiment(command),
         Command::Diagnostics { command } => cmd_diagnostics(command),
+        Command::Telegram { command } => cmd_telegram(&settings, command).await,
         Command::StrategyBuilder { command } => cmd_strategy_builder(command).await,
         Command::Ctf { condition_id } => cmd_ctf(&settings, &condition_id).await,
         Command::ValidateReplay { path } => cmd_validate_replay(&path).await,
@@ -3438,6 +3492,462 @@ fn cmd_experiment(command: ExperimentCommand) {
     }
 }
 
+async fn cmd_telegram(settings: &config::Settings, command: TelegramCommand) {
+    if let TelegramCommand::Status {
+        soak_report,
+        send: false,
+    } = &command
+    {
+        let text = telegram_status_text(settings, soak_report.as_deref())
+            .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}"));
+        println!("{text}");
+        return;
+    }
+
+    let Some(client) = monitoring::telegram::TelegramClient::from_env() else {
+        eprintln!(
+            "Telegram is not configured: set TELEGRAM_BOT_TOKEN and numeric TELEGRAM_CHAT_ID"
+        );
+        std::process::exit(2);
+    };
+
+    match command {
+        TelegramCommand::Probe {
+            set_commands,
+            send_status,
+        } => {
+            let me = match client.get_me().await {
+                Ok(me) => me,
+                Err(e) => {
+                    eprintln!("telegram probe failed: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+            if set_commands {
+                if let Err(e) = client.set_operator_commands().await {
+                    eprintln!("telegram set commands failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+            if send_status {
+                let text = telegram_status_text(settings, None)
+                    .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}"));
+                if let Err(e) = client
+                    .send_message(&text, Some(monitoring::telegram::operator_keyboard()))
+                    .await
+                {
+                    eprintln!("telegram send status failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "bot": me,
+                    "chat_id": client.chat_id(),
+                    "commands_set": set_commands,
+                    "status_sent": send_status,
+                }))
+                .expect("serialize telegram probe")
+            );
+        }
+        TelegramCommand::Status { soak_report, send } => {
+            let text = telegram_status_text(settings, soak_report.as_deref())
+                .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}"));
+            if send {
+                if let Err(e) = client
+                    .send_message(&text, Some(monitoring::telegram::operator_keyboard()))
+                    .await
+                {
+                    eprintln!("telegram send status failed: {e:#}");
+                    std::process::exit(1);
+                }
+            } else {
+                println!("{text}");
+            }
+        }
+        TelegramCommand::Poll { once, timeout_s } => {
+            if let Err(e) = telegram_poll_loop(settings, &client, once, timeout_s).await {
+                eprintln!("telegram poll failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+async fn telegram_poll_loop(
+    settings: &config::Settings,
+    client: &monitoring::telegram::TelegramClient,
+    once: bool,
+    timeout_s: u64,
+) -> anyhow::Result<()> {
+    let mut offset = None;
+    loop {
+        let updates = client.get_updates(offset, timeout_s).await?;
+        for update in updates {
+            if let Some(id) = update.get("update_id").and_then(|v| v.as_i64()) {
+                offset = Some(id + 1);
+            }
+            if let Err(e) = handle_telegram_update(settings, client, &update).await {
+                tracing::warn!(error = %e, "telegram update handler failed");
+            }
+        }
+        if once {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_telegram_update(
+    settings: &config::Settings,
+    client: &monitoring::telegram::TelegramClient,
+    update: &serde_json::Value,
+) -> anyhow::Result<()> {
+    if let Some(callback) = update.get("callback_query") {
+        let callback_id = callback.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let data = callback.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        let chat_id = callback
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(|v| v.as_i64());
+        let message_id = callback
+            .get("message")
+            .and_then(|m| m.get("message_id"))
+            .and_then(|v| v.as_i64());
+        let Some(chat_id) = chat_id else {
+            return Ok(());
+        };
+        if !client.is_allowed_chat(chat_id) {
+            let _ = client
+                .answer_callback_query(callback_id, "unauthorized chat")
+                .await;
+            return Ok(());
+        }
+        let text = telegram_action_text(settings, data).await;
+        let _ = client.answer_callback_query(callback_id, "updated").await;
+        if let Some(message_id) = message_id {
+            if let Err(e) = client
+                .edit_message_text(
+                    chat_id,
+                    message_id,
+                    &text,
+                    Some(monitoring::telegram::operator_keyboard()),
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "telegram edit failed; sending new message");
+                client
+                    .send_message(&text, Some(monitoring::telegram::operator_keyboard()))
+                    .await?;
+            }
+        }
+        return Ok(());
+    }
+
+    let Some(message) = update.get("message") else {
+        return Ok(());
+    };
+    let Some(chat_id) = message
+        .get("chat")
+        .and_then(|c| c.get("id"))
+        .and_then(|v| v.as_i64())
+    else {
+        return Ok(());
+    };
+    if !client.is_allowed_chat(chat_id) {
+        return Ok(());
+    }
+    let text = message
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    let response = match text {
+        "/status" | "/start" => telegram_status_text(settings, None)
+            .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
+        "/stale" => telegram_staleness_text(settings)
+            .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
+        "/preflight" => telegram_preflight_text(settings).await,
+        "/wallet" => telegram_wallet_text(settings).await,
+        "/help" => monitoring::telegram::help_text().to_string(),
+        _ => monitoring::telegram::help_text().to_string(),
+    };
+    client
+        .send_message(&response, Some(monitoring::telegram::operator_keyboard()))
+        .await?;
+    Ok(())
+}
+
+async fn telegram_action_text(settings: &config::Settings, action: &str) -> String {
+    match action {
+        "pm:status" => telegram_status_text(settings, None)
+            .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
+        "pm:stale" => telegram_staleness_text(settings)
+            .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
+        "pm:preflight" => telegram_preflight_text(settings).await,
+        "pm:wallet" => telegram_wallet_text(settings).await,
+        _ => monitoring::telegram::help_text().to_string(),
+    }
+}
+
+fn telegram_status_text(
+    settings: &config::Settings,
+    report_path: Option<&str>,
+) -> anyhow::Result<String> {
+    let report_path = match report_path {
+        Some(path) => Some(std::path::PathBuf::from(path)),
+        None => latest_named_file(
+            &std::path::Path::new(&settings.logs_dir).join("soak"),
+            "soak_",
+            ".json",
+        ),
+    };
+    let Some(path) = report_path else {
+        return Ok("PolyMomentum status\nNo soak report found yet.".to_string());
+    };
+    let report = read_json_value(&path)?;
+    let release = report.get("release").unwrap_or(&serde_json::Value::Null);
+    let wallet = report.get("wallet").unwrap_or(&serde_json::Value::Null);
+    let peers = report.get("peers").unwrap_or(&serde_json::Value::Null);
+    let diagnostics = report
+        .get("diagnostics")
+        .unwrap_or(&serde_json::Value::Null);
+    let replay = report.get("replay").unwrap_or(&serde_json::Value::Null);
+    let stale_text = if let Some(stale) = report.get("staleness") {
+        compact_staleness_line(stale)
+    } else {
+        report
+            .get("latest_session")
+            .and_then(|v| v.as_str())
+            .and_then(|session| {
+                monitoring::staleness::analyze_staleness(
+                    session,
+                    monitoring::staleness::StalenessConfig::default(),
+                )
+                .ok()
+            })
+            .map(|r| {
+                format!(
+                    "freshness={} outcomes={} recent_wr={}",
+                    r.status,
+                    r.sample.outcomes,
+                    pct_opt(r.sample.recent_win_rate)
+                )
+            })
+            .unwrap_or_else(|| "freshness=unknown".to_string())
+    };
+    let replay_line = replay
+        .get("output")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().replace('\n', " "))
+        .unwrap_or_else(|| "replay=unknown".to_string());
+    let hash = release
+        .get("git_sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let strategy_hash = release
+        .get("promotion")
+        .and_then(|p| p.get("strategy"))
+        .and_then(|s| s.get("params_hash"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let wallet_line = format!(
+        "wallet_live_ready={} pUSD={} negRiskAllow={} POL={}",
+        yes_no(wallet.get("live_ready").and_then(|v| v.as_bool())),
+        money_opt(wallet.get("pusd").and_then(|v| v.as_f64())),
+        money_opt(
+            wallet
+                .get("pusd_allowance_neg_risk_exchange")
+                .and_then(|v| v.as_f64())
+        ),
+        num_opt(wallet.get("pol").and_then(|v| v.as_f64()), 4)
+    );
+    let peers_line = format!(
+        "peers adgts={} polyarb={} collector={}",
+        str_field(peers, "adgts"),
+        str_field(peers, "polyarbitrage"),
+        str_field(peers, "polyarbitrage_collector")
+    );
+    let diag_line = format!(
+        "diag_ok={} events={} warnings={}",
+        yes_no(diagnostics.get("ok").and_then(|v| v.as_bool())),
+        diagnostics
+            .get("total_events")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        diagnostics
+            .get("warnings")
+            .and_then(|v| v.as_array())
+            .map(|v| v.len().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    Ok(format!(
+        "PolyMomentum status\nverdict={} mode={} generated={}\nrelease={} strategy={}\n{}\n{}\n{}\n{}\n{}\nreport={}",
+        yes_no(report.get("ok").and_then(|v| v.as_bool())),
+        str_field(&report, "mode"),
+        str_field(&report, "generated_at"),
+        hash,
+        short_hash(strategy_hash),
+        replay_line,
+        stale_text,
+        wallet_line,
+        diag_line,
+        peers_line,
+        path.display()
+    ))
+}
+
+fn telegram_staleness_text(settings: &config::Settings) -> anyhow::Result<String> {
+    let latest_session = latest_named_file(
+        std::path::Path::new(&settings.session_log_dir),
+        "session_",
+        ".jsonl",
+    )
+    .ok_or_else(|| anyhow::anyhow!("no session_*.jsonl found"))?;
+    let report = monitoring::staleness::analyze_staleness(
+        &latest_session,
+        monitoring::staleness::StalenessConfig::default(),
+    )?;
+    Ok(format!(
+        "Strategy freshness\nstatus={} ok={} outcomes={} wr={} recent={} recent_wr={} drift={} drop={} eps={}\nwarnings={}\nrecommendation={}\nsession={}",
+        report.status,
+        yes_no(Some(report.ok)),
+        report.sample.outcomes,
+        pct_opt(report.sample.win_rate),
+        report.sample.recent_window,
+        pct_opt(report.sample.recent_win_rate),
+        yes_no(Some(report.drift.significant)),
+        num_opt(report.drift.drop, 3),
+        num_opt(report.drift.epsilon, 3),
+        if report.warnings.is_empty() {
+            "none".to_string()
+        } else {
+            report.warnings.join(", ")
+        },
+        report.recommendation,
+        latest_session.display()
+    ))
+}
+
+async fn telegram_preflight_text(settings: &config::Settings) -> String {
+    let report = run_startup_preflight(settings, RuntimeMode::Paper, false).await;
+    format!(
+        "Paper preflight\nok={} mode={}\nchecks={} failures={}",
+        yes_no(Some(report.ok)),
+        report.mode.as_str(),
+        report.checks.len(),
+        report.failure_summary()
+    )
+}
+
+async fn telegram_wallet_text(settings: &config::Settings) -> String {
+    if settings.private_key.is_empty() {
+        return "Wallet\nPRIVATE_KEY not set".to_string();
+    }
+    let reader =
+        match data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key) {
+            Ok(reader) => reader,
+            Err(e) => return format!("Wallet\ninit failed: {e}"),
+        };
+    match reader.fetch_balances().await {
+        Ok(b) => format!(
+            "Wallet\naddress={}\nlive_ready={}\npUSD={} exchangeAllow={} negRiskAllow={} POL={:.4}\ndetail={}",
+            b.address,
+            yes_no(Some(b.live_ready())),
+            money_opt(Some(b.pusd)),
+            money_opt(Some(b.pusd_allowance_exchange)),
+            money_opt(Some(b.pusd_allowance_neg_risk_exchange)),
+            b.pol,
+            b.live_ready_detail()
+        ),
+        Err(e) => format!("Wallet\nfetch failed: {e}"),
+    }
+}
+
+fn latest_named_file(
+    dir: &std::path::Path,
+    prefix: &str,
+    suffix: &str,
+) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with(prefix) || !name.ends_with(suffix) {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn read_json_value(path: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("read JSON {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))
+}
+
+fn compact_staleness_line(stale: &serde_json::Value) -> String {
+    let sample = stale.get("sample").unwrap_or(&serde_json::Value::Null);
+    format!(
+        "freshness={} outcomes={} recent_wr={} drift={}",
+        str_field(stale, "status"),
+        sample
+            .get("outcomes")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        pct_opt(sample.get("recent_win_rate").and_then(|v| v.as_f64())),
+        yes_no(
+            stale
+                .get("drift")
+                .and_then(|d| d.get("significant"))
+                .and_then(|v| v.as_bool())
+        )
+    )
+}
+
+fn str_field<'a>(v: &'a serde_json::Value, field: &str) -> &'a str {
+    v.get(field).and_then(|x| x.as_str()).unwrap_or("unknown")
+}
+
+fn yes_no(v: Option<bool>) -> &'static str {
+    match v {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    }
+}
+
+fn money_opt(v: Option<f64>) -> String {
+    v.map(|x| format!("${x:.2}"))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn num_opt(v: Option<f64>, decimals: usize) -> String {
+    v.map(|x| format!("{x:.decimals$}"))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn pct_opt(v: Option<f64>) -> String {
+    v.map(|x| format!("{:.1}%", x * 100.0))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn short_hash(v: &str) -> String {
+    v.chars().take(10).collect()
+}
+
 fn cmd_diagnostics(command: DiagnosticsCommand) {
     match command {
         DiagnosticsCommand::Session { path } => {
@@ -3497,6 +4007,37 @@ fn cmd_diagnostics(command: DiagnosticsCommand) {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&report).expect("serialize causality report")
+            );
+            if !report.ok {
+                std::process::exit(2);
+            }
+        }
+        DiagnosticsCommand::Staleness {
+            path,
+            min_outcomes,
+            min_recent_window,
+            min_recent_win_rate,
+            delta,
+        } => {
+            let report = match monitoring::staleness::analyze_staleness(
+                &path,
+                monitoring::staleness::StalenessConfig {
+                    min_outcomes,
+                    min_recent_window,
+                    min_recent_win_rate,
+                    delta,
+                    ..Default::default()
+                },
+            ) {
+                Ok(report) => report,
+                Err(e) => {
+                    eprintln!("staleness diagnostics failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("serialize staleness report")
             );
             if !report.ok {
                 std::process::exit(2);

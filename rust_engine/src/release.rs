@@ -578,19 +578,27 @@ fn check_live_alerts(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
         .or_else(|_| std::env::var("ALERT_WEBHOOK_URL"))
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
-    if settings.alert_required && webhook_present {
+    let telegram_present = std::env::var("TELEGRAM_BOT_TOKEN")
+        .or_else(|_| std::env::var("POLYMOMENTUM_TELEGRAM_BOT_TOKEN"))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        && std::env::var("TELEGRAM_CHAT_ID")
+            .or_else(|_| std::env::var("POLYMOMENTUM_TELEGRAM_CHAT_ID"))
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+    if settings.alert_required && (webhook_present || telegram_present) {
         push(
             checks,
             "live_alerting",
             CheckStatus::Ok,
-            "alerting is required and a webhook is configured".to_string(),
+            "alerting is required and Slack/webhook or Telegram is configured".to_string(),
         );
     } else if settings.alert_required {
         push(
             checks,
             "live_alerting",
             CheckStatus::Fail,
-            "ALERT_REQUIRED=1 but no SLACK_WEBHOOK_URL or ALERT_WEBHOOK_URL is configured"
+            "ALERT_REQUIRED=1 but no Slack/webhook or Telegram alert target is configured"
                 .to_string(),
         );
     } else {
