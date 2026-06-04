@@ -327,6 +327,9 @@ enum Command {
         /// Write a reproducible JSON experiment report to this path.
         #[arg(long)]
         report_json: Option<String>,
+        /// Write full resolved trades for every sweep variant to this path.
+        #[arg(long)]
+        trades_json: Option<String>,
         /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
         #[arg(long)]
         window_minutes: Option<f64>,
@@ -1307,6 +1310,7 @@ async fn main() {
             checkpoint,
             resume,
             report_json,
+            trades_json,
             window_minutes,
             adaptive_health_rearm_minutes,
             continuous,
@@ -1373,6 +1377,7 @@ async fn main() {
                 checkpoint.as_deref(),
                 resume,
                 report_json.as_deref(),
+                trades_json.as_deref(),
                 window_minutes,
                 adaptive_health_rearm_minutes,
                 continuous,
@@ -4692,6 +4697,7 @@ async fn cmd_harness_sweep(
     checkpoint: Option<&str>,
     resume: bool,
     report_json: Option<&str>,
+    trades_json: Option<&str>,
     window_minutes: Option<f64>,
     adaptive_health_rearm_minutes: f64,
     continuous: bool,
@@ -5043,6 +5049,53 @@ async fn cmd_harness_sweep(
                     std::process::exit(1);
                 }
                 println!("Experiment report: {path}");
+            }
+            if let Some(path) = trades_json {
+                let variants: Vec<_> = runs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, run)| {
+                        serde_json::json!({
+                            "variant_index": idx,
+                            "strategy_name": &run.variant.name,
+                            "risk_profile": run.variant.risk_profile(),
+                            "strategy_params": serde_json::to_value(&run.variant)
+                                .unwrap_or(serde_json::Value::Null),
+                            "summary": {
+                                "trades": run.results.n_trades(),
+                                "wins": run.results.n_wins(),
+                                "losses": run.results.n_losses(),
+                                "win_rate": run.results.win_rate(),
+                                "total_pnl": run.results.total_pnl(),
+                                "avg_pnl": run.results.avg_pnl(),
+                                "total_fees": run.results.total_fees(),
+                                "fills_success": run.results.fills_success,
+                                "fills_failed": run.results.fills_failed,
+                                "unresolved_fills": run.results.unresolved_fills.len(),
+                            },
+                            "trades": &run.results.trades,
+                            "unresolved_fills": &run.results.unresolved_fills,
+                        })
+                    })
+                    .collect();
+                let report = serde_json::json!({
+                    "schema_version": 1,
+                    "generated_at": chrono::Utc::now().to_rfc3339(),
+                    "mode": "harness_sweep_trades",
+                    "start": start_dt.to_rfc3339(),
+                    "end": end_dt.to_rfc3339(),
+                    "bankroll_usd": cfg.bankroll_usd,
+                    "max_total_exposure_usd": cfg.max_total_exposure_usd,
+                    "latency_ms": cfg.latency.insert_ms,
+                    "window_minutes": window_minutes,
+                    "continuous": continuous,
+                    "variants": variants,
+                });
+                if let Err(e) = write_json_atomic(path, &report, true) {
+                    eprintln!("write trade report {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("Trade report: {path}");
             }
             // Sort by PnL descending; trim to top N.
             let mut sorted = runs;
