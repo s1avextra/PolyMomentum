@@ -50,7 +50,7 @@ impl TelegramClient {
         allowed.sort_unstable();
         allowed.dedup();
         let http = Client::builder()
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(10))
             .build()
             .context("build Telegram HTTP client")?;
         Ok(Self {
@@ -145,11 +145,24 @@ impl TelegramClient {
         if let Some(offset) = offset {
             payload["offset"] = json!(offset);
         }
-        let result = self.post_json("getUpdates", payload).await?;
+        let request_timeout = long_poll_request_timeout(timeout_s);
+        let result = self
+            .post_json_with_timeout("getUpdates", payload, request_timeout)
+            .await?;
         Ok(result.as_array().cloned().unwrap_or_default())
     }
 
     async fn post_json(&self, method: &str, payload: Value) -> Result<Value> {
+        self.post_json_with_timeout(method, payload, Duration::from_secs(10))
+            .await
+    }
+
+    async fn post_json_with_timeout(
+        &self,
+        method: &str,
+        payload: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let url = format!(
             "{}/bot{}/{}",
             self.api_base.trim_end_matches('/'),
@@ -159,6 +172,7 @@ impl TelegramClient {
         let resp = self
             .http
             .post(&url)
+            .timeout(timeout)
             .json(&payload)
             .send()
             .await
@@ -231,6 +245,10 @@ fn redact_secret(text: &str, secret: &str) -> String {
     text.replace(secret, "<redacted>")
 }
 
+fn long_poll_request_timeout(timeout_s: u64) -> Duration {
+    Duration::from_secs(timeout_s.min(50) + 10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +280,11 @@ mod tests {
         let redacted = redact_secret(text, token);
         assert!(!redacted.contains(token));
         assert!(redacted.contains("bot<redacted>/getUpdates"));
+    }
+
+    #[test]
+    fn long_poll_timeout_exceeds_telegram_wait() {
+        assert_eq!(long_poll_request_timeout(30), Duration::from_secs(40));
+        assert_eq!(long_poll_request_timeout(99), Duration::from_secs(60));
     }
 }
