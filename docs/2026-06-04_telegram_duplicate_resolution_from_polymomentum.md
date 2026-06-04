@@ -39,3 +39,18 @@ other non-Telegram webhooks still work as generic webhooks.
 This prevents a future stale `ALERT_WEBHOOK_URL` from silently attaching
 PolyMomentum alerts to `PArbeiter_bot` or any other legacy Telegram bot.
 
+## Follow-up after 13:09 Bangkok alert
+
+The `PolyMomentum Rust stopped` alert at 2026-06-04 13:09 Bangkok
+(06:09 UTC on the VPS) was emitted by the old running engine while it was
+being restarted to apply the env cleanup. That old process still had the stale
+`ALERT_WEBHOOK_URL` in memory, so its final shutdown alert could still go to
+`PArbeiter_bot`.
+
+After that restart, a redacted process-env scan showed both live PolyMomentum
+processes inheriting an empty `ALERT_WEBHOOK_URL` and only the `PMomentum_bot`
+Telegram token.
+
+Additional hardening: all `/etc/polymomentum/env.bak*` backup files on the VPS
+were sanitized so their `ALERT_WEBHOOK_URL` entries are empty. This prevents an
+old backup restore from reattaching PolyMomentum alerts to `PArbeiter_bot`.
