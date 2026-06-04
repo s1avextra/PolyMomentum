@@ -16,7 +16,9 @@ fi
 LOG_DIR="${POLYMOMENTUM_LOGS_DIR:-$APP_DIR/logs}"
 SESSION_DIR="${SESSION_LOG_DIR:-$LOG_DIR/sessions}"
 SOAK_DIR="${POLYMOMENTUM_SOAK_DIR:-$LOG_DIR/soak}"
+TMP_ROOT="${POLYMOMENTUM_TMP_DIR:-$LOG_DIR/tmp}"
 mkdir -p "$SOAK_DIR"
+mkdir -p "$TMP_ROOT"
 
 if [ ! -x "$ENGINE" ]; then
     echo "engine binary is not executable: $ENGINE" >&2
@@ -33,7 +35,7 @@ if [ -z "$MODE" ]; then
     fi
 fi
 
-TMPDIR="$(mktemp -d)"
+TMPDIR="$(mktemp -d "$TMP_ROOT/soak.XXXXXXXXXX")"
 OUT_TMP=""
 cleanup() {
     rm -rf "$TMPDIR"
