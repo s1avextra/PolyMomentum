@@ -5,10 +5,11 @@ Date: 2026-06-03
 ## Goal
 
 Make the deployed PolyMomentum strategy observable and operator-friendly without
-turning chat into a risky control plane. Telegram is a read-only monitor:
+turning chat into a risky control plane. Telegram is a read-mostly monitor:
 status, freshness, preflight, wallet, replay, peer-service state, and alerts.
-It cannot place orders, switch live mode, restart services, or change strategy
-parameters.
+The only state-changing action is a confirmation-gated PolyMomentum stop that
+writes the configured kill switch. It cannot place orders, switch live mode,
+restart services, change strategy parameters, or touch peer bots.
 
 ## Telegram Operator Model
 
@@ -30,10 +31,11 @@ Commands:
 - `/stale` - latest session strategy freshness verdict.
 - `/preflight` - read-only paper preflight.
 - `/wallet` - wallet live-readiness snapshot.
+- `/terminate` - confirmation-gated stop for PolyMomentum only.
 - `/help` - command list and safety note.
 
-Inline buttons mirror the same read-only actions: Status, Freshness, Preflight,
-Wallet.
+Inline buttons include Status, Freshness, Preflight, Wallet, and Stop. Stop opens
+a confirmation prompt; only `Confirm Stop` writes the kill switch.
 
 ## Anti-Stale Strategy Sentinel
 

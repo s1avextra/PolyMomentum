@@ -13,7 +13,7 @@ Environment=POLYMOMENTUM_DATA_DIR=/opt/polymomentum/data
 Environment=POLYMOMENTUM_LOGS_DIR=/opt/polymomentum/logs
 Environment=STATE_DB_PATH=/opt/polymomentum/logs/candle/state.db
 Environment=SESSION_LOG_DIR=/opt/polymomentum/logs/sessions
-Environment=KILL_SWITCH_PATH=/opt/polymomentum/KILL
+Environment=KILL_SWITCH_PATH=/opt/polymomentum/control/KILL
 ExecStart=/opt/polymomentum/polymomentum-engine telegram poll
 Restart=on-failure
 RestartSec=10
@@ -26,12 +26,13 @@ TasksMax=64
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 
-# Hardening: read-only operator monitor, no control-plane writes.
+# Hardening: read-only operator monitor except the kill-switch control file.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/opt/polymomentum
+ReadWritePaths=/opt/polymomentum/control
 
 [Install]
 WantedBy=multi-user.target

@@ -51,10 +51,20 @@ alert() {
     fi
 }
 
+KILL_ACTIVE=false
+if [ -f "$KILL_FILE" ]; then
+    KILL_ACTIVE=true
+    alert "kill_switch" "kill switch active at $KILL_FILE"
+fi
+
 # 1. Service liveness — restart and alert if dead.
 if ! systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
-    alert "service_down" "$SERVICE inactive — restarting"
-    systemctl restart "$SERVICE" 2>/dev/null || true
+    if [ "$KILL_ACTIVE" = true ]; then
+        alert "service_stopped_by_kill" "$SERVICE inactive while kill switch is active — not restarting"
+    else
+        alert "service_down" "$SERVICE inactive — restarting"
+        systemctl restart "$SERVICE" 2>/dev/null || true
+    fi
 fi
 
 # 2. Disk free.
@@ -63,12 +73,7 @@ if [ -n "$DISK" ] && [ "$DISK" -gt 90 ]; then
     alert "disk_full" "disk usage ${DISK}% on $APP_DIR"
 fi
 
-# 3. Kill switch.
-if [ -f "$KILL_FILE" ]; then
-    alert "kill_switch" "kill switch active at $KILL_FILE"
-fi
-
-# 4. State DB sanity — circuit breaker, last trade.
+# 3. State DB sanity — circuit breaker, last trade.
 if [ -f "$STATE_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     DB_OUT=$(sqlite3 "$STATE_DB" \
         "SELECT 'breaker=' || COALESCE((SELECT value FROM meta WHERE key='candle_breaker_tripped'), '0'); \

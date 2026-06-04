@@ -48,6 +48,7 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="/opt/polymomentum"
+KILL_SWITCH_REMOTE="$APP_DIR/control/KILL"
 SCP_CMD="${SCP_CMD:-scp}"
 PROMOTION_FILE=""
 PROMOTION_REMOTE=""
@@ -114,10 +115,13 @@ if [ -n "$PROMOTION_PATH" ]; then
 fi
 
 echo "=== Copying binary to $VPS ==="
-ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data $APP_DIR/config"
-ssh "$VPS" "if [ -f /tmp/polymomentum/KILL ]; then sudo touch $APP_DIR/KILL; fi; \
+ssh "$VPS" "mkdir -p $APP_DIR/logs/candle $APP_DIR/logs/sessions $APP_DIR/data $APP_DIR/config && \
+    sudo install -d -o polymomentum -g polymomentum -m 0755 $APP_DIR/control"
+ssh "$VPS" "if [ -f /tmp/polymomentum/KILL ] || [ -f $APP_DIR/KILL ]; then sudo touch $KILL_SWITCH_REMOTE; fi; \
+    sudo chown polymomentum:polymomentum $APP_DIR/control; \
+    if [ -f $KILL_SWITCH_REMOTE ]; then sudo chown polymomentum:polymomentum $KILL_SWITCH_REMOTE; fi; \
     if sudo test -f /etc/polymomentum/env; then \
-        sudo sed -i 's|^KILL_SWITCH_PATH=/tmp/polymomentum/KILL$|KILL_SWITCH_PATH=$APP_DIR/KILL|' /etc/polymomentum/env; \
+        sudo sed -i 's|^KILL_SWITCH_PATH=/tmp/polymomentum/KILL$|KILL_SWITCH_PATH=$KILL_SWITCH_REMOTE|; s|^KILL_SWITCH_PATH=$APP_DIR/KILL$|KILL_SWITCH_PATH=$KILL_SWITCH_REMOTE|' /etc/polymomentum/env; \
     fi"
 scp_copy "$BIN" "$VPS:$APP_DIR/polymomentum-engine.new"
 ssh "$VPS" "chown polymomentum:polymomentum $APP_DIR/polymomentum-engine.new && \
@@ -177,7 +181,7 @@ if $ENABLE; then
     echo "=== Running remote preflight ==="
     PREFLIGHT_ACK="$([ "$MODE" = "live" ] && echo --i-understand-live || true)"
     PREFLIGHT_PROMOTION="$([ -n "$PROMOTION_REMOTE" ] && echo "--promotion-artifact $PROMOTION_REMOTE" || true)"
-    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$APP_DIR/KILL; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK $PREFLIGHT_PROMOTION'"
+    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$KILL_SWITCH_REMOTE; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK $PREFLIGHT_PROMOTION'"
 
     echo "=== Enabling service ==="
     ssh "$VPS" "sudo systemctl enable polymomentum-engine && sudo systemctl restart polymomentum-engine"

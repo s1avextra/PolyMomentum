@@ -23,7 +23,8 @@ command -v cargo &>/dev/null || (
 id polymomentum &>/dev/null || useradd -r -s /bin/false -d "$APP_DIR" polymomentum
 mkdir -p \
     "$APP_DIR/logs/"{candle,sessions} \
-    "$APP_DIR/data"
+    "$APP_DIR/data" \
+    "$APP_DIR/control"
 chown -R polymomentum:polymomentum "$APP_DIR"
 
 # 4. Secrets directory — outside the deploy tree.
@@ -62,7 +63,7 @@ BANKROLL_USD=100
 CANDLE_PAPER_BREAKER_RESET_ON_START=0
 
 # Operational kill switch (touch this file from any shell to halt trading)
-KILL_SWITCH_PATH=/opt/polymomentum/KILL
+KILL_SWITCH_PATH=/opt/polymomentum/control/KILL
 ENVEOF
     chmod 640 "$ENV_FILE"
     chown root:polymomentum "$ENV_FILE"
@@ -82,6 +83,7 @@ cp "$HERE/polymomentum-healthcheck.service" /etc/systemd/system/
 cp "$HERE/polymomentum-healthcheck.timer" /etc/systemd/system/
 cp "$HERE/polymomentum-soak-report.service" /etc/systemd/system/
 cp "$HERE/polymomentum-soak-report.timer" /etc/systemd/system/
+cp "$HERE/polymomentum-telegram-monitor.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable polymomentum-healthcheck.timer 2>/dev/null || true
 systemctl enable polymomentum-soak-report.timer 2>/dev/null || true

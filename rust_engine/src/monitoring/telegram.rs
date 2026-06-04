@@ -83,6 +83,7 @@ impl TelegramClient {
                     {"command": "stale", "description": "Strategy freshness verdict"},
                     {"command": "preflight", "description": "Read-only paper preflight"},
                     {"command": "wallet", "description": "Wallet live-readiness snapshot"},
+                    {"command": "terminate", "description": "Confirm-gated stop for PolyMomentum only"},
                     {"command": "help", "description": "Show safe commands"}
                 ]
             }),
@@ -212,13 +213,30 @@ pub fn operator_keyboard() -> Value {
             [
                 {"text": "Preflight", "callback_data": "pm:preflight"},
                 {"text": "Wallet", "callback_data": "pm:wallet"}
+            ],
+            [
+                {"text": "Stop", "callback_data": "pm:terminate"}
+            ]
+        ]
+    })
+}
+
+pub fn termination_keyboard() -> Value {
+    json!({
+        "inline_keyboard": [
+            [
+                {"text": "Confirm Stop", "callback_data": "pm:terminate_confirm"}
+            ],
+            [
+                {"text": "Cancel", "callback_data": "pm:terminate_cancel"},
+                {"text": "Status", "callback_data": "pm:status"}
             ]
         ]
     })
 }
 
 pub fn help_text() -> &'static str {
-    "PolyMomentum monitor commands\n/status - current service, replay, wallet, peers\n/stale - deployed strategy freshness verdict\n/preflight - read-only paper preflight\n/wallet - wallet readiness snapshot\n\nAll Telegram actions are read-only; live mode and orders cannot be changed from chat."
+    "PolyMomentum monitor commands\n/status - current service, replay, wallet, peers\n/stale - deployed strategy freshness verdict\n/preflight - read-only paper preflight\n/wallet - wallet readiness snapshot\n/terminate - confirmation-gated stop for PolyMomentum only\n\nStop writes PolyMomentum's kill switch. It does not touch peer bots or place/cancel orders."
 }
 
 fn parse_chat_ids(raw: Option<&str>) -> Vec<i64> {
@@ -260,15 +278,16 @@ mod tests {
 
     #[test]
     fn operator_keyboard_uses_short_callback_data() {
-        let keyboard = operator_keyboard();
-        let rows = keyboard
-            .get("inline_keyboard")
-            .and_then(|v| v.as_array())
-            .unwrap();
-        for row in rows {
-            for button in row.as_array().unwrap() {
-                let data = button.get("callback_data").unwrap().as_str().unwrap();
-                assert!(data.len() <= 64);
+        for keyboard in [operator_keyboard(), termination_keyboard()] {
+            let rows = keyboard
+                .get("inline_keyboard")
+                .and_then(|v| v.as_array())
+                .unwrap();
+            for row in rows {
+                for button in row.as_array().unwrap() {
+                    let data = button.get("callback_data").unwrap().as_str().unwrap();
+                    assert!(data.len() <= 64);
+                }
             }
         }
     }

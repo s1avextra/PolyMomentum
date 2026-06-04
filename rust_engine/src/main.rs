@@ -3645,22 +3645,15 @@ async fn handle_telegram_update(
                 .await;
             return Ok(());
         }
-        let text = telegram_action_text(settings, data).await;
-        let _ = client.answer_callback_query(callback_id, "updated").await;
+        let (text, keyboard, answer) = telegram_callback_response(settings, data).await;
+        let _ = client.answer_callback_query(callback_id, answer).await;
         if let Some(message_id) = message_id {
             if let Err(e) = client
-                .edit_message_text(
-                    chat_id,
-                    message_id,
-                    &text,
-                    Some(monitoring::telegram::operator_keyboard()),
-                )
+                .edit_message_text(chat_id, message_id, &text, Some(keyboard.clone()))
                 .await
             {
                 tracing::warn!(error = %e, "telegram edit failed; sending new message");
-                client
-                    .send_message(&text, Some(monitoring::telegram::operator_keyboard()))
-                    .await?;
+                client.send_message(&text, Some(keyboard)).await?;
             }
         }
         return Ok(());
@@ -3686,31 +3679,132 @@ async fn handle_telegram_update(
         .split_whitespace()
         .next()
         .unwrap_or("");
-    let response = match text {
-        "/status" | "/start" => telegram_status_text(settings, None)
-            .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
-        "/stale" => telegram_staleness_text(settings)
-            .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
-        "/preflight" => telegram_preflight_text(settings).await,
-        "/wallet" => telegram_wallet_text(settings).await,
-        "/help" => monitoring::telegram::help_text().to_string(),
-        _ => monitoring::telegram::help_text().to_string(),
-    };
-    client
-        .send_message(&response, Some(monitoring::telegram::operator_keyboard()))
-        .await?;
+    let (response, keyboard) = telegram_message_response(settings, text).await;
+    client.send_message(&response, Some(keyboard)).await?;
     Ok(())
 }
 
-async fn telegram_action_text(settings: &config::Settings, action: &str) -> String {
+async fn telegram_callback_response(
+    settings: &config::Settings,
+    action: &str,
+) -> (String, serde_json::Value, &'static str) {
     match action {
-        "pm:status" => telegram_status_text(settings, None)
-            .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
-        "pm:stale" => telegram_staleness_text(settings)
-            .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
-        "pm:preflight" => telegram_preflight_text(settings).await,
-        "pm:wallet" => telegram_wallet_text(settings).await,
-        _ => monitoring::telegram::help_text().to_string(),
+        "pm:terminate" => (
+            telegram_terminate_prompt(settings),
+            monitoring::telegram::termination_keyboard(),
+            "confirmation required",
+        ),
+        "pm:terminate_confirm" => (
+            telegram_terminate_confirm_text(settings).await,
+            monitoring::telegram::operator_keyboard(),
+            "stop requested",
+        ),
+        "pm:terminate_cancel" => (
+            "PolyMomentum stop cancelled.".to_string(),
+            monitoring::telegram::operator_keyboard(),
+            "cancelled",
+        ),
+        "pm:status" => (
+            telegram_status_text(settings, None)
+                .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
+            monitoring::telegram::operator_keyboard(),
+            "updated",
+        ),
+        "pm:stale" => (
+            telegram_staleness_text(settings)
+                .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
+            monitoring::telegram::operator_keyboard(),
+            "updated",
+        ),
+        "pm:preflight" => (
+            telegram_preflight_text(settings).await,
+            monitoring::telegram::operator_keyboard(),
+            "updated",
+        ),
+        "pm:wallet" => (
+            telegram_wallet_text(settings).await,
+            monitoring::telegram::operator_keyboard(),
+            "updated",
+        ),
+        _ => (
+            monitoring::telegram::help_text().to_string(),
+            monitoring::telegram::operator_keyboard(),
+            "updated",
+        ),
+    }
+}
+
+async fn telegram_message_response(
+    settings: &config::Settings,
+    text: &str,
+) -> (String, serde_json::Value) {
+    match text {
+        "/status" | "/start" => (
+            telegram_status_text(settings, None)
+                .unwrap_or_else(|e| format!("PolyMomentum status unavailable\nreason={e:#}")),
+            monitoring::telegram::operator_keyboard(),
+        ),
+        "/stale" => (
+            telegram_staleness_text(settings)
+                .unwrap_or_else(|e| format!("Strategy freshness unavailable\nreason={e:#}")),
+            monitoring::telegram::operator_keyboard(),
+        ),
+        "/preflight" => (
+            telegram_preflight_text(settings).await,
+            monitoring::telegram::operator_keyboard(),
+        ),
+        "/wallet" => (
+            telegram_wallet_text(settings).await,
+            monitoring::telegram::operator_keyboard(),
+        ),
+        "/terminate" => (
+            telegram_terminate_prompt(settings),
+            monitoring::telegram::termination_keyboard(),
+        ),
+        "/help" => (
+            monitoring::telegram::help_text().to_string(),
+            monitoring::telegram::operator_keyboard(),
+        ),
+        _ => (
+            monitoring::telegram::help_text().to_string(),
+            monitoring::telegram::operator_keyboard(),
+        ),
+    }
+}
+
+fn telegram_terminate_prompt(settings: &config::Settings) -> String {
+    format!(
+        "Confirm PolyMomentum stop\nThis writes the kill switch at {}.\nOnly polymomentum-engine stops; Telegram monitor stays available. Peer bots are untouched.\nPress Confirm Stop to proceed.",
+        settings.kill_switch_path
+    )
+}
+
+async fn telegram_terminate_confirm_text(settings: &config::Settings) -> String {
+    let path = std::path::Path::new(&settings.kill_switch_path);
+    if path.as_os_str().is_empty() {
+        return "PolyMomentum stop failed\nreason=empty KILL_SWITCH_PATH".to_string();
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return format!(
+                "PolyMomentum stop failed\nkill_switch={}\nreason=create parent: {e}",
+                path.display()
+            );
+        }
+    }
+    let body = format!(
+        "requested_at={}\nsource=telegram\nscope=polymomentum-engine\n",
+        chrono::Utc::now().to_rfc3339()
+    );
+    match tokio::fs::write(path, body).await {
+        Ok(()) => format!(
+            "PolyMomentum stop requested\nkill_switch={}\nEngine will stop on the next cycle. Telegram monitor remains online.",
+            path.display()
+        ),
+        Err(e) => format!(
+            "PolyMomentum stop failed\nkill_switch={}\nreason={e}",
+            path.display()
+        ),
     }
 }
 
