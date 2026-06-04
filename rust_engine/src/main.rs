@@ -3583,8 +3583,27 @@ async fn telegram_poll_loop(
     timeout_s: u64,
 ) -> anyhow::Result<()> {
     let mut offset = None;
+    let mut consecutive_errors: u32 = 0;
     loop {
-        let updates = client.get_updates(offset, timeout_s).await?;
+        let updates = match client.get_updates(offset, timeout_s).await {
+            Ok(updates) => {
+                consecutive_errors = 0;
+                updates
+            }
+            Err(e) if !once => {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                let delay_s = 30_u64.min(1_u64 << consecutive_errors.min(5));
+                tracing::warn!(
+                    error = %e,
+                    consecutive_errors,
+                    delay_s,
+                    "telegram poll request failed; retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         for update in updates {
             if let Some(id) = update.get("update_id").and_then(|v| v.as_i64()) {
                 offset = Some(id + 1);

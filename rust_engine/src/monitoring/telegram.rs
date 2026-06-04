@@ -158,20 +158,31 @@ impl TelegramClient {
         );
         let resp = self
             .http
-            .post(url)
+            .post(&url)
             .json(&payload)
             .send()
             .await
-            .with_context(|| format!("Telegram {method} request failed"))?;
+            .map_err(|err| {
+                anyhow!(
+                    "Telegram {method} request failed: {}",
+                    redact_secret(&err.to_string(), &self.token)
+                )
+            })?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            bail!("Telegram {method} returned HTTP {status}: {body}");
+            bail!(
+                "Telegram {method} returned HTTP {status}: {}",
+                redact_secret(&body, &self.token)
+            );
         }
         let parsed: Value = serde_json::from_str(&body)
             .with_context(|| format!("parse Telegram {method} response"))?;
         if !parsed.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
-            return Err(anyhow!("Telegram {method} returned not-ok: {parsed}"));
+            return Err(anyhow!(
+                "Telegram {method} returned not-ok: {}",
+                redact_secret(&parsed.to_string(), &self.token)
+            ));
         }
         Ok(parsed.get("result").cloned().unwrap_or(Value::Null))
     }
@@ -212,6 +223,14 @@ fn truncate(text: &str, max: usize) -> String {
     out
 }
 
+fn redact_secret(text: &str, secret: &str) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() || !text.contains(secret) {
+        return text.to_string();
+    }
+    text.replace(secret, "<redacted>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +253,14 @@ mod tests {
                 assert!(data.len() <= 64);
             }
         }
+    }
+
+    #[test]
+    fn redacts_bot_token_from_error_text() {
+        let token = "123:secret-token";
+        let text = "request failed for https://api.telegram.org/bot123:secret-token/getUpdates";
+        let redacted = redact_secret(text, token);
+        assert!(!redacted.contains(token));
+        assert!(redacted.contains("bot<redacted>/getUpdates"));
     }
 }
