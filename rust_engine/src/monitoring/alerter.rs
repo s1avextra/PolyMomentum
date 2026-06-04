@@ -28,6 +28,11 @@ impl Alerter {
             let trimmed = url.trim();
             if trimmed.is_empty() {
                 None
+            } else if telegram.is_some() && looks_like_telegram_send_message_url(trimmed) {
+                tracing::warn!(
+                    "ignoring Telegram sendMessage ALERT_WEBHOOK_URL because TELEGRAM_BOT_TOKEN is configured"
+                );
+                None
             } else {
                 Some(trimmed.to_string())
             }
@@ -103,9 +108,15 @@ impl Alerter {
     }
 }
 
+fn looks_like_telegram_send_message_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("api.telegram.org/bot") && lower.contains("/sendmessage")
+}
+
 #[cfg(test)]
 mod tests {
     use super::Alerter;
+    use crate::monitoring::telegram::TelegramClient;
 
     #[test]
     fn disabled_without_webhook() {
@@ -119,5 +130,25 @@ mod tests {
             Alerter::new_with_telegram(Some(" https://example.com/hook ".to_string()), None)
                 .enabled()
         );
+    }
+
+    #[test]
+    fn ignores_telegram_webhook_when_dedicated_telegram_is_configured() {
+        let telegram = TelegramClient::new(
+            "123456789:test-token".to_string(),
+            "415683".to_string(),
+            None,
+            None,
+        )
+        .expect("telegram client");
+        assert!(Alerter::new_with_telegram(
+            Some(
+                "https://api.telegram.org/bot123456789:old/sendMessage?chat_id=415683"
+                    .to_string(),
+            ),
+            Some(telegram),
+        )
+        .webhook
+        .is_none());
     }
 }

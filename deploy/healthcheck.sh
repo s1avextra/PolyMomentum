@@ -6,10 +6,16 @@ set -uo pipefail
 APP_DIR="${POLYMOMENTUM_DIR:-/opt/polymomentum}"
 SERVICE="${POLYMOMENTUM_SERVICE:-polymomentum-engine}"
 WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"
+TELEGRAM_TOKEN="${TELEGRAM_BOT_TOKEN:-${POLYMOMENTUM_TELEGRAM_BOT_TOKEN:-}}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-${POLYMOMENTUM_TELEGRAM_CHAT_ID:-}}"
 KILL_FILE="${KILL_FILE:-${KILL_SWITCH_PATH:-/opt/polymomentum/KILL}}"
 STATE_DB="${STATE_DB:-$APP_DIR/logs/candle/state.db}"
 INACTIVE_HOURS="${INACTIVE_HOURS:-2}"
 LOGS_LIMIT_MB="${LOGS_LIMIT_MB:-2048}"
+
+case "$WEBHOOK_URL" in
+    *api.telegram.org/bot*/sendMessage*) WEBHOOK_URL="" ;;
+esac
 
 # Per-category cooldown so we don't spam.
 COOLDOWN_DIR="${COOLDOWN_DIR:-/var/tmp/polymomentum-healthcheck}"
@@ -31,7 +37,13 @@ alert() {
     fi
     echo "$now" > "$last_file"
     logger -t polymomentum "HEALTH[$category]: $msg"
-    if [ -n "$WEBHOOK_URL" ]; then
+    if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=:heart: HEALTH[$category]: $msg" \
+            --data-urlencode "disable_web_page_preview=true" \
+            >/dev/null 2>&1 || true
+    elif [ -n "$WEBHOOK_URL" ]; then
         curl -s -X POST "$WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d "{\"text\": \":heart: HEALTH[$category]: $msg\"}" \
