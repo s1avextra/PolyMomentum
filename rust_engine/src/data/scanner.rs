@@ -61,12 +61,60 @@ pub struct CandleContract {
     pub asset: String,
 }
 
+impl CandleContract {
+    pub fn terminal_resolution(&self) -> Option<(String, [f64; 2])> {
+        if !self.market.closed {
+            return None;
+        }
+        let up_price = self
+            .market
+            .outcomes
+            .iter()
+            .find(|o| o.token_id == self.up_token_id)
+            .map(|o| o.price)
+            .unwrap_or(self.up_price);
+        let down_price = self
+            .market
+            .outcomes
+            .iter()
+            .find(|o| o.token_id == self.down_token_id)
+            .map(|o| o.price)
+            .unwrap_or(self.down_price);
+        if up_price <= 0.0 && down_price <= 0.0 {
+            return None;
+        }
+        let terminal = up_price >= 0.99
+            || down_price >= 0.99
+            || ((up_price - down_price).abs() <= 1e-9 && up_price > 0.0);
+        if !terminal {
+            return None;
+        }
+        let direction = if (up_price - down_price).abs() <= 1e-9 {
+            "tie"
+        } else if up_price > down_price {
+            "up"
+        } else {
+            "down"
+        };
+        Some((direction.to_string(), [up_price, down_price]))
+    }
+
+    pub fn terminal_direction(&self) -> Option<String> {
+        self.terminal_resolution().map(|(direction, _)| direction)
+    }
+}
+
 pub fn scan_candle_markets(
     markets: &[Market],
     max_hours: f64,
     min_liquidity: f64,
 ) -> Vec<CandleContract> {
-    scan_candle_markets_inner(markets, max_hours, min_liquidity, /*include_resolved=*/ false)
+    scan_candle_markets_inner(
+        markets,
+        max_hours,
+        min_liquidity,
+        /*include_resolved=*/ false,
+    )
 }
 
 /// Backtest variant: also accepts already-resolved candles. The harness needs
@@ -76,7 +124,12 @@ pub fn scan_candle_markets_for_backtest(
     markets: &[Market],
     min_liquidity: f64,
 ) -> Vec<CandleContract> {
-    scan_candle_markets_inner(markets, f64::INFINITY, min_liquidity, /*include_resolved=*/ true)
+    scan_candle_markets_inner(
+        markets,
+        f64::INFINITY,
+        min_liquidity,
+        /*include_resolved=*/ true,
+    )
 }
 
 fn scan_candle_markets_inner(
@@ -92,9 +145,14 @@ fn scan_candle_markets_inner(
         if !include_resolved && (!m.active || m.closed) {
             continue;
         }
-        let Some(caps) = CANDLE_RE.captures(&m.question) else { continue };
+        let Some(caps) = CANDLE_RE.captures(&m.question) else {
+            continue;
+        };
         let asset = prefix_to_asset(caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-        let window_desc = caps.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let window_desc = caps
+            .get(2)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
 
         if m.outcomes.len() != 2 {
             continue;
@@ -145,7 +203,9 @@ fn scan_candle_markets_inner(
     }
 
     contracts.sort_by(|a, b| {
-        a.hours_left.partial_cmp(&b.hours_left).unwrap_or(std::cmp::Ordering::Equal)
+        a.hours_left
+            .partial_cmp(&b.hours_left)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     tracing::info!(
@@ -175,8 +235,16 @@ mod tests {
             question: question.into(),
             slug: "x".into(),
             outcomes: vec![
-                Outcome { token_id: "u".into(), name: "Up".into(), price: 0.5 },
-                Outcome { token_id: "d".into(), name: "Down".into(), price: 0.5 },
+                Outcome {
+                    token_id: "u".into(),
+                    name: "Up".into(),
+                    price: 0.5,
+                },
+                Outcome {
+                    token_id: "d".into(),
+                    name: "Down".into(),
+                    price: 0.5,
+                },
             ],
             tags: vec![],
             category: String::new(),
@@ -228,5 +296,34 @@ mod tests {
         let past = (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
         let m = mk_market("Bitcoin Up or Down - April 4, 3AM ET?", &past, 500.0);
         assert!(scan_candle_markets(&[m], 2.0, 100.0).is_empty());
+    }
+
+    #[test]
+    fn terminal_resolution_reads_closed_outcomes() {
+        let past = (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+        let mut m = mk_market("Bitcoin Up or Down - April 4, 3AM ET?", &past, 500.0);
+        m.closed = true;
+        m.outcomes[0].price = 0.0;
+        m.outcomes[1].price = 1.0;
+
+        let cs = scan_candle_markets_for_backtest(&[m], 100.0);
+
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].terminal_resolution().unwrap().0, "down");
+        assert_eq!(cs[0].terminal_direction().as_deref(), Some("down"));
+    }
+
+    #[test]
+    fn terminal_resolution_ignores_stale_nonterminal_prices() {
+        let past = (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+        let mut m = mk_market("Bitcoin Up or Down - April 4, 3AM ET?", &past, 500.0);
+        m.closed = true;
+        m.outcomes[0].price = 0.62;
+        m.outcomes[1].price = 0.38;
+
+        let cs = scan_candle_markets_for_backtest(&[m], 100.0);
+
+        assert_eq!(cs.len(), 1);
+        assert!(cs[0].terminal_resolution().is_none());
     }
 }

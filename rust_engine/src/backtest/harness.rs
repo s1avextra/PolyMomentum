@@ -104,6 +104,7 @@ impl CandleUniverse {
                     condition_id: c.market.condition_id.clone(),
                     open_ts_s: close - window_minutes * 60.0,
                     close_ts_s: close,
+                    official_direction: c.terminal_direction(),
                 }
             })
             .collect()
@@ -145,6 +146,7 @@ struct CandleRuntimeContract {
     close_ts_s: f64,
     open_ts_s: f64,
     window_minutes: f64,
+    official_direction: Option<String>,
 }
 
 impl CandleRuntimeContract {
@@ -165,6 +167,7 @@ impl CandleRuntimeContract {
             close_ts_s,
             open_ts_s: close_ts_s - window_minutes * 60.0,
             window_minutes,
+            official_direction: contract.terminal_direction(),
         }
     }
 }
@@ -217,6 +220,7 @@ struct BacktestOpenPosition {
     direction: String,
     open_btc: f64,
     close_ts_s: f64,
+    official_direction: Option<String>,
     entry_price: f64,
     size: f64,
     fee: f64,
@@ -349,11 +353,12 @@ impl CandleBacktestStrategy {
                 self.open_positions.insert(intent_id, pos);
                 continue;
             }
-            let actual = if close_btc >= pos.open_btc {
+            let local_actual = if close_btc >= pos.open_btc {
                 "up"
             } else {
                 "down"
             };
+            let actual = pos.official_direction.as_deref().unwrap_or(local_actual);
             let won = pos.direction == actual;
             let pnl = paper_outcome_pnl(won, pos.entry_price, pos.size, pos.fee);
             self.breaker_state.record_resolution(won, pnl);
@@ -681,6 +686,7 @@ impl Strategy for CandleBacktestStrategy {
                 direction: decision.direction.clone(),
                 open_btc: signal.open_price,
                 close_ts_s: runtime.close_ts_s,
+                official_direction: runtime.official_direction.clone(),
                 entry_price: sizing_price,
                 size,
                 fee: 0.0,
@@ -1670,6 +1676,7 @@ mod tests {
                     direction: "up".to_string(),
                     open_btc: 100.0,
                     close_ts_s,
+                    official_direction: None,
                     entry_price: 0.0,
                     size: 0.0,
                     fee: 0.0,

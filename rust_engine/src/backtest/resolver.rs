@@ -19,7 +19,13 @@ pub struct ResolvedTrade {
     pub decision: CandleDecision,
     pub open_btc: f64,
     pub close_btc: f64,
+    #[serde(default)]
+    pub local_direction: String,
     pub actual_direction: String,
+    #[serde(default)]
+    pub resolution_source: String,
+    #[serde(default)]
+    pub resolution_disagreed: bool,
     pub won: bool,
     /// Realized P&L *before* fees: (1 - fill_price) * size on win, -fill_price * size on loss.
     pub pnl: f64,
@@ -404,6 +410,8 @@ pub struct CandleWindow {
     pub open_ts_s: f64,
     /// Close of the window in seconds since epoch.
     pub close_ts_s: f64,
+    /// Polymarket terminal outcome when historical metadata already has it.
+    pub official_direction: Option<String>,
 }
 
 /// Resolve a list of fills + decisions against the BTC tape. Each fill must
@@ -450,7 +458,11 @@ pub fn resolve_fills(
             continue;
         }
 
-        let actual = if close_btc >= open_btc { "up" } else { "down" };
+        let local_actual = if close_btc >= open_btc { "up" } else { "down" };
+        let (actual, resolution_source) = match window.official_direction.as_deref() {
+            Some(direction) => (direction, "polymarket_terminal"),
+            None => (local_actual, "btc_close"),
+        };
         let won = decision.direction == actual;
         let pnl = if won {
             (1.0 - fill.fill_price) * fill.filled_size
@@ -464,7 +476,10 @@ pub fn resolve_fills(
             decision: decision.clone(),
             open_btc,
             close_btc,
+            local_direction: local_actual.to_string(),
             actual_direction: actual.to_string(),
+            resolution_source: resolution_source.to_string(),
+            resolution_disagreed: actual != local_actual,
             won,
             pnl,
             pnl_after_fee,
@@ -539,20 +554,29 @@ mod tests {
         fill
     }
 
+    fn mk_window(cid: &str, official_direction: Option<&str>) -> CandleWindow {
+        CandleWindow {
+            condition_id: cid.into(),
+            open_ts_s: 1_700_000_000.0,
+            close_ts_s: 1_700_000_300.0,
+            official_direction: official_direction.map(str::to_string),
+        }
+    }
+
     #[test]
     fn resolves_winning_up_trade() {
         let h = mk_history();
-        let windows = vec![CandleWindow {
-            condition_id: "c1".into(),
-            open_ts_s: 1_700_000_000.0,
-            close_ts_s: 1_700_000_300.0,
-        }];
+        let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("up")];
         let res = resolve_fills(&fills, &decisions, &windows, &h);
         assert_eq!(res.n_trades(), 1);
         let t = &res.trades[0];
         assert!(t.won);
+        assert_eq!(t.local_direction, "up");
+        assert_eq!(t.actual_direction, "up");
+        assert_eq!(t.resolution_source, "btc_close");
+        assert!(!t.resolution_disagreed);
         // pnl = (1 - 0.40) * 10 = 6.0; minus fee 0.10 = 5.90
         assert!((t.pnl_after_fee - 5.9).abs() < 1e-9);
     }
@@ -560,11 +584,7 @@ mod tests {
     #[test]
     fn resolves_losing_down_trade() {
         let h = mk_history();
-        let windows = vec![CandleWindow {
-            condition_id: "c1".into(),
-            open_ts_s: 1_700_000_000.0,
-            close_ts_s: 1_700_000_300.0,
-        }];
+        let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("down")]; // BTC went up, we predicted down → loss
         let res = resolve_fills(&fills, &decisions, &windows, &h);
@@ -573,6 +593,25 @@ mod tests {
         assert!(!t.won);
         // pnl = -0.40 * 10 = -4.0; minus fee 0.10 = -4.10
         assert!((t.pnl_after_fee + 4.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn official_terminal_outcome_overrides_btc_close() {
+        let h = mk_history();
+        let windows = vec![mk_window("c1", Some("down"))];
+        let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
+        let decisions = vec![mk_decision("down")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.n_trades(), 1);
+        let t = &res.trades[0];
+        assert!(t.won);
+        assert_eq!(t.local_direction, "up");
+        assert_eq!(t.actual_direction, "down");
+        assert_eq!(t.resolution_source, "polymarket_terminal");
+        assert!(t.resolution_disagreed);
+        assert!((t.pnl_after_fee - 5.9).abs() < 1e-9);
     }
 
     #[test]
@@ -588,11 +627,7 @@ mod tests {
     #[test]
     fn failed_execution_attempt_is_not_unresolved_exposure() {
         let h = mk_history();
-        let windows = vec![CandleWindow {
-            condition_id: "c1".into(),
-            open_ts_s: 1_700_000_000.0,
-            close_ts_s: 1_700_000_300.0,
-        }];
+        let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_failed_fill("maker_unfilled")];
         let decisions = vec![mk_decision("up")];
 
@@ -607,11 +642,7 @@ mod tests {
     #[test]
     fn pnl_diagnostics_preserve_win_loss_asymmetry() {
         let h = mk_history();
-        let windows = vec![CandleWindow {
-            condition_id: "c1".into(),
-            open_ts_s: 1_700_000_000.0,
-            close_ts_s: 1_700_000_300.0,
-        }];
+        let windows = vec![mk_window("c1", None)];
         let fills = vec![
             mk_fill("c1", 0.40, 10.0, 0.10),
             mk_fill("c1", 0.40, 10.0, 0.10),
@@ -632,11 +663,7 @@ mod tests {
     #[test]
     fn causal_bucket_diagnostics_use_decision_regime() {
         let h = mk_history();
-        let windows = vec![CandleWindow {
-            condition_id: "c1".into(),
-            open_ts_s: 1_700_000_000.0,
-            close_ts_s: 1_700_000_300.0,
-        }];
+        let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let mut decision = mk_decision("up");
         decision.regime = DecisionRegime {

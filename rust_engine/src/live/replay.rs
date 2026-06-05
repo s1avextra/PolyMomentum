@@ -1310,39 +1310,9 @@ fn replay_outcome_prices(actual: &str) -> [f64; 2] {
 }
 
 fn replay_polymarket_resolution(contract: &CandleContract) -> Option<(String, [f64; 2], bool)> {
-    let up_price = contract
-        .market
-        .outcomes
-        .iter()
-        .find(|o| o.token_id == contract.up_token_id)
-        .map(|o| o.price)
-        .unwrap_or(contract.up_price);
-    let down_price = contract
-        .market
-        .outcomes
-        .iter()
-        .find(|o| o.token_id == contract.down_token_id)
-        .map(|o| o.price)
-        .unwrap_or(contract.down_price);
-    let outcome_prices = [up_price, down_price];
-    let terminal = up_price >= 0.99
-        || down_price >= 0.99
-        || ((up_price - down_price).abs() <= 1e-9 && up_price > 0.0);
-    if !terminal {
-        return None;
-    }
-    if up_price <= 0.0 && down_price <= 0.0 {
-        return None;
-    }
-
-    let actual = if (up_price - down_price).abs() <= 1e-9 {
-        "tie"
-    } else if up_price > down_price {
-        "up"
-    } else {
-        "down"
-    };
-    Some((actual.to_string(), outcome_prices, contract.market.closed))
+    contract
+        .terminal_resolution()
+        .map(|(actual, outcome_prices)| (actual, outcome_prices, contract.market.closed))
 }
 
 fn replay_microstructure(book: &TokenBook) -> BookMicrostructure {
