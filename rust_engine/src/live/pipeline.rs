@@ -537,6 +537,8 @@ fn zones_equal_except_settlement(before: ZoneConfig, after: ZoneConfig) -> bool 
         && before.max_price == after.max_price
         && before.edge_cap == after.edge_cap
         && before.min_ev_buffer == after.min_ev_buffer
+        && before.min_reversion_count == after.min_reversion_count
+        && before.max_reversion_count == after.max_reversion_count
 }
 
 pub struct Pipeline {

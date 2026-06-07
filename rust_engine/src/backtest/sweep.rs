@@ -43,8 +43,12 @@ pub struct SweepGrid {
     pub settlement_sigma_buffer: Vec<f64>,
     /// Maximum feed-forward reversion count allowed; 0 disables the cap.
     pub max_reversion_count: Vec<u64>,
+    /// Minimum feed-forward reversion count required; 0 disables the floor.
+    pub min_reversion_count: Vec<u64>,
     /// Whether to include a maker variant for each (conf, z, edge) cell.
     pub also_maker: bool,
+    /// Restrict the grid to maker variants only.
+    pub maker_only: bool,
     /// Maximum executable spread, in binary-option price points.
     pub micro_max_spread: Vec<f64>,
     /// Minimum depth on the thinner side of the order book.
@@ -125,7 +129,9 @@ impl SweepGrid {
             settlement_guard_minutes: vec![settlement_guard_minutes],
             settlement_sigma_buffer: vec![settlement_sigma_buffer],
             max_reversion_count: vec![0],
+            min_reversion_count: vec![0],
             also_maker: true,
+            maker_only: false,
             micro_max_spread: vec![micro_max_spread],
             micro_min_depth: vec![micro_min_depth],
             micro_min_pressure: vec![micro_min_pressure],
@@ -142,7 +148,9 @@ impl SweepGrid {
     /// Generate every guarded strategy cell.
     /// Cartesian product can balloon — keep the grid small.
     pub fn variants(&self) -> Vec<StrategyVariant> {
-        let maker_sides: Vec<bool> = if self.also_maker {
+        let maker_sides: Vec<bool> = if self.maker_only {
+            vec![true]
+        } else if self.also_maker {
             vec![false, true]
         } else {
             vec![false]
@@ -159,6 +167,7 @@ impl SweepGrid {
                 * self.settlement_guard_minutes.len()
                 * self.settlement_sigma_buffer.len()
                 * self.max_reversion_count.len()
+                * self.min_reversion_count.len()
                 * self.micro_max_spread.len()
                 * self.micro_min_depth.len()
                 * self.micro_min_pressure.len()
@@ -185,12 +194,18 @@ impl SweepGrid {
                                                 for &max_reversion_count in
                                                     &self.max_reversion_count
                                                 {
-                                                    for &micro_spread in &self.micro_max_spread {
-                                                        for &micro_depth in &self.micro_min_depth {
-                                                            for &micro_pressure in
-                                                                &self.micro_min_pressure
+                                                    for &min_reversion_count in
+                                                        &self.min_reversion_count
+                                                    {
+                                                        for &micro_spread in &self.micro_max_spread
+                                                        {
+                                                            for &micro_depth in
+                                                                &self.micro_min_depth
                                                             {
-                                                                for &stress_dd_cap in &self
+                                                                for &micro_pressure in
+                                                                    &self.micro_min_pressure
+                                                                {
+                                                                    for &stress_dd_cap in &self
                                                                 .max_projected_stressed_drawdown_pct
                                                             {
                                                                 for &degraded_after_losses in
@@ -221,6 +236,7 @@ impl SweepGrid {
                                                                                         floor,
                                                                                         guard,
                                                                                         sigma,
+                                                                                        min_reversion_count,
                                                                                         max_reversion_count,
                                                                                         micro_spread,
                                                                                         micro_depth,
@@ -239,6 +255,7 @@ impl SweepGrid {
                                                                     }
                                                                 }
                                                             }
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -275,6 +292,7 @@ impl SweepGrid {
             settlement_min_abs_move_usd: cell.floor,
             settlement_guard_minutes: cell.guard,
             settlement_sigma_buffer: cell.sigma,
+            min_reversion_count: cell.min_reversion_count,
             max_reversion_count: if cell.max_reversion_count == 0 {
                 ZoneConfig::default().max_reversion_count
             } else {
@@ -318,9 +336,14 @@ impl SweepGrid {
         } else {
             String::new()
         };
+        let min_reversion_suffix = if cell.min_reversion_count > 0 {
+            format!("_minrv{}", cell.min_reversion_count)
+        } else {
+            String::new()
+        };
 
         let label = format!(
-            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
+            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
             self.zone_mode.as_str(),
             cell.conf,
             cell.z,
@@ -329,6 +352,7 @@ impl SweepGrid {
             cell.min_price,
             cell.max_price,
             cutoff_suffix,
+            min_reversion_suffix,
             reversion_suffix,
             cell.floor,
             cell.guard,
@@ -381,6 +405,7 @@ struct SweepCell {
     floor: f64,
     guard: f64,
     sigma: f64,
+    min_reversion_count: u64,
     max_reversion_count: u64,
     micro_spread: f64,
     micro_depth: f64,
@@ -462,6 +487,19 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             variants.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names.len(), variants.len());
+    }
+
+    #[test]
+    fn maker_only_emits_no_taker_variants() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.maker_only = true;
+
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2);
+        assert!(variants.iter().all(|v| v.prefer_maker));
+        assert!(variants.iter().all(|v| v.name.ends_with("_mk")));
     }
 
     #[test]
@@ -558,6 +596,22 @@ mod tests {
         assert!(variants
             .iter()
             .any(|v| v.zone_config.max_reversion_count == u64::MAX));
+    }
+
+    #[test]
+    fn min_reversion_count_dimension_applies_to_zone_config() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.min_reversion_count = vec![0, 1];
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2 * 2 * 2);
+        assert!(variants
+            .iter()
+            .any(|v| v.zone_config.min_reversion_count == 1 && v.name.contains("_minrv1_")));
+        assert!(variants
+            .iter()
+            .any(|v| v.zone_config.min_reversion_count == 0 && !v.name.contains("_minrv0_")));
     }
 
     #[test]

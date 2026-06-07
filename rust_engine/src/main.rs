@@ -262,6 +262,9 @@ enum Command {
         /// Comma-separated max reversion counts; 0 disables the cap.
         #[arg(long, default_value = "0")]
         max_reversion_count: String,
+        /// Comma-separated min reversion counts; 0 disables the floor.
+        #[arg(long, default_value = "0")]
+        min_reversion_count: String,
         /// Comma-separated executable spread ceilings for microstructure gates.
         #[arg(long, default_value = "1.0")]
         micro_max_spread: String,
@@ -301,6 +304,9 @@ enum Command {
         /// Include both maker and taker fill model variants per cell.
         #[arg(long, default_value_t = true)]
         also_maker: bool,
+        /// Restrict the sweep grid to maker fill variants only.
+        #[arg(long, default_value_t = false)]
+        maker_only: bool,
         /// Restrict grid to one timing zone: all, early, primary, late, terminal.
         #[arg(long, default_value = "all")]
         zone_mode: String,
@@ -990,7 +996,7 @@ enum StrategyBuilderCommand {
         /// Limit number of folds for bounded smoke runs.
         #[arg(long)]
         max_folds: Option<usize>,
-        /// Rolling lab profile, e.g. a_plus5m, a_plus5m_adaptive, or a_plus5m_causal_guard.
+        /// Rolling lab profile, e.g. a_plus5m, a_plus5m_causal_guard, or a_plus5m_reversion_guard.
         #[arg(long, default_value = "a_plus5m")]
         profile: String,
         /// Restrict sweeps to one timing zone: all, early, primary, late, terminal.
@@ -1291,6 +1297,7 @@ async fn main() {
             settlement_guard_minutes,
             settlement_sigma_buffer,
             max_reversion_count,
+            min_reversion_count,
             micro_max_spread,
             micro_min_depth,
             micro_min_pressure,
@@ -1304,6 +1311,7 @@ async fn main() {
             degraded_max_price,
             degraded_force_taker,
             also_maker,
+            maker_only,
             zone_mode,
             top,
             threads,
@@ -1327,6 +1335,7 @@ async fn main() {
             let settlement_guards = parse_csv_floats(&settlement_guard_minutes);
             let settlement_sigmas = parse_csv_floats(&settlement_sigma_buffer);
             let max_reversion_count = parse_csv_u64s(&max_reversion_count);
+            let min_reversion_count = parse_csv_u64s(&min_reversion_count);
             let micro_spreads = parse_csv_floats(&micro_max_spread);
             let micro_depths = parse_csv_floats(&micro_min_depth);
             let micro_pressures = parse_csv_floats(&micro_min_pressure);
@@ -1358,6 +1367,7 @@ async fn main() {
                 settlement_guards,
                 settlement_sigmas,
                 max_reversion_count,
+                min_reversion_count,
                 micro_spreads,
                 micro_depths,
                 micro_pressures,
@@ -1371,6 +1381,7 @@ async fn main() {
                 degraded_max_price,
                 degraded_force_taker,
                 also_maker,
+                maker_only,
                 zone_mode,
                 top,
                 threads,
@@ -1637,6 +1648,7 @@ struct RollingHistoryProfile {
     settlement_floor: String,
     settlement_guard_minutes: String,
     settlement_sigma_buffer: String,
+    min_reversion_count: String,
     max_reversion_count: String,
     micro_max_spread: String,
     micro_min_depth: String,
@@ -1921,6 +1933,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             profile.settlement_guard_minutes.clone(),
             "--settlement-sigma-buffer".to_string(),
             profile.settlement_sigma_buffer.clone(),
+            "--min-reversion-count".to_string(),
+            profile.min_reversion_count.clone(),
             "--max-reversion-count".to_string(),
             profile.max_reversion_count.clone(),
             "--micro-max-spread".to_string(),
@@ -2225,6 +2239,7 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             settlement_floor: "10.0".to_string(),
             settlement_guard_minutes: "1.0".to_string(),
             settlement_sigma_buffer: "0.0".to_string(),
+            min_reversion_count: "0".to_string(),
             max_reversion_count: "0".to_string(),
             micro_max_spread: "1.0".to_string(),
             micro_min_depth: "0.0".to_string(),
@@ -2286,6 +2301,16 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.max_price = "0.75,0.85".to_string();
             profile.settlement_cutoff_minutes = "2.0".to_string();
             profile.settlement_guard_minutes = "2.0".to_string();
+            profile.max_reversion_count = "2".to_string();
+            profile
+        }
+        "a_plus5m_reversion_guard" => {
+            let mut profile = rolling_history_profile("a_plus5m_causal_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.50".to_string();
+            profile.min_price = "0.75".to_string();
+            profile.max_price = "0.85".to_string();
+            profile.min_reversion_count = "1".to_string();
             profile.max_reversion_count = "2".to_string();
             profile
         }
@@ -4678,6 +4703,7 @@ async fn cmd_harness_sweep(
     settlement_guard_minutes: Vec<f64>,
     settlement_sigma_buffer: Vec<f64>,
     max_reversion_count: Vec<u64>,
+    min_reversion_count: Vec<u64>,
     micro_max_spread: Vec<f64>,
     micro_min_depth: Vec<f64>,
     micro_min_pressure: Vec<f64>,
@@ -4691,6 +4717,7 @@ async fn cmd_harness_sweep(
     degraded_max_price: Vec<f64>,
     degraded_force_taker: bool,
     also_maker: bool,
+    maker_only: bool,
     zone_mode: backtest::sweep::ZoneMode,
     top: usize,
     threads: usize,
@@ -4785,6 +4812,10 @@ async fn cmd_harness_sweep(
         eprintln!("--max-reversion-count must contain at least one integer");
         std::process::exit(2);
     }
+    if min_reversion_count.is_empty() {
+        eprintln!("--min-reversion-count must contain at least one integer");
+        std::process::exit(2);
+    }
     let adaptive_rearm_after_s = match adaptive_health_rearm_minutes {
         m if !m.is_finite() || m < 0.0 => {
             eprintln!("--adaptive-health-rearm-minutes must be a finite non-negative number");
@@ -4812,6 +4843,7 @@ async fn cmd_harness_sweep(
         settlement_guard_minutes,
         settlement_sigma_buffer,
         max_reversion_count,
+        min_reversion_count,
         micro_max_spread,
         micro_min_depth,
         micro_min_pressure,
@@ -4822,6 +4854,7 @@ async fn cmd_harness_sweep(
         degraded_max_price,
         degraded_force_taker,
         also_maker,
+        maker_only,
         zone_mode,
     };
     let variants = grid.variants();
