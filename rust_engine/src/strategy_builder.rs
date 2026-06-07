@@ -5,7 +5,8 @@
 //! PMXT harness sweep, aggregate promotion, cached live-replay parity, and
 //! session diagnostics.
 
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -13,6 +14,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 
 use crate::backtest::experiment::{self, PromotionArtifact};
+use crate::backtest::resolver::TradePnlDiagnostics;
 use crate::backtest::strategies::StrategyVariant;
 use crate::monitoring::{causality, diagnostics};
 use crate::strategy::spec::stable_json_hash;
@@ -89,6 +91,106 @@ pub struct StrategyBuilderCheck {
     pub name: String,
     pub status: StrategyBuilderCheckStatus,
     pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderSelectivitySearchInput {
+    pub report_paths: Vec<String>,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub top: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderSelectivitySearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub methodology: Vec<String>,
+    pub gates: SelectivitySearchGates,
+    pub candidates: Vec<SelectivityCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectivitySearchGates {
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectivityCandidateReport {
+    pub rank: usize,
+    pub passed: bool,
+    pub variant: String,
+    pub rule: SelectivityRule,
+    pub aggregate: SelectivityStatsReport,
+    pub fold_forward: SelectivityFoldForwardReport,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectivityStatsReport {
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub win_rate: f64,
+    pub wilson_win_rate_lower: f64,
+    pub total_pnl: f64,
+    pub avg_pnl: f64,
+    pub profit_factor: f64,
+    pub payoff_ratio: f64,
+    pub worst_loss_to_avg_win: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectivityFoldForwardReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub worst_report_pnl: f64,
+    pub stats: SelectivityStatsReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct SelectivityRule {
+    pub dimension: String,
+    pub value: String,
+    pub action: SelectivityAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectivityAction {
+    AllowOnly,
+    Deny,
+}
+
+#[derive(Debug, Clone)]
+struct SelectivityFold {
+    variants: Vec<SelectivityVariantFold>,
+}
+
+#[derive(Debug, Clone)]
+struct SelectivityVariantFold {
+    name: String,
+    buckets: BTreeMap<String, TradePnlDiagnostics>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SelectivityCandidateKey {
+    variant: String,
+    rule: SelectivityRule,
 }
 
 #[derive(Debug, Clone)]
@@ -847,6 +949,318 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
         checks,
         next_steps,
     }
+}
+
+pub fn selectivity_search(
+    input: StrategyBuilderSelectivitySearchInput,
+) -> Result<StrategyBuilderSelectivitySearch> {
+    if input.report_paths.len() < 2 {
+        bail!("selectivity search needs at least two reports");
+    }
+    if input.min_train_reports == 0 {
+        bail!("--min-train-reports must be > 0");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+
+    let mut folds = Vec::new();
+    for report_path in &input.report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load selectivity report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| SelectivityVariantFold {
+                name: variant_report_name(variant),
+                buckets: variant.diagnostics.by_causal_bucket.clone(),
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+
+    Ok(selectivity_search_from_folds(&folds, &input))
+}
+
+fn selectivity_search_from_folds(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderSelectivitySearchInput,
+) -> StrategyBuilderSelectivitySearch {
+    let mut candidates = candidate_keys(folds)
+        .into_iter()
+        .map(|candidate| evaluate_selectivity_candidate(folds, input, candidate))
+        .collect::<Vec<_>>();
+    let candidate_count = candidates.len();
+
+    candidates.sort_by(|a, b| {
+        b.passed
+            .cmp(&a.passed)
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.total_pnl,
+                    b.fold_forward.stats.total_pnl,
+                )
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.wilson_win_rate_lower,
+                    b.fold_forward.stats.wilson_win_rate_lower,
+                )
+            })
+            .then_with(|| {
+                b.fold_forward
+                    .stats
+                    .trades
+                    .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| f64_desc(a.aggregate.total_pnl, b.aggregate.total_pnl))
+            .then_with(|| a.variant.cmp(&b.variant))
+            .then_with(|| a.rule.cmp(&b.rule))
+    });
+
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let top = input.top.max(1);
+    candidates.truncate(top);
+
+    StrategyBuilderSelectivitySearch {
+        schema_version: 1,
+        ok: candidates.iter().any(|candidate| candidate.passed),
+        report_count: folds.len(),
+        candidate_count,
+        methodology: vec![
+            "Generate one-dimensional allow-only and deny rules from causal PnL buckets already emitted by feed-forward harness reports.".to_string(),
+            "Score each OOS report only when the same rule had enough prior-report trades and positive prior-report PnL.".to_string(),
+            "Do not use future folds to decide whether a current fold is eligible; late lucky regimes cannot select themselves backward.".to_string(),
+            "Treat these results as strategy hypotheses; rerun the selected rule through full harness/live-replay before promotion.".to_string(),
+        ],
+        gates: SelectivitySearchGates {
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+        },
+        candidates,
+    }
+}
+
+fn candidate_keys(folds: &[SelectivityFold]) -> Vec<SelectivityCandidateKey> {
+    let mut dimensions_by_variant: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> =
+        BTreeMap::new();
+    for fold in folds {
+        for variant in &fold.variants {
+            let dimensions = dimensions_by_variant
+                .entry(variant.name.clone())
+                .or_default();
+            for key in variant.buckets.keys() {
+                if let Some((dimension, value)) = split_bucket_key(key) {
+                    dimensions
+                        .entry(dimension.to_string())
+                        .or_default()
+                        .insert(value.to_string());
+                }
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for (variant, dimensions) in dimensions_by_variant {
+        for (dimension, values) in dimensions {
+            for value in &values {
+                candidates.push(SelectivityCandidateKey {
+                    variant: variant.clone(),
+                    rule: SelectivityRule {
+                        dimension: dimension.clone(),
+                        value: value.clone(),
+                        action: SelectivityAction::AllowOnly,
+                    },
+                });
+                if values.len() > 1 {
+                    candidates.push(SelectivityCandidateKey {
+                        variant: variant.clone(),
+                        rule: SelectivityRule {
+                            dimension: dimension.clone(),
+                            value: value.clone(),
+                            action: SelectivityAction::Deny,
+                        },
+                    });
+                }
+            }
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn evaluate_selectivity_candidate(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderSelectivitySearchInput,
+    candidate: SelectivityCandidateKey,
+) -> SelectivityCandidateReport {
+    let mut aggregate = TradePnlDiagnostics::default();
+    for fold in folds {
+        aggregate.merge_from(&rule_stats_for_fold(
+            fold,
+            &candidate.variant,
+            &candidate.rule,
+        ));
+    }
+
+    let mut oos = TradePnlDiagnostics::default();
+    let mut eligible_reports = 0_usize;
+    let mut profitable_reports = 0_usize;
+    let mut losing_reports = 0_usize;
+    let mut worst_report_pnl: Option<f64> = None;
+
+    for idx in 0..folds.len() {
+        if idx < input.min_train_reports {
+            continue;
+        }
+
+        let mut train = TradePnlDiagnostics::default();
+        let mut train_reports_with_trades = 0_usize;
+        for train_fold in &folds[..idx] {
+            let fold_stats = rule_stats_for_fold(train_fold, &candidate.variant, &candidate.rule);
+            if fold_stats.trades > 0 {
+                train_reports_with_trades += 1;
+            }
+            train.merge_from(&fold_stats);
+        }
+
+        if train_reports_with_trades < input.min_train_reports
+            || train.trades < input.min_train_trades
+            || train.total_pnl <= 0.0
+        {
+            continue;
+        }
+
+        let fold_stats = rule_stats_for_fold(&folds[idx], &candidate.variant, &candidate.rule);
+        if fold_stats.trades == 0 {
+            continue;
+        }
+
+        eligible_reports += 1;
+        if fold_stats.total_pnl > 0.0 {
+            profitable_reports += 1;
+        } else if fold_stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst_report_pnl = Some(match worst_report_pnl {
+            Some(current) => current.min(fold_stats.total_pnl),
+            None => fold_stats.total_pnl,
+        });
+        oos.merge_from(&fold_stats);
+    }
+
+    let fold_forward = SelectivityFoldForwardReport {
+        eligible_reports,
+        profitable_reports,
+        losing_reports,
+        worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        stats: stats_report(&oos),
+    };
+    let passed = fold_forward.stats.trades >= input.min_oos_trades
+        && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
+        && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
+        && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+
+    let mut notes = vec![
+        "aggregate bucket rule; rerun selected candidates in full harness before promotion"
+            .to_string(),
+        "fold-forward eligibility uses only prior reports".to_string(),
+    ];
+    if candidate.rule.action == SelectivityAction::Deny {
+        notes.push(
+            "deny rule is the complement inside one causal bucket dimension, not an interaction search"
+                .to_string(),
+        );
+    }
+    if !passed {
+        notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+
+    SelectivityCandidateReport {
+        rank: 0,
+        passed,
+        variant: candidate.variant,
+        rule: candidate.rule,
+        aggregate: stats_report(&aggregate),
+        fold_forward,
+        notes,
+    }
+}
+
+fn rule_stats_for_fold(
+    fold: &SelectivityFold,
+    variant_name: &str,
+    rule: &SelectivityRule,
+) -> TradePnlDiagnostics {
+    let Some(variant) = fold
+        .variants
+        .iter()
+        .find(|variant| variant.name == variant_name)
+    else {
+        return TradePnlDiagnostics::default();
+    };
+    let key = format!("{}={}", rule.dimension, rule.value);
+    match rule.action {
+        SelectivityAction::AllowOnly => variant.buckets.get(&key).cloned().unwrap_or_default(),
+        SelectivityAction::Deny => {
+            let mut stats = TradePnlDiagnostics::default();
+            for (bucket_key, bucket_stats) in &variant.buckets {
+                let Some((dimension, value)) = split_bucket_key(bucket_key) else {
+                    continue;
+                };
+                if dimension == rule.dimension && value != rule.value {
+                    stats.merge_from(bucket_stats);
+                }
+            }
+            stats
+        }
+    }
+}
+
+fn stats_report(stats: &TradePnlDiagnostics) -> SelectivityStatsReport {
+    SelectivityStatsReport {
+        trades: stats.trades,
+        wins: stats.wins,
+        losses: stats.losses,
+        win_rate: stats.win_rate,
+        wilson_win_rate_lower: wilson_lower(stats.wins as usize, stats.trades as usize),
+        total_pnl: stats.total_pnl,
+        avg_pnl: stats.avg_pnl,
+        profit_factor: stats.profit_factor,
+        payoff_ratio: stats.payoff_ratio,
+        worst_loss_to_avg_win: stats.worst_loss_to_avg_win,
+    }
+}
+
+fn split_bucket_key(key: &str) -> Option<(&str, &str)> {
+    key.split_once('=')
+}
+
+fn variant_report_name(variant: &experiment::VariantReport) -> String {
+    variant
+        .strategy_params
+        .get("name")
+        .and_then(|value| value.as_str())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| variant.strategy.params_hash.clone())
+}
+
+fn f64_desc(left: f64, right: f64) -> Ordering {
+    right.partial_cmp(&left).unwrap_or(Ordering::Equal)
 }
 
 fn only_passive_execution_failures(reject_reasons: &BTreeMap<String, usize>) -> bool {
@@ -2030,6 +2444,83 @@ mod tests {
     }
 
     #[test]
+    fn selectivity_search_prefers_feed_forward_down_rule() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(4, 0, 4.0, 0.0)),
+                ("direction=up", pnl_stats(0, 2, 0.0, -2.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(4, 0, 4.0, 0.0)),
+                ("direction=up", pnl_stats(1, 2, 1.0, -2.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(5, 0, 5.0, 0.0)),
+                ("direction=up", pnl_stats(0, 3, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(5, 0, 5.0, 0.0)),
+                ("direction=up", pnl_stats(1, 3, 1.0, -3.0)),
+            ]),
+        ];
+        let search = selectivity_search_from_folds(&folds, &selectivity_input(20));
+
+        let down_rule = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.variant == "candidate"
+                    && candidate.rule.dimension == "direction"
+                    && candidate.rule.value == "down"
+                    && candidate.rule.action == SelectivityAction::AllowOnly
+            })
+            .expect("down allow-only candidate");
+
+        assert!(search.ok);
+        assert!(down_rule.passed);
+        assert_eq!(down_rule.fold_forward.eligible_reports, 2);
+        assert_eq!(down_rule.fold_forward.stats.trades, 10);
+        assert_eq!(down_rule.fold_forward.stats.wins, 10);
+        assert!(down_rule.fold_forward.stats.total_pnl > 9.0);
+    }
+
+    #[test]
+    fn selectivity_search_does_not_promote_future_luck() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=up", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=up", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(12, 0, 12.0, 0.0)),
+                ("direction=up", pnl_stats(0, 2, 0.0, -2.0)),
+            ]),
+        ];
+        let search = selectivity_search_from_folds(&folds, &selectivity_input(20));
+
+        let down_rule = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.variant == "candidate"
+                    && candidate.rule.dimension == "direction"
+                    && candidate.rule.value == "down"
+                    && candidate.rule.action == SelectivityAction::AllowOnly
+            })
+            .expect("down allow-only candidate");
+
+        assert!(!search.ok);
+        assert!(down_rule.aggregate.total_pnl > 0.0);
+        assert_eq!(down_rule.fold_forward.eligible_reports, 0);
+        assert_eq!(down_rule.fold_forward.stats.trades, 0);
+        assert!(!down_rule.passed);
+    }
+
+    #[test]
     fn unknown_profile_is_rejected() {
         let err = StrategyBuilderProfile::from_name("mystery").unwrap_err();
         assert!(err.to_string().contains("unknown strategy-builder profile"));
@@ -2044,6 +2535,95 @@ mod tests {
         assert_eq!(profile.min_reversion_count, "1");
         assert_eq!(profile.max_reversion_count, "2");
         assert!(profile.degraded_force_taker);
+    }
+
+    fn selectivity_input(top: usize) -> StrategyBuilderSelectivitySearchInput {
+        StrategyBuilderSelectivitySearchInput {
+            report_paths: Vec::new(),
+            min_train_reports: 2,
+            min_train_trades: 4,
+            min_oos_trades: 5,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 1,
+            min_worst_oos_pnl: 0.0,
+            top,
+        }
+    }
+
+    fn selectivity_fold(buckets: Vec<(&str, TradePnlDiagnostics)>) -> SelectivityFold {
+        SelectivityFold {
+            variants: vec![SelectivityVariantFold {
+                name: "candidate".to_string(),
+                buckets: buckets
+                    .into_iter()
+                    .map(|(key, stats)| (key.to_string(), stats))
+                    .collect(),
+            }],
+        }
+    }
+
+    fn pnl_stats(
+        wins: u64,
+        losses: u64,
+        gross_win_pnl: f64,
+        gross_loss_pnl: f64,
+    ) -> TradePnlDiagnostics {
+        let trades = wins + losses;
+        let total_pnl = gross_win_pnl + gross_loss_pnl;
+        let avg_win_pnl = if wins == 0 {
+            0.0
+        } else {
+            gross_win_pnl / wins as f64
+        };
+        let avg_loss_pnl = if losses == 0 {
+            0.0
+        } else {
+            gross_loss_pnl / losses as f64
+        };
+        let profit_factor = if gross_loss_pnl.abs() > 0.0 {
+            gross_win_pnl / gross_loss_pnl.abs()
+        } else if gross_win_pnl > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        let payoff_ratio = if avg_loss_pnl.abs() > 0.0 {
+            avg_win_pnl / avg_loss_pnl.abs()
+        } else if avg_win_pnl > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        TradePnlDiagnostics {
+            trades,
+            wins,
+            losses,
+            win_rate: if trades == 0 {
+                0.0
+            } else {
+                wins as f64 / trades as f64
+            },
+            total_pnl,
+            avg_pnl: if trades == 0 {
+                0.0
+            } else {
+                total_pnl / trades as f64
+            },
+            gross_win_pnl,
+            gross_loss_pnl,
+            avg_win_pnl,
+            avg_loss_pnl,
+            max_win_pnl: avg_win_pnl,
+            max_loss_pnl: avg_loss_pnl,
+            profit_factor,
+            payoff_ratio,
+            worst_loss_to_avg_win: if avg_win_pnl > 0.0 {
+                avg_loss_pnl.abs() / avg_win_pnl
+            } else {
+                0.0
+            },
+        }
     }
 
     #[test]
