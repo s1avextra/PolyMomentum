@@ -1357,6 +1357,8 @@ fn push_calibration_window_stages(
         format!("--ev-buffer={}", profile.ev_buffer),
         format!("--min-price={}", profile.min_price),
         format!("--max-price={}", profile.max_price),
+        format!("--min-reversion-count={}", profile.min_reversion_count),
+        format!("--max-reversion-count={}", profile.max_reversion_count),
         format!("--settlement-floor={}", profile.settlement_floor),
         format!(
             "--settlement-guard-minutes={}",
@@ -1429,6 +1431,8 @@ fn push_calibration_window_stages(
         format!("--ev-buffer={}", profile.ev_buffer),
         format!("--min-price={}", profile.min_price),
         format!("--max-price={}", profile.max_price),
+        format!("--min-reversion-count={}", profile.min_reversion_count),
+        format!("--max-reversion-count={}", profile.max_reversion_count),
         format!("--settlement-floor={}", profile.settlement_floor),
         format!(
             "--settlement-guard-minutes={}",
@@ -1581,6 +1585,8 @@ struct StrategyBuilderProfile {
     ev_buffer: &'static str,
     min_price: &'static str,
     max_price: &'static str,
+    min_reversion_count: &'static str,
+    max_reversion_count: &'static str,
     settlement_floor: &'static str,
     settlement_guard_minutes: &'static str,
     settlement_sigma_buffer: &'static str,
@@ -1610,6 +1616,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0",
                 min_price: "0.10",
                 max_price: "0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1635,6 +1643,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0,0.05",
                 min_price: "0.10",
                 max_price: "0.75",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "25.0,35.0",
                 settlement_guard_minutes: "5.0",
                 settlement_sigma_buffer: "0.20",
@@ -1660,6 +1670,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0",
                 min_price: "0.10",
                 max_price: "0.75,0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1685,6 +1697,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0",
                 min_price: "0.10",
                 max_price: "0.75,0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1710,6 +1724,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0",
                 min_price: "0.10",
                 max_price: "0.75,0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1735,6 +1751,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "-1.0",
                 min_price: "0.10",
                 max_price: "0.75,0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1760,6 +1778,8 @@ impl StrategyBuilderProfile {
                 ev_buffer: "0.05",
                 min_price: "0.10",
                 max_price: "0.90",
+                min_reversion_count: "0",
+                max_reversion_count: "9999",
                 settlement_floor: "10.0",
                 settlement_guard_minutes: "1.0",
                 settlement_sigma_buffer: "0.0",
@@ -1777,8 +1797,35 @@ impl StrategyBuilderProfile {
                 degraded_force_taker: true,
                 also_maker: true,
             }),
+            "a_plus5m_reversion_guard" => Ok(Self {
+                name: "a_plus5m_reversion_guard",
+                conf: "0.50",
+                z: "0.50,0.70,0.90,1.10",
+                edge: "0.07,0.10",
+                ev_buffer: "-1.0",
+                min_price: "0.75",
+                max_price: "0.85",
+                min_reversion_count: "1",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "20",
+                max_total_exposure_usd: "15",
+                max_projected_stressed_drawdown_pct: "0.24",
+                degraded_after_losses: "1,2",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "0.90",
+                degraded_max_price: "0.75,0.90",
+                degraded_force_taker: true,
+                also_maker: true,
+            }),
             _ => bail!(
-                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, swift5m"
+                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_reversion_guard, swift5m"
             ),
         }
     }
@@ -1986,6 +2033,17 @@ mod tests {
     fn unknown_profile_is_rejected() {
         let err = StrategyBuilderProfile::from_name("mystery").unwrap_err();
         assert!(err.to_string().contains("unknown strategy-builder profile"));
+    }
+
+    #[test]
+    fn reversion_guard_profile_matches_validated_grid() {
+        let profile = StrategyBuilderProfile::from_name("a_plus5m_reversion_guard").unwrap();
+        assert_eq!(profile.conf, "0.50");
+        assert_eq!(profile.min_price, "0.75");
+        assert_eq!(profile.max_price, "0.85");
+        assert_eq!(profile.min_reversion_count, "1");
+        assert_eq!(profile.max_reversion_count, "2");
+        assert!(profile.degraded_force_taker);
     }
 
     #[test]

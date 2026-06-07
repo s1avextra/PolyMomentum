@@ -159,3 +159,97 @@ Promotion is still blocked by sample size and fold density. Required next gate:
    maker probability grid before canary.
 5. Keep validation backtest/live-replay only until a behavior cannot be proven
    offline.
+
+## Broader Current-Data Gate - 2026-06-07
+
+Fresh PMXT preflight checked `2026-05-30T20:00:00Z` through
+`2026-06-06T23:00:00Z`. The first missing archive hour was
+`2026-06-05T09:00:00Z`, so the full-fold effective window was
+`2026-05-30T20:00:00Z` through `2026-06-05T03:00:00Z`.
+
+The run executed 16 complete 8h folds with:
+
+- profile: `a_plus5m_reversion_guard`
+- zone mode: `all`
+- 5 minute windows
+- 32 variants: `z in {0.50,0.70,0.90,1.10}`, `edge in {0.07,0.10}`,
+  taker plus maker twins, degraded fallback after 1 or 2 losses
+- atomic PMXT fetch/replay/delete
+- `--min-fold-top-trades 0` only for diagnostics collection after the strict
+  run correctly rejected the first fold as sparse
+
+Raw parquets were deleted hour by hour. The final artifact tree was only
+8.3 MB and contained reports/metadata; no `.parquet` files remained.
+
+Strict robust promotion rejected all variants. The leading newer-block cell was
+the taker variant:
+
+`all_c0.50_z0.70_e0.07_..._fbL2..._tk`
+
+| Metric | Value |
+| --- | ---: |
+| Trades | 91 |
+| Wins / losses | 82 / 9 |
+| Win rate | 90.11% |
+| Wilson 95 lower | 82.26% |
+| PnL | +42.4734 |
+| Fees | 6.0104 |
+| Avg PnL / trade | +0.4667 |
+| Profitable folds | 12 / 16 |
+| Losing folds | 4 / 16 |
+| Dense folds >= 10 trades | 1 / 16 |
+| Dense folds >= 20 trades | 0 / 16 |
+| Worst fold | -8.1737 |
+| Circuit breakers | 0 |
+
+Robust gate blockers:
+
+- trades `91 < 320`
+- profitable folds `12 < 16`
+- daily/fold density below gate
+- worst fold PnL below zero
+- robust score below zero
+- `direction=up` causal bucket negative with 36 trades
+
+The best structural clue was directional asymmetry:
+
+| Bucket | Trades | Wins / losses | PnL | Profit factor |
+| --- | ---: | ---: | ---: | ---: |
+| `direction=down` | 55 | 52 / 3 | +43.3666 | 3.7712 |
+| `direction=up` | 36 | 30 / 6 | -0.8932 | 0.9715 |
+
+This should not be promoted as a direction-only production guard yet, because a
+single current-data block can make a directional filter look better than it is.
+It is strong enough to define the next feed-forward research hypothesis:
+evaluate a causal, pre-trade directional/regime quality gate across older and
+newer blocks without selecting on the holdout fold.
+
+## Strategy Builder Repair - 2026-06-07
+
+The broader gate surfaced a project-streamlining inconsistency: the
+`strategy-builder rolling-history` profile registry supported
+`a_plus5m_reversion_guard`, but the strategy-builder plan/scout registry did
+not. That meant discovery plans could drift from the validated reversion-guard
+family.
+
+Fixed in `rust_engine/src/strategy_builder.rs`:
+
+- added `min_reversion_count` and `max_reversion_count` profile fields
+- wired those fields into generated `sweep` and `harness-sweep` commands
+- added the `a_plus5m_reversion_guard` strategy-builder profile
+- added a regression test for the validated grid
+
+Verification:
+
+- `cargo test --manifest-path rust_engine/Cargo.toml strategy_builder`
+- `cargo test --manifest-path rust_engine/Cargo.toml`
+- `strategy-builder plan` now emits `--min-reversion-count=1` and
+  `--max-reversion-count=2` for both scout and harness stages
+
+Updated grade: **B+ research candidate / not production**.
+
+The execution/backtest machinery behaved correctly and stayed resource-bounded.
+The strategy itself is still not A+ because the new current block is sparse and
+has negative tail folds. The next productive step is not paper mode; it is a
+feed-forward directional/regime-quality experiment over multiple PMXT blocks,
+with the same robust gates and no timestamp-based filter.
