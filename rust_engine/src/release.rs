@@ -180,6 +180,8 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
         "poly_api_passphrase_present": !settings.poly_api_passphrase.is_empty(),
         "bankroll_usd": settings.bankroll_usd,
+        "simulated_bankroll_usd": settings.simulated_bankroll_usd(),
+        "candle_simulated_balance_reset_on_start": settings.candle_simulated_balance_reset_on_start,
         "max_total_exposure_usd": settings.max_total_exposure_usd,
         "max_position_per_market_usd": settings.max_position_per_market_usd,
         "candle_position_pct": settings.candle_position_pct,
@@ -654,20 +656,24 @@ fn check_dir(name: &'static str, path: &str, mode: RuntimeMode, checks: &mut Vec
 }
 
 fn check_paper_bankroll(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
-    if settings.bankroll_usd > 0.0 {
+    let bankroll = settings.simulated_bankroll_usd();
+    if bankroll > 0.0 {
         push(
             checks,
             "paper_bankroll",
             CheckStatus::Ok,
-            format!("BANKROLL_USD={:.2}", settings.bankroll_usd),
+            if settings.bankroll_usd > 0.0 {
+                format!("BANKROLL_USD={bankroll:.2}")
+            } else {
+                format!("BANKROLL_USD defaulted to simulated ${bankroll:.2}")
+            },
         );
     } else {
         push(
             checks,
             "paper_bankroll",
             CheckStatus::Fail,
-            "paper mode requires BANKROLL_USD > 0 so fills and risk limits are exercised"
-                .to_string(),
+            "paper mode requires a positive simulated bankroll so fills and risk limits are exercised".to_string(),
         );
     }
 }
@@ -834,13 +840,16 @@ mod tests {
     }
 
     #[test]
-    fn paper_preflight_rejects_zero_bankroll() {
+    fn paper_preflight_defaults_zero_bankroll_to_simulated_balance() {
         let tmp = TempDir::new().unwrap();
         let mut s = test_settings(&tmp);
         s.bankroll_usd = 0.0;
         let report = run_preflight(&s, RuntimeMode::Paper, false);
-        assert!(!report.ok);
-        assert!(report.failure_summary().contains("BANKROLL_USD > 0"));
+        assert!(report.ok, "{}", report.failure_summary());
+        assert!(report
+            .checks
+            .iter()
+            .any(|c| c.name == "paper_bankroll" && c.detail.contains("simulated $100.00")));
     }
 
     #[test]

@@ -227,12 +227,14 @@ impl OraclePending {
         let fee = self.fee.unwrap_or(0.0);
         let provisional_won = self.provisional_won?;
         let provisional_pnl = self.provisional_pnl?;
-        let final_won = match polymarket_actual {
-            "up" | "down" => polymarket_actual == direction,
-            "tie" => false,
+        let (final_won, final_pnl) = match polymarket_actual {
+            "up" | "down" => {
+                let won = polymarket_actual == direction;
+                (won, paper_outcome_pnl(won, entry_price, size, fee))
+            }
+            "tie" => (false, (0.5 - entry_price) * size - fee),
             _ => return None,
         };
-        let final_pnl = paper_outcome_pnl(final_won, entry_price, size, fee);
         Some((final_won, final_pnl, provisional_won, provisional_pnl))
     }
 }
@@ -250,7 +252,7 @@ fn paper_position_exposure(pos: &PaperPosition) -> f64 {
 }
 
 fn pending_resolution_exposure(entry: &OraclePending) -> f64 {
-    if entry.shadow || entry.pnl_recorded {
+    if entry.pnl_recorded {
         return 0.0;
     }
     match (entry.entry_price, entry.size) {
@@ -262,7 +264,16 @@ fn pending_resolution_exposure(entry: &OraclePending) -> f64 {
 }
 
 fn pending_requires_realization(entry: &OraclePending) -> bool {
-    !entry.shadow && !entry.pnl_recorded
+    if entry.pnl_recorded {
+        return false;
+    }
+    if entry.shadow {
+        return entry.entry_price.is_some()
+            && entry.size.unwrap_or(0.0) > 0.0
+            && entry.provisional_won.is_some()
+            && entry.provisional_pnl.is_some();
+    }
+    true
 }
 
 fn permanent_live_order_reject_reason(message: &str) -> Option<&'static str> {
@@ -583,7 +594,9 @@ impl Pipeline {
     pub async fn new(settings: Settings, mode: Mode) -> Result<Arc<Self>> {
         let release_manifest = ReleaseManifest::capture(&settings, mode.runtime_mode());
         let runtime_strategy = RuntimeStrategy::load(&settings)?;
-        let bankroll = if settings.bankroll_usd > 0.0 {
+        let bankroll = if matches!(mode, Mode::Paper) {
+            settings.simulated_bankroll_usd()
+        } else if settings.bankroll_usd > 0.0 {
             settings.bankroll_usd
         } else {
             // Fall back to wallet detection if private key set
@@ -593,10 +606,14 @@ impl Pipeline {
             initial_bankroll: bankroll,
             max_total_exposure_override: settings.max_total_exposure_usd,
             max_per_market_override: runtime_strategy.max_per_market_usd,
-            actualize_on_open: true,
+            actualize_on_open: matches!(mode, Mode::Live),
             ..Default::default()
         };
         let risk = RiskManager::open(&settings.state_db_path, risk_cfg).await?;
+        if matches!(mode, Mode::Paper) && settings.candle_simulated_balance_reset_on_start {
+            risk.reset_simulated_session(bankroll).await?;
+            tracing::info!(bankroll, "simulated paper/shadow state reset on startup");
+        }
 
         let monitor = Arc::new(SessionMonitor::open(&settings.session_log_dir)?);
         let alerter = Alerter::from_env();
@@ -1639,11 +1656,57 @@ impl Pipeline {
                             } else {
                                 down_price
                             };
+                            let mut position = self.risk.effective_bankroll().await
+                                * self.runtime_strategy.position_pct;
+                            let vol_ratio = if ps.implied_vol > 0.0 {
+                                ps.implied_vol / 0.50
+                            } else {
+                                1.0
+                            };
+                            if vol_ratio > 2.5 {
+                                position *= self.settings.candle_vol_extreme_multiplier;
+                            } else if vol_ratio > 1.5 {
+                                position *= self.settings.candle_vol_high_multiplier;
+                            }
+                            let max_per_market = self.risk.max_per_market().await;
+                            let avail = self
+                                .risk
+                                .available_capital_for_exposure(open_exposure)
+                                .await;
+                            position = position.min(max_per_market).min(avail);
+                            if let Some(stress_headroom) = breaker_state
+                                .stressed_drawdown_exposure_headroom(
+                                    open_exposure,
+                                    self.risk.initial_bankroll().await.max(1.0),
+                                    self.runtime_strategy.max_projected_stressed_drawdown_pct,
+                                )
+                            {
+                                position = position.min(stress_headroom);
+                            }
+                            if position < 1.0 {
+                                continue;
+                            }
+                            let taker_fee_rate = c
+                                .market
+                                .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
+                            let cfg = PaperFillCfg {
+                                prefer_maker: self.runtime_strategy.effective_prefer_maker(
+                                    breaker_state.losses,
+                                    breaker_metrics.realized_drawdown_pct,
+                                ),
+                                default_taker_rate: taker_fee_rate,
+                                min_order_size_shares: self.settings.live_min_order_size_shares,
+                                ..Default::default()
+                            };
+                            let Some(fill) = simulate_paper_fill(entry_price, position, &cfg)
+                            else {
+                                continue;
+                            };
                             let shadow_position = PaperPosition {
                                 direction: decision.direction.clone(),
-                                entry_price,
-                                fee: 0.0,
-                                size: 0.0,
+                                entry_price: fill.fill_price,
+                                fee: fill.fee,
+                                size: fill.shares,
                                 open_btc: signal.open_price,
                                 end_time: end.timestamp() as f64,
                                 asset: c.asset.clone(),
@@ -1651,10 +1714,17 @@ impl Pipeline {
                                 event_id: c.market.event_id.clone(),
                                 shadow: true,
                             };
-                            let mut positions = self.paper_positions.lock().await;
-                            if !positions.contains_key(&cid) {
-                                positions.insert(cid.clone(), shadow_position);
-                                drop(positions);
+                            let inserted = {
+                                let mut positions = self.paper_positions.lock().await;
+                                if positions.contains_key(&cid) {
+                                    false
+                                } else {
+                                    positions.insert(cid.clone(), shadow_position);
+                                    true
+                                }
+                            };
+                            if inserted {
+                                self.traded.lock().await.insert(cid.clone());
                                 self.persist_paper_positions().await;
                             }
                             continue;
@@ -2322,8 +2392,8 @@ impl Pipeline {
                             fee: Some(pos.fee),
                             size: Some(pos.size),
                             provisional_won: Some(won),
-                            provisional_pnl: Some(0.0),
-                            pnl_recorded: true,
+                            provisional_pnl: Some(pnl),
+                            pnl_recorded: false,
                             shadow: true,
                         },
                     );
@@ -2457,23 +2527,8 @@ impl Pipeline {
                             agreed,
                             delay,
                         );
-                        if entry.shadow {
-                            if !agreed {
-                                tracing::warn!(
-                                    cid = short_cid(&cid),
-                                    ours = %entry.our_actual,
-                                    polymarket = res_str,
-                                    "candle.oracle.shadow_disagreement"
-                                );
-                            } else {
-                                tracing::info!(cid = short_cid(&cid), "candle.oracle.agreed");
-                            }
-                        } else if let Some((
-                            final_won,
-                            final_pnl,
-                            provisional_won,
-                            provisional_pnl,
-                        )) = entry.oracle_pnl(res_str)
+                        if let Some((final_won, final_pnl, provisional_won, provisional_pnl)) =
+                            entry.oracle_pnl(res_str)
                         {
                             if entry.pnl_recorded {
                                 let pnl_delta = final_pnl - provisional_pnl;
@@ -2534,8 +2589,9 @@ impl Pipeline {
                                 bs.record_resolution(final_won, final_pnl);
                                 drop(bs);
                                 self.persist_breaker_state().await;
+                                let source = if entry.shadow { "ctf_shadow" } else { "ctf" };
                                 self.monitor.record_realized_resolution(
-                                    &cid, res_str, final_won, final_pnl, "ctf",
+                                    &cid, res_str, final_won, final_pnl, source,
                                 );
                                 tracing::info!(
                                     cid = short_cid(&cid),
@@ -2587,18 +2643,16 @@ impl Pipeline {
                                 "candle.oracle.disagreement"
                             );
                         }
-                        if !entry.shadow {
-                            let bs = *self.breaker.lock().await;
-                            let open_exposure = (self.open_position_exposure().await
-                                - pending_resolution_exposure(&entry))
-                            .max(0.0);
-                            let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
-                            if let Some(reason) =
-                                bs.should_trip(&self.breaker_cfg, open_exposure, breaker_bankroll)
-                            {
-                                self.trip_breaker(reason).await;
-                                self.stop.notify_one();
-                            }
+                        let bs = *self.breaker.lock().await;
+                        let open_exposure = (self.open_position_exposure().await
+                            - pending_resolution_exposure(&entry))
+                        .max(0.0);
+                        let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
+                        if let Some(reason) =
+                            bs.should_trip(&self.breaker_cfg, open_exposure, breaker_bankroll)
+                        {
+                            self.trip_breaker(reason).await;
+                            self.stop.notify_one();
                         }
                         if is_tie {
                             if entry.shadow {
@@ -3420,7 +3474,7 @@ mod tests {
     }
 
     #[test]
-    fn oracle_pnl_treats_polymarket_tie_as_loss() {
+    fn oracle_pnl_treats_polymarket_tie_as_half_redemption() {
         let pending = OraclePending {
             our_actual: "up".to_string(),
             our_open_btc: 100.0,
@@ -3442,12 +3496,12 @@ mod tests {
 
         assert!(!final_won);
         assert!(provisional_won);
-        assert!((final_pnl - -4.21).abs() < 1e-9);
+        assert!((final_pnl - 0.79).abs() < 1e-9);
         assert!((provisional_pnl - 5.79).abs() < 1e-9);
     }
 
     #[test]
-    fn pending_resolution_exposure_only_counts_unrealized_non_shadow_entries() {
+    fn pending_resolution_exposure_counts_unrealized_entries_until_recorded() {
         let mut pending = OraclePending {
             our_actual: "up".to_string(),
             our_open_btc: 100.0,
@@ -3469,6 +3523,8 @@ mod tests {
         assert_eq!(pending_resolution_exposure(&pending), 0.0);
         pending.pnl_recorded = false;
         pending.shadow = true;
+        assert!((pending_resolution_exposure(&pending) - 4.21).abs() < 1e-9);
+        pending.pnl_recorded = true;
         assert_eq!(pending_resolution_exposure(&pending), 0.0);
     }
 

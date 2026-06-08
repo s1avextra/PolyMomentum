@@ -13,6 +13,8 @@ use crate::strategy::momentum::MomentumSignal;
 use crate::sweep::strategy::Strategy;
 use crate::sweep::SweepRun;
 
+const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+
 #[derive(Debug, Clone)]
 pub struct EvaluationRow {
     pub ts_ms: i64,
@@ -112,6 +114,18 @@ pub struct ResolutionRow {
     pub close_btc: f64,
 }
 
+struct ReplayCandidate<'a> {
+    entry: &'a EvaluationRow,
+    resolution: &'a ResolutionRow,
+    zone: String,
+}
+
+struct OpenReplayPosition {
+    close_ts_ms: i64,
+    exposure: f64,
+    pnl: f64,
+}
+
 impl ResolutionRow {
     pub fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
@@ -165,6 +179,7 @@ pub fn run_strategy(
         ..Default::default()
     };
     let mut total_entry_price = 0.0;
+    let mut candidates: Vec<ReplayCandidate<'_>> = Vec::new();
 
     for (cid, evals) in by_cid.iter() {
         // Find the first evaluation that would trade under this strategy.
@@ -204,8 +219,44 @@ pub fn run_strategy(
             continue;
         };
 
-        // Position sizing — same shape as the live pipeline.
-        let position = (bankroll_usd * position_pct).min(max_per_market_usd);
+        candidates.push(ReplayCandidate {
+            entry,
+            resolution,
+            zone,
+        });
+    }
+    candidates.sort_by_key(|c| c.entry.ts_ms);
+
+    let mut realized_for_sizing = 0.0;
+    let mut locked_exposure = 0.0;
+    let mut open_positions: Vec<OpenReplayPosition> = Vec::new();
+
+    for candidate in candidates {
+        let entry = candidate.entry;
+        let resolution = candidate.resolution;
+        let zone = candidate.zone;
+        let entry_ts_ms = entry.ts_ms;
+        let mut still_open = Vec::with_capacity(open_positions.len());
+        for pos in open_positions.drain(..) {
+            if pos.close_ts_ms <= entry_ts_ms {
+                locked_exposure = (locked_exposure - pos.exposure).max(0.0);
+                realized_for_sizing += pos.pnl;
+            } else {
+                still_open.push(pos);
+            }
+        }
+        open_positions = still_open;
+
+        // Position sizing — same cash-locking shape as the live pipeline.
+        let active_bankroll = (bankroll_usd + realized_for_sizing).max(0.0);
+        let exposure_cap = active_bankroll * DEFAULT_EXPOSURE_RATIO;
+        let available = (exposure_cap - locked_exposure).max(0.0);
+        let position = (active_bankroll * position_pct)
+            .min(max_per_market_usd)
+            .min(available);
+        if position < 1.0 {
+            continue;
+        }
         let market_price = if entry.direction == "up" {
             entry.up_price
         } else {
@@ -221,6 +272,15 @@ pub fn run_strategy(
         } else {
             -fill.fill_price * fill.shares - fill.fee
         };
+        let exposure = fill.fill_price * fill.shares + fill.fee;
+        locked_exposure += exposure;
+        let close_ts_ms =
+            entry.ts_ms + (entry.minutes_remaining.max(0.0) * 60_000.0).round() as i64;
+        open_positions.push(OpenReplayPosition {
+            close_ts_ms,
+            exposure,
+            pnl,
+        });
 
         // Aggregate
         run.trades += 1;
@@ -370,5 +430,22 @@ mod tests {
         strat.microstructure.max_spread = 0.02;
         let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
+    }
+
+    #[test]
+    fn replay_sizing_locks_capital_until_resolution() {
+        let evals = vec![
+            mk_eval("c1", 1, 0.75, 2.0, "up"),
+            mk_eval("c2", 1, 0.75, 2.0, "up"),
+            mk_eval("c3", 30_001, 0.75, 2.0, "up"),
+        ];
+        let res = vec![mk_res("c1", "up"), mk_res("c2", "up"), mk_res("c3", "up")];
+        let strat = crate::sweep::strategy::terminal_only();
+
+        let run = run_strategy(&evals, &res, &strat, 10.0, 1.0, 20.0);
+
+        assert_eq!(run.trades, 2);
+        assert_eq!(run.wins, 2);
+        assert!(run.realized_pnl > 0.0);
     }
 }

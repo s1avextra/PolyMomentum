@@ -9,6 +9,8 @@ use std::fmt;
 use clap::ValueEnum;
 use serde::Serialize;
 
+pub const DEFAULT_SIMULATED_BANKROLL_USD: f64 = 100.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeMode {
@@ -155,6 +157,7 @@ pub struct Settings {
     pub candle_breaker_min_win_rate: f64,
     pub candle_breaker_max_drawdown_pct: f64,
     pub candle_paper_breaker_reset_on_start: bool,
+    pub candle_simulated_balance_reset_on_start: bool,
     pub candle_paper_breaker_auto_rearm_secs: i64,
 
     pub kill_switch_path: String,
@@ -312,6 +315,10 @@ impl Settings {
                 "CANDLE_PAPER_BREAKER_RESET_ON_START",
                 false,
             ),
+            candle_simulated_balance_reset_on_start: env_bool(
+                "CANDLE_SIMULATED_BALANCE_RESET_ON_START",
+                true,
+            ),
             candle_paper_breaker_auto_rearm_secs: env_i64(
                 "CANDLE_PAPER_BREAKER_AUTO_REARM_SECS",
                 300,
@@ -327,6 +334,14 @@ impl Settings {
 
             data_dir,
             logs_dir,
+        }
+    }
+
+    pub fn simulated_bankroll_usd(&self) -> f64 {
+        if self.bankroll_usd > 0.0 {
+            self.bankroll_usd
+        } else {
+            DEFAULT_SIMULATED_BANKROLL_USD
         }
     }
 }
@@ -361,6 +376,14 @@ mod tests {
         assert!(s.candle_window_minutes >= 0.0);
         assert!(s.kelly_fraction > 0.0 && s.kelly_fraction <= 1.0);
         assert!(s.max_position_per_market_usd > 0.0);
+        assert!(s.simulated_bankroll_usd() > 0.0);
+    }
+
+    #[test]
+    fn zero_bankroll_defaults_to_simulated_starting_balance() {
+        let mut s = Settings::from_env();
+        s.bankroll_usd = 0.0;
+        assert_eq!(s.simulated_bankroll_usd(), DEFAULT_SIMULATED_BANKROLL_USD);
     }
 
     #[test]

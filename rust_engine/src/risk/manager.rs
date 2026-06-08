@@ -188,6 +188,46 @@ impl RiskManager {
         i.total_fees_paid += amount;
     }
 
+    pub async fn reset_simulated_session(&self, initial_bankroll: f64) -> Result<()> {
+        let initial_bankroll = initial_bankroll.max(0.0);
+        {
+            let mut i = self.inner.lock().await;
+            i.cfg.initial_bankroll = initial_bankroll;
+            i.positions.clear();
+            i.last_trade_time.clear();
+            i.total_pnl = 0.0;
+            i.total_fees_paid = 0.0;
+        }
+
+        let saved_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let conn = self.db.lock().await;
+        conn.execute_batch(
+            "BEGIN;
+             DELETE FROM state;
+             DELETE FROM positions;
+             DELETE FROM cooldowns;
+             DELETE FROM paper_positions;
+             DELETE FROM oracle_pending;
+             DELETE FROM meta WHERE key LIKE 'candle_%';",
+        )?;
+        for (k, v) in [
+            ("bankroll_baseline", initial_bankroll),
+            ("total_pnl", 0.0),
+            ("total_fees_paid", 0.0),
+            ("saved_at", saved_at),
+        ] {
+            conn.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                params![k, Value::from(v).to_string()],
+            )?;
+        }
+        conn.execute_batch("COMMIT;")?;
+        Ok(())
+    }
+
     pub async fn record_trade(&self, record: TradeRecord) -> Result<()> {
         let conn = self.db.lock().await;
         conn.execute(
@@ -618,5 +658,64 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, "c1");
         assert_eq!(loaded[0].1["size"].as_i64(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn simulated_session_reset_starts_fresh_without_erasing_trade_history() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("state.db");
+        let mr = RiskManager::open(
+            &path,
+            RiskConfig {
+                initial_bankroll: 250.0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        mr.record_pnl(-7.5).await.unwrap();
+        mr.record_fees(0.12).await;
+        mr.record_trade(TradeRecord {
+            timestamp: 1.0,
+            market_condition_id: "c1".to_string(),
+            outcome_idx: 0,
+            side: "buy".to_string(),
+            size: 5.0,
+            price: 0.4,
+            cost: 2.0,
+            event_id: "e1".to_string(),
+            pnl: 0.0,
+            paper: true,
+        })
+        .await
+        .unwrap();
+        mr.save_paper_positions(&[(
+            "c1".to_string(),
+            serde_json::json!({"size": 5, "entry_price": 0.4}),
+        )])
+        .await
+        .unwrap();
+        mr.save_oracle_pending(&[("c1".to_string(), serde_json::json!({"attempts": 1}))])
+            .await
+            .unwrap();
+        mr.set_meta("candle_breaker_tripped", "1").await.unwrap();
+
+        mr.reset_simulated_session(100.0).await.unwrap();
+
+        assert!((mr.initial_bankroll().await - 100.0).abs() < 1e-9);
+        assert!((mr.total_pnl().await).abs() < 1e-9);
+        assert!(mr.load_paper_positions().await.unwrap().is_empty());
+        assert!(mr.load_oracle_pending().await.unwrap().is_empty());
+        assert!(mr
+            .get_meta("candle_breaker_tripped")
+            .await
+            .unwrap()
+            .is_none());
+
+        let conn = Connection::open(&path).unwrap();
+        let trades: i64 = conn
+            .query_row("SELECT COUNT(*) FROM trades", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(trades, 1);
     }
 }

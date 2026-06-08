@@ -2505,6 +2505,18 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.max_reversion_count = "2".to_string();
             profile
         }
+        "a_plus5m_causal_guard_selected" => {
+            let mut profile = rolling_history_profile("a_plus5m_causal_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.40".to_string();
+            profile.z = "0.90".to_string();
+            profile.edge = "0.07".to_string();
+            profile.max_price = "0.85".to_string();
+            profile.degraded_after_losses = "2".to_string();
+            profile.degraded_force_taker = true;
+            profile.taker_only = true;
+            profile
+        }
         "a_plus5m_reversion_guard" => {
             let mut profile = rolling_history_profile("a_plus5m_causal_guard")?;
             profile.name = name.to_string();

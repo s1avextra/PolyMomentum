@@ -2211,6 +2211,33 @@ impl StrategyBuilderProfile {
                 degraded_force_taker: true,
                 also_maker: true,
             }),
+            "a_plus5m_causal_guard_selected" => Ok(Self {
+                name: "a_plus5m_causal_guard_selected",
+                conf: "0.40",
+                z: "0.90",
+                edge: "0.07",
+                ev_buffer: "-1.0",
+                min_price: "0.10",
+                max_price: "0.85",
+                min_reversion_count: "0",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "20",
+                max_total_exposure_usd: "15",
+                max_projected_stressed_drawdown_pct: "0.24",
+                degraded_after_losses: "2",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "0.90",
+                degraded_max_price: "0.0",
+                degraded_force_taker: true,
+                also_maker: false,
+            }),
             "a_plus5m_reversion_guard" => Ok(Self {
                 name: "a_plus5m_reversion_guard",
                 conf: "0.50",
@@ -2239,7 +2266,7 @@ impl StrategyBuilderProfile {
                 also_maker: true,
             }),
             _ => bail!(
-                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_reversion_guard, swift5m"
+                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_causal_guard_selected, a_plus5m_reversion_guard, swift5m"
             ),
         }
     }
