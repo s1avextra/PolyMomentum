@@ -10,7 +10,7 @@
 //! sizing knobs are independent and can be swept after the gate
 //! parameters are tuned.
 
-use crate::backtest::strategies::StrategyVariant;
+use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
 use crate::strategy::decision::ZoneConfig;
 use crate::strategy::microstructure::MicrostructureConfig;
 
@@ -49,6 +49,8 @@ pub struct SweepGrid {
     pub also_maker: bool,
     /// Restrict the grid to maker variants only.
     pub maker_only: bool,
+    /// Restrict the grid to taker variants only.
+    pub taker_only: bool,
     /// Maximum executable spread, in binary-option price points.
     pub micro_max_spread: Vec<f64>,
     /// Minimum depth on the thinner side of the order book.
@@ -67,6 +69,8 @@ pub struct SweepGrid {
     pub degraded_max_price: Vec<f64>,
     /// Force taker execution while degraded execution fallback is active.
     pub degraded_force_taker: bool,
+    /// Causal selectivity filters to apply after decision construction.
+    pub selectivity: Vec<SelectivityFilter>,
     /// Timing zone to keep enabled for each variant.
     pub zone_mode: ZoneMode,
 }
@@ -116,6 +120,7 @@ impl SweepGrid {
         let micro_min_depth = base.microstructure.min_book_depth;
         let micro_min_pressure = base.microstructure.min_book_pressure;
         let max_projected_stressed_drawdown_pct = base.max_projected_stressed_drawdown_pct;
+        let selectivity = base.selectivity.clone();
         Self {
             base,
             conf: vec![0.30, 0.40, 0.50, 0.60],
@@ -132,6 +137,7 @@ impl SweepGrid {
             min_reversion_count: vec![0],
             also_maker: true,
             maker_only: false,
+            taker_only: false,
             micro_max_spread: vec![micro_max_spread],
             micro_min_depth: vec![micro_min_depth],
             micro_min_pressure: vec![micro_min_pressure],
@@ -141,6 +147,7 @@ impl SweepGrid {
             degraded_min_z: vec![0.0],
             degraded_max_price: vec![0.0],
             degraded_force_taker: false,
+            selectivity: vec![selectivity],
             zone_mode: ZoneMode::All,
         }
     }
@@ -150,6 +157,8 @@ impl SweepGrid {
     pub fn variants(&self) -> Vec<StrategyVariant> {
         let maker_sides: Vec<bool> = if self.maker_only {
             vec![true]
+        } else if self.taker_only {
+            vec![false]
         } else if self.also_maker {
             vec![false, true]
         } else {
@@ -176,8 +185,14 @@ impl SweepGrid {
                 * self.degraded_after_drawdown_pct.len()
                 * self.degraded_min_z.len()
                 * self.degraded_max_price.len()
+                * self.selectivity.len().max(1)
                 * maker_sides.len(),
         );
+        let selectivity_filters = if self.selectivity.is_empty() {
+            vec![SelectivityFilter::default()]
+        } else {
+            self.selectivity.clone()
+        };
         for &conf in &self.conf {
             for &z in &self.z {
                 for &edge in &self.edge {
@@ -223,32 +238,37 @@ impl SweepGrid {
                                                                             for &maker in
                                                                                 &maker_sides
                                                                             {
-                                                                                self.push_variant(
-                                                                                    &mut out,
-                                                                                    SweepCell {
-                                                                                        conf,
-                                                                                        z,
-                                                                                        edge,
-                                                                                        ev,
-                                                                                        min_price,
-                                                                                        max_price,
-                                                                                        cutoff,
-                                                                                        floor,
-                                                                                        guard,
-                                                                                        sigma,
-                                                                                        min_reversion_count,
-                                                                                        max_reversion_count,
-                                                                                        micro_spread,
-                                                                                        micro_depth,
-                                                                                        micro_pressure,
-                                                                                        stress_dd_cap,
-                                                                                        degraded_after_losses,
-                                                                                        degraded_drawdown,
-                                                                                        degraded_min_z,
-                                                                                        degraded_max_price,
-                                                                                        maker,
-                                                                                    },
-                                                                                );
+                                                                                for selectivity in
+                                                                                    &selectivity_filters
+                                                                                {
+                                                                                    self.push_variant(
+                                                                                        &mut out,
+                                                                                        SweepCell {
+                                                                                            conf,
+                                                                                            z,
+                                                                                            edge,
+                                                                                            ev,
+                                                                                            min_price,
+                                                                                            max_price,
+                                                                                            cutoff,
+                                                                                            floor,
+                                                                                            guard,
+                                                                                            sigma,
+                                                                                            min_reversion_count,
+                                                                                            max_reversion_count,
+                                                                                            micro_spread,
+                                                                                            micro_depth,
+                                                                                            micro_pressure,
+                                                                                            stress_dd_cap,
+                                                                                            degraded_after_losses,
+                                                                                            degraded_drawdown,
+                                                                                            degraded_min_z,
+                                                                                            degraded_max_price,
+                                                                                            maker,
+                                                                                        },
+                                                                                        selectivity.clone(),
+                                                                                    );
+                                                                                }
                                                                             }
                                                                         }
                                                                         }
@@ -273,7 +293,12 @@ impl SweepGrid {
         out
     }
 
-    fn push_variant(&self, out: &mut Vec<StrategyVariant>, cell: SweepCell) {
+    fn push_variant(
+        &self,
+        out: &mut Vec<StrategyVariant>,
+        cell: SweepCell,
+        selectivity: SelectivityFilter,
+    ) {
         let mut cfg = ZoneConfig {
             early_min_confidence: cell.conf,
             late_min_confidence: cell.conf,
@@ -341,9 +366,14 @@ impl SweepGrid {
         } else {
             String::new()
         };
+        let selectivity_suffix = if selectivity.is_disabled() {
+            String::new()
+        } else {
+            format!("_sel{}", selectivity.label())
+        };
 
         let label = format!(
-            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}_{}",
+            "{}_c{:.2}_z{:.2}_e{:.2}_ev{:+.2}_p{:.2}-{:.2}{}{}{}_sf{:.0}_sg{:.1}_ss{:.2}_ms{:.2}_md{:.0}_mp{:.2}{}{}{}_{}",
             self.zone_mode.as_str(),
             cell.conf,
             cell.z,
@@ -362,6 +392,7 @@ impl SweepGrid {
             cell.micro_pressure,
             stress_dd_suffix,
             degraded_suffix,
+            selectivity_suffix,
             if cell.maker { "mk" } else { "tk" }
         );
         out.push(StrategyVariant {
@@ -389,6 +420,7 @@ impl SweepGrid {
                 min_book_depth: cell.micro_depth,
                 min_book_pressure: cell.micro_pressure,
             },
+            selectivity,
         });
     }
 }
@@ -490,6 +522,29 @@ mod tests {
     }
 
     #[test]
+    fn selectivity_filter_is_carried_into_variants() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        let mut filter = SelectivityFilter::default();
+        filter
+            .require_tags
+            .insert("direction".to_string(), "down".to_string());
+        grid.selectivity = vec![filter];
+
+        let variants = grid.variants();
+
+        assert!(variants.iter().all(|v| {
+            v.selectivity
+                .require_tags
+                .get("direction")
+                .is_some_and(|value| value == "down")
+        }));
+        assert!(variants
+            .iter()
+            .all(|v| v.name.contains("_selreqdirection-down_")));
+    }
+
+    #[test]
     fn maker_only_emits_no_taker_variants() {
         let base = StrategyVariant::baseline();
         let mut grid = SweepGrid::small_default(base);
@@ -500,6 +555,19 @@ mod tests {
         assert_eq!(variants.len(), 4 * 3 * 3 * 2);
         assert!(variants.iter().all(|v| v.prefer_maker));
         assert!(variants.iter().all(|v| v.name.ends_with("_mk")));
+    }
+
+    #[test]
+    fn taker_only_emits_no_maker_variants() {
+        let base = StrategyVariant::baseline();
+        let mut grid = SweepGrid::small_default(base);
+        grid.taker_only = true;
+
+        let variants = grid.variants();
+
+        assert_eq!(variants.len(), 4 * 3 * 3 * 2);
+        assert!(variants.iter().all(|v| !v.prefer_maker));
+        assert!(variants.iter().all(|v| v.name.ends_with("_tk")));
     }
 
     #[test]

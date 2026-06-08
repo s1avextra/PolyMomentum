@@ -125,6 +125,8 @@ pub struct MultiReportPromotionGate {
 pub struct RobustPromotionGate {
     #[serde(default = "default_min_neighbor_count")]
     pub min_neighbor_count: usize,
+    #[serde(default)]
+    pub min_neighbor_observations: usize,
     #[serde(default = "default_min_neighbor_positive_rate")]
     pub min_neighbor_positive_rate: f64,
     #[serde(default = "default_max_pbo")]
@@ -183,6 +185,7 @@ impl Default for RobustPromotionGate {
     fn default() -> Self {
         Self {
             min_neighbor_count: default_min_neighbor_count(),
+            min_neighbor_observations: 0,
             min_neighbor_positive_rate: default_min_neighbor_positive_rate(),
             max_pbo: default_max_pbo(),
             min_median_oos_percentile: 0.0,
@@ -304,6 +307,8 @@ pub struct RobustVariantDiagnostics {
     pub median_window_expectancy: f64,
     pub wilson_win_rate_lower: f64,
     pub neighbor_count: usize,
+    #[serde(default)]
+    pub neighbor_observations: usize,
     pub neighbor_positive_rate: f64,
     pub fill_rate: f64,
     pub max_stressed_drawdown_pct: f64,
@@ -662,11 +667,12 @@ impl PromotionArtifact {
             .risk_notes
             .extend(multi_report_risk_notes(reports, selected, &multi_gate));
         artifact.risk_notes.push(format!(
-            "robust score {:.4}; worst_window_pnl {:.2}; median_window_pnl {:.2}; neighbor_positive_rate {:.1}% over {} neighbor(s)",
+            "robust score {:.4}; worst_window_pnl {:.2}; median_window_pnl {:.2}; neighbor_positive_rate {:.1}% over {} active observation(s) from {} neighbor(s)",
             selected_diag.robust_score,
             selected_diag.worst_window_pnl,
             selected_diag.median_window_pnl,
             100.0 * selected_diag.neighbor_positive_rate,
+            selected_diag.neighbor_observations,
             selected_diag.neighbor_count,
         ));
         artifact.risk_notes.push(format!(
@@ -950,7 +956,8 @@ fn robust_variant_diagnostics(
     let worst_window_expectancy = expectancies.first().copied().unwrap_or(0.0);
     let median_window_expectancy = median_sorted(&expectancies);
 
-    let (neighbor_count, neighbor_positive_rate) = neighbor_stability(reports, aggregate, selected);
+    let (neighbor_count, neighbor_observations, neighbor_positive_rate) =
+        neighbor_stability(reports, aggregate, selected);
     let wilson = wilson_win_rate_lower(selected.wins, selected.trades);
     let drawdown_inverse = (1.0 - selected.breaker_stressed_drawdown_pct).clamp(0.0, 1.0);
     let trade_pnl = &selected.diagnostics.trade_pnl;
@@ -975,6 +982,7 @@ fn robust_variant_diagnostics(
         median_window_expectancy,
         wilson_win_rate_lower: wilson,
         neighbor_count,
+        neighbor_observations,
         neighbor_positive_rate,
         fill_rate: selected.fill_rate,
         max_stressed_drawdown_pct: selected.breaker_stressed_drawdown_pct,
@@ -1024,6 +1032,12 @@ fn robust_rejection_reasons(
         reasons.push(format!(
             "neighbor_count {} below minimum {}",
             diagnostic.neighbor_count, gate.min_neighbor_count
+        ));
+    }
+    if diagnostic.neighbor_observations < gate.min_neighbor_observations {
+        reasons.push(format!(
+            "neighbor_observations {} below minimum {}",
+            diagnostic.neighbor_observations, gate.min_neighbor_observations
         ));
     }
     if diagnostic.neighbor_positive_rate < gate.min_neighbor_positive_rate {
@@ -1085,9 +1099,9 @@ fn neighbor_stability(
     reports: &[ExperimentReport],
     aggregate: &ExperimentReport,
     selected: &VariantReport,
-) -> (usize, f64) {
+) -> (usize, usize, f64) {
     let Some(selected_knobs) = VariantKnobs::from_variant(selected) else {
-        return (0, 0.0);
+        return (0, 0, 0.0);
     };
     let mut neighbor_count = 0_usize;
     let mut positive = 0_usize;
@@ -1108,6 +1122,9 @@ fn neighbor_stability(
         }
         neighbor_count += 1;
         for variant in daily {
+            if variant.trades == 0 {
+                continue;
+            }
             total += 1;
             if variant.total_pnl > 0.0 {
                 positive += 1;
@@ -1115,9 +1132,9 @@ fn neighbor_stability(
         }
     }
     if total == 0 {
-        (neighbor_count, 0.0)
+        (neighbor_count, 0, 0.0)
     } else {
-        (neighbor_count, positive as f64 / total as f64)
+        (neighbor_count, total, positive as f64 / total as f64)
     }
 }
 
@@ -2490,6 +2507,7 @@ mod tests {
             },
             RobustPromotionGate {
                 min_neighbor_count: 2,
+                min_neighbor_observations: 0,
                 min_neighbor_positive_rate: 1.0,
                 max_pbo: 1.0,
                 min_median_oos_percentile: 0.0,
@@ -2544,6 +2562,7 @@ mod tests {
             },
             RobustPromotionGate {
                 min_neighbor_count: 2,
+                min_neighbor_observations: 0,
                 min_neighbor_positive_rate: 1.0,
                 max_pbo: 1.0,
                 min_median_oos_percentile: 1.01,
@@ -2573,6 +2592,7 @@ mod tests {
             median_window_expectancy: 0.10,
             wilson_win_rate_lower: 0.70,
             neighbor_count: 3,
+            neighbor_observations: 9,
             neighbor_positive_rate: 0.80,
             fill_rate: 0.70,
             max_stressed_drawdown_pct: 0.05,
@@ -2612,5 +2632,47 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|reason| reason.contains("causal_bucket price=0.50_0.75")));
+    }
+
+    #[test]
+    fn neighbor_stability_ignores_silent_neighbor_windows() {
+        let cfg = cfg();
+        let mut reports = Vec::new();
+        for i in 0..3 {
+            let mut report = ExperimentReport::from_harness(format!("fold{i}"), &cfg, &[]);
+            let selected = robust_variant("selected", "selected", 5.0, 0.60, 0.80, 0.90);
+            let mut neighbor =
+                robust_variant("neighbor_conf", "neighbor_conf", 4.0, 0.70, 0.80, 0.90);
+            if i == 1 {
+                neighbor.trades = 0;
+                neighbor.wins = 0;
+                neighbor.losses = 0;
+                neighbor.total_pnl = 0.0;
+                neighbor.avg_pnl = 0.0;
+                neighbor.by_zone = BTreeMap::new();
+            }
+            report.variants = vec![selected, neighbor];
+            reports.push(report);
+        }
+        let multi_gate = MultiReportPromotionGate {
+            min_reports: 3,
+            min_profitable_reports: 2,
+            min_daily_trades: 0,
+            min_daily_pnl: 0.0,
+            max_daily_loss: 0.0,
+        };
+        let aggregate = aggregate_reports(&reports, &multi_gate).unwrap();
+        let selected = aggregate
+            .variants
+            .iter()
+            .find(|variant| variant_label(variant) == "selected")
+            .unwrap();
+
+        let (neighbor_count, observations, positive_rate) =
+            neighbor_stability(&reports, &aggregate, selected);
+
+        assert_eq!(neighbor_count, 1);
+        assert_eq!(observations, 2);
+        assert_eq!(positive_rate, 1.0);
     }
 }

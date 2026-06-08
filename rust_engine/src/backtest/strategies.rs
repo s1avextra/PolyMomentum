@@ -4,8 +4,10 @@
 //! `ZoneConfig`. The harness loops one variant at a time over the same PMXT
 //! v2 + BTC tape so per-strategy P&L is comparable.
 
+use std::collections::BTreeMap;
+
 use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
-use crate::strategy::decision::ZoneConfig;
+use crate::strategy::decision::{DecisionRegime, ZoneConfig};
 use crate::strategy::microstructure::MicrostructureConfig;
 
 fn is_zero_f64(v: &f64) -> bool {
@@ -18,6 +20,89 @@ fn is_zero_u64(v: &u64) -> bool {
 
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SelectivityFilter {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub require_tags: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deny_tags: BTreeMap<String, String>,
+}
+
+impl SelectivityFilter {
+    pub fn is_disabled(&self) -> bool {
+        self.require_tags.is_empty() && self.deny_tags.is_empty()
+    }
+
+    pub fn reject_reason(&self, regime: &DecisionRegime) -> Option<String> {
+        if self.is_disabled() {
+            return None;
+        }
+        let tags: BTreeMap<String, String> = regime.causal_tags().into_iter().collect();
+        for (dimension, expected) in &self.require_tags {
+            match tags.get(dimension) {
+                Some(actual) if actual == expected => {}
+                Some(actual) => {
+                    return Some(format!(
+                        "selectivity_require_{}_{}_got_{}",
+                        clean_label(dimension),
+                        clean_label(expected),
+                        clean_label(actual)
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "selectivity_require_{}_{}_missing",
+                        clean_label(dimension),
+                        clean_label(expected)
+                    ));
+                }
+            }
+        }
+        for (dimension, denied) in &self.deny_tags {
+            if tags.get(dimension) == Some(denied) {
+                return Some(format!(
+                    "selectivity_deny_{}_{}",
+                    clean_label(dimension),
+                    clean_label(denied)
+                ));
+            }
+        }
+        None
+    }
+
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        for (dimension, value) in &self.require_tags {
+            parts.push(format!(
+                "req{}-{}",
+                clean_label(dimension),
+                clean_label(value)
+            ));
+        }
+        for (dimension, value) in &self.deny_tags {
+            parts.push(format!(
+                "deny{}-{}",
+                clean_label(dimension),
+                clean_label(value)
+            ));
+        }
+        parts.join("_")
+    }
+}
+
+fn clean_label(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Tunable knobs the harness varies. The variant name is what shows up in
@@ -69,13 +154,24 @@ pub struct StrategyVariant {
     /// Optional order-book confirmation gate for long entries.
     #[serde(default)]
     pub microstructure: MicrostructureConfig,
+    /// Optional causal regime filter applied after decision construction and
+    /// before any order/exposure side effects.
+    #[serde(default, skip_serializing_if = "SelectivityFilter::is_disabled")]
+    pub selectivity: SelectivityFilter,
 }
 
 impl StrategyVariant {
     pub fn risk_profile(&self) -> String {
         format!(
-            "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
-            self.position_pct, self.max_per_market_usd, self.max_projected_stressed_drawdown_pct
+            "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}{}",
+            self.position_pct,
+            self.max_per_market_usd,
+            self.max_projected_stressed_drawdown_pct,
+            if self.selectivity.is_disabled() {
+                String::new()
+            } else {
+                format!(";selectivity={}", self.selectivity.label())
+            }
         )
     }
 
@@ -101,6 +197,7 @@ impl StrategyVariant {
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
+            selectivity: SelectivityFilter::default(),
         }
     }
 
@@ -207,6 +304,7 @@ impl StrategyVariant {
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
+            selectivity: SelectivityFilter::default(),
         }
     }
 
@@ -303,6 +401,44 @@ pub fn default_variants() -> Vec<StrategyVariant> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selectivity_filter_requires_and_denies_causal_tags() {
+        let mut require_down = SelectivityFilter::default();
+        require_down
+            .require_tags
+            .insert("direction".to_string(), "down".to_string());
+        let down = DecisionRegime {
+            direction: "down".to_string(),
+            zone: "primary".to_string(),
+            ..DecisionRegime::default()
+        };
+        let up = DecisionRegime {
+            direction: "up".to_string(),
+            zone: "primary".to_string(),
+            ..DecisionRegime::default()
+        };
+
+        assert!(require_down.reject_reason(&down).is_none());
+        assert!(require_down
+            .reject_reason(&up)
+            .unwrap()
+            .starts_with("selectivity_require_direction_down"));
+
+        let mut deny_early = SelectivityFilter::default();
+        deny_early
+            .deny_tags
+            .insert("zone".to_string(), "early".to_string());
+        let early = DecisionRegime {
+            zone: "early".to_string(),
+            ..down.clone()
+        };
+        assert!(deny_early.reject_reason(&down).is_none());
+        assert_eq!(
+            deny_early.reject_reason(&early).unwrap(),
+            "selectivity_deny_zone_early"
+        );
+    }
 
     #[test]
     fn degraded_execution_tightens_z_and_forces_taker_only_after_threshold() {

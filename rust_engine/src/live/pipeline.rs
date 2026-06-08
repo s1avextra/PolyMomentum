@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
 use crate::backtest::fill_model::{resting_limit_price, round_price_to_tick, Side};
-use crate::backtest::strategies::StrategyVariant;
+use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
 use crate::clob::{create_shared_client, SharedClobClient};
 use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
 use crate::config::{RuntimeMode, Settings};
@@ -302,6 +302,7 @@ struct RuntimeStrategy {
     prefer_maker: bool,
     default_fee_rate: f64,
     microstructure: MicrostructureConfig,
+    selectivity: SelectivityFilter,
     source: String,
 }
 
@@ -384,6 +385,7 @@ impl RuntimeStrategy {
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
             microstructure: variant.microstructure,
+            selectivity: variant.selectivity,
             source,
         })
     }
@@ -441,6 +443,7 @@ impl RuntimeStrategy {
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             microstructure,
+            selectivity: SelectivityFilter::default(),
             source: "settings".to_string(),
         }
     }
@@ -851,6 +854,7 @@ impl Pipeline {
             self.runtime_strategy.min_edge,
             self.runtime_strategy.skip_dead_zone,
             &self.runtime_strategy.microstructure,
+            &self.runtime_strategy.selectivity,
             self.settings.candle_settlement_alignment_ready,
         );
         tracing::info!(
@@ -1545,6 +1549,51 @@ impl Pipeline {
                         });
                     }
                     DecisionResult::Trade(decision) => {
+                        if let Some(reason) = self
+                            .runtime_strategy
+                            .selectivity
+                            .reject_reason(&decision.regime)
+                        {
+                            let aggregate = format!("{}_{}", reason, decision.zone);
+                            self.monitor.record_signal_skip(&cid, &aggregate);
+                            self.monitor.record_signal_evaluation(&SignalEvaluation {
+                                ts_ms: eval_ts_ms,
+                                cid: short_cid(&cid),
+                                asset: c.asset.clone(),
+                                open: signal.open_price,
+                                px: signal.current_price,
+                                chg: signal.price_change,
+                                chg_pct: signal.price_change_pct,
+                                cons: signal.consistency,
+                                z: signal.z_score,
+                                conf: signal.confidence,
+                                reversion_count: signal.reversion_count,
+                                elapsed_min: signal.minutes_elapsed,
+                                remaining_min: signal.minutes_remaining,
+                                dir: signal.direction.clone(),
+                                vol_fast,
+                                vol_slow,
+                                implied_vol: ps.implied_vol,
+                                cross_boost: 0.0,
+                                up_price,
+                                down_price,
+                                book_spread: signal_micro.spread,
+                                book_pressure: signal_micro.pressure,
+                                book_bid_depth: signal_micro.bid_depth,
+                                book_ask_depth: signal_micro.ask_depth,
+                                zone: decision.zone.clone(),
+                                fair: decision.fair_value,
+                                edge: decision.edge,
+                                decision_trade: false,
+                                execution_attempted: false,
+                                traded: false,
+                                skip_reason: Some(reason),
+                                skip_detail: Some(
+                                    "causal selectivity filter rejected the decision".to_string(),
+                                ),
+                            });
+                            continue;
+                        }
                         if !self.settings.candle_settlement_alignment_ready {
                             let reason = "settlement_alignment_unverified".to_string();
                             let aggregate = format!("{}_{}", reason, decision.zone);

@@ -128,6 +128,7 @@ impl SessionMonitor {
         min_edge: f64,
         skip_dead_zone: bool,
         microstructure: &crate::strategy::microstructure::MicrostructureConfig,
+        selectivity: &crate::backtest::strategies::SelectivityFilter,
         settlement_alignment_ready: bool,
     ) {
         self.write_event(
@@ -141,6 +142,7 @@ impl SessionMonitor {
                 "min_edge": min_edge,
                 "skip_dead_zone": skip_dead_zone,
                 "microstructure": microstructure,
+                "selectivity": selectivity,
                 "settlement_alignment_ready": settlement_alignment_ready,
                 "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
                 "settlement_guard_minutes": zone_config.settlement_guard_minutes,

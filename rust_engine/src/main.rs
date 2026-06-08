@@ -310,6 +310,9 @@ enum Command {
         /// Restrict grid to one timing zone: all, early, primary, late, terminal.
         #[arg(long, default_value = "all")]
         zone_mode: String,
+        /// Restrict the sweep grid to taker fill variants only.
+        #[arg(long, default_value_t = false)]
+        taker_only: bool,
         /// Show top N variants in the report.
         #[arg(long, default_value_t = 20)]
         top: usize,
@@ -339,6 +342,12 @@ enum Command {
         /// Write compact per-trade causal features for every sweep variant to this path.
         #[arg(long)]
         trade_features_json: Option<String>,
+        /// Require causal decision tags before order creation, e.g. direction=down. Repeat or comma-separate.
+        #[arg(long)]
+        require_causal_tag: Vec<String>,
+        /// Deny causal decision tags before order creation, e.g. direction=up. Repeat or comma-separate.
+        #[arg(long)]
+        deny_causal_tag: Vec<String>,
         /// Restrict the candle universe to one window length, e.g. 5 for 5-minute candles.
         #[arg(long)]
         window_minutes: Option<f64>,
@@ -762,6 +771,9 @@ enum ExperimentCommand {
         /// Minimum count of nearby parameter variants required around the selected point.
         #[arg(long, default_value_t = 2)]
         min_neighbor_count: usize,
+        /// Minimum active neighbor-window observations required around the selected point.
+        #[arg(long, default_value_t = 0)]
+        min_neighbor_observations: usize,
         /// Minimum share of neighbor-window observations with positive PnL.
         #[arg(long, default_value_t = 0.60)]
         min_neighbor_positive_rate: f64,
@@ -1035,6 +1047,12 @@ enum StrategyBuilderCommand {
         /// Rolling lab profile, e.g. a_plus5m, a_plus5m_causal_guard, or a_plus5m_reversion_guard.
         #[arg(long, default_value = "a_plus5m")]
         profile: String,
+        /// Require causal decision tags in each fold's harness-sweep, e.g. direction=down.
+        #[arg(long)]
+        require_causal_tag: Vec<String>,
+        /// Deny causal decision tags in each fold's harness-sweep, e.g. direction=up.
+        #[arg(long)]
+        deny_causal_tag: Vec<String>,
         /// Restrict sweeps to one timing zone: all, early, primary, late, terminal.
         #[arg(long, default_value = "early")]
         zone_mode: String,
@@ -1068,9 +1086,24 @@ enum StrategyBuilderCommand {
         /// Minimum top-variant trades required in each fold before treating it as strategy evidence. Defaults to --min-fold-trades; 0 disables.
         #[arg(long)]
         min_fold_top_trades: Option<usize>,
+        /// Minimum aggregate trades required by robust-promote. Defaults to --min-fold-trades × fold count.
+        #[arg(long)]
+        min_promotion_trades: Option<usize>,
+        /// Minimum trades per report required by robust-promote. Defaults to --min-fold-trades.
+        #[arg(long)]
+        min_promotion_daily_trades: Option<usize>,
+        /// Minimum profitable reports required by robust-promote. Defaults to fold count.
+        #[arg(long)]
+        min_promotion_profitable_reports: Option<usize>,
+        /// Minimum aggregate losses required by robust-promote. Defaults to 5.
+        #[arg(long)]
+        min_promotion_losses: Option<usize>,
         /// Abort before the next fold if cache-root size exceeds this budget. 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_cache_gb: f64,
+        /// Minimum active neighbor-window observations passed to robust-promote.
+        #[arg(long)]
+        min_neighbor_observations: Option<usize>,
         /// Minimum neighbor positive rate passed to robust-promote.
         #[arg(long, default_value_t = 0.60)]
         min_neighbor_positive_rate: f64,
@@ -1349,6 +1382,7 @@ async fn main() {
             also_maker,
             maker_only,
             zone_mode,
+            taker_only,
             top,
             threads,
             checkpoint,
@@ -1356,6 +1390,8 @@ async fn main() {
             report_json,
             trades_json,
             trade_features_json,
+            require_causal_tag,
+            deny_causal_tag,
             window_minutes,
             adaptive_health_rearm_minutes,
             continuous,
@@ -1420,6 +1456,7 @@ async fn main() {
                 also_maker,
                 maker_only,
                 zone_mode,
+                taker_only,
                 top,
                 threads,
                 checkpoint.as_deref(),
@@ -1427,6 +1464,8 @@ async fn main() {
                 report_json.as_deref(),
                 trades_json.as_deref(),
                 trade_features_json.as_deref(),
+                require_causal_tag,
+                deny_causal_tag,
                 window_minutes,
                 adaptive_health_rearm_minutes,
                 continuous,
@@ -1644,6 +1683,8 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             fold_hours,
             max_folds,
             profile,
+            require_causal_tag,
+            deny_causal_tag,
             zone_mode,
             promotion_output,
             execute,
@@ -1655,7 +1696,12 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_fold_trades,
             min_fold_target_events,
             min_fold_top_trades,
+            min_promotion_trades,
+            min_promotion_daily_trades,
+            min_promotion_profitable_reports,
+            min_promotion_losses,
             max_cache_gb,
+            min_neighbor_observations,
             min_neighbor_positive_rate,
             max_pbo,
             min_median_oos_percentile,
@@ -1673,6 +1719,8 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 fold_hours,
                 max_folds,
                 profile,
+                require_causal_tag,
+                deny_causal_tag,
                 zone_mode,
                 promotion_output: promotion_output.map(std::path::PathBuf::from),
                 execute,
@@ -1684,7 +1732,12 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 min_fold_trades,
                 min_fold_target_events,
                 min_fold_top_trades,
+                min_promotion_trades,
+                min_promotion_daily_trades,
+                min_promotion_profitable_reports,
+                min_promotion_losses,
                 max_cache_gb,
+                min_neighbor_observations,
                 min_neighbor_positive_rate,
                 max_pbo,
                 min_median_oos_percentile,
@@ -1718,6 +1771,8 @@ struct RollingHistoryInput {
     fold_hours: i64,
     max_folds: Option<usize>,
     profile: String,
+    require_causal_tag: Vec<String>,
+    deny_causal_tag: Vec<String>,
     zone_mode: String,
     promotion_output: Option<std::path::PathBuf>,
     execute: bool,
@@ -1728,7 +1783,12 @@ struct RollingHistoryInput {
     min_fold_trades: usize,
     min_fold_target_events: u64,
     min_fold_top_trades: Option<usize>,
+    min_promotion_trades: Option<usize>,
+    min_promotion_daily_trades: Option<usize>,
+    min_promotion_profitable_reports: Option<usize>,
+    min_promotion_losses: Option<usize>,
     max_cache_gb: f64,
+    min_neighbor_observations: Option<usize>,
     min_neighbor_positive_rate: f64,
     max_pbo: f64,
     min_median_oos_percentile: f64,
@@ -1762,6 +1822,7 @@ struct RollingHistoryProfile {
     degraded_min_z: String,
     degraded_max_price: String,
     degraded_force_taker: bool,
+    taker_only: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1910,6 +1971,19 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "fold_hours": input.fold_hours,
             "min_fold_trades": input.min_fold_trades,
             "coverage_policy": coverage_policy,
+            "promotion_policy": {
+                "min_trades": input
+                    .min_promotion_trades
+                    .unwrap_or(input.min_fold_trades * fold_summaries.len()),
+                "min_daily_trades": input
+                    .min_promotion_daily_trades
+                    .unwrap_or(input.min_fold_trades),
+                "min_profitable_reports": input
+                    .min_promotion_profitable_reports
+                    .unwrap_or(fold_summaries.len()),
+                "min_losses": input.min_promotion_losses.unwrap_or(5),
+                "min_neighbor_observations": input.min_neighbor_observations.unwrap_or(0),
+            },
             "window_minutes": input.window_minutes,
             "delete_after_process": input.delete_after_process,
             "atomic_parquet": input.atomic_parquet,
@@ -2042,7 +2116,6 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--micro-min-depth".to_string(),
             profile.micro_min_depth.clone(),
             format!("--micro-min-pressure={}", profile.micro_min_pressure),
-            "--also-maker".to_string(),
             "--zone-mode".to_string(),
             zone_mode_string(zone_mode).to_string(),
             "--top".to_string(),
@@ -2055,8 +2128,22 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--report-json".to_string(),
             sweep_report.display().to_string(),
         ];
+        for tag in &input.require_causal_tag {
+            sweep_args.push("--require-causal-tag".to_string());
+            sweep_args.push(tag.clone());
+        }
+        for tag in &input.deny_causal_tag {
+            sweep_args.push("--deny-causal-tag".to_string());
+            sweep_args.push(tag.clone());
+        }
+        if !profile.taker_only {
+            sweep_args.push("--also-maker".to_string());
+        }
         if profile.degraded_force_taker {
             sweep_args.push("--degraded-force-taker".to_string());
+        }
+        if profile.taker_only {
+            sweep_args.push("--taker-only".to_string());
         }
         if input.atomic_parquet {
             sweep_args.push("--atomic-parquet".to_string());
@@ -2162,6 +2249,17 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         });
     }
 
+    let min_promotion_trades = input
+        .min_promotion_trades
+        .unwrap_or(input.min_fold_trades * fold_summaries.len());
+    let min_promotion_daily_trades = input
+        .min_promotion_daily_trades
+        .unwrap_or(input.min_fold_trades);
+    let min_promotion_profitable_reports = input
+        .min_promotion_profitable_reports
+        .unwrap_or(fold_summaries.len());
+    let min_promotion_losses = input.min_promotion_losses.unwrap_or(5);
+    let min_neighbor_observations = input.min_neighbor_observations.unwrap_or(0);
     let mut promote_args = vec![
         "experiment".to_string(),
         "robust-promote".to_string(),
@@ -2170,11 +2268,11 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         "--min-reports".to_string(),
         fold_summaries.len().to_string(),
         "--min-profitable-reports".to_string(),
-        fold_summaries.len().to_string(),
+        min_promotion_profitable_reports.to_string(),
         "--min-trades".to_string(),
-        (input.min_fold_trades * fold_summaries.len()).to_string(),
+        min_promotion_trades.to_string(),
         "--min-losses".to_string(),
-        "5".to_string(),
+        min_promotion_losses.to_string(),
         "--min-zone-count".to_string(),
         if zone_mode == backtest::sweep::ZoneMode::All {
             "2".to_string()
@@ -2198,11 +2296,13 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         "--min-fill-rate".to_string(),
         "0.55".to_string(),
         "--min-daily-trades".to_string(),
-        input.min_fold_trades.to_string(),
+        min_promotion_daily_trades.to_string(),
         "--min-daily-pnl".to_string(),
         "0".to_string(),
         "--min-neighbor-count".to_string(),
         "2".to_string(),
+        "--min-neighbor-observations".to_string(),
+        min_neighbor_observations.to_string(),
         "--min-neighbor-positive-rate".to_string(),
         input.min_neighbor_positive_rate.to_string(),
         "--max-pbo".to_string(),
@@ -2353,6 +2453,7 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             degraded_min_z: "0.0".to_string(),
             degraded_max_price: "0.0".to_string(),
             degraded_force_taker: false,
+            taker_only: false,
         },
         "a_plus5m_regime" => {
             let mut profile = rolling_history_profile("a_plus5m")?;
@@ -2412,6 +2513,32 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.max_price = "0.85".to_string();
             profile.min_reversion_count = "1".to_string();
             profile.max_reversion_count = "2".to_string();
+            profile
+        }
+        "a_plus5m_down_reversion_guard" => {
+            let mut profile = rolling_history_profile("a_plus5m_reversion_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.60".to_string();
+            profile.z = "0.80".to_string();
+            profile.edge = "0.09".to_string();
+            profile.degraded_after_losses = "2".to_string();
+            profile.degraded_max_price = "0.0".to_string();
+            profile.taker_only = true;
+            profile
+        }
+        "a_plus5m_down_reversion_guard_neighbors" => {
+            let mut profile = rolling_history_profile("a_plus5m_down_reversion_guard")?;
+            profile.name = name.to_string();
+            profile.z = "0.70,0.80".to_string();
+            profile.edge = "0.05,0.07,0.09".to_string();
+            profile
+        }
+        "a_plus5m_down_reversion_guard_confidence" => {
+            let mut profile = rolling_history_profile("a_plus5m_down_reversion_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.60,0.70".to_string();
+            profile.z = "0.70,0.80".to_string();
+            profile.edge = "0.07,0.09".to_string();
             profile
         }
         other => anyhow::bail!("unknown rolling-history profile `{other}`"),
@@ -3526,6 +3653,7 @@ fn cmd_experiment(command: ExperimentCommand) {
             min_daily_pnl,
             max_daily_loss,
             min_neighbor_count,
+            min_neighbor_observations,
             min_neighbor_positive_rate,
             max_pbo,
             min_median_oos_percentile,
@@ -3572,6 +3700,7 @@ fn cmd_experiment(command: ExperimentCommand) {
             };
             let robust_gate = backtest::experiment::RobustPromotionGate {
                 min_neighbor_count,
+                min_neighbor_observations,
                 min_neighbor_positive_rate,
                 max_pbo,
                 min_median_oos_percentile,
@@ -4369,7 +4498,13 @@ async fn cmd_validate_replay(path: &str) {
             &validation_cfg.zone_config,
             f64opt(&v, "cross_boost").unwrap_or(0.0),
         );
-        let traded = matches!(res, strategy::decision::DecisionResult::Trade(_));
+        let traded = match res {
+            strategy::decision::DecisionResult::Trade(decision) => validation_cfg
+                .selectivity
+                .reject_reason(&decision.regime)
+                .is_none(),
+            strategy::decision::DecisionResult::Skip(_) => false,
+        };
         let expected_logged_decision_trade = traded && validation_cfg.settlement_alignment_ready;
         let logged_decision_trade = v
             .get("decision_trade")
@@ -4397,6 +4532,7 @@ struct ReplayValidationConfig {
     min_confidence: f64,
     min_edge: f64,
     skip_dead_zone: bool,
+    selectivity: backtest::strategies::SelectivityFilter,
     settlement_alignment_ready: bool,
 }
 
@@ -4407,6 +4543,7 @@ impl Default for ReplayValidationConfig {
             min_confidence: strategy::decision::DEFAULT_MIN_CONFIDENCE,
             min_edge: strategy::decision::DEFAULT_MIN_EDGE,
             skip_dead_zone: true,
+            selectivity: backtest::strategies::SelectivityFilter::default(),
             settlement_alignment_ready: true,
         }
     }
@@ -4449,6 +4586,13 @@ impl ReplayValidationConfig {
         if let Some(vv) = v.get("skip_dead_zone").and_then(|x| x.as_bool()) {
             self.skip_dead_zone = vv;
         }
+        if let Some(selectivity) = v.get("selectivity") {
+            if let Ok(filter) = serde_json::from_value::<backtest::strategies::SelectivityFilter>(
+                selectivity.clone(),
+            ) {
+                self.selectivity = filter;
+            }
+        }
         if let Some(vv) = v
             .get("settlement_alignment_ready")
             .and_then(|x| x.as_bool())
@@ -4462,6 +4606,7 @@ impl ReplayValidationConfig {
         self.min_confidence = variant.min_confidence;
         self.min_edge = variant.min_edge;
         self.skip_dead_zone = variant.skip_dead_zone;
+        self.selectivity = variant.selectivity;
     }
 }
 
@@ -4655,6 +4800,50 @@ fn parse_csv_u64s(s: &str) -> Vec<u64> {
         .collect()
 }
 
+fn parse_selectivity_filter(
+    require: &[String],
+    deny: &[String],
+) -> anyhow::Result<backtest::strategies::SelectivityFilter> {
+    let require_tags = parse_causal_tag_map(require, "--require-causal-tag")?;
+    let deny_tags = parse_causal_tag_map(deny, "--deny-causal-tag")?;
+    Ok(backtest::strategies::SelectivityFilter {
+        require_tags,
+        deny_tags,
+    })
+}
+
+fn parse_causal_tag_map(
+    args: &[String],
+    flag: &str,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let mut tags = std::collections::BTreeMap::new();
+    for arg in args {
+        for raw in arg.split(',') {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let Some((dimension, value)) = raw.split_once('=') else {
+                anyhow::bail!("{flag} value `{raw}` must use dimension=value");
+            };
+            let dimension = dimension.trim();
+            let value = value.trim();
+            if dimension.is_empty() || value.is_empty() {
+                anyhow::bail!("{flag} value `{raw}` must use non-empty dimension=value");
+            }
+            match tags.insert(dimension.to_string(), value.to_string()) {
+                Some(prev) if prev != value => {
+                    anyhow::bail!(
+                        "{flag} has conflicting values for `{dimension}`: `{prev}` and `{value}`"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(tags)
+}
+
 fn btc_required_range_ms(
     universe: &backtest::harness::CandleUniverse,
     fallback_start_ms: i64,
@@ -4819,6 +5008,7 @@ async fn cmd_harness_sweep(
     also_maker: bool,
     maker_only: bool,
     zone_mode: backtest::sweep::ZoneMode,
+    taker_only: bool,
     top: usize,
     threads: usize,
     checkpoint: Option<&str>,
@@ -4826,6 +5016,8 @@ async fn cmd_harness_sweep(
     report_json: Option<&str>,
     trades_json: Option<&str>,
     trade_features_json: Option<&str>,
+    require_causal_tag: Vec<String>,
+    deny_causal_tag: Vec<String>,
     window_minutes: Option<f64>,
     adaptive_health_rearm_minutes: f64,
     continuous: bool,
@@ -4901,6 +5093,10 @@ async fn cmd_harness_sweep(
         eprintln!("--degraded-max-price must contain finite values in [0, 1]");
         std::process::exit(2);
     }
+    if maker_only && taker_only {
+        eprintln!("--maker-only and --taker-only are mutually exclusive");
+        std::process::exit(2);
+    }
     if settlement_cutoff_minutes.is_empty()
         || settlement_cutoff_minutes
             .iter()
@@ -4925,12 +5121,20 @@ async fn cmd_harness_sweep(
         m if m > 0.0 => Some(m * 60.0),
         _ => None,
     };
+    let selectivity = match parse_selectivity_filter(&require_causal_tag, &deny_causal_tag) {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("causal selectivity parse failed: {e:#}");
+            std::process::exit(2);
+        }
+    };
 
     // Build the variant grid.
     let mut base = backtest::strategies::StrategyVariant::baseline();
     base.position_pct = position_pct;
     base.max_per_market_usd = max_per_market_usd;
     base.max_projected_stressed_drawdown_pct = max_projected_stressed_drawdown_pct[0];
+    base.selectivity = selectivity.clone();
     let grid = backtest::sweep::SweepGrid {
         base,
         conf,
@@ -4954,8 +5158,10 @@ async fn cmd_harness_sweep(
         degraded_min_z,
         degraded_max_price,
         degraded_force_taker,
+        selectivity: vec![selectivity],
         also_maker,
         maker_only,
+        taker_only,
         zone_mode,
     };
     let variants = grid.variants();
@@ -6218,6 +6424,8 @@ mod replay_validation_tests {
             fold_hours: 2,
             max_folds: None,
             profile: "a_plus5m".to_string(),
+            require_causal_tag: vec!["direction=down".to_string()],
+            deny_causal_tag: Vec::new(),
             zone_mode: "early".to_string(),
             promotion_output: None,
             execute: false,
@@ -6229,7 +6437,12 @@ mod replay_validation_tests {
             min_fold_trades: 20,
             min_fold_target_events: 1,
             min_fold_top_trades: None,
+            min_promotion_trades: None,
+            min_promotion_daily_trades: None,
+            min_promotion_profitable_reports: None,
+            min_promotion_losses: None,
             max_cache_gb: 1.0,
+            min_neighbor_observations: None,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
             min_median_oos_percentile: 0.80,
@@ -6271,6 +6484,101 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("0.50,0.70,0.90,1.10")));
+        assert!(summary["folds"][0]["sweep_args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--require-causal-tag")
+                && pair[1].as_str() == Some("direction=down")));
+    }
+
+    #[tokio::test]
+    async fn rolling_history_down_neighbor_profile_is_taker_only() {
+        let summary = run_rolling_history(RollingHistoryInput {
+            start: "2026-05-24T00:00:00Z".to_string(),
+            end: "2026-05-24T01:00:00Z".to_string(),
+            out_dir: std::path::PathBuf::from("/tmp/poly_rolling_down_neighbor_test"),
+            cache_root: None,
+            btc_csv: Some("/tmp/btc.csv".to_string()),
+            bankroll: 100.0,
+            latency_ms: 50,
+            threads: 1,
+            window_minutes: 5.0,
+            fold_hours: 2,
+            max_folds: None,
+            profile: "a_plus5m_down_reversion_guard_neighbors".to_string(),
+            require_causal_tag: vec!["direction=down".to_string()],
+            deny_causal_tag: Vec::new(),
+            zone_mode: "all".to_string(),
+            promotion_output: None,
+            execute: false,
+            delete_after_process: true,
+            atomic_parquet: true,
+            preflight_pmxt_hours: false,
+            stop_at_first_missing_hour: false,
+            require_full_folds: false,
+            min_fold_trades: 20,
+            min_fold_target_events: 1,
+            min_fold_top_trades: None,
+            min_promotion_trades: Some(7),
+            min_promotion_daily_trades: Some(0),
+            min_promotion_profitable_reports: Some(1),
+            min_promotion_losses: Some(0),
+            max_cache_gb: 1.0,
+            min_neighbor_observations: Some(2),
+            min_neighbor_positive_rate: 0.60,
+            max_pbo: 0.50,
+            min_median_oos_percentile: 0.80,
+        })
+        .await
+        .unwrap();
+        let args = summary["folds"][0]["sweep_args"].as_array().unwrap();
+
+        assert!(args.iter().any(|arg| arg.as_str() == Some("--taker-only")));
+        assert!(!args.iter().any(|arg| arg.as_str() == Some("--also-maker")));
+        assert!(args.iter().any(|arg| arg.as_str() == Some("0.60")));
+        assert!(args.iter().any(|arg| arg.as_str() == Some("0.70,0.80")));
+        assert!(args
+            .iter()
+            .any(|arg| arg.as_str() == Some("0.05,0.07,0.09")));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--require-causal-tag")
+                && pair[1].as_str() == Some("direction=down")));
+        let promotion_args = summary["promotion_args"].as_array().unwrap();
+        assert!(promotion_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--min-trades") && pair[1].as_str() == Some("7")));
+        assert!(promotion_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--min-daily-trades")
+                && pair[1].as_str() == Some("0")));
+        assert!(promotion_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--min-profitable-reports")
+                && pair[1].as_str() == Some("1")));
+        assert!(promotion_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--min-losses") && pair[1].as_str() == Some("0")));
+        assert!(promotion_args.windows(2).any(|pair| pair[0].as_str()
+            == Some("--min-neighbor-observations")
+            && pair[1].as_str() == Some("2")));
+        assert_eq!(summary["promotion_policy"]["min_trades"], 7);
+        assert_eq!(summary["promotion_policy"]["min_daily_trades"], 0);
+        assert_eq!(summary["promotion_policy"]["min_profitable_reports"], 1);
+        assert_eq!(summary["promotion_policy"]["min_losses"], 0);
+        assert_eq!(summary["promotion_policy"]["min_neighbor_observations"], 2);
+    }
+
+    #[test]
+    fn rolling_history_confidence_profile_tightens_recent_loss_regime() {
+        let profile = rolling_history_profile("a_plus5m_down_reversion_guard_confidence").unwrap();
+
+        assert_eq!(profile.conf, "0.60,0.70");
+        assert_eq!(profile.z, "0.70,0.80");
+        assert_eq!(profile.edge, "0.07,0.09");
+        assert!(profile.taker_only);
+        assert!(profile.degraded_force_taker);
     }
 
     #[tokio::test]
@@ -6288,6 +6596,8 @@ mod replay_validation_tests {
             fold_hours: 2,
             max_folds: None,
             profile: "a_plus5m".to_string(),
+            require_causal_tag: Vec::new(),
+            deny_causal_tag: Vec::new(),
             zone_mode: "early".to_string(),
             promotion_output: None,
             execute: false,
@@ -6299,7 +6609,12 @@ mod replay_validation_tests {
             min_fold_trades: 20,
             min_fold_target_events: 1,
             min_fold_top_trades: None,
+            min_promotion_trades: None,
+            min_promotion_daily_trades: None,
+            min_promotion_profitable_reports: None,
+            min_promotion_losses: None,
             max_cache_gb: 1.0,
+            min_neighbor_observations: None,
             min_neighbor_positive_rate: 0.60,
             max_pbo: 0.50,
             min_median_oos_percentile: 0.80,

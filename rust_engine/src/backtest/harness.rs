@@ -590,6 +590,12 @@ impl Strategy for CandleBacktestStrategy {
                 return Vec::new();
             }
         };
+        if let Some(reason) = self.variant.selectivity.reject_reason(&decision.regime) {
+            self.skipped_decision += 1;
+            let key = format!("{}_{}", reason, decision.zone);
+            *self.skip_reasons.entry(key).or_insert(0) += 1;
+            return Vec::new();
+        }
 
         let traded_token = if decision.direction == "up" {
             contract.up_token_id.as_str()

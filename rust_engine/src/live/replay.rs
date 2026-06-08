@@ -284,6 +284,7 @@ pub async fn run_live_replay(
         cfg.strategy.variant.min_edge,
         cfg.strategy.variant.skip_dead_zone,
         &cfg.strategy.variant.microstructure,
+        &cfg.strategy.variant.selectivity,
         settings.candle_settlement_alignment_ready,
     );
 
@@ -976,6 +977,24 @@ impl Strategy for LiveReplayStrategy {
                 return Vec::new();
             }
         };
+        if let Some(reason) = variant.selectivity.reject_reason(&decision.regime) {
+            self.record_skip(
+                timestamp_s,
+                &contract,
+                &signal,
+                up_price,
+                down_price,
+                implied_vol,
+                &signal_micro,
+                decision.zone,
+                reason,
+                "causal selectivity filter rejected the decision".to_string(),
+                false,
+                decision.fair_value,
+                decision.edge,
+            );
+            return Vec::new();
+        }
         if !self.settlement_alignment_ready {
             self.record_skip(
                 timestamp_s,
