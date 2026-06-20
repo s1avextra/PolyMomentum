@@ -1,12 +1,14 @@
 //! Release identity and fail-closed startup preflight.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::backtest::experiment::PromotionArtifact;
+use crate::backtest::experiment::{PromotionArtifact, CURRENT_INVENTORY_MODEL_VERSION};
 use crate::backtest::strategies::StrategyVariant;
 use crate::config::{RuntimeMode, Settings, VenueMode};
 use crate::strategy::spec::{stable_json_hash, StrategySpec};
@@ -32,6 +34,8 @@ pub struct PromotionReleaseManifest {
     pub detail: String,
     pub source_report_hash: Option<String>,
     pub data_manifest_hash: Option<String>,
+    pub inventory_model_version: Option<u32>,
+    pub required_inventory_model_version: u32,
     pub strategy: Option<StrategySpec>,
     pub trades: Option<usize>,
     pub win_rate: Option<f64>,
@@ -129,8 +133,9 @@ pub fn run_preflight(
 
     check_peer_private_paths(settings, &mut checks);
     check_runtime_paths(settings, mode, &mut checks);
+    check_disk_watermarks(settings, &mut checks);
     check_kill_switch(settings, &mut checks);
-    check_promotion_artifact(settings, &mut checks);
+    check_promotion_artifact(settings, mode, &mut checks);
     check_settlement_alignment(settings, mode, &mut checks);
     check_candle_window(settings, mode, &mut checks);
 
@@ -194,6 +199,9 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "alert_required": settings.alert_required,
         "promotion_artifact_present": !settings.promotion_artifact_path.trim().is_empty(),
         "promotion_required": settings.promotion_required,
+        "allow_stale_research_artifact": settings.allow_stale_research_artifact,
+        "preflight_min_free_disk_gb": settings.preflight_min_free_disk_gb,
+        "preflight_min_free_disk_pct": settings.preflight_min_free_disk_pct,
         "data_dir": settings.data_dir,
         "logs_dir": settings.logs_dir,
         "state_db_path": settings.state_db_path,
@@ -274,6 +282,8 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
             detail: "no promotion artifact configured".to_string(),
             source_report_hash: None,
             data_manifest_hash: None,
+            inventory_model_version: None,
+            required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
             strategy: None,
             trades: None,
             win_rate: None,
@@ -290,6 +300,8 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
                     detail,
                     source_report_hash: Some(artifact.source_report_hash),
                     data_manifest_hash: Some(artifact.data_manifest_hash),
+                    inventory_model_version: Some(artifact.inventory_model_version),
+                    required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
                     strategy: Some(artifact.selected_strategy),
                     trades: Some(artifact.trades),
                     win_rate: Some(artifact.win_rate),
@@ -305,6 +317,8 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
             detail: e.to_string(),
             source_report_hash: None,
             data_manifest_hash: None,
+            inventory_model_version: None,
+            required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
             strategy: None,
             trades: None,
             win_rate: None,
@@ -390,15 +404,24 @@ fn promotion_manifest_from_artifact(
     path: &str,
     artifact: &PromotionArtifact,
 ) -> PromotionReleaseManifest {
+    let stale_detail = promotion_inventory_model_error(artifact);
     PromotionReleaseManifest {
-        status: "ok",
+        status: if stale_detail.is_some() {
+            "stale_research"
+        } else {
+            "ok"
+        },
         path: Some(path.to_string()),
-        detail: format!(
-            "promoted {} trades from {}",
-            artifact.trades, artifact.source_label
-        ),
+        detail: stale_detail.unwrap_or_else(|| {
+            format!(
+                "promoted {} trades from {}",
+                artifact.trades, artifact.source_label
+            )
+        }),
         source_report_hash: Some(artifact.source_report_hash.clone()),
         data_manifest_hash: Some(artifact.data_manifest_hash.clone()),
+        inventory_model_version: Some(artifact.inventory_model_version),
+        required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
         strategy: Some(artifact.selected_strategy.clone()),
         trades: Some(artifact.trades),
         win_rate: Some(artifact.win_rate),
@@ -630,6 +653,155 @@ fn check_runtime_paths(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<
     );
 }
 
+#[derive(Debug)]
+struct DiskUsage {
+    checked_path: PathBuf,
+    available_bytes: u64,
+    total_bytes: u64,
+    free_pct: f64,
+}
+
+fn check_disk_watermarks(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let min_free_gb = settings.preflight_min_free_disk_gb.max(0.0);
+    let min_free_pct = settings.preflight_min_free_disk_pct.max(0.0);
+    if min_free_gb <= 0.0 && min_free_pct <= 0.0 {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Ok,
+            "disk watermark disabled".to_string(),
+        );
+        return;
+    }
+
+    let state_parent = Path::new(&settings.state_db_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let paths = [
+        PathBuf::from(&settings.data_dir),
+        PathBuf::from(&settings.logs_dir),
+        PathBuf::from(&settings.session_log_dir),
+        state_parent,
+    ];
+
+    let mut seen = BTreeSet::new();
+    let mut failures = Vec::new();
+    let mut details = Vec::new();
+    for path in paths {
+        let check_path = nearest_existing_path(&path);
+        let key = check_path.display().to_string();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        match disk_usage(&check_path) {
+            Ok(usage) => {
+                let available_gb = usage.available_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+                let total_gb = usage.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+                let low_gb = min_free_gb > 0.0 && available_gb < min_free_gb;
+                let low_pct = min_free_pct > 0.0 && usage.free_pct < min_free_pct;
+                let detail = format!(
+                    "{} free={available_gb:.2}GiB/{total_gb:.2}GiB ({:.1}%)",
+                    usage.checked_path.display(),
+                    usage.free_pct
+                );
+                if low_gb || low_pct {
+                    failures.push(format!(
+                        "{detail} below min {:.2}GiB and/or {:.1}%",
+                        min_free_gb, min_free_pct
+                    ));
+                } else {
+                    details.push(detail);
+                }
+            }
+            Err(e) => failures.push(format!("{key}: disk check failed: {e}")),
+        }
+    }
+
+    if failures.is_empty() {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Ok,
+            format!(
+                "disk headroom ok; min {:.2}GiB and {:.1}% free; {}",
+                min_free_gb,
+                min_free_pct,
+                details.join("; ")
+            ),
+        );
+    } else {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Fail,
+            failures.join("; "),
+        );
+    }
+}
+
+fn nearest_existing_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.exists() {
+            return ancestor.to_path_buf();
+        }
+    }
+    PathBuf::from("/")
+}
+
+fn disk_usage(path: &Path) -> std::io::Result<DiskUsage> {
+    let output = Command::new("df").arg("-Pk").arg(path).output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .last()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "empty df output"))?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 5 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("unparseable df output: {line}"),
+        ));
+    }
+    let total_kb = fields[1].parse::<u64>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("parse df total blocks failed: {e}"),
+        )
+    })?;
+    let available_kb = fields[3].parse::<u64>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("parse df available blocks failed: {e}"),
+        )
+    })?;
+    let used_pct = fields[4]
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("parse df capacity failed: {e}"),
+            )
+        })?;
+    Ok(DiskUsage {
+        checked_path: path.to_path_buf(),
+        available_bytes: available_kb.saturating_mul(1024),
+        total_bytes: total_kb.saturating_mul(1024),
+        free_pct: (100.0 - used_pct).max(0.0),
+    })
+}
+
 fn check_dir(name: &'static str, path: &str, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
     let p = Path::new(path);
     match std::fs::metadata(p) {
@@ -696,7 +868,11 @@ fn check_kill_switch(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
     }
 }
 
-fn check_promotion_artifact(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+fn check_promotion_artifact(
+    settings: &Settings,
+    mode: RuntimeMode,
+    checks: &mut Vec<PreflightCheck>,
+) {
     let path = settings.promotion_artifact_path.trim();
     if path.is_empty() {
         let status = if settings.promotion_required {
@@ -717,6 +893,17 @@ fn check_promotion_artifact(settings: &Settings, checks: &mut Vec<PreflightCheck
         Ok(artifact) => {
             if let Some(detail) = promotion_validation_error(&artifact) {
                 push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+            } else if let Some(detail) = promotion_inventory_model_error(&artifact) {
+                if !mode.is_live() && settings.allow_stale_research_artifact {
+                    push(
+                        checks,
+                        "promotion_artifact",
+                        CheckStatus::Warn,
+                        format!("{detail}; allowed for paper research diagnostics only"),
+                    );
+                } else {
+                    push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+                }
             } else {
                 push(
                     checks,
@@ -735,6 +922,17 @@ fn check_promotion_artifact(settings: &Settings, checks: &mut Vec<PreflightCheck
             CheckStatus::Fail,
             format!("failed to load promotion artifact {path}: {e}"),
         ),
+    }
+}
+
+fn promotion_inventory_model_error(artifact: &PromotionArtifact) -> Option<String> {
+    if artifact.inventory_model_version < CURRENT_INVENTORY_MODEL_VERSION {
+        Some(format!(
+            "promotion artifact inventory_model_version={} is stale; current required version is {}",
+            artifact.inventory_model_version, CURRENT_INVENTORY_MODEL_VERSION
+        ))
+    } else {
+        None
     }
 }
 
@@ -799,7 +997,7 @@ fn push(checks: &mut Vec<PreflightCheck>, name: &'static str, status: CheckStatu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backtest::experiment::PromotionGate;
+    use crate::backtest::experiment::{PromotionGate, CURRENT_INVENTORY_MODEL_VERSION};
     use tempfile::TempDir;
 
     fn test_settings(tmp: &TempDir) -> Settings {
@@ -822,6 +1020,9 @@ mod tests {
         s.candle_window_minutes = 5.0;
         s.promotion_artifact_path.clear();
         s.promotion_required = false;
+        s.allow_stale_research_artifact = false;
+        s.preflight_min_free_disk_gb = 0.0;
+        s.preflight_min_free_disk_pct = 0.0;
         s.clob_v2_ready = false;
         s.live_reconciliation_ready = false;
         s.private_key.clear();
@@ -964,6 +1165,46 @@ mod tests {
     }
 
     #[test]
+    fn preflight_rejects_stale_inventory_model_promotion_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion_with_inventory_model(
+            tmp.path(),
+            StrategyVariant::baseline(),
+            CURRENT_INVENTORY_MODEL_VERSION - 1,
+        );
+        s.promotion_artifact_path = artifact.display().to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("inventory_model_version"));
+        assert_eq!(report.release_manifest.promotion.status, "stale_research");
+    }
+
+    #[test]
+    fn paper_preflight_allows_stale_inventory_model_for_research_override() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion_with_inventory_model(
+            tmp.path(),
+            StrategyVariant::baseline(),
+            CURRENT_INVENTORY_MODEL_VERSION - 1,
+        );
+        s.promotion_artifact_path = artifact.display().to_string();
+        s.allow_stale_research_artifact = true;
+
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+
+        assert!(report.ok, "{}", report.failure_summary());
+        assert!(report.checks.iter().any(|c| {
+            c.name == "promotion_artifact"
+                && c.status == CheckStatus::Warn
+                && c.detail.contains("paper research diagnostics only")
+        }));
+    }
+
+    #[test]
     fn live_preflight_requires_5m_window() {
         let tmp = TempDir::new().unwrap();
         let mut s = test_settings(&tmp);
@@ -1002,6 +1243,14 @@ mod tests {
     }
 
     fn write_test_promotion(root: &std::path::Path, variant: StrategyVariant) -> PathBuf {
+        write_test_promotion_with_inventory_model(root, variant, CURRENT_INVENTORY_MODEL_VERSION)
+    }
+
+    fn write_test_promotion_with_inventory_model(
+        root: &std::path::Path,
+        variant: StrategyVariant,
+        inventory_model_version: u32,
+    ) -> PathBuf {
         let selected_strategy = StrategySpec::from_serializable_params(
             "candle_momentum",
             "1",
@@ -1010,6 +1259,7 @@ mod tests {
         );
         let artifact = PromotionArtifact {
             schema_version: 1,
+            inventory_model_version,
             created_at: "2026-05-23T00:00:00Z".to_string(),
             source_report_hash: "source".to_string(),
             source_label: "test".to_string(),

@@ -14,6 +14,8 @@ use crate::data::catalog::MarketCatalog;
 use crate::data::manifest::{DataManifest, DataSourceManifest};
 use crate::strategy::spec::StrategySpec;
 
+pub const CURRENT_INVENTORY_MODEL_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentReport {
     pub schema_version: u32,
@@ -243,6 +245,8 @@ fn default_require_complete_data() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionArtifact {
     pub schema_version: u32,
+    #[serde(default = "default_inventory_model_version")]
+    pub inventory_model_version: u32,
     pub created_at: String,
     pub source_report_hash: String,
     pub source_label: String,
@@ -265,6 +269,10 @@ pub struct PromotionArtifact {
     pub promotion_gate: PromotionGate,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robust_diagnostics: Option<RobustPromotionDiagnostics>,
+}
+
+fn default_inventory_model_version() -> u32 {
+    0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,6 +509,7 @@ impl PromotionArtifact {
 
         Ok(Self {
             schema_version: 1,
+            inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
             created_at: Utc::now().to_rfc3339(),
             source_report_hash: crate::strategy::spec::stable_json_hash(report),
             source_label: report.label.clone(),

@@ -12,6 +12,8 @@ KILL_FILE="${KILL_FILE:-${KILL_SWITCH_PATH:-/opt/polymomentum/KILL}}"
 STATE_DB="${STATE_DB:-$APP_DIR/logs/candle/state.db}"
 INACTIVE_HOURS="${INACTIVE_HOURS:-2}"
 LOGS_LIMIT_MB="${LOGS_LIMIT_MB:-2048}"
+DISK_WARN_PCT="${DISK_WARN_PCT:-85}"
+DISK_CRITICAL_PCT="${DISK_CRITICAL_PCT:-90}"
 
 case "$WEBHOOK_URL" in
     *api.telegram.org/bot*/sendMessage*) WEBHOOK_URL="" ;;
@@ -57,20 +59,29 @@ if [ -f "$KILL_FILE" ]; then
     alert "kill_switch" "kill switch active at $KILL_FILE"
 fi
 
-# 1. Service liveness — restart and alert if dead.
+# 1. Disk free. Check this before liveness so a disk-full preflight failure
+# does not become an automatic restart loop.
+DISK_CRITICAL=false
+DISK=$(df "$APP_DIR" 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}')
+if [ -n "$DISK" ]; then
+    if [ "$DISK" -gt "$DISK_CRITICAL_PCT" ]; then
+        DISK_CRITICAL=true
+        alert "disk_full" "disk usage ${DISK}% on $APP_DIR exceeds critical ${DISK_CRITICAL_PCT}% — not restarting services automatically"
+    elif [ "$DISK" -gt "$DISK_WARN_PCT" ]; then
+        alert "disk_pressure" "disk usage ${DISK}% on $APP_DIR exceeds warning ${DISK_WARN_PCT}%"
+    fi
+fi
+
+# 2. Service liveness — restart and alert if dead.
 if ! systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
     if [ "$KILL_ACTIVE" = true ]; then
         alert "service_stopped_by_kill" "$SERVICE inactive while kill switch is active — not restarting"
+    elif [ "$DISK_CRITICAL" = true ]; then
+        alert "service_stopped_by_disk" "$SERVICE inactive while disk is critical — not restarting"
     else
         alert "service_down" "$SERVICE inactive — restarting"
         systemctl restart "$SERVICE" 2>/dev/null || true
     fi
-fi
-
-# 2. Disk free.
-DISK=$(df "$APP_DIR" 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}')
-if [ -n "$DISK" ] && [ "$DISK" -gt 90 ]; then
-    alert "disk_full" "disk usage ${DISK}% on $APP_DIR"
 fi
 
 # 3. State DB sanity — circuit breaker, last trade.

@@ -3,7 +3,7 @@
 # update systemd unit, restart.
 #
 # Usage:
-#   deploy/deploy.sh user@vps-ip [--enable-service] [--mode paper|live] [--i-understand-live] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json]
+#   deploy/deploy.sh user@vps-ip [--enable-service] [--mode paper|live] [--i-understand-live] [--allow-stale-research-artifact] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json]
 #
 # Layout on VPS:
 #   /opt/polymomentum/
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 user@vps-ip [--enable-service] [--mode paper|live] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json]" >&2
+    echo "Usage: $0 user@vps-ip [--enable-service] [--mode paper|live] [--binary ./polymomentum-engine-linux-x86_64] [--promotion-artifact ./promotion.json] [--allow-stale-research-artifact]" >&2
     exit 1
 fi
 
@@ -24,6 +24,7 @@ VPS="$1"; shift
 ENABLE=false
 MODE="paper"
 LIVE_ACK=false
+ALLOW_STALE_RESEARCH=false
 BINARY_PATH=""
 PROMOTION_PATH=""
 while [ $# -gt 0 ]; do
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
         --enable-service) ENABLE=true; shift ;;
         --mode) MODE="$2"; shift 2 ;;
         --i-understand-live) LIVE_ACK=true; shift ;;
+        --allow-stale-research-artifact) ALLOW_STALE_RESEARCH=true; shift ;;
         --binary) BINARY_PATH="$2"; shift 2 ;;
         --promotion-artifact) PROMOTION_PATH="$2"; shift 2 ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
@@ -43,6 +45,10 @@ if [ "$MODE" != "paper" ] && [ "$MODE" != "live" ]; then
 fi
 if [ "$MODE" = "live" ] && [ "$LIVE_ACK" != "true" ]; then
     echo "--mode live requires --i-understand-live and a passing binary preflight" >&2
+    exit 2
+fi
+if [ "$MODE" = "live" ] && [ "$ALLOW_STALE_RESEARCH" = "true" ]; then
+    echo "--allow-stale-research-artifact is paper-only and cannot be used with --mode live" >&2
     exit 2
 fi
 
@@ -162,6 +168,10 @@ if [ -n "$PROMOTION_REMOTE" ]; then
     sed -i.bak "s|preflight --mode $MODE|preflight --mode $MODE --promotion-artifact $PROMOTION_REMOTE|; s|live --mode $MODE|live --mode $MODE --promotion-artifact $PROMOTION_REMOTE|" "$SERVICE_TMP"
     rm -f "$SERVICE_TMP.bak"
 fi
+if [ "$ALLOW_STALE_RESEARCH" = "true" ]; then
+    sed -i.bak "s|preflight --mode $MODE|preflight --mode $MODE --allow-stale-research-artifact|; s|live --mode $MODE|live --mode $MODE --allow-stale-research-artifact|" "$SERVICE_TMP"
+    rm -f "$SERVICE_TMP.bak"
+fi
 scp_copy "$SERVICE_TMP" "$VPS:/tmp/polymomentum-engine.service"
 rm -f "$SERVICE_TMP"
 ssh "$VPS" "sudo mv /tmp/polymomentum-engine.service /etc/systemd/system/polymomentum-engine.service && \
@@ -181,7 +191,8 @@ if $ENABLE; then
     echo "=== Running remote preflight ==="
     PREFLIGHT_ACK="$([ "$MODE" = "live" ] && echo --i-understand-live || true)"
     PREFLIGHT_PROMOTION="$([ -n "$PROMOTION_REMOTE" ] && echo "--promotion-artifact $PROMOTION_REMOTE" || true)"
-    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$KILL_SWITCH_REMOTE; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK $PREFLIGHT_PROMOTION'"
+    PREFLIGHT_STALE="$([ "$ALLOW_STALE_RESEARCH" = "true" ] && echo --allow-stale-research-artifact || true)"
+    ssh "$VPS" "sudo -u polymomentum bash -lc 'set -a; [ -f /etc/polymomentum/env ] && . /etc/polymomentum/env; set +a; export POLYMOMENTUM_DATA_DIR=$APP_DIR/data POLYMOMENTUM_LOGS_DIR=$APP_DIR/logs STATE_DB_PATH=$APP_DIR/logs/candle/state.db SESSION_LOG_DIR=$APP_DIR/logs/sessions KILL_SWITCH_PATH=$KILL_SWITCH_REMOTE; $APP_DIR/polymomentum-engine preflight --mode $MODE $PREFLIGHT_ACK $PREFLIGHT_PROMOTION $PREFLIGHT_STALE'"
 
     echo "=== Enabling service ==="
     ssh "$VPS" "sudo systemctl enable polymomentum-engine && sudo systemctl restart polymomentum-engine"

@@ -61,6 +61,9 @@ enum Command {
         /// Promotion artifact JSON to bind this runtime to a backtested variant.
         #[arg(long)]
         promotion_artifact: Option<String>,
+        /// Permit a stale promotion artifact only for paper-mode research diagnostics.
+        #[arg(long)]
+        allow_stale_research_artifact: bool,
     },
     /// Replay the live decision/order diagnostics loop from cached PMXT + BTC data.
     LiveReplay {
@@ -122,6 +125,9 @@ enum Command {
         /// Promotion artifact JSON to validate.
         #[arg(long)]
         promotion_artifact: Option<String>,
+        /// Permit a stale promotion artifact only for paper-mode research diagnostics.
+        #[arg(long)]
+        allow_stale_research_artifact: bool,
     },
     /// Print the release manifest used in preflight and session logs.
     ReleaseManifest {
@@ -1127,9 +1133,11 @@ async fn main() {
             mode,
             i_understand_live,
             promotion_artifact,
+            allow_stale_research_artifact,
         } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
+            apply_stale_research_override(&mut settings, allow_stale_research_artifact);
             let preflight = run_startup_preflight(&settings, mode, i_understand_live).await;
             if !preflight.ok {
                 eprintln!("preflight failed: {}", preflight.failure_summary());
@@ -1195,9 +1203,11 @@ async fn main() {
             mode,
             i_understand_live,
             promotion_artifact,
+            allow_stale_research_artifact,
         } => {
             let mut settings = settings.clone();
             apply_promotion_override(&mut settings, promotion_artifact);
+            apply_stale_research_override(&mut settings, allow_stale_research_artifact);
             let report = run_startup_preflight(&settings, mode, i_understand_live).await;
             println!(
                 "{}",
@@ -1525,6 +1535,12 @@ async fn main() {
 fn apply_promotion_override(settings: &mut config::Settings, path: Option<String>) {
     if let Some(path) = path {
         settings.promotion_artifact_path = path;
+    }
+}
+
+fn apply_stale_research_override(settings: &mut config::Settings, allow: bool) {
+    if allow {
+        settings.allow_stale_research_artifact = true;
     }
 }
 

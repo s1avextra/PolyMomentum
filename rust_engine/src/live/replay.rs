@@ -1399,6 +1399,7 @@ mod tests {
         );
         let artifact = crate::backtest::experiment::PromotionArtifact {
             schema_version: 1,
+            inventory_model_version: crate::backtest::experiment::CURRENT_INVENTORY_MODEL_VERSION,
             created_at: "2026-05-06T00:00:00Z".to_string(),
             source_report_hash: "source".to_string(),
             source_label: "unit".to_string(),
@@ -1452,6 +1453,7 @@ mod tests {
         );
         let artifact = crate::backtest::experiment::PromotionArtifact {
             schema_version: 1,
+            inventory_model_version: crate::backtest::experiment::CURRENT_INVENTORY_MODEL_VERSION,
             created_at: "2026-05-06T00:00:00Z".to_string(),
             source_report_hash: "source".to_string(),
             source_label: "unit".to_string(),

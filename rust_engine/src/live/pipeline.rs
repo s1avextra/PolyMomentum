@@ -3173,7 +3173,9 @@ fn unix_now_s() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backtest::experiment::{PromotionArtifact, PromotionGate};
+    use crate::backtest::experiment::{
+        PromotionArtifact, PromotionGate, CURRENT_INVENTORY_MODEL_VERSION,
+    };
     use chrono::TimeZone;
     use tempfile::TempDir;
 
@@ -3182,6 +3184,7 @@ mod tests {
             StrategySpec::from_serializable_params("candle_momentum", "1", variant, "test-risk");
         PromotionArtifact {
             schema_version: 1,
+            inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
             created_at: "2026-05-01T00:00:00Z".to_string(),
             source_report_hash: "report-hash".to_string(),
             source_label: "unit".to_string(),

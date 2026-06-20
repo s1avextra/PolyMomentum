@@ -10,6 +10,8 @@ use clap::ValueEnum;
 use serde::Serialize;
 
 pub const DEFAULT_SIMULATED_BANKROLL_USD: f64 = 100.0;
+pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_GB: f64 = 10.0;
+pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_PCT: f64 = 15.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -164,6 +166,9 @@ pub struct Settings {
     pub alert_required: bool,
     pub promotion_artifact_path: String,
     pub promotion_required: bool,
+    pub allow_stale_research_artifact: bool,
+    pub preflight_min_free_disk_gb: f64,
+    pub preflight_min_free_disk_pct: f64,
 
     pub data_dir: String,
     pub logs_dir: String,
@@ -328,6 +333,18 @@ impl Settings {
             alert_required: env_bool("ALERT_REQUIRED", false),
             promotion_artifact_path: env_str("POLYMOMENTUM_PROMOTION_ARTIFACT", ""),
             promotion_required: env_bool("POLYMOMENTUM_REQUIRE_PROMOTION", false),
+            allow_stale_research_artifact: env_bool(
+                "POLYMOMENTUM_ALLOW_STALE_RESEARCH_ARTIFACT",
+                false,
+            ),
+            preflight_min_free_disk_gb: env_f64(
+                "POLYMOMENTUM_PREFLIGHT_MIN_FREE_DISK_GB",
+                DEFAULT_PREFLIGHT_MIN_FREE_DISK_GB,
+            ),
+            preflight_min_free_disk_pct: env_f64(
+                "POLYMOMENTUM_PREFLIGHT_MIN_FREE_DISK_PCT",
+                DEFAULT_PREFLIGHT_MIN_FREE_DISK_PCT,
+            ),
 
             state_db_path: env_str("STATE_DB_PATH", &format!("{}/candle/state.db", logs_dir)),
             session_log_dir: env_str("SESSION_LOG_DIR", &format!("{}/sessions", logs_dir)),
