@@ -338,6 +338,65 @@ pub struct CausalBucketDiagnostic {
     pub profit_factor: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneConcentrationAudit {
+    pub schema_version: u32,
+    pub report_count: usize,
+    pub variant_name: String,
+    pub params_hash: String,
+    pub max_zone_trade_share: f64,
+    pub min_zone_trades: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_zone_pnl: Option<f64>,
+    pub total: ZoneConcentrationTotal,
+    pub zones: Vec<ZoneConcentrationZone>,
+    pub folds: Vec<ZoneConcentrationFold>,
+    pub pass: bool,
+    pub rejections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneConcentrationTotal {
+    pub trades: usize,
+    pub wins: usize,
+    pub losses: usize,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+    pub total_fees: f64,
+    pub dominant_zone: Option<String>,
+    pub dominant_zone_trade_share: Option<f64>,
+    pub wilson_win_rate_lower: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneConcentrationZone {
+    pub zone: String,
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub win_rate: f64,
+    pub pnl: f64,
+    pub trade_share: f64,
+    pub passes_min_trades: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passes_min_pnl: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneConcentrationFold {
+    pub label: String,
+    pub start: String,
+    pub end: String,
+    pub trades: usize,
+    pub wins: usize,
+    pub losses: usize,
+    pub total_pnl: f64,
+    pub total_fees: f64,
+    pub dominant_zone: Option<String>,
+    pub dominant_zone_trade_share: Option<f64>,
+    pub zones: Vec<ZoneConcentrationZone>,
+}
+
 impl ExperimentReport {
     pub fn from_harness(
         label: impl Into<String>,
@@ -906,6 +965,166 @@ fn aggregate_variant_reports(group: &[&VariantReport]) -> VariantReport {
         sharpe_like: daily_sharpe(group),
         by_zone,
     }
+}
+
+pub fn zone_concentration_audit(
+    reports: &[ExperimentReport],
+    params_hash: Option<&str>,
+    max_zone_trade_share: f64,
+    min_zone_trades: u64,
+    min_zone_pnl: Option<f64>,
+) -> Result<ZoneConcentrationAudit> {
+    if reports.is_empty() {
+        bail!("zone concentration audit requires at least one report");
+    }
+    let aggregate = aggregate_reports(
+        reports,
+        &MultiReportPromotionGate {
+            min_reports: reports.len(),
+            ..MultiReportPromotionGate::default()
+        },
+    )?;
+    if aggregate.variants.is_empty() {
+        bail!("zone concentration audit found no comparable variants across all reports");
+    }
+    let selected = match params_hash {
+        Some(params_hash) => aggregate
+            .variants
+            .iter()
+            .find(|variant| variant.strategy.params_hash == params_hash)
+            .with_context(|| {
+                format!("params_hash {params_hash} is not comparable across all reports")
+            })?,
+        None => aggregate
+            .variants
+            .first()
+            .expect("checked non-empty aggregate variants"),
+    };
+
+    let daily = matching_daily_variants(reports, selected);
+    if daily.len() != reports.len() {
+        bail!(
+            "selected variant is present in {} of {} reports",
+            daily.len(),
+            reports.len()
+        );
+    }
+
+    let (dominant_zone, dominant_zone_trade_share) = dominant_zone_share(selected);
+    let zones = zone_concentration_rows(
+        &selected.by_zone,
+        selected.trades,
+        min_zone_trades,
+        min_zone_pnl,
+    );
+    let folds = reports
+        .iter()
+        .zip(daily.iter())
+        .map(|(report, variant)| {
+            let (fold_dominant_zone, fold_dominant_zone_trade_share) = dominant_zone_share(variant);
+            ZoneConcentrationFold {
+                label: report.label.clone(),
+                start: report.start.clone(),
+                end: report.end.clone(),
+                trades: variant.trades,
+                wins: variant.wins,
+                losses: variant.losses,
+                total_pnl: variant.total_pnl,
+                total_fees: variant.total_fees,
+                dominant_zone: fold_dominant_zone,
+                dominant_zone_trade_share: fold_dominant_zone_trade_share,
+                zones: zone_concentration_rows(
+                    &variant.by_zone,
+                    variant.trades,
+                    min_zone_trades,
+                    min_zone_pnl,
+                ),
+            }
+        })
+        .collect();
+
+    let mut rejections = Vec::new();
+    if selected.trades == 0 {
+        rejections.push("selected variant has no trades".to_string());
+    }
+    if let Some(share) = dominant_zone_trade_share {
+        if share > max_zone_trade_share {
+            let zone = dominant_zone.as_deref().unwrap_or("unknown");
+            rejections.push(format!(
+                "zone {zone} trade share {:.4} above maximum {:.4}",
+                share, max_zone_trade_share
+            ));
+        }
+    } else {
+        rejections.push("by_zone breakdown is empty".to_string());
+    }
+    for zone in &zones {
+        if zone.trades > 0 && !zone.passes_min_trades {
+            rejections.push(format!(
+                "zone {} trades {} below minimum {}",
+                zone.zone, zone.trades, min_zone_trades
+            ));
+        }
+        if matches!(zone.passes_min_pnl, Some(false)) {
+            let minimum = min_zone_pnl.unwrap_or(0.0);
+            rejections.push(format!(
+                "zone {} pnl {:.4} below minimum {:.4}",
+                zone.zone, zone.pnl, minimum
+            ));
+        }
+    }
+
+    let pass = rejections.is_empty();
+    Ok(ZoneConcentrationAudit {
+        schema_version: 1,
+        report_count: reports.len(),
+        variant_name: variant_label(selected),
+        params_hash: selected.strategy.params_hash.clone(),
+        max_zone_trade_share,
+        min_zone_trades,
+        min_zone_pnl,
+        total: ZoneConcentrationTotal {
+            trades: selected.trades,
+            wins: selected.wins,
+            losses: selected.losses,
+            win_rate: selected.win_rate,
+            total_pnl: selected.total_pnl,
+            total_fees: selected.total_fees,
+            dominant_zone,
+            dominant_zone_trade_share,
+            wilson_win_rate_lower: wilson_win_rate_lower(selected.wins, selected.trades),
+        },
+        zones,
+        folds,
+        pass,
+        rejections,
+    })
+}
+
+fn zone_concentration_rows(
+    by_zone: &BTreeMap<String, ZoneReport>,
+    total_trades: usize,
+    min_zone_trades: u64,
+    min_zone_pnl: Option<f64>,
+) -> Vec<ZoneConcentrationZone> {
+    by_zone
+        .iter()
+        .map(|(zone, stats)| ZoneConcentrationZone {
+            zone: zone.clone(),
+            trades: stats.trades,
+            wins: stats.wins,
+            losses: stats.losses,
+            win_rate: stats.win_rate,
+            pnl: stats.pnl,
+            trade_share: if total_trades == 0 {
+                0.0
+            } else {
+                stats.trades as f64 / total_trades as f64
+            },
+            passes_min_trades: stats.trades >= min_zone_trades,
+            passes_min_pnl: min_zone_pnl.map(|minimum| stats.pnl >= minimum),
+        })
+        .collect()
 }
 
 fn build_trial_ledger(reports: &[ExperimentReport]) -> TrialLedger {
@@ -2221,6 +2440,50 @@ mod tests {
         let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
 
         assert!(err.to_string().contains("zone primary trade share"));
+    }
+
+    #[test]
+    fn zone_concentration_audit_makes_threshold_tradeoff_explicit() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        report.variants.push(VariantReport {
+            strategy: StrategySpec::new("s", "1", "hash", "risk"),
+            strategy_params: serde_json::json!({"name": "test"}),
+            trades: 40,
+            wins: 30,
+            losses: 10,
+            unresolved_fills: 0,
+            execution_attempts: 40,
+            fills_success: 40,
+            fills_failed: 0,
+            fill_rate: 1.0,
+            reject_reasons: BTreeMap::new(),
+            breaker_tripped: false,
+            breaker_reason: None,
+            breaker_tripped_at_s: None,
+            breaker_realized_drawdown_pct: 0.0,
+            breaker_stressed_drawdown_pct: 0.0,
+            diagnostics: BacktestDiagnostics::default(),
+            win_rate: 0.75,
+            total_pnl: 4.0,
+            avg_pnl: 0.1,
+            total_fees: 0.0,
+            sharpe_like: 1.0,
+            by_zone: zone_split(30, 10),
+        });
+
+        let strict = zone_concentration_audit(&[report.clone()], None, 0.70, 0, None).unwrap();
+        assert!(!strict.pass);
+        assert_eq!(strict.total.dominant_zone.as_deref(), Some("primary"));
+        assert_eq!(strict.total.dominant_zone_trade_share, Some(0.75));
+        assert!(strict
+            .rejections
+            .iter()
+            .any(|reason| reason.contains("above maximum 0.7000")));
+
+        let relaxed = zone_concentration_audit(&[report], None, 0.80, 0, None).unwrap();
+        assert!(relaxed.pass);
+        assert_eq!(relaxed.total.dominant_zone_trade_share, Some(0.75));
     }
 
     #[test]

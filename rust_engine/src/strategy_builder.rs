@@ -1950,7 +1950,7 @@ fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> Str
         args.extend(["--report".to_string(), report.display().to_string()]);
     }
     let min_zone_count = if zone_mode == "all" { "2" } else { "1" };
-    let max_zone_trade_share = if zone_mode == "all" { "0.85" } else { "1.0" };
+    let max_zone_trade_share = if zone_mode == "all" { "0.70" } else { "1.0" };
     args.extend([
         "--output".to_string(),
         output.display().to_string(),
