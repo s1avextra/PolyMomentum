@@ -620,6 +620,9 @@ enum ExperimentCommand {
         /// Optional minimum PnL required in each active aggregate timing zone.
         #[arg(long)]
         min_zone_pnl: Option<f64>,
+        /// Optional output JSON path for the zone audit.
+        #[arg(long)]
+        output: Option<String>,
     },
     /// Promote the best passing backtest variant into a deployable artifact.
     Promote {
@@ -1967,6 +1970,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             end.format("%Y%m%dT%H%M%SZ")
         ))
     });
+    let zone_audit_output = zone_audit_output_for_promotion(&promotion_output);
 
     let mut folds = Vec::new();
     let mut fold_start = start;
@@ -1996,7 +2000,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
     let build_summary = |promotion_status: &str,
                          promotion_error: Option<String>,
                          fold_summaries: &[RollingFoldSummary],
-                         promote_args: &[String]| {
+                         promote_args: &[String],
+                         zone_audit_args: &[String]| {
         serde_json::json!({
             "schema_version": 1,
             "mode": if input.execute { "executed" } else { "dry_run" },
@@ -2033,6 +2038,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "folds": fold_summaries,
             "promotion_output": promotion_output.display().to_string(),
             "promotion_args": promote_args,
+            "zone_audit_output": zone_audit_output.display().to_string(),
+            "zone_audit_args": zone_audit_args,
             "storage_policy": if input.atomic_parquet {
                 "per-fold cache is session-owned; atomic_parquet downloads one raw PMXT hour at a time and deletes only parquets downloaded by this process after replay; delete_after_process removes fold_* dirs under cache_root after report write"
             } else {
@@ -2255,6 +2262,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
                     Some(message.clone()),
                     &fold_summaries,
                     &[],
+                    &[],
                 );
                 write_json_atomic(&manifest, &summary, false)
                     .with_context(|| format!("write {}", manifest.display()))?;
@@ -2360,13 +2368,57 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
     for report in &sweep_reports {
         promote_args.extend(["--report".to_string(), report.display().to_string()]);
     }
+    let max_zone_trade_share = if zone_mode == backtest::sweep::ZoneMode::All {
+        "0.70"
+    } else {
+        "1.0"
+    };
+    let mut zone_audit_args = vec![
+        "experiment".to_string(),
+        "zone-audit".to_string(),
+        "--output".to_string(),
+        zone_audit_output.display().to_string(),
+        "--max-zone-trade-share".to_string(),
+        max_zone_trade_share.to_string(),
+        "--min-zone-pnl".to_string(),
+        "0".to_string(),
+    ];
+    for report in &sweep_reports {
+        zone_audit_args.extend(["--report".to_string(), report.display().to_string()]);
+    }
 
     if input.execute {
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("create {}", out_dir.display()))?;
         let manifest = out_dir.join("rolling_history_manifest.json");
-        let pending_summary =
-            build_summary("promotion_pending", None, &fold_summaries, &promote_args);
+        let zone_audit_pending_summary = build_summary(
+            "zone_audit_pending",
+            None,
+            &fold_summaries,
+            &promote_args,
+            &zone_audit_args,
+        );
+        write_json_atomic(&manifest, &zone_audit_pending_summary, false)
+            .with_context(|| format!("write {}", manifest.display()))?;
+        if let Err(err) = run_child(&exe, &zone_audit_args) {
+            let failed_summary = build_summary(
+                "zone_audit_failed",
+                Some(err.to_string()),
+                &fold_summaries,
+                &promote_args,
+                &zone_audit_args,
+            );
+            write_json_atomic(&manifest, &failed_summary, false)
+                .with_context(|| format!("write {}", manifest.display()))?;
+            return Err(err);
+        }
+        let pending_summary = build_summary(
+            "promotion_pending",
+            None,
+            &fold_summaries,
+            &promote_args,
+            &zone_audit_args,
+        );
         write_json_atomic(&manifest, &pending_summary, false)
             .with_context(|| format!("write {}", manifest.display()))?;
         if let Err(err) = run_child(&exe, &promote_args) {
@@ -2375,18 +2427,31 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
                 Some(err.to_string()),
                 &fold_summaries,
                 &promote_args,
+                &zone_audit_args,
             );
             write_json_atomic(&manifest, &failed_summary, false)
                 .with_context(|| format!("write {}", manifest.display()))?;
             return Err(err);
         }
-        let summary = build_summary("promotion_passed", None, &fold_summaries, &promote_args);
+        let summary = build_summary(
+            "promotion_passed",
+            None,
+            &fold_summaries,
+            &promote_args,
+            &zone_audit_args,
+        );
         write_json_atomic(&manifest, &summary, false)
             .with_context(|| format!("write {}", manifest.display()))?;
         return Ok(summary);
     }
 
-    let summary = build_summary("dry_run", None, &fold_summaries, &promote_args);
+    let summary = build_summary(
+        "dry_run",
+        None,
+        &fold_summaries,
+        &promote_args,
+        &zone_audit_args,
+    );
     Ok(summary)
 }
 
@@ -2626,6 +2691,14 @@ fn run_child(exe: &std::path::Path, args: &[String]) -> anyhow::Result<()> {
         anyhow::bail!("child command failed with {status}: {}", args.join(" "));
     }
     Ok(())
+}
+
+fn zone_audit_output_for_promotion(path: &std::path::Path) -> std::path::PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("promotion");
+    path.with_file_name(format!("{stem}.zone_audit.json"))
 }
 
 fn enforce_cache_budget(cache_root: &std::path::Path, max_cache_gb: f64) -> anyhow::Result<()> {
@@ -3532,6 +3605,7 @@ fn cmd_experiment(command: ExperimentCommand) {
             max_zone_trade_share,
             min_zone_trades,
             min_zone_pnl,
+            output,
         } => {
             let mut reports = Vec::new();
             for path in &report {
@@ -3556,10 +3630,33 @@ fn cmd_experiment(command: ExperimentCommand) {
                     std::process::exit(2);
                 }
             };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&audit).expect("serialize zone concentration audit")
-            );
+            if let Some(output) = output {
+                if let Err(e) =
+                    backtest::experiment::write_zone_concentration_audit_atomic(&output, &audit)
+                {
+                    eprintln!("write zone concentration audit failed: {e}");
+                    std::process::exit(1);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "output": output,
+                        "pass": audit.pass,
+                        "variant_name": audit.variant_name,
+                        "params_hash": audit.params_hash,
+                        "dominant_zone": audit.total.dominant_zone,
+                        "dominant_zone_trade_share": audit.total.dominant_zone_trade_share,
+                        "rejections": audit.rejections,
+                    }))
+                    .expect("serialize zone concentration audit summary")
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&audit)
+                        .expect("serialize zone concentration audit")
+                );
+            }
         }
         ExperimentCommand::Promote {
             report,
@@ -6550,6 +6647,23 @@ mod replay_validation_tests {
             .unwrap()
             .iter()
             .any(|arg| arg.as_str() == Some("--max-pbo")));
+        assert!(summary["zone_audit_output"]
+            .as_str()
+            .unwrap()
+            .ends_with(".zone_audit.json"));
+        assert!(summary["zone_audit_args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--max-zone-trade-share")
+                && pair[1].as_str() == Some("1.0")));
+        assert!(summary["zone_audit_args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(
+                |pair| pair[0].as_str() == Some("--min-zone-pnl") && pair[1].as_str() == Some("0")
+            ));
         assert!(summary["promotion_args"]
             .as_array()
             .unwrap()
@@ -6645,6 +6759,12 @@ mod replay_validation_tests {
         assert!(promotion_args.windows(2).any(|pair| pair[0].as_str()
             == Some("--min-neighbor-observations")
             && pair[1].as_str() == Some("2")));
+        assert!(summary["zone_audit_args"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--max-zone-trade-share")
+                && pair[1].as_str() == Some("0.70")));
         assert_eq!(summary["promotion_policy"]["min_trades"], 7);
         assert_eq!(summary["promotion_policy"]["min_daily_trades"], 0);
         assert_eq!(summary["promotion_policy"]["min_profitable_reports"], 1);

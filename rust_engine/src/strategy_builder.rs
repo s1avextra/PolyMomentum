@@ -283,6 +283,7 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             window_stamp(start, calibration_end),
             window_stamp(holdout_start, holdout_end)
         ));
+        let fold_zone_audit = zone_audit_output_for_promotion(&fold_promotion);
         stages.push(StrategyBuilderStage {
             name: format!("feed_forward_promote_{}", holdout_idx),
             purpose:
@@ -297,6 +298,24 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             verify: vec![
                 format!("train_end={} < holdout_start={}", calibration_end.to_rfc3339(), holdout_start.to_rfc3339()),
                 "promotion artifact params hash matches strategy_params".to_string(),
+            ],
+            resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
+        });
+        stages.push(StrategyBuilderStage {
+            name: format!("feed_forward_zone_audit_{}", holdout_idx),
+            purpose:
+                "Record timing-zone concentration for the selected calibration candidate before holdout replay."
+                    .to_string(),
+            command: zone_audit_command(
+                &static_calibration_reports(&calibration_reports),
+                &fold_zone_audit,
+                zone_mode,
+            ),
+            outputs: vec![fold_zone_audit.display().to_string()],
+            verify: vec![
+                "zone audit pass=true for A+ all-zone promotion".to_string(),
+                "dominant zone share and per-zone PnL are reviewed before holdout scoring"
+                    .to_string(),
             ],
             resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
         });
@@ -491,6 +510,26 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
         resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
     });
 
+    let final_zone_audit = zone_audit_output_for_promotion(&promotion_output);
+    stages.push(StrategyBuilderStage {
+        name: "final_zone_audit".to_string(),
+        purpose:
+            "Record timing-zone concentration for the final deployable candidate before runtime preflight."
+                .to_string(),
+        command: zone_audit_command(
+            &static_calibration_reports(&calibration_reports),
+            &final_zone_audit,
+            zone_mode,
+        ),
+        outputs: vec![final_zone_audit.display().to_string()],
+        verify: vec![
+            "zone audit pass=true for A+ all-zone promotion".to_string(),
+            "negative active-zone PnL is treated as a research warning even when promotion passes"
+                .to_string(),
+        ],
+        resource_policy: "Lightweight; safe on dev box or VPS.".to_string(),
+    });
+
     stages.push(StrategyBuilderStage {
         name: "runtime_preflight".to_string(),
         purpose:
@@ -632,7 +671,8 @@ pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan
             "Do not run CPU-heavy sweeps on the multi-tenant VPS; run them on the dev box and copy artifacts over.".to_string(),
             "BTC tape coverage is now a hard gate; stale CSVs are rejected instead of producing flat fake resolutions.".to_string(),
             "Use backtest/live-replay validation first; paper mode is only for live venue plumbing that cannot be reproduced offline.".to_string(),
-            "Promotion uses robust-promote: hard gates first, then worst-window expectancy, neighbor stability, Wilson lower bound, maker fill reliability, and PBO diagnostics.".to_string(),
+            "Promotion uses robust-promote: hard gates first, then worst-window expectancy, neighbor stability, zone balance, zone PnL coverage, Wilson lower bound, maker fill reliability, and PBO diagnostics.".to_string(),
+            "Every promotion stage has a matching zone-audit artifact; A+ all-zone candidates must keep dominant-zone share within the strict concentration gate.".to_string(),
             "For broad PMXT history, scan gradually in time-boxed local caches: hydrate one rolling window, emit reports/artifacts, then delete only the parquets downloaded by that session.".to_string(),
         ],
     })
@@ -1990,6 +2030,33 @@ fn promotion_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> Str
     shell_command(&args)
 }
 
+fn zone_audit_command(reports: &[PathBuf], output: &Path, zone_mode: &str) -> String {
+    let max_zone_trade_share = if zone_mode == "all" { "0.70" } else { "1.0" };
+    let mut args = vec![
+        "polymomentum-engine".to_string(),
+        "experiment".to_string(),
+        "zone-audit".to_string(),
+        "--output".to_string(),
+        output.display().to_string(),
+        "--max-zone-trade-share".to_string(),
+        max_zone_trade_share.to_string(),
+        "--min-zone-pnl".to_string(),
+        "0".to_string(),
+    ];
+    for report in reports {
+        args.extend(["--report".to_string(), report.display().to_string()]);
+    }
+    shell_command(&args)
+}
+
+fn zone_audit_output_for_promotion(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("promotion");
+    path.with_file_name(format!("{stem}.zone_audit.json"))
+}
+
 #[derive(Debug)]
 struct StrategyBuilderProfile {
     name: &'static str,
@@ -2357,7 +2424,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(plan.stages.len(), 26);
+        assert_eq!(plan.stages.len(), 29);
         assert_eq!(plan.zone_mode, "primary");
         assert_eq!(plan.fold_hours, 24);
         assert!(plan
@@ -2376,6 +2443,15 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.command.contains("robust-promote") && s.command.contains("--max-pbo")));
+        assert!(plan.stages.iter().any(|s| {
+            s.command.contains("experiment zone-audit")
+                && s.command.contains("--max-zone-trade-share 1.0")
+                && s.command.contains("--min-zone-pnl 0")
+        }));
+        assert!(plan.stages.iter().any(|s| {
+            s.name == "final_zone_audit"
+                && s.outputs.iter().any(|o| o.ends_with(".zone_audit.json"))
+        }));
         assert!(plan.stages.iter().any(|s| {
             s.name.starts_with("calibration_adaptive_breaker_probe_")
                 && s.command.contains("--adaptive-health-rearm-minutes 15")

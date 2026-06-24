@@ -320,6 +320,20 @@ pub struct RobustVariantDiagnostics {
     pub neighbor_positive_rate: f64,
     pub fill_rate: f64,
     pub max_stressed_drawdown_pct: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_zone_trade_share: Option<f64>,
+    #[serde(default)]
+    pub zone_balance_score: f64,
+    #[serde(default)]
+    pub zone_pnl_coverage_score: f64,
+    #[serde(default)]
+    pub non_dominant_zone_pnl: f64,
+    #[serde(default)]
+    pub worst_zone_pnl: f64,
+    #[serde(default)]
+    pub negative_zone_count: usize,
     pub profit_factor: f64,
     pub payoff_ratio: f64,
     pub worst_loss_to_avg_win: f64,
@@ -1143,7 +1157,7 @@ fn build_trial_ledger(reports: &[ExperimentReport]) -> TrialLedger {
             .map(crate::strategy::spec::stable_json_hash)
             .collect(),
         selection_objective:
-            "robust_score with hard vetoes, neighbor stability, worst-window pnl, and PBO"
+            "robust_score with hard vetoes, worst-window pnl, neighbor stability, zone balance, zone PnL coverage, and PBO"
                 .to_string(),
     }
 }
@@ -1191,13 +1205,16 @@ fn robust_variant_diagnostics(
     let trade_pnl = &selected.diagnostics.trade_pnl;
     let negative_causal_buckets = negative_causal_buckets(selected);
     let simplicity = simplicity_score(selected);
-    let robust_score = 0.30 * worst_window_expectancy
-        + 0.20 * median_window_expectancy
+    let zone = zone_stability_diagnostics(selected);
+    let robust_score = 0.28 * worst_window_expectancy
+        + 0.18 * median_window_expectancy
         + 0.15 * wilson
-        + 0.15 * neighbor_positive_rate
-        + 0.10 * selected.fill_rate
+        + 0.14 * neighbor_positive_rate
+        + 0.08 * selected.fill_rate
         + 0.05 * drawdown_inverse
-        + 0.05 * simplicity;
+        + 0.04 * simplicity
+        + 0.05 * zone.balance_score
+        + 0.03 * zone.pnl_coverage_score;
 
     RobustVariantDiagnostics {
         strategy_name: variant_label(selected),
@@ -1214,11 +1231,83 @@ fn robust_variant_diagnostics(
         neighbor_positive_rate,
         fill_rate: selected.fill_rate,
         max_stressed_drawdown_pct: selected.breaker_stressed_drawdown_pct,
+        dominant_zone: zone.dominant_zone,
+        dominant_zone_trade_share: zone.dominant_zone_trade_share,
+        zone_balance_score: zone.balance_score,
+        zone_pnl_coverage_score: zone.pnl_coverage_score,
+        non_dominant_zone_pnl: zone.non_dominant_zone_pnl,
+        worst_zone_pnl: zone.worst_zone_pnl,
+        negative_zone_count: zone.negative_zone_count,
         profit_factor: trade_pnl.profit_factor,
         payoff_ratio: trade_pnl.payoff_ratio,
         worst_loss_to_avg_win: trade_pnl.worst_loss_to_avg_win,
         negative_causal_buckets,
         robust_score,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ZoneStabilityDiagnostics {
+    dominant_zone: Option<String>,
+    dominant_zone_trade_share: Option<f64>,
+    balance_score: f64,
+    pnl_coverage_score: f64,
+    non_dominant_zone_pnl: f64,
+    worst_zone_pnl: f64,
+    negative_zone_count: usize,
+}
+
+fn zone_stability_diagnostics(selected: &VariantReport) -> ZoneStabilityDiagnostics {
+    let (dominant_zone, dominant_zone_trade_share) = dominant_zone_share(selected);
+    let active: Vec<(&String, &ZoneReport)> = selected
+        .by_zone
+        .iter()
+        .filter(|(_, report)| report.trades > 0)
+        .collect();
+    if active.is_empty() {
+        return ZoneStabilityDiagnostics {
+            dominant_zone,
+            dominant_zone_trade_share,
+            balance_score: 0.0,
+            pnl_coverage_score: 0.0,
+            non_dominant_zone_pnl: 0.0,
+            worst_zone_pnl: 0.0,
+            negative_zone_count: 0,
+        };
+    }
+
+    let active_count = active.len();
+    let share = dominant_zone_trade_share.unwrap_or(1.0);
+    let ideal_share = 1.0 / active_count as f64;
+    let balance_score = if active_count <= 1 {
+        0.0
+    } else {
+        ((1.0 - share) / (1.0 - ideal_share)).clamp(0.0, 1.0)
+    };
+    let pnl_positive_count = active
+        .iter()
+        .filter(|(_, report)| report.pnl >= 0.0)
+        .count();
+    let pnl_coverage_score = pnl_positive_count as f64 / active_count as f64;
+    let non_dominant_zone_pnl = active
+        .iter()
+        .filter(|(zone, _)| Some(zone.as_str()) != dominant_zone.as_deref())
+        .map(|(_, report)| report.pnl)
+        .sum();
+    let worst_zone_pnl = active
+        .iter()
+        .map(|(_, report)| report.pnl)
+        .fold(f64::INFINITY, f64::min);
+    let negative_zone_count = active.iter().filter(|(_, report)| report.pnl < 0.0).count();
+
+    ZoneStabilityDiagnostics {
+        dominant_zone,
+        dominant_zone_trade_share,
+        balance_score,
+        pnl_coverage_score,
+        non_dominant_zone_pnl,
+        worst_zone_pnl,
+        negative_zone_count,
     }
 }
 
@@ -1914,6 +2003,28 @@ pub fn write_promotion_atomic(path: impl AsRef<Path>, artifact: &PromotionArtifa
     ));
     std::fs::write(&tmp, payload)
         .with_context(|| format!("write tmp promotion artifact {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+pub fn write_zone_concentration_audit_atomic(
+    path: impl AsRef<Path>,
+    audit: &ZoneConcentrationAudit,
+) -> Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create zone audit dir {}", parent.display()))?;
+    }
+    let payload = serde_json::to_vec_pretty(audit).context("serialize ZoneConcentrationAudit")?;
+    let tmp = path.with_extension(format!(
+        "{}.tmp.{}",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("json"),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, payload)
+        .with_context(|| format!("write tmp zone audit {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
@@ -2852,6 +2963,67 @@ mod tests {
     }
 
     #[test]
+    fn robust_promotion_prefers_zone_balanced_candidate_after_hard_gates() {
+        let cfg = cfg();
+        let mut reports = Vec::new();
+        for i in 0..3 {
+            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            let mut concentrated =
+                robust_variant("concentrated", "concentrated", 10.0, 0.40, 0.70, 0.90);
+            concentrated.by_zone = zone_split(21, 9);
+            let mut balanced = robust_variant("balanced", "balanced", 10.0, 0.40, 0.70, 0.90);
+            balanced.by_zone = zone_split(15, 15);
+            report.variants = vec![concentrated, balanced];
+            reports.push(report);
+        }
+
+        let (artifact, diagnostics) = PromotionArtifact::from_reports_robust(
+            &reports,
+            PromotionGate {
+                min_trades: 90,
+                min_zone_count: 2,
+                max_zone_trade_share: 0.70,
+                max_passive_failed_fills: 200,
+                min_fill_rate: 0.50,
+                ..PromotionGate::default()
+            },
+            MultiReportPromotionGate {
+                min_reports: 3,
+                min_profitable_reports: 3,
+                min_daily_trades: 30,
+                min_daily_pnl: 0.0,
+                max_daily_loss: 0.0,
+            },
+            RobustPromotionGate {
+                min_neighbor_count: 0,
+                min_neighbor_observations: 0,
+                min_neighbor_positive_rate: 0.0,
+                max_pbo: 1.0,
+                min_median_oos_percentile: 0.0,
+                min_worst_window_pnl: 0.0,
+                min_robust_score: 0.0,
+                min_profit_factor: 0.0,
+                min_payoff_ratio: 0.0,
+                max_worst_loss_to_avg_win: 0.0,
+                min_causal_bucket_trades: 0,
+                min_causal_bucket_pnl: 0.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            artifact
+                .strategy_params
+                .get("name")
+                .and_then(|v| v.as_str()),
+            Some("balanced")
+        );
+        assert_eq!(diagnostics.selected.dominant_zone_trade_share, Some(0.5));
+        assert!(diagnostics.selected.zone_balance_score > 0.99);
+        assert_eq!(diagnostics.selected.zone_pnl_coverage_score, 1.0);
+    }
+
+    #[test]
     fn robust_rejection_reasons_include_loss_asymmetry_gates() {
         let diagnostic = RobustVariantDiagnostics {
             strategy_name: "candidate".to_string(),
@@ -2868,6 +3040,13 @@ mod tests {
             neighbor_positive_rate: 0.80,
             fill_rate: 0.70,
             max_stressed_drawdown_pct: 0.05,
+            dominant_zone: Some("early".to_string()),
+            dominant_zone_trade_share: Some(0.60),
+            zone_balance_score: 0.80,
+            zone_pnl_coverage_score: 1.0,
+            non_dominant_zone_pnl: 2.0,
+            worst_zone_pnl: 1.0,
+            negative_zone_count: 0,
             profit_factor: 1.10,
             payoff_ratio: 0.10,
             worst_loss_to_avg_win: 8.0,
