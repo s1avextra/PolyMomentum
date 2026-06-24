@@ -1,0 +1,170 @@
+# A+ Revalidation From PolyMomentum - 2026-06-24
+
+## Verdict
+
+Current state is operationally safer than before the cleanup, but the strategy is
+not A+ live-promotable yet.
+
+The major blockers are evidence-level, not process-level:
+
+- All tracked deploy promotion JSON files predate
+  `CURRENT_INVENTORY_MODEL_VERSION = 2` and are correctly rejected by strict
+  preflight unless the paper-only stale-research override is used.
+- A fresh strict aggregate promotion of the locked candidate rejects because the
+  selected trades are too concentrated in the `early` zone:
+  `75.16%` versus the strict `70.00%` cap.
+- A near-threshold May 23 fold changed materially once checked against current
+  official CTF settlement. The official result for condition
+  `0x06b617a428ff73dd6320d188bd3ded2bd587d01445988519749ccdf94933ef73`
+  is `up`; the local BTC close moved only about `$0.34` in the opposite
+  direction. Current replay treats this as a loss, which is the safer and more
+  live-realistic accounting.
+
+## VPS Runtime And Disk
+
+- Root disk recovered from the preflight failure zone to about `33 GiB` free,
+  `53%` used.
+- Active services after cleanup:
+  `adgts`, `adgts-avellaneda-paper`, `polyarbitrage`,
+  `polymomentum-engine`, and `polymomentum-telegram-monitor`.
+- PolyMomentum paper restarted cleanly with:
+  - `bankroll_baseline = 100`
+  - `total_pnl = 0`
+  - open positions = 0
+  - healthcheck timer active
+- New paper diagnostics are operational-only evidence because the running
+  artifact is still marked `stale_research`.
+
+See also:
+
+- `docs/2026-06-24_vps_disk_cleanup_result_from_polymomentum.md`
+
+## Data Availability
+
+- VPS shared PMXT raw cache was effectively empty:
+  `/opt/shared/pmxt_v2_cache` was about `4 KiB`.
+- VPS shared distilled cache path
+  `/opt/shared/pmxt_v2_distilled_candles/` was absent.
+- A current-date smoke for `2026-06-24T08:00:00Z` passed archive availability
+  preflight but loaded `0` target events for the 12 fetched BTC 5-minute
+  contracts. This was treated as coverage failure, not strategy evidence.
+- A known May window loaded target events correctly, proving the replay engine
+  and market mapping still work when data coverage exists.
+
+## Locked Candidate Revalidation
+
+The locked deployed candidate parameters were replayed locally, not on the VPS,
+using one candidate only:
+
+- bankroll: `$100`
+- position sizing: `5%`
+- max total exposure: `$15`
+- max per market: `$20`
+- latency: `50 ms`
+- window: 5-minute BTC candles
+- execution: taker-only
+- settlement cutoff: `2.0 min`
+- settlement guard: `2.0 min`
+- settlement floor: `$10`
+- max reversion count: `2`
+- degraded fallback after 2 losses
+- atomic parquet mode enabled; raw parquets were deleted hour by hour
+
+The seven historical 8-hour folds from the previous artifact window were replayed:
+
+| Window UTC | Trades | Wins | Losses | PnL | Fees | Breaker |
+|---|---:|---:|---:|---:|---:|---|
+| 2026-05-23 00-07 | 16 | 14 | 2 | 7.90001 | 1.25909 | no |
+| 2026-05-23 08-15 | 15 | 15 | 0 | 20.97455 | 1.20145 | no |
+| 2026-05-23 16-23 | 28 | 23 | 5 | 0.07643 | 1.95037 | no |
+| 2026-05-24 00-07 | 28 | 24 | 4 | 9.60214 | 2.20096 | no |
+| 2026-05-24 08-15 | 27 | 24 | 3 | 17.33278 | 2.24382 | no |
+| 2026-05-24 16-23 | 25 | 22 | 3 | 10.10251 | 1.93159 | no |
+| 2026-05-25 00-07 | 18 | 16 | 2 | 7.77633 | 1.27447 | no |
+
+Aggregate:
+
+- trades: `157`
+- wins: `138`
+- losses: `19`
+- win rate: `87.90%`
+- total PnL: `73.76475`
+- total fees: `12.06175`
+- fill rate: `100%`
+- worst fold PnL: `0.07643`
+- no breaker trips
+- local compact evidence: `/private/tmp/polymomentum_locked_candidate_20260624/`
+- cache root after run: `0B`
+
+## Promotion Gate Results
+
+Strict aggregate promotion with fresh release binary rejected:
+
+```text
+promotion rejected: no variants passed aggregate gates; best candidate failed: zone early trade share 0.7516 above maximum 0.7000
+```
+
+Relaxing only the zone concentration cap to `1.0` produces a research artifact
+with `inventory_model_version = 2`, but this is not A+ because the strict
+concentration veto is meaningful:
+
+- total PnL: `73.76475`
+- trades: `157`
+- dominant zone: `early`
+- dominant zone share: `75.16%`
+- artifact path:
+  `/private/tmp/polymomentum_locked_candidate_20260624/promotion_locked_candidate_relaxed_zone_fresh_binary.json`
+
+## Important Correction
+
+The local release binary before this audit was stale from 2026-06-08. It could
+still replay the old path, but it did not emit the current artifact schema. The
+release binary was rebuilt locally on 2026-06-24, and the fresh binary confirmed:
+
+- `required_inventory_model_version = 2`
+- relaxed regenerated artifact includes `inventory_model_version = 2`
+- strict aggregate still rejects on zone concentration
+- fresh fold 3 replay still produces `23/5`, `PnL = 0.07643`
+
+## A+ Roadmap
+
+1. Keep VPS paper in stale-research mode only for operational wiring and
+   diagnostics; do not use it as strategy validation.
+2. Promote only from fresh backtest/live-replay evidence generated by a current
+   binary that emits `inventory_model_version = 2`.
+3. Treat near-threshold official settlement as first-class risk:
+   - add/keep hard vetoes for tiny BTC settlement moves;
+   - report official-vs-local settlement disagreements per fold;
+   - reject candidates whose profitability depends on below-floor outcomes.
+4. Rework the strategy finder to search for lower concentration:
+   - explicit max zone-share objective;
+   - early/primary balanced candidates;
+   - fold-level veto when one timing zone dominates;
+   - no relaxation of the `70%` cap for A+.
+5. Run the next feed-forward search on a broader, storage-bounded historical
+   window:
+   - one fold cache at a time;
+   - atomic parquet mode;
+   - delete fold cache after compact report;
+   - use dev machine for sweeps, not VPS.
+6. Require the next candidate to pass:
+   - at least 200 resolved trades;
+   - at least 7 independent profitable folds;
+   - strict zone concentration;
+   - current official CTF settlement checks;
+   - current inventory model;
+   - live-replay parity;
+   - zero critical order-flow mismatches.
+
+## Current Grade
+
+- Runtime process safety: `A-`
+- Disk/resource hygiene after cleanup: `A`
+- Order/replay accounting framework: `A-`
+- Strategy evidence freshness: `B`
+- Current candidate promotability: `B-`
+- Overall live readiness: `B+`, fail-closed
+
+The system is much closer to being trustable, but the current candidate should
+not be shipped live until the strict gate passes under current settlement and
+inventory semantics.
