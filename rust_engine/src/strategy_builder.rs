@@ -1017,7 +1017,7 @@ pub fn selectivity_search(
             .iter()
             .map(|variant| SelectivityVariantFold {
                 name: variant_report_name(variant),
-                buckets: variant.diagnostics.by_causal_bucket.clone(),
+                buckets: selectivity_buckets_for_variant(variant),
             })
             .collect();
         folds.push(SelectivityFold { variants });
@@ -1074,7 +1074,7 @@ fn selectivity_search_from_folds(
         report_count: folds.len(),
         candidate_count,
         methodology: vec![
-            "Generate one-dimensional allow-only and deny rules from causal PnL buckets already emitted by feed-forward harness reports.".to_string(),
+            "Generate allow-only and deny rules from causal PnL buckets and full regime-interaction buckets already emitted by feed-forward harness reports.".to_string(),
             "Score each OOS report only when the same rule had enough prior-report trades and positive prior-report PnL.".to_string(),
             "Do not use future folds to decide whether a current fold is eligible; late lucky regimes cannot select themselves backward.".to_string(),
             "Treat these results as strategy hypotheses; rerun the selected rule through full harness/live-replay before promotion.".to_string(),
@@ -1221,7 +1221,7 @@ fn evaluate_selectivity_candidate(
     ];
     if candidate.rule.action == SelectivityAction::Deny {
         notes.push(
-            "deny rule is the complement inside one causal bucket dimension, not an interaction search"
+            "deny rule is the complement inside one bucket dimension; regime-deny rules abstain from one full interaction bucket"
                 .to_string(),
         );
     }
@@ -1297,6 +1297,16 @@ fn variant_report_name(variant: &experiment::VariantReport) -> String {
         .filter(|name| !name.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| variant.strategy.params_hash.clone())
+}
+
+fn selectivity_buckets_for_variant(
+    variant: &experiment::VariantReport,
+) -> BTreeMap<String, TradePnlDiagnostics> {
+    let mut buckets = variant.diagnostics.by_causal_bucket.clone();
+    for (key, stats) in &variant.diagnostics.by_regime {
+        buckets.insert(format!("regime={key}"), stats.clone());
+    }
+    buckets
 }
 
 fn f64_desc(left: f64, right: f64) -> Ordering {
@@ -2621,6 +2631,62 @@ mod tests {
         assert_eq!(down_rule.fold_forward.eligible_reports, 0);
         assert_eq!(down_rule.fold_forward.stats.trades, 0);
         assert!(!down_rule.passed);
+    }
+
+    #[test]
+    fn selectivity_search_can_deny_full_regime_interaction() {
+        let folds = vec![
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(4, 0, 4.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.50_0.75",
+                    pnl_stats(0, 2, 0.0, -8.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(5, 0, 5.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.50_0.75",
+                    pnl_stats(0, 2, 0.0, -8.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(5, 0, 5.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.50_0.75",
+                    pnl_stats(0, 2, 0.0, -8.0),
+                ),
+            ]),
+        ];
+        let mut input = selectivity_input(20);
+        input.min_train_reports = 1;
+        let search = selectivity_search_from_folds(&folds, &input);
+
+        let deny_toxic_regime = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.variant == "candidate"
+                    && candidate.rule.dimension == "regime"
+                    && candidate.rule.value == "zone=early|dir=down|price=0.50_0.75"
+                    && candidate.rule.action == SelectivityAction::Deny
+            })
+            .expect("regime deny candidate");
+
+        assert!(search.ok);
+        assert!(deny_toxic_regime.passed);
+        assert_eq!(deny_toxic_regime.fold_forward.eligible_reports, 2);
+        assert_eq!(deny_toxic_regime.fold_forward.stats.trades, 10);
+        assert!(deny_toxic_regime.fold_forward.stats.total_pnl > 9.0);
     }
 
     #[test]

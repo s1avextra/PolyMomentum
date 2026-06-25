@@ -431,6 +431,13 @@ mod tests {
             .insert("zone".to_string(), "early".to_string());
         let early = DecisionRegime {
             zone: "early".to_string(),
+            price_bucket: "0.50_0.75".to_string(),
+            edge_bucket: "0.07_0.15".to_string(),
+            z_bucket: "0.7_1.1".to_string(),
+            confidence_bucket: "0.50_0.70".to_string(),
+            volatility_bucket: "lt_0.40".to_string(),
+            reversion_bucket: "0".to_string(),
+            minutes_remaining_bucket: "2_4".to_string(),
             ..down.clone()
         };
         assert!(deny_early.reject_reason(&down).is_none());
@@ -438,6 +445,16 @@ mod tests {
             deny_early.reject_reason(&early).unwrap(),
             "selectivity_deny_zone_early"
         );
+
+        let mut deny_regime = SelectivityFilter::default();
+        deny_regime
+            .deny_tags
+            .insert("regime".to_string(), early.key());
+        assert_eq!(
+            deny_regime.reject_reason(&early).unwrap(),
+            "selectivity_deny_regime_zone_early_dir_down_price_0.50_0.75_edge_0.07_0.15_z_0.7_1.1_conf_0.50_0.70_vol_lt_0.40_rev_0_min_2_4"
+        );
+        assert!(deny_regime.reject_reason(&down).is_none());
     }
 
     #[test]

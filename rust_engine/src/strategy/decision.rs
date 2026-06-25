@@ -108,6 +108,7 @@ impl DecisionRegime {
 
     pub fn causal_tags(&self) -> Vec<(String, String)> {
         vec![
+            ("regime".to_string(), self.key()),
             ("zone".to_string(), self.zone.clone()),
             ("direction".to_string(), self.direction.clone()),
             ("price".to_string(), self.price_bucket.clone()),
