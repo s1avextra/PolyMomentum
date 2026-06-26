@@ -4983,19 +4983,26 @@ fn parse_selectivity_filter(
     require: &[String],
     deny: &[String],
 ) -> anyhow::Result<backtest::strategies::SelectivityFilter> {
-    let require_tags = parse_causal_tag_map(require, "--require-causal-tag")?;
-    let deny_tags = parse_causal_tag_map(deny, "--deny-causal-tag")?;
+    let (require_tags, require_tag_values) =
+        parse_causal_tag_maps(require, "--require-causal-tag")?;
+    let (deny_tags, deny_tag_values) = parse_causal_tag_maps(deny, "--deny-causal-tag")?;
     Ok(backtest::strategies::SelectivityFilter {
         require_tags,
         deny_tags,
+        require_tag_values,
+        deny_tag_values,
     })
 }
 
-fn parse_causal_tag_map(
+fn parse_causal_tag_maps(
     args: &[String],
     flag: &str,
-) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
-    let mut tags = std::collections::BTreeMap::new();
+) -> anyhow::Result<(
+    std::collections::BTreeMap<String, String>,
+    std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+)> {
+    let mut values: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
     for arg in args {
         for raw in arg.split(',') {
             let raw = raw.trim();
@@ -5010,17 +5017,23 @@ fn parse_causal_tag_map(
             if dimension.is_empty() || value.is_empty() {
                 anyhow::bail!("{flag} value `{raw}` must use non-empty dimension=value");
             }
-            match tags.insert(dimension.to_string(), value.to_string()) {
-                Some(prev) if prev != value => {
-                    anyhow::bail!(
-                        "{flag} has conflicting values for `{dimension}`: `{prev}` and `{value}`"
-                    );
-                }
-                _ => {}
-            }
+            values
+                .entry(dimension.to_string())
+                .or_default()
+                .insert(value.to_string());
         }
     }
-    Ok(tags)
+    let mut singles = std::collections::BTreeMap::new();
+    let mut multi = std::collections::BTreeMap::new();
+    for (dimension, set) in values {
+        if set.len() == 1 {
+            let value = set.into_iter().next().expect("single value exists");
+            singles.insert(dimension, value);
+        } else {
+            multi.insert(dimension, set);
+        }
+    }
+    Ok((singles, multi))
 }
 
 fn btc_required_range_ms(
@@ -6501,6 +6514,27 @@ mod replay_validation_tests {
             Some("/tmp/promotion.json")
         );
         assert_eq!(promotion_path_from_runtime_source("settings"), None);
+    }
+
+    #[test]
+    fn selectivity_parser_allows_multi_value_dimensions() {
+        let filter = parse_selectivity_filter(
+            &["direction=up".to_string()],
+            &[
+                "regime=zone=early|dir=up".to_string(),
+                "regime=zone=primary|dir=up".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            filter.require_tags.get("direction").map(String::as_str),
+            Some("up")
+        );
+        let regimes = filter.deny_tag_values.get("regime").unwrap();
+        assert!(regimes.contains("zone=early|dir=up"));
+        assert!(regimes.contains("zone=primary|dir=up"));
+        assert!(filter.deny_tags.get("regime").is_none());
     }
 
     #[test]

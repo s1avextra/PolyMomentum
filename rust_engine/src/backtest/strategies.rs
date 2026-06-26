@@ -4,7 +4,7 @@
 //! `ZoneConfig`. The harness loops one variant at a time over the same PMXT
 //! v2 + BTC tape so per-strategy P&L is comparable.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
 use crate::strategy::decision::{DecisionRegime, ZoneConfig};
@@ -28,11 +28,18 @@ pub struct SelectivityFilter {
     pub require_tags: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub deny_tags: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub require_tag_values: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deny_tag_values: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl SelectivityFilter {
     pub fn is_disabled(&self) -> bool {
-        self.require_tags.is_empty() && self.deny_tags.is_empty()
+        self.require_tags.is_empty()
+            && self.deny_tags.is_empty()
+            && self.require_tag_values.is_empty()
+            && self.deny_tag_values.is_empty()
     }
 
     pub fn reject_reason(&self, regime: &DecisionRegime) -> Option<String> {
@@ -60,6 +67,26 @@ impl SelectivityFilter {
                 }
             }
         }
+        for (dimension, allowed) in &self.require_tag_values {
+            match tags.get(dimension) {
+                Some(actual) if allowed.contains(actual) => {}
+                Some(actual) => {
+                    return Some(format!(
+                        "selectivity_require_{}_{}_got_{}",
+                        clean_label(dimension),
+                        clean_label(&join_values(allowed)),
+                        clean_label(actual)
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "selectivity_require_{}_{}_missing",
+                        clean_label(dimension),
+                        clean_label(&join_values(allowed))
+                    ));
+                }
+            }
+        }
         for (dimension, denied) in &self.deny_tags {
             if tags.get(dimension) == Some(denied) {
                 return Some(format!(
@@ -67,6 +94,17 @@ impl SelectivityFilter {
                     clean_label(dimension),
                     clean_label(denied)
                 ));
+            }
+        }
+        for (dimension, denied_values) in &self.deny_tag_values {
+            if let Some(actual) = tags.get(dimension) {
+                if denied_values.contains(actual) {
+                    return Some(format!(
+                        "selectivity_deny_{}_{}",
+                        clean_label(dimension),
+                        clean_label(actual)
+                    ));
+                }
             }
         }
         None
@@ -88,8 +126,30 @@ impl SelectivityFilter {
                 clean_label(value)
             ));
         }
+        for (dimension, values) in &self.require_tag_values {
+            for value in values {
+                parts.push(format!(
+                    "req{}-{}",
+                    clean_label(dimension),
+                    clean_label(value)
+                ));
+            }
+        }
+        for (dimension, values) in &self.deny_tag_values {
+            for value in values {
+                parts.push(format!(
+                    "deny{}-{}",
+                    clean_label(dimension),
+                    clean_label(value)
+                ));
+            }
+        }
         parts.join("_")
     }
+}
+
+fn join_values(values: &BTreeSet<String>) -> String {
+    values.iter().cloned().collect::<Vec<_>>().join("|")
 }
 
 fn clean_label(value: &str) -> String {
@@ -455,6 +515,33 @@ mod tests {
             "selectivity_deny_regime_zone_early_dir_down_price_0.50_0.75_edge_0.07_0.15_z_0.7_1.1_conf_0.50_0.70_vol_lt_0.40_rev_0_min_2_4"
         );
         assert!(deny_regime.reject_reason(&down).is_none());
+
+        let primary_up = DecisionRegime {
+            direction: "up".to_string(),
+            zone: "primary".to_string(),
+            price_bucket: "0.75_0.90".to_string(),
+            edge_bucket: "0.07_0.15".to_string(),
+            z_bucket: "0.7_1.1".to_string(),
+            confidence_bucket: "0.50_0.70".to_string(),
+            volatility_bucket: "lt_0.40".to_string(),
+            reversion_bucket: "0".to_string(),
+            minutes_remaining_bucket: "2_4".to_string(),
+            ..DecisionRegime::default()
+        };
+        let mut deny_many_regimes = SelectivityFilter::default();
+        deny_many_regimes.deny_tag_values.insert(
+            "regime".to_string(),
+            std::collections::BTreeSet::from([early.key(), primary_up.key()]),
+        );
+        assert_eq!(
+            deny_many_regimes.reject_reason(&early).unwrap(),
+            "selectivity_deny_regime_zone_early_dir_down_price_0.50_0.75_edge_0.07_0.15_z_0.7_1.1_conf_0.50_0.70_vol_lt_0.40_rev_0_min_2_4"
+        );
+        assert_eq!(
+            deny_many_regimes.reject_reason(&primary_up).unwrap(),
+            "selectivity_deny_regime_zone_primary_dir_up_price_0.75_0.90_edge_0.07_0.15_z_0.7_1.1_conf_0.50_0.70_vol_lt_0.40_rev_0_min_2_4"
+        );
+        assert!(deny_many_regimes.reject_reason(&down).is_none());
     }
 
     #[test]

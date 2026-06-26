@@ -7,12 +7,14 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use futures_util::{stream, StreamExt};
 use reqwest::Client;
 use serde_json::Value;
 
 use crate::data::models::{Market, Outcome};
 
 const GAMMA_MARKETS_KEYSET: &str = "/markets/keyset";
+const MAX_SLUG_FETCH_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]
 pub struct GammaClient {
@@ -146,18 +148,37 @@ impl GammaClient {
         closed: bool,
     ) -> Result<Vec<Market>> {
         let mut all = Vec::new();
-        for slug in slugs {
-            let params = vec![
-                ("limit", "1".to_string()),
-                ("slug", slug.clone()),
-                ("closed", closed.to_string()),
-            ];
-            let v = self.get_with_retry(GAMMA_MARKETS_KEYSET, &params).await?;
-            let (items, _) = unwrap_market_page(v);
-            for raw in &items {
-                if let Some(m) = parse_gamma_market(raw) {
-                    all.push(m);
+        let total = slugs.len();
+        let concurrency = total.clamp(1, MAX_SLUG_FETCH_CONCURRENCY);
+        let mut responses = stream::iter(slugs.iter().cloned())
+            .map(|slug| async move {
+                let params = vec![
+                    ("limit", "1".to_string()),
+                    ("slug", slug.clone()),
+                    ("closed", closed.to_string()),
+                ];
+                let v = self
+                    .get_with_retry(GAMMA_MARKETS_KEYSET, &params)
+                    .await
+                    .with_context(|| format!("fetch gamma slug {slug}"))?;
+                let (items, _) = unwrap_market_page(v);
+                let mut markets = Vec::new();
+                for raw in &items {
+                    if let Some(m) = parse_gamma_market(raw) {
+                        markets.push(m);
+                    }
                 }
+                Ok::<_, anyhow::Error>(markets)
+            })
+            .buffer_unordered(concurrency);
+
+        let mut completed = 0usize;
+        while let Some(markets) = responses.next().await {
+            let mut markets = markets?;
+            all.append(&mut markets);
+            completed += 1;
+            if completed % 100 == 0 || completed == total {
+                eprintln!("gamma: fetched {completed}/{total} slug metadata response(s)");
             }
         }
         all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
