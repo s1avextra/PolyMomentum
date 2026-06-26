@@ -106,6 +106,19 @@ pub struct StrategyBuilderSelectivitySearchInput {
     pub top: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderAdaptiveDirectionInput {
+    pub report_paths: Vec<String>,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub top: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StrategyBuilderSelectivitySearch {
     pub schema_version: u32,
@@ -115,6 +128,17 @@ pub struct StrategyBuilderSelectivitySearch {
     pub methodology: Vec<String>,
     pub gates: SelectivitySearchGates,
     pub candidates: Vec<SelectivityCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderAdaptiveDirectionSearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub methodology: Vec<String>,
+    pub gates: SelectivitySearchGates,
+    pub candidates: Vec<AdaptiveDirectionCandidateReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +164,15 @@ pub struct SelectivityCandidateReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveDirectionCandidateReport {
+    pub rank: usize,
+    pub passed: bool,
+    pub variant: String,
+    pub fold_forward: AdaptiveDirectionFoldForwardReport,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectivityStatsReport {
     pub trades: u64,
     pub wins: u64,
@@ -160,6 +193,27 @@ pub struct SelectivityFoldForwardReport {
     pub losing_reports: usize,
     pub worst_report_pnl: f64,
     pub stats: SelectivityStatsReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveDirectionFoldForwardReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub abstained_reports: usize,
+    pub worst_report_pnl: f64,
+    pub stats: SelectivityStatsReport,
+    pub decisions: Vec<AdaptiveDirectionDecisionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveDirectionDecisionReport {
+    pub report_index: usize,
+    pub train_reports: usize,
+    pub selected_direction: Option<String>,
+    pub train: Option<SelectivityStatsReport>,
+    pub oos: Option<SelectivityStatsReport>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -1026,6 +1080,41 @@ pub fn selectivity_search(
     Ok(selectivity_search_from_folds(&folds, &input))
 }
 
+pub fn adaptive_direction_search(
+    input: StrategyBuilderAdaptiveDirectionInput,
+) -> Result<StrategyBuilderAdaptiveDirectionSearch> {
+    if input.report_paths.len() < 2 {
+        bail!("adaptive direction search needs at least two reports");
+    }
+    if input.min_train_reports == 0 {
+        bail!("--min-train-reports must be > 0");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+
+    let mut folds = Vec::new();
+    for report_path in &input.report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load adaptive direction report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| SelectivityVariantFold {
+                name: variant_report_name(variant),
+                buckets: selectivity_buckets_for_variant(variant),
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+
+    Ok(adaptive_direction_search_from_folds(&folds, &input))
+}
+
 fn selectivity_search_from_folds(
     folds: &[SelectivityFold],
     input: &StrategyBuilderSelectivitySearchInput,
@@ -1090,6 +1179,251 @@ fn selectivity_search_from_folds(
         },
         candidates,
     }
+}
+
+fn adaptive_direction_search_from_folds(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveDirectionInput,
+) -> StrategyBuilderAdaptiveDirectionSearch {
+    let mut candidates = variant_names(folds)
+        .into_iter()
+        .map(|variant| evaluate_adaptive_direction_candidate(folds, input, variant))
+        .collect::<Vec<_>>();
+    let candidate_count = candidates.len();
+
+    candidates.sort_by(|a, b| {
+        b.passed
+            .cmp(&a.passed)
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.total_pnl,
+                    b.fold_forward.stats.total_pnl,
+                )
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.wilson_win_rate_lower,
+                    b.fold_forward.stats.wilson_win_rate_lower,
+                )
+            })
+            .then_with(|| {
+                b.fold_forward
+                    .stats
+                    .trades
+                    .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| a.variant.cmp(&b.variant))
+    });
+
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let top = input.top.max(1);
+    candidates.truncate(top);
+
+    StrategyBuilderAdaptiveDirectionSearch {
+        schema_version: 1,
+        ok: candidates.iter().any(|candidate| candidate.passed),
+        report_count: folds.len(),
+        candidate_count,
+        methodology: vec![
+            "For each OOS report, aggregate only strictly earlier reports for the same variant."
+                .to_string(),
+            "Score the up and down direction buckets from prior folds; choose the best positive, sufficiently sampled side or abstain flat."
+                .to_string(),
+            "Apply the selected direction to the next report only after the choice is fixed; future folds never influence current choices."
+                .to_string(),
+            "Treat this as a regime-selection hypothesis; rerun any selected adaptive policy through full harness/live-replay before promotion."
+                .to_string(),
+        ],
+        gates: SelectivitySearchGates {
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+        },
+        candidates,
+    }
+}
+
+fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for fold in folds {
+        for variant in &fold.variants {
+            names.insert(variant.name.clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn evaluate_adaptive_direction_candidate(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveDirectionInput,
+    variant: String,
+) -> AdaptiveDirectionCandidateReport {
+    let mut oos = TradePnlDiagnostics::default();
+    let mut eligible_reports = 0_usize;
+    let mut profitable_reports = 0_usize;
+    let mut losing_reports = 0_usize;
+    let mut abstained_reports = 0_usize;
+    let mut worst_report_pnl: Option<f64> = None;
+    let mut decisions = Vec::new();
+
+    for idx in 0..folds.len() {
+        if idx < input.min_train_reports {
+            decisions.push(AdaptiveDirectionDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                selected_direction: None,
+                train: None,
+                oos: None,
+                reason: "insufficient_prior_reports".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let selected = select_direction_from_prior_folds(&folds[..idx], input, &variant);
+        let Some((direction, train_stats)) = selected else {
+            decisions.push(AdaptiveDirectionDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                selected_direction: None,
+                train: None,
+                oos: None,
+                reason: "no_direction_passed_prior_gates".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        };
+
+        let fold_stats = direction_stats_for_fold(&folds[idx], &variant, direction);
+        if fold_stats.trades == 0 {
+            decisions.push(AdaptiveDirectionDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                selected_direction: Some(direction.to_string()),
+                train: Some(stats_report(&train_stats)),
+                oos: None,
+                reason: "selected_direction_had_no_oos_trades".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        eligible_reports += 1;
+        if fold_stats.total_pnl > 0.0 {
+            profitable_reports += 1;
+        } else if fold_stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst_report_pnl = Some(match worst_report_pnl {
+            Some(current) => current.min(fold_stats.total_pnl),
+            None => fold_stats.total_pnl,
+        });
+        oos.merge_from(&fold_stats);
+        decisions.push(AdaptiveDirectionDecisionReport {
+            report_index: idx,
+            train_reports: idx,
+            selected_direction: Some(direction.to_string()),
+            train: Some(stats_report(&train_stats)),
+            oos: Some(stats_report(&fold_stats)),
+            reason: "selected_from_prior_direction_stats".to_string(),
+        });
+    }
+
+    let fold_forward = AdaptiveDirectionFoldForwardReport {
+        eligible_reports,
+        profitable_reports,
+        losing_reports,
+        abstained_reports,
+        worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        stats: stats_report(&oos),
+        decisions,
+    };
+    let passed = fold_forward.stats.trades >= input.min_oos_trades
+        && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
+        && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
+        && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+
+    let mut notes = vec![
+        "adaptive direction selector; rerun selected policy in full harness before promotion"
+            .to_string(),
+        "fold decisions use only prior report direction buckets".to_string(),
+        "flat abstention is used when prior evidence is insufficient or negative".to_string(),
+    ];
+    if !passed {
+        notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+
+    AdaptiveDirectionCandidateReport {
+        rank: 0,
+        passed,
+        variant,
+        fold_forward,
+        notes,
+    }
+}
+
+fn select_direction_from_prior_folds(
+    prior_folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveDirectionInput,
+    variant: &str,
+) -> Option<(&'static str, TradePnlDiagnostics)> {
+    ["up", "down"]
+        .into_iter()
+        .filter_map(|direction| {
+            let mut stats = TradePnlDiagnostics::default();
+            let mut reports_with_trades = 0_usize;
+            for fold in prior_folds {
+                let fold_stats = direction_stats_for_fold(fold, variant, direction);
+                if fold_stats.trades > 0 {
+                    reports_with_trades += 1;
+                }
+                stats.merge_from(&fold_stats);
+            }
+            if reports_with_trades < input.min_train_reports
+                || stats.trades < input.min_train_trades
+                || stats.total_pnl <= 0.0
+            {
+                return None;
+            }
+            Some((direction, stats))
+        })
+        .max_by(|(_, left), (_, right)| {
+            left.total_pnl
+                .partial_cmp(&right.total_pnl)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| {
+                    left.avg_pnl
+                        .partial_cmp(&right.avg_pnl)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .then_with(|| left.trades.cmp(&right.trades))
+        })
+}
+
+fn direction_stats_for_fold(
+    fold: &SelectivityFold,
+    variant_name: &str,
+    direction: &str,
+) -> TradePnlDiagnostics {
+    let Some(variant) = fold
+        .variants
+        .iter()
+        .find(|variant| variant.name == variant_name)
+    else {
+        return TradePnlDiagnostics::default();
+    };
+    variant
+        .buckets
+        .get(&format!("direction={direction}"))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn candidate_keys(folds: &[SelectivityFold]) -> Vec<SelectivityCandidateKey> {
@@ -2690,6 +3024,145 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_direction_search_switches_only_after_prior_evidence_changes() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(3, 0, 3.0, 0.0)),
+                ("direction=down", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(3, 0, 3.0, 0.0)),
+                ("direction=down", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 2, 0.0, -10.0)),
+                ("direction=down", pnl_stats(4, 0, 8.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=down", pnl_stats(10, 0, 20.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=down", pnl_stats(10, 0, 20.0, 0.0)),
+            ]),
+        ];
+        let search = adaptive_direction_search_from_folds(&folds, &adaptive_input(5));
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive candidate");
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(candidate.fold_forward.eligible_reports, 3);
+        assert_eq!(candidate.fold_forward.profitable_reports, 2);
+        assert_eq!(candidate.fold_forward.losing_reports, 1);
+        assert_eq!(candidate.fold_forward.abstained_reports, 2);
+        assert_eq!(candidate.fold_forward.stats.trades, 22);
+        assert!(candidate.fold_forward.stats.total_pnl > 29.0);
+
+        let choices = candidate
+            .fold_forward
+            .decisions
+            .iter()
+            .map(|decision| decision.selected_direction.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            choices,
+            vec![None, None, Some("up"), Some("down"), Some("down")]
+        );
+        assert_eq!(candidate.fold_forward.decisions[2].train_reports, 2);
+        assert!(
+            candidate.fold_forward.decisions[2]
+                .train
+                .as_ref()
+                .unwrap()
+                .total_pnl
+                > 5.0
+        );
+        assert!(
+            candidate.fold_forward.decisions[3]
+                .train
+                .as_ref()
+                .unwrap()
+                .total_pnl
+                > 9.0
+        );
+    }
+
+    #[test]
+    fn adaptive_direction_search_does_not_promote_future_down_luck() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=up", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+                ("direction=up", pnl_stats(1, 0, 1.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=down", pnl_stats(12, 0, 20.0, 0.0)),
+                ("direction=up", pnl_stats(0, 2, 0.0, -2.0)),
+            ]),
+        ];
+        let search = adaptive_direction_search_from_folds(&folds, &adaptive_input(5));
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive candidate");
+        let decision = &candidate.fold_forward.decisions[2];
+
+        assert!(!search.ok);
+        assert_eq!(decision.selected_direction.as_deref(), Some("up"));
+        assert_ne!(decision.selected_direction.as_deref(), Some("down"));
+        assert!(decision.train.as_ref().unwrap().total_pnl > 1.0);
+        assert_eq!(decision.oos.as_ref().unwrap().total_pnl, -2.0);
+        assert!(!candidate.passed);
+    }
+
+    #[test]
+    fn adaptive_direction_search_abstains_without_positive_prior_edge() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 1, 0.0, -1.0)),
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 1, 0.0, -1.0)),
+                ("direction=down", pnl_stats(0, 2, 0.0, -2.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(8, 0, 20.0, 0.0)),
+                ("direction=down", pnl_stats(8, 0, 20.0, 0.0)),
+            ]),
+        ];
+        let search = adaptive_direction_search_from_folds(&folds, &adaptive_input(5));
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive candidate");
+
+        assert!(!search.ok);
+        assert_eq!(candidate.fold_forward.eligible_reports, 0);
+        assert_eq!(candidate.fold_forward.abstained_reports, 3);
+        assert_eq!(
+            candidate.fold_forward.decisions[2].reason,
+            "no_direction_passed_prior_gates"
+        );
+        assert_eq!(
+            candidate.fold_forward.decisions[2]
+                .selected_direction
+                .as_deref(),
+            None
+        );
+    }
+
+    #[test]
     fn unknown_profile_is_rejected() {
         let err = StrategyBuilderProfile::from_name("mystery").unwrap_err();
         assert!(err.to_string().contains("unknown strategy-builder profile"));
@@ -2716,6 +3189,20 @@ mod tests {
             min_oos_total_pnl: 0.0,
             min_oos_profitable_reports: 1,
             min_worst_oos_pnl: 0.0,
+            top,
+        }
+    }
+
+    fn adaptive_input(top: usize) -> StrategyBuilderAdaptiveDirectionInput {
+        StrategyBuilderAdaptiveDirectionInput {
+            report_paths: Vec::new(),
+            min_train_reports: 2,
+            min_train_trades: 2,
+            min_oos_trades: 4,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 2,
+            min_worst_oos_pnl: -10.0,
             top,
         }
     }
