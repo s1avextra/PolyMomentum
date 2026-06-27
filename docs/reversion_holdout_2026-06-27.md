@@ -83,31 +83,117 @@ A combined deny approximation over the four negative regime buckets produced:
 This improves aggregate PnL but fails the same A+ robustness goal and worsens
 sample sufficiency.
 
+## Extension: 2026-06-07 Through 2026-06-10
+
+Extended the same `reversion=1_2` profile with 12 more full 8-hour folds:
+
+- Window: 2026-06-07T00:00:00Z through 2026-06-10T23:00:00Z.
+- Artifacts: `/private/tmp/polymomentum_reversion_extension_20260627_jun07_10/`.
+- Temporary cache: `/private/tmp/polymomentum_reversion_extension_20260627_cache/`.
+- Storage mode: `--atomic-parquet --delete-after-process --max-cache-gb 8`.
+- Preflight: 96/96 PMXT hours available, 12/12 full folds.
+
+Extension totals:
+
+- Folds: 12.
+- Trades: 91.
+- Wins/losses: 74 / 17.
+- Win rate: 81.32%.
+- Net PnL: +11.29482 USD.
+- Fees: 6.94988 USD.
+- Profitable/losing folds: 7 / 5.
+- Worst fold: -12.05971 USD.
+- Breaker trips: none.
+
+The extension met the basic aggregate direction, but failed robust promotion:
+
+- Profitable reports 7 below the 8-report extension gate.
+- Worst window PnL -12.05971 below required 0.
+- Neighbor count 0 below required 2.
+- Neighbor positive rate 0.0 below required 0.6.
+- Robust score -0.1761 below required 0.
+- Profit factor 1.1277 below required 1.20.
+- Five causal buckets were negative at the configured minimum support.
+
+The worst extension fold was
+`fold_011_20260610T080000Z_20260610T150000Z_sweep.json`: 9 trades, 5 wins,
+4 losses, -12.05971 PnL, 100% fill rate, no breaker. Its primary zone was
+profitable (+1.61857 on 2/2), while early-zone trades lost -13.67828 on 3/7.
+The loss was payoff-asymmetry, not an execution artifact: average win was
++1.74579 and average loss was -5.19716.
+
+## Combined 42-Fold Result
+
+Combined the original 30 folds plus the 12-fold extension:
+
+- Window: 2026-05-28T00:00:00Z through 2026-06-10T23:00:00Z.
+- Folds: 42.
+- Trades: 269.
+- Wins/losses: 226 / 43.
+- Win rate: 84.01%.
+- Net PnL: +85.10134 USD.
+- Fees: 20.86566 USD.
+- Profitable/losing folds: 29 / 13.
+- Worst fold: -12.05971 USD.
+- Breaker trips: none.
+
+The combined run now clears the prior sample-size blocker, but it still fails
+A+ promotion. Robust promotion rejected the candidate for:
+
+- Worst window PnL -12.05971 below required 0.
+- Neighbor count 0 below required 2.
+- Neighbor positive rate 0.0 below required 0.6.
+- Robust score -0.1268 below required 0.
+- Negative causal bucket:
+  `regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4`,
+  22 trades, 16 wins, 6 losses, -13.26433 PnL, 0.5791 profit factor.
+
+Zone audit passed on the combined reports:
+
+- Early: 169 trades, 142 wins, 27 losses, +75.43883 PnL, 62.83% trade share.
+- Primary: 100 trades, 84 wins, 16 losses, +9.66251 PnL, 37.17% trade share.
+
+So the blocker is not early-zone concentration by itself. It is a narrower
+interaction: high-price, low-edge, low-z, low-confidence, low-volatility
+near-expiry contexts, especially on early down trades. Similar-looking broader
+buckets can be profitable, so a blunt direction or zone ban is too crude.
+
+Feed-forward selectivity-search over all 42 reports generated 201 single-rule
+candidates and none passed. The best deny rule improved aggregate PnL to
++95.89509 with 267 trades, but its fold-forward worst report remained
+-12.05971 and only 24/36 eligible reports were profitable. This means the
+current single-rule search cannot explain away the bad window without
+post-hoc leakage.
+
 ## Verdict
 
-The `reversion=1_2` candidate is a strong research signal, not a production
-strategy. Execution/replay mechanics were stable: no breaker trips, no fill
-failures in the reported fold summaries, and raw PMXT parquets were deleted
-after each hour. The blocker is not order mechanics; it is strategy robustness
-and sample sufficiency.
+The `reversion=1_2` candidate is still a strong research signal, not a
+production strategy. Execution/replay mechanics were stable: no breaker trips,
+no fill failures in the reported fold summaries, and raw PMXT parquets were
+deleted after each downloaded hour. The blocker is not order mechanics or
+sample count anymore; it is strategy robustness under bad payoff-asymmetry
+windows.
 
 Current grade for this candidate:
 
-- Execution harness: A-
+- Execution harness: A
 - Storage discipline: A
-- Strategy edge: B+
+- Strategy edge: B
 - Production readiness: C+
 
 ## Next Steps
 
-1. Extend the same atomic holdout until at least 250 trades, because 30 folds
-   only yielded 178 trades.
-2. Use the completed reports as the baseline for a multi-rule feed-forward
-   selectivity pass; single-rule selectivity did not pass.
-3. Test an explicit loss-context guard in full harness, not from aggregate math
-   alone. Candidate guards should focus on low-volatility, high-price, near-
-   expiry `down` buckets and should be rejected if worst fold stays negative.
-4. Add a robust-gate mode for combined deny candidates if the current
-   selectivity-search remains single-rule only.
-5. Only after a 200+ trade feed-forward gate passes with nonnegative worst fold,
-   run live-replay parity. Do not use paper mode for this validation.
+1. Add multi-rule feed-forward guard search. The search must learn guards only
+   from prior folds, then evaluate each later fold without future information.
+2. Add explicit payoff-asymmetry guard features to the strategy lab: rolling
+   average win, rolling average loss, loss-to-win ratio, recent resolved loss
+   burst, and per-regime profit factor. These must be feed-forward only.
+3. Add neighbor evidence for the selected parameter point. Current promotion
+   still has `neighbor_count=0`, so we cannot know if the result is a stable
+   plateau or a narrow parameter spike.
+4. Rerun the full harness on the selected multi-rule candidate. Promotion
+   should require at least 250 trades, positive PnL, Wilson lower bound above
+   0.60, nonnegative worst fold, positive worst supported causal bucket, and
+   passing neighbor robustness.
+5. Only after that passes, run live-replay parity. Do not use paper mode for
+   strategy validation when backtest/live-replay can prove the same behavior.
