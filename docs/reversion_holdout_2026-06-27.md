@@ -184,9 +184,11 @@ guards without using paper mode. The implementation:
 Validation:
 
 - `cargo test --manifest-path rust_engine/Cargo.toml strategy_builder::tests:: -- --nocapture`
-  passed 19/19 tests.
+  passed 21/21 tests after the adaptive-mode extension.
 - Tests cover multi-rule composition, future-only loss rejection, and
-  feed-forward pattern generalization.
+  feed-forward pattern generalization. The adaptive-mode tests also prove the
+  selector cannot flat a future-only loss and only chooses flat from prior-tail
+  evidence.
 
 Strict exact-regime multi-guard search:
 
@@ -230,6 +232,60 @@ Adaptive direction comparison:
 - Direction selection reduced the Jun 10 08:00-15:00 UTC fold from -12.05971
   to -1.78366, but introduced or left other bad folds, so it is not sufficient.
 
+## Adaptive Mode Search: 2026-06-28
+
+Added `strategy-builder adaptive-mode-search` to choose among flat, direction,
+and guarded mode per fold using only prior evidence. The selector:
+
+- Builds direction and guarded options from strictly prior reports.
+- Ranks active modes by prior worst-fold PnL first, then prior aggregate PnL,
+  Wilson lower bound, profit factor, and trade count.
+- Can choose flat when no active mode passes prior gates, or when the best
+  active mode's prior worst-fold PnL is below `--flat-if-worst-train-below`.
+- Scores the current fold only after the mode is fixed.
+
+Pattern-guard adaptive mode, no flat threshold:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_no_flat.json`.
+- Result: failed.
+- Feed-forward OOS: 126 trades, 103 wins, 23 losses, +34.86972 PnL, Wilson
+  lower 0.74096, 20 profitable / 12 losing eligible reports, worst -12.88359.
+- Mode counts: direction 6, guarded 26, flat 10.
+
+Pattern-guard adaptive mode, flat threshold -8 and -5:
+
+- Artifacts:
+  `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_flat_m8.json`
+  and
+  `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_flat_m5.json`.
+- Result: both failed with the same summary.
+- Feed-forward OOS: 124 trades, 101 wins, 23 losses, +33.18294 PnL, Wilson
+  lower 0.73703, 19 profitable / 12 losing eligible reports, worst -12.88359.
+- Mode counts: direction 5, guarded 26, flat 11.
+
+Pattern-guard adaptive mode, flat threshold -3 and -2:
+
+- Artifacts:
+  `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_flat_m3.json`
+  and
+  `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_flat_m2.json`.
+- Result: both failed.
+- At -3: only 16 OOS trades, -8.02990 PnL, worst -5.28118, 38 flat reports.
+- At -2: only 10 OOS trades, -7.70561 PnL, worst -4.15719, 40 flat reports.
+- These thresholds reduce exposure but collapse sample size and still lose.
+
+Exact-guard adaptive mode:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_mode_exact_no_flat.json`.
+- Result: failed.
+- Feed-forward OOS: 101 trades, 79 wins, 22 losses, -3.78399 PnL, Wilson
+  lower 0.69215, 17 profitable / 12 losing eligible reports, worst -12.05971.
+
+The combined selector is useful as a control/diagnostic primitive, but it does
+not rescue this candidate. The bad folds are not predictable enough from the
+current prior-fold regime summaries: a prior-tail-ranked guarded mode still
+chooses the Jun 10 08:00-15:00 UTC window and loses -12.88359.
+
 ## Verdict
 
 The `reversion=1_2` candidate is still a strong research signal, not a
@@ -237,27 +293,31 @@ production strategy. Execution/replay mechanics were stable: no breaker trips,
 no fill failures in the reported fold summaries, and raw PMXT parquets were
 deleted after each downloaded hour. The blocker is not order mechanics or
 sample count anymore; it is strategy robustness under bad payoff-asymmetry
-windows. The new multi-guard tooling makes this clearer: static aggregate
-guards can look excellent while feed-forward OOS still fails.
+windows. The new multi-guard and adaptive-mode tooling makes this clearer:
+static aggregate guards can look excellent while feed-forward OOS still fails,
+and flat thresholds that avoid cliffs also erase sample size and profitability.
 
 Current grade for this candidate:
 
 - Execution harness: A
 - Storage discipline: A
-- Strategy-lab tooling: A-
+- Strategy-lab tooling: A
 - Strategy edge: B-
 - Production readiness: C+
 
 ## Next Steps
 
-1. Do not promote `reversion=1_2` as-is. The exact, loose, pattern, and
-   adaptive-direction searches all failed feed-forward worst-fold gates.
+1. Do not promote `reversion=1_2` as-is. The exact, loose, pattern,
+   adaptive-direction, and adaptive-mode searches all failed feed-forward
+   worst-fold gates.
 2. Move the search objective away from maximizing static aggregate PnL and
    toward minimizing tail loss: worst-fold PnL, average loss size, and loss
    burst frequency must be first-class objectives.
-3. Add a combined adaptive policy search that can choose among flat, direction,
-   and guarded modes per fold from prior evidence only. The current individual
-   pieces help different bad folds but do not solve all of them.
+3. Add richer pre-trade state features for the search lab. Current fold-level
+   causal summaries are too blunt. Next candidates should include distance to
+   BTC candle close, intra-candle path shape, local book imbalance, spread
+   stability, and loss-burst state computed strictly from already-resolved
+   prior positions.
 4. Add neighbor evidence for any selected parameter point. Current promotion
    still has `neighbor_count=0`, so we cannot know if the result is a stable
    plateau or a narrow parameter spike.

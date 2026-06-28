@@ -138,6 +138,26 @@ pub struct StrategyBuilderAdaptiveDirectionInput {
     pub top: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderAdaptiveModeInput {
+    pub report_paths: Vec<String>,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_guard_rules: usize,
+    pub min_guard_trades: u64,
+    pub min_guard_loss_pnl: f64,
+    pub min_guard_loss_reports: usize,
+    pub recent_report_lookback: usize,
+    pub pattern_guards: bool,
+    pub flat_if_worst_train_below: f64,
+    pub top: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StrategyBuilderSelectivitySearch {
     pub schema_version: u32,
@@ -172,6 +192,17 @@ pub struct StrategyBuilderAdaptiveDirectionSearch {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderAdaptiveModeSearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub methodology: Vec<String>,
+    pub gates: AdaptiveModeSearchGates,
+    pub candidates: Vec<AdaptiveModeCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectivitySearchGates {
     pub min_train_reports: usize,
     pub min_train_trades: u64,
@@ -197,6 +228,24 @@ pub struct MultiGuardSearchGates {
     pub min_guard_loss_reports: usize,
     pub recent_report_lookback: usize,
     pub pattern_guards: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeSearchGates {
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_guard_rules: usize,
+    pub min_guard_trades: u64,
+    pub min_guard_loss_pnl: f64,
+    pub min_guard_loss_reports: usize,
+    pub recent_report_lookback: usize,
+    pub pattern_guards: bool,
+    pub flat_if_worst_train_below: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +276,15 @@ pub struct AdaptiveDirectionCandidateReport {
     pub passed: bool,
     pub variant: String,
     pub fold_forward: AdaptiveDirectionFoldForwardReport,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeCandidateReport {
+    pub rank: usize,
+    pub passed: bool,
+    pub variant: String,
+    pub fold_forward: AdaptiveModeFoldForwardReport,
     pub notes: Vec<String>,
 }
 
@@ -314,6 +372,58 @@ pub struct AdaptiveDirectionDecisionReport {
     pub train: Option<SelectivityStatsReport>,
     pub oos: Option<SelectivityStatsReport>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeFoldForwardReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub abstained_reports: usize,
+    pub worst_report_pnl: f64,
+    pub stats: SelectivityStatsReport,
+    pub decisions: Vec<AdaptiveModeDecisionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeDecisionReport {
+    pub report_index: usize,
+    pub train_reports: usize,
+    pub recent_losing_reports: usize,
+    pub recent_worst_report_pnl: f64,
+    pub selected_mode: AdaptiveModeKind,
+    pub selected_direction: Option<String>,
+    pub guard: MultiGuardPolicyReport,
+    pub train: Option<SelectivityStatsReport>,
+    pub train_summary: Option<AdaptiveModeTrainSummaryReport>,
+    pub oos: Option<SelectivityStatsReport>,
+    pub active_options: Vec<AdaptiveModeOptionReport>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeOptionReport {
+    pub mode: AdaptiveModeKind,
+    pub direction: Option<String>,
+    pub guard: MultiGuardPolicyReport,
+    pub train: SelectivityStatsReport,
+    pub train_summary: AdaptiveModeTrainSummaryReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveModeTrainSummaryReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub worst_report_pnl: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdaptiveModeKind {
+    Flat,
+    Direction,
+    Guarded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -1257,6 +1367,45 @@ pub fn adaptive_direction_search(
     Ok(adaptive_direction_search_from_folds(&folds, &input))
 }
 
+pub fn adaptive_mode_search(
+    input: StrategyBuilderAdaptiveModeInput,
+) -> Result<StrategyBuilderAdaptiveModeSearch> {
+    if input.report_paths.len() < 2 {
+        bail!("adaptive mode search needs at least two reports");
+    }
+    if input.min_train_reports == 0 {
+        bail!("--min-train-reports must be > 0");
+    }
+    if input.max_guard_rules == 0 {
+        bail!("--max-guard-rules must be > 0");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+
+    let mut folds = Vec::new();
+    for report_path in &input.report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load adaptive mode report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| SelectivityVariantFold {
+                name: variant_report_name(variant),
+                buckets: selectivity_buckets_for_variant(variant),
+                regimes: variant.diagnostics.by_regime.clone(),
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+
+    Ok(adaptive_mode_search_from_folds(&folds, &input))
+}
+
 fn selectivity_search_from_folds(
     folds: &[SelectivityFold],
     input: &StrategyBuilderSelectivitySearchInput,
@@ -1467,6 +1616,78 @@ fn adaptive_direction_search_from_folds(
     }
 }
 
+fn adaptive_mode_search_from_folds(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveModeInput,
+) -> StrategyBuilderAdaptiveModeSearch {
+    let mut candidates = variant_names(folds)
+        .into_iter()
+        .map(|variant| evaluate_adaptive_mode_candidate(folds, input, variant))
+        .collect::<Vec<_>>();
+    let candidate_count = candidates.len();
+
+    candidates.sort_by(|a, b| {
+        b.passed
+            .cmp(&a.passed)
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.total_pnl,
+                    b.fold_forward.stats.total_pnl,
+                )
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.wilson_win_rate_lower,
+                    b.fold_forward.stats.wilson_win_rate_lower,
+                )
+            })
+            .then_with(|| {
+                b.fold_forward
+                    .stats
+                    .trades
+                    .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| a.variant.cmp(&b.variant))
+    });
+
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let top = input.top.max(1);
+    candidates.truncate(top);
+
+    StrategyBuilderAdaptiveModeSearch {
+        schema_version: 1,
+        ok: candidates.iter().any(|candidate| candidate.passed),
+        report_count: folds.len(),
+        candidate_count,
+        methodology: vec![
+            "For each OOS report, build direction and guarded options from strictly prior reports only.".to_string(),
+            "Rank active options by prior worst-fold PnL first, then prior aggregate PnL, Wilson lower bound, profit factor, and trade count.".to_string(),
+            "Choose flat when no active mode passes prior gates, or when the best active prior worst-fold PnL is below the configured flat threshold.".to_string(),
+            "Score the selected mode on the current fold only after the mode is fixed; future folds never influence current choices.".to_string(),
+            "Treat passing results as strategy hypotheses; rerun selected policies in full harness/live-replay before promotion.".to_string(),
+        ],
+        gates: AdaptiveModeSearchGates {
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+            max_guard_rules: input.max_guard_rules,
+            min_guard_trades: input.min_guard_trades,
+            min_guard_loss_pnl: input.min_guard_loss_pnl,
+            min_guard_loss_reports: input.min_guard_loss_reports,
+            recent_report_lookback: input.recent_report_lookback,
+            pattern_guards: input.pattern_guards,
+            flat_if_worst_train_below: input.flat_if_worst_train_below,
+        },
+        candidates,
+    }
+}
+
 fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
     let mut names = BTreeSet::new();
     for fold in folds {
@@ -1483,6 +1704,375 @@ struct MultiGuardRule {
     match_tags: BTreeMap<String, String>,
     reports_with_trades: usize,
     stats: TradePnlDiagnostics,
+}
+
+#[derive(Debug, Clone)]
+struct AdaptiveModeOption {
+    mode: AdaptiveModeKind,
+    direction: Option<String>,
+    guard: Vec<MultiGuardRule>,
+    train: TradePnlDiagnostics,
+    train_summary: AdaptiveModeTrainSummary,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AdaptiveModeTrainSummary {
+    eligible_reports: usize,
+    profitable_reports: usize,
+    losing_reports: usize,
+    worst_report_pnl: f64,
+}
+
+fn evaluate_adaptive_mode_candidate(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveModeInput,
+    variant: String,
+) -> AdaptiveModeCandidateReport {
+    let mut oos = TradePnlDiagnostics::default();
+    let mut eligible_reports = 0_usize;
+    let mut profitable_reports = 0_usize;
+    let mut losing_reports = 0_usize;
+    let mut abstained_reports = 0_usize;
+    let mut worst_report_pnl: Option<f64> = None;
+    let mut decisions = Vec::new();
+
+    for idx in 0..folds.len() {
+        if idx < input.min_train_reports {
+            let (recent_losing_reports, recent_worst_report_pnl) =
+                recent_loss_context(&folds[..idx], &variant, input.recent_report_lookback);
+            decisions.push(AdaptiveModeDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                selected_mode: AdaptiveModeKind::Flat,
+                selected_direction: None,
+                guard: MultiGuardPolicyReport {
+                    deny_regimes: Vec::new(),
+                },
+                train: None,
+                train_summary: None,
+                oos: None,
+                active_options: Vec::new(),
+                reason: "insufficient_prior_reports".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let prior_folds = &folds[..idx];
+        let mut options = adaptive_mode_options(prior_folds, input, &variant);
+        options.sort_by(compare_adaptive_mode_options);
+        let option_reports = options
+            .iter()
+            .map(adaptive_mode_option_report)
+            .collect::<Vec<_>>();
+        let (recent_losing_reports, recent_worst_report_pnl) =
+            recent_loss_context(prior_folds, &variant, input.recent_report_lookback);
+        let selected = options.first().cloned();
+        let Some(selected) = selected else {
+            decisions.push(AdaptiveModeDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                selected_mode: AdaptiveModeKind::Flat,
+                selected_direction: None,
+                guard: MultiGuardPolicyReport {
+                    deny_regimes: Vec::new(),
+                },
+                train: None,
+                train_summary: None,
+                oos: None,
+                active_options: option_reports,
+                reason: "no_active_mode_passed_prior_gates".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        };
+        if selected.train_summary.worst_report_pnl < input.flat_if_worst_train_below {
+            decisions.push(AdaptiveModeDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                selected_mode: AdaptiveModeKind::Flat,
+                selected_direction: None,
+                guard: MultiGuardPolicyReport {
+                    deny_regimes: Vec::new(),
+                },
+                train: Some(stats_report(&selected.train)),
+                train_summary: Some(adaptive_mode_train_summary_report(&selected.train_summary)),
+                oos: None,
+                active_options: option_reports,
+                reason: "best_active_mode_prior_tail_below_flat_threshold".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let fold_stats = adaptive_mode_stats_for_fold(&folds[idx], &variant, &selected);
+        if fold_stats.trades == 0 {
+            decisions.push(AdaptiveModeDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                selected_mode: selected.mode,
+                selected_direction: selected.direction.clone(),
+                guard: guard_policy_report(&selected.guard),
+                train: Some(stats_report(&selected.train)),
+                train_summary: Some(adaptive_mode_train_summary_report(&selected.train_summary)),
+                oos: None,
+                active_options: option_reports,
+                reason: "selected_mode_had_no_oos_trades".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        eligible_reports += 1;
+        if fold_stats.total_pnl > 0.0 {
+            profitable_reports += 1;
+        } else if fold_stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst_report_pnl = Some(match worst_report_pnl {
+            Some(current) => current.min(fold_stats.total_pnl),
+            None => fold_stats.total_pnl,
+        });
+        oos.merge_from(&fold_stats);
+        decisions.push(AdaptiveModeDecisionReport {
+            report_index: idx,
+            train_reports: idx,
+            recent_losing_reports,
+            recent_worst_report_pnl,
+            selected_mode: selected.mode,
+            selected_direction: selected.direction.clone(),
+            guard: guard_policy_report(&selected.guard),
+            train: Some(stats_report(&selected.train)),
+            train_summary: Some(adaptive_mode_train_summary_report(&selected.train_summary)),
+            oos: Some(stats_report(&fold_stats)),
+            active_options: option_reports,
+            reason: "selected_from_prior_tail_ranked_modes".to_string(),
+        });
+    }
+
+    let fold_forward = AdaptiveModeFoldForwardReport {
+        eligible_reports,
+        profitable_reports,
+        losing_reports,
+        abstained_reports,
+        worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        stats: stats_report(&oos),
+        decisions,
+    };
+    let passed = fold_forward.stats.trades >= input.min_oos_trades
+        && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
+        && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
+        && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+
+    let mut notes = vec![
+        "adaptive mode selector; rerun any selected policy in full harness before promotion"
+            .to_string(),
+        "mode decisions use only prior reports and rank prior tail before aggregate PnL"
+            .to_string(),
+        "flat decisions are abstentions and do not contribute OOS trades or PnL".to_string(),
+    ];
+    if !passed {
+        notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+
+    AdaptiveModeCandidateReport {
+        rank: 0,
+        passed,
+        variant,
+        fold_forward,
+        notes,
+    }
+}
+
+fn adaptive_mode_options(
+    prior_folds: &[SelectivityFold],
+    input: &StrategyBuilderAdaptiveModeInput,
+    variant: &str,
+) -> Vec<AdaptiveModeOption> {
+    let mut options = Vec::new();
+    if let Some((direction, train)) = select_direction_from_prior_folds(
+        prior_folds,
+        &StrategyBuilderAdaptiveDirectionInput {
+            report_paths: Vec::new(),
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+            top: input.top,
+        },
+        variant,
+    ) {
+        let option = AdaptiveModeOption {
+            mode: AdaptiveModeKind::Direction,
+            direction: Some(direction.to_string()),
+            guard: Vec::new(),
+            train,
+            train_summary: adaptive_mode_train_summary_for_direction(
+                prior_folds,
+                variant,
+                direction,
+            ),
+        };
+        if option.train.trades >= input.min_train_trades && option.train.total_pnl > 0.0 {
+            options.push(option);
+        }
+    }
+
+    let guard_input = StrategyBuilderMultiGuardSearchInput {
+        report_paths: Vec::new(),
+        min_train_reports: input.min_train_reports,
+        min_train_trades: input.min_train_trades,
+        min_oos_trades: input.min_oos_trades,
+        min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+        min_oos_total_pnl: input.min_oos_total_pnl,
+        min_oos_profitable_reports: input.min_oos_profitable_reports,
+        min_worst_oos_pnl: input.min_worst_oos_pnl,
+        max_rules: input.max_guard_rules,
+        min_guard_trades: input.min_guard_trades,
+        min_guard_loss_pnl: input.min_guard_loss_pnl,
+        min_guard_loss_reports: input.min_guard_loss_reports,
+        recent_report_lookback: input.recent_report_lookback,
+        pattern_guards: input.pattern_guards,
+        top: input.top,
+    };
+    let guard = learn_multi_guard_from_prior_folds(prior_folds, &guard_input, variant);
+    if !guard.is_empty() {
+        let train = stats_for_regime_guard(prior_folds, variant, &guard);
+        let train_summary = adaptive_mode_train_summary_for_guard(prior_folds, variant, &guard);
+        let option = AdaptiveModeOption {
+            mode: AdaptiveModeKind::Guarded,
+            direction: None,
+            guard,
+            train,
+            train_summary,
+        };
+        if option.train.trades >= input.min_train_trades && option.train.total_pnl > 0.0 {
+            options.push(option);
+        }
+    }
+
+    options
+}
+
+fn compare_adaptive_mode_options(
+    left: &AdaptiveModeOption,
+    right: &AdaptiveModeOption,
+) -> Ordering {
+    f64_desc(
+        left.train_summary.worst_report_pnl,
+        right.train_summary.worst_report_pnl,
+    )
+    .then_with(|| f64_desc(left.train.total_pnl, right.train.total_pnl))
+    .then_with(|| {
+        f64_desc(
+            wilson_lower(left.train.wins as usize, left.train.trades as usize),
+            wilson_lower(right.train.wins as usize, right.train.trades as usize),
+        )
+    })
+    .then_with(|| f64_desc(left.train.profit_factor, right.train.profit_factor))
+    .then_with(|| right.train.trades.cmp(&left.train.trades))
+    .then_with(|| left.mode.cmp(&right.mode))
+}
+
+fn adaptive_mode_stats_for_fold(
+    fold: &SelectivityFold,
+    variant: &str,
+    option: &AdaptiveModeOption,
+) -> TradePnlDiagnostics {
+    match option.mode {
+        AdaptiveModeKind::Flat => TradePnlDiagnostics::default(),
+        AdaptiveModeKind::Direction => option
+            .direction
+            .as_deref()
+            .map(|direction| direction_stats_for_fold(fold, variant, direction))
+            .unwrap_or_default(),
+        AdaptiveModeKind::Guarded => {
+            stats_for_regime_guard(std::slice::from_ref(fold), variant, &option.guard)
+        }
+    }
+}
+
+fn adaptive_mode_train_summary_for_direction(
+    folds: &[SelectivityFold],
+    variant: &str,
+    direction: &str,
+) -> AdaptiveModeTrainSummary {
+    let mut summary = AdaptiveModeTrainSummary::default();
+    let mut worst_report_pnl: Option<f64> = None;
+    for fold in folds {
+        let stats = direction_stats_for_fold(fold, variant, direction);
+        update_adaptive_mode_train_summary(&mut summary, &mut worst_report_pnl, &stats);
+    }
+    summary.worst_report_pnl = worst_report_pnl.unwrap_or(0.0);
+    summary
+}
+
+fn adaptive_mode_train_summary_for_guard(
+    folds: &[SelectivityFold],
+    variant: &str,
+    guard: &[MultiGuardRule],
+) -> AdaptiveModeTrainSummary {
+    let mut summary = AdaptiveModeTrainSummary::default();
+    let mut worst_report_pnl: Option<f64> = None;
+    for fold in folds {
+        let stats = stats_for_regime_guard(std::slice::from_ref(fold), variant, guard);
+        update_adaptive_mode_train_summary(&mut summary, &mut worst_report_pnl, &stats);
+    }
+    summary.worst_report_pnl = worst_report_pnl.unwrap_or(0.0);
+    summary
+}
+
+fn update_adaptive_mode_train_summary(
+    summary: &mut AdaptiveModeTrainSummary,
+    worst_report_pnl: &mut Option<f64>,
+    stats: &TradePnlDiagnostics,
+) {
+    if stats.trades == 0 {
+        return;
+    }
+    summary.eligible_reports += 1;
+    if stats.total_pnl > 0.0 {
+        summary.profitable_reports += 1;
+    } else if stats.total_pnl < 0.0 {
+        summary.losing_reports += 1;
+    }
+    *worst_report_pnl = Some(match *worst_report_pnl {
+        Some(current) => current.min(stats.total_pnl),
+        None => stats.total_pnl,
+    });
+}
+
+fn adaptive_mode_option_report(option: &AdaptiveModeOption) -> AdaptiveModeOptionReport {
+    AdaptiveModeOptionReport {
+        mode: option.mode,
+        direction: option.direction.clone(),
+        guard: guard_policy_report(&option.guard),
+        train: stats_report(&option.train),
+        train_summary: adaptive_mode_train_summary_report(&option.train_summary),
+    }
+}
+
+fn adaptive_mode_train_summary_report(
+    summary: &AdaptiveModeTrainSummary,
+) -> AdaptiveModeTrainSummaryReport {
+    AdaptiveModeTrainSummaryReport {
+        eligible_reports: summary.eligible_reports,
+        profitable_reports: summary.profitable_reports,
+        losing_reports: summary.losing_reports,
+        worst_report_pnl: summary.worst_report_pnl,
+    }
 }
 
 fn evaluate_multi_guard_candidate(
@@ -3772,6 +4362,65 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_mode_search_does_not_flat_future_only_loss() {
+        let folds = vec![
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(2, 0, 2.0, 0.0)),
+                ("direction=down", pnl_stats(0, 1, 0.0, -1.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(2, 0, 2.0, 0.0)),
+                ("direction=down", pnl_stats(0, 1, 0.0, -1.0)),
+            ]),
+            selectivity_fold(vec![
+                ("direction=up", pnl_stats(0, 2, 0.0, -8.0)),
+                ("direction=down", pnl_stats(2, 0, 2.0, 0.0)),
+            ]),
+        ];
+
+        let search = adaptive_mode_search_from_folds(&folds, &adaptive_mode_input(5));
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive mode candidate");
+        let decision = &candidate.fold_forward.decisions[2];
+
+        assert!(!search.ok);
+        assert_eq!(decision.selected_mode, AdaptiveModeKind::Direction);
+        assert_eq!(decision.selected_direction.as_deref(), Some("up"));
+        assert_eq!(decision.oos.as_ref().unwrap().total_pnl, -8.0);
+    }
+
+    #[test]
+    fn adaptive_mode_search_flats_when_prior_tail_is_too_bad() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(0, 1, 0.0, -6.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(4, 0, 4.0, 0.0))]),
+        ];
+
+        let mut input = adaptive_mode_input(5);
+        input.flat_if_worst_train_below = -5.0;
+        let search = adaptive_mode_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive mode candidate");
+        let decision = &candidate.fold_forward.decisions[2];
+
+        assert!(!search.ok);
+        assert_eq!(decision.selected_mode, AdaptiveModeKind::Flat);
+        assert_eq!(
+            decision.reason,
+            "best_active_mode_prior_tail_below_flat_threshold"
+        );
+        assert!(decision.oos.is_none());
+        assert_eq!(candidate.fold_forward.stats.trades, 0);
+    }
+
+    #[test]
     fn adaptive_direction_search_switches_only_after_prior_evidence_changes() {
         let folds = vec![
             selectivity_fold(vec![
@@ -3951,6 +4600,27 @@ mod tests {
             min_oos_total_pnl: 0.0,
             min_oos_profitable_reports: 2,
             min_worst_oos_pnl: -10.0,
+            top,
+        }
+    }
+
+    fn adaptive_mode_input(top: usize) -> StrategyBuilderAdaptiveModeInput {
+        StrategyBuilderAdaptiveModeInput {
+            report_paths: Vec::new(),
+            min_train_reports: 2,
+            min_train_trades: 2,
+            min_oos_trades: 4,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 1,
+            min_worst_oos_pnl: 0.0,
+            max_guard_rules: 4,
+            min_guard_trades: 1,
+            min_guard_loss_pnl: 0.0,
+            min_guard_loss_reports: 1,
+            recent_report_lookback: 2,
+            pattern_guards: false,
+            flat_if_worst_train_below: -1.0e9,
             top,
         }
     }
