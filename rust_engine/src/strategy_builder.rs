@@ -107,6 +107,25 @@ pub struct StrategyBuilderSelectivitySearchInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct StrategyBuilderMultiGuardSearchInput {
+    pub report_paths: Vec<String>,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_rules: usize,
+    pub min_guard_trades: u64,
+    pub min_guard_loss_pnl: f64,
+    pub min_guard_loss_reports: usize,
+    pub recent_report_lookback: usize,
+    pub pattern_guards: bool,
+    pub top: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct StrategyBuilderAdaptiveDirectionInput {
     pub report_paths: Vec<String>,
     pub min_train_reports: usize,
@@ -128,6 +147,17 @@ pub struct StrategyBuilderSelectivitySearch {
     pub methodology: Vec<String>,
     pub gates: SelectivitySearchGates,
     pub candidates: Vec<SelectivityCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderMultiGuardSearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub methodology: Vec<String>,
+    pub gates: MultiGuardSearchGates,
+    pub candidates: Vec<MultiGuardCandidateReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,6 +183,23 @@ pub struct SelectivitySearchGates {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardSearchGates {
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_rules: usize,
+    pub min_guard_trades: u64,
+    pub min_guard_loss_pnl: f64,
+    pub min_guard_loss_reports: usize,
+    pub recent_report_lookback: usize,
+    pub pattern_guards: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectivityCandidateReport {
     pub rank: usize,
     pub passed: bool,
@@ -160,6 +207,17 @@ pub struct SelectivityCandidateReport {
     pub rule: SelectivityRule,
     pub aggregate: SelectivityStatsReport,
     pub fold_forward: SelectivityFoldForwardReport,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardCandidateReport {
+    pub rank: usize,
+    pub passed: bool,
+    pub variant: String,
+    pub final_guard: MultiGuardPolicyReport,
+    pub aggregate_static_final_guard: SelectivityStatsReport,
+    pub fold_forward: MultiGuardFoldForwardReport,
     pub notes: Vec<String>,
 }
 
@@ -181,9 +239,51 @@ pub struct SelectivityStatsReport {
     pub wilson_win_rate_lower: f64,
     pub total_pnl: f64,
     pub avg_pnl: f64,
+    pub gross_win_pnl: f64,
+    pub gross_loss_pnl: f64,
+    pub avg_win_pnl: f64,
+    pub avg_loss_pnl: f64,
+    pub max_win_pnl: f64,
+    pub max_loss_pnl: f64,
     pub profit_factor: f64,
     pub payoff_ratio: f64,
     pub worst_loss_to_avg_win: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardFoldForwardReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub abstained_reports: usize,
+    pub worst_report_pnl: f64,
+    pub stats: SelectivityStatsReport,
+    pub decisions: Vec<MultiGuardDecisionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardDecisionReport {
+    pub report_index: usize,
+    pub train_reports: usize,
+    pub recent_losing_reports: usize,
+    pub recent_worst_report_pnl: f64,
+    pub guard: MultiGuardPolicyReport,
+    pub train: Option<SelectivityStatsReport>,
+    pub oos: Option<SelectivityStatsReport>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardPolicyReport {
+    pub deny_regimes: Vec<MultiGuardRuleReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiGuardRuleReport {
+    pub regime: String,
+    pub match_tags: BTreeMap<String, String>,
+    pub train_reports_with_trades: usize,
+    pub train_stats: SelectivityStatsReport,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +339,7 @@ struct SelectivityFold {
 struct SelectivityVariantFold {
     name: String,
     buckets: BTreeMap<String, TradePnlDiagnostics>,
+    regimes: BTreeMap<String, TradePnlDiagnostics>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1072,12 +1173,52 @@ pub fn selectivity_search(
             .map(|variant| SelectivityVariantFold {
                 name: variant_report_name(variant),
                 buckets: selectivity_buckets_for_variant(variant),
+                regimes: variant.diagnostics.by_regime.clone(),
             })
             .collect();
         folds.push(SelectivityFold { variants });
     }
 
     Ok(selectivity_search_from_folds(&folds, &input))
+}
+
+pub fn multi_guard_search(
+    input: StrategyBuilderMultiGuardSearchInput,
+) -> Result<StrategyBuilderMultiGuardSearch> {
+    if input.report_paths.len() < 2 {
+        bail!("multi-guard search needs at least two reports");
+    }
+    if input.min_train_reports == 0 {
+        bail!("--min-train-reports must be > 0");
+    }
+    if input.max_rules == 0 {
+        bail!("--max-rules must be > 0");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+
+    let mut folds = Vec::new();
+    for report_path in &input.report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load multi-guard report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| SelectivityVariantFold {
+                name: variant_report_name(variant),
+                buckets: selectivity_buckets_for_variant(variant),
+                regimes: variant.diagnostics.by_regime.clone(),
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+
+    Ok(multi_guard_search_from_folds(&folds, &input))
 }
 
 pub fn adaptive_direction_search(
@@ -1107,6 +1248,7 @@ pub fn adaptive_direction_search(
             .map(|variant| SelectivityVariantFold {
                 name: variant_report_name(variant),
                 buckets: selectivity_buckets_for_variant(variant),
+                regimes: variant.diagnostics.by_regime.clone(),
             })
             .collect();
         folds.push(SelectivityFold { variants });
@@ -1176,6 +1318,82 @@ fn selectivity_search_from_folds(
             min_oos_total_pnl: input.min_oos_total_pnl,
             min_oos_profitable_reports: input.min_oos_profitable_reports,
             min_worst_oos_pnl: input.min_worst_oos_pnl,
+        },
+        candidates,
+    }
+}
+
+fn multi_guard_search_from_folds(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderMultiGuardSearchInput,
+) -> StrategyBuilderMultiGuardSearch {
+    let mut candidates = variant_names(folds)
+        .into_iter()
+        .map(|variant| evaluate_multi_guard_candidate(folds, input, variant))
+        .collect::<Vec<_>>();
+    let candidate_count = candidates.len();
+
+    candidates.sort_by(|a, b| {
+        b.passed
+            .cmp(&a.passed)
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.total_pnl,
+                    b.fold_forward.stats.total_pnl,
+                )
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.wilson_win_rate_lower,
+                    b.fold_forward.stats.wilson_win_rate_lower,
+                )
+            })
+            .then_with(|| {
+                b.fold_forward
+                    .stats
+                    .trades
+                    .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| a.variant.cmp(&b.variant))
+    });
+
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let top = input.top.max(1);
+    candidates.truncate(top);
+
+    StrategyBuilderMultiGuardSearch {
+        schema_version: 1,
+        ok: candidates.iter().any(|candidate| candidate.passed),
+        report_count: folds.len(),
+        candidate_count,
+        methodology: vec![
+            "Learn a set of denied full-regime buckets from strictly prior reports only."
+                .to_string(),
+            "Only full-regime buckets are composed because they are mutually exclusive; overlapping dimensions are deliberately excluded from multi-rule arithmetic."
+                .to_string(),
+            "Each OOS fold is scored after its guard is fixed from prior folds; future folds never choose current guards."
+                .to_string(),
+            "Guard ranking uses prior-fold loss support and payoff-asymmetry diagnostics: profit factor, average loss, payoff ratio, and worst loss to average win."
+                .to_string(),
+            "Treat the result as a strategy hypothesis; rerun any static guard through full harness/live-replay before promotion."
+                .to_string(),
+        ],
+        gates: MultiGuardSearchGates {
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+            max_rules: input.max_rules,
+            min_guard_trades: input.min_guard_trades,
+            min_guard_loss_pnl: input.min_guard_loss_pnl,
+            min_guard_loss_reports: input.min_guard_loss_reports,
+            recent_report_lookback: input.recent_report_lookback,
+            pattern_guards: input.pattern_guards,
         },
         candidates,
     }
@@ -1258,6 +1476,360 @@ fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
     }
     names.into_iter().collect()
 }
+
+#[derive(Debug, Clone)]
+struct MultiGuardRule {
+    label: String,
+    match_tags: BTreeMap<String, String>,
+    reports_with_trades: usize,
+    stats: TradePnlDiagnostics,
+}
+
+fn evaluate_multi_guard_candidate(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderMultiGuardSearchInput,
+    variant: String,
+) -> MultiGuardCandidateReport {
+    let mut oos = TradePnlDiagnostics::default();
+    let mut eligible_reports = 0_usize;
+    let mut profitable_reports = 0_usize;
+    let mut losing_reports = 0_usize;
+    let mut abstained_reports = 0_usize;
+    let mut worst_report_pnl: Option<f64> = None;
+    let mut decisions = Vec::new();
+
+    for idx in 0..folds.len() {
+        if idx < input.min_train_reports {
+            let (recent_losing_reports, recent_worst_report_pnl) =
+                recent_loss_context(&folds[..idx], &variant, input.recent_report_lookback);
+            decisions.push(MultiGuardDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                guard: MultiGuardPolicyReport {
+                    deny_regimes: Vec::new(),
+                },
+                train: None,
+                oos: None,
+                reason: "insufficient_prior_reports".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let guard = learn_multi_guard_from_prior_folds(&folds[..idx], input, &variant);
+        let train_stats = stats_for_regime_guard(&folds[..idx], &variant, &guard);
+        let (recent_losing_reports, recent_worst_report_pnl) =
+            recent_loss_context(&folds[..idx], &variant, input.recent_report_lookback);
+        if train_stats.trades < input.min_train_trades || train_stats.total_pnl <= 0.0 {
+            decisions.push(MultiGuardDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                guard: guard_policy_report(&guard),
+                train: Some(stats_report(&train_stats)),
+                oos: None,
+                reason: "guarded_prior_stats_failed_train_gates".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let fold_stats = stats_for_regime_guard(&folds[idx..=idx], &variant, &guard);
+        if fold_stats.trades == 0 {
+            decisions.push(MultiGuardDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                recent_losing_reports,
+                recent_worst_report_pnl,
+                guard: guard_policy_report(&guard),
+                train: Some(stats_report(&train_stats)),
+                oos: None,
+                reason: "guard_removed_all_oos_trades".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        eligible_reports += 1;
+        if fold_stats.total_pnl > 0.0 {
+            profitable_reports += 1;
+        } else if fold_stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst_report_pnl = Some(match worst_report_pnl {
+            Some(current) => current.min(fold_stats.total_pnl),
+            None => fold_stats.total_pnl,
+        });
+        oos.merge_from(&fold_stats);
+        decisions.push(MultiGuardDecisionReport {
+            report_index: idx,
+            train_reports: idx,
+            recent_losing_reports,
+            recent_worst_report_pnl,
+            guard: guard_policy_report(&guard),
+            train: Some(stats_report(&train_stats)),
+            oos: Some(stats_report(&fold_stats)),
+            reason: "guard_selected_from_prior_regime_stats".to_string(),
+        });
+    }
+
+    let fold_forward = MultiGuardFoldForwardReport {
+        eligible_reports,
+        profitable_reports,
+        losing_reports,
+        abstained_reports,
+        worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        stats: stats_report(&oos),
+        decisions,
+    };
+    let passed = fold_forward.stats.trades >= input.min_oos_trades
+        && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
+        && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
+        && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+
+    let final_guard = learn_multi_guard_from_prior_folds(folds, input, &variant);
+    let aggregate_static_final_guard = stats_for_regime_guard(folds, &variant, &final_guard);
+
+    let mut notes = vec![
+        "multi-guard selector; rerun the final static guard in full harness before promotion"
+            .to_string(),
+        "fold decisions use only prior full-regime bucket evidence".to_string(),
+        "recent loss context is reported from prior folds only and is not allowed to peek at the current fold".to_string(),
+    ];
+    if !passed {
+        notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+
+    MultiGuardCandidateReport {
+        rank: 0,
+        passed,
+        variant,
+        final_guard: guard_policy_report(&final_guard),
+        aggregate_static_final_guard: stats_report(&aggregate_static_final_guard),
+        fold_forward,
+        notes,
+    }
+}
+
+fn learn_multi_guard_from_prior_folds(
+    prior_folds: &[SelectivityFold],
+    input: &StrategyBuilderMultiGuardSearchInput,
+    variant: &str,
+) -> Vec<MultiGuardRule> {
+    let mut patterns: BTreeMap<String, (BTreeMap<String, String>, TradePnlDiagnostics, usize)> =
+        BTreeMap::new();
+    for fold in prior_folds {
+        let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+            continue;
+        };
+        let mut fold_patterns: BTreeMap<String, (BTreeMap<String, String>, TradePnlDiagnostics)> =
+            BTreeMap::new();
+        for (regime, stats) in &variant_fold.regimes {
+            for (label, match_tags) in guard_patterns_for_regime(regime, input.pattern_guards) {
+                let entry = fold_patterns
+                    .entry(label)
+                    .or_insert_with(|| (match_tags, TradePnlDiagnostics::default()));
+                entry.1.merge_from(stats);
+            }
+        }
+        for (label, (match_tags, stats)) in fold_patterns {
+            let entry = patterns
+                .entry(label)
+                .or_insert_with(|| (match_tags, TradePnlDiagnostics::default(), 0_usize));
+            entry.1.merge_from(&stats);
+            if stats.trades > 0 {
+                entry.2 += 1;
+            }
+        }
+    }
+
+    let mut toxic = patterns
+        .into_iter()
+        .filter_map(|(label, (match_tags, stats, reports_with_trades))| {
+            if reports_with_trades < input.min_guard_loss_reports
+                || stats.trades < input.min_guard_trades
+                || stats.total_pnl >= -input.min_guard_loss_pnl.max(0.0)
+            {
+                return None;
+            }
+            Some(MultiGuardRule {
+                label,
+                match_tags,
+                reports_with_trades,
+                stats,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    toxic.sort_by(|a, b| {
+        a.stats
+            .total_pnl
+            .partial_cmp(&b.stats.total_pnl)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                a.stats
+                    .profit_factor
+                    .partial_cmp(&b.stats.profit_factor)
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| b.stats.losses.cmp(&a.stats.losses))
+            .then_with(|| b.stats.trades.cmp(&a.stats.trades))
+            .then_with(|| a.label.cmp(&b.label))
+    });
+
+    let mut selected = Vec::new();
+    let mut current = stats_for_regime_guard(prior_folds, variant, &selected);
+    for rule in toxic {
+        if selected.len() >= input.max_rules {
+            break;
+        }
+        let mut trial_guard = selected.clone();
+        trial_guard.push(rule.clone());
+        let trial = stats_for_regime_guard(prior_folds, variant, &trial_guard);
+        if trial.trades < input.min_train_trades {
+            continue;
+        }
+        if trial.total_pnl <= current.total_pnl + 1e-9 {
+            continue;
+        }
+        current = trial;
+        selected.push(rule);
+    }
+    selected
+}
+
+fn stats_for_regime_guard(
+    folds: &[SelectivityFold],
+    variant: &str,
+    guard: &[MultiGuardRule],
+) -> TradePnlDiagnostics {
+    let mut stats = TradePnlDiagnostics::default();
+    for fold in folds {
+        let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+            continue;
+        };
+        for (regime, regime_stats) in &variant_fold.regimes {
+            if guard.iter().any(|rule| guard_rule_matches(rule, regime)) {
+                continue;
+            }
+            stats.merge_from(regime_stats);
+        }
+    }
+    stats
+}
+
+fn recent_loss_context(
+    prior_folds: &[SelectivityFold],
+    variant: &str,
+    lookback: usize,
+) -> (usize, f64) {
+    if lookback == 0 || prior_folds.is_empty() {
+        return (0, 0.0);
+    }
+    let start = prior_folds.len().saturating_sub(lookback);
+    let mut losing_reports = 0_usize;
+    let mut worst: Option<f64> = None;
+    let empty_guard = Vec::new();
+    for fold in &prior_folds[start..] {
+        let stats = stats_for_regime_guard(std::slice::from_ref(fold), variant, &empty_guard);
+        if stats.trades == 0 {
+            continue;
+        }
+        if stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst = Some(match worst {
+            Some(current) => current.min(stats.total_pnl),
+            None => stats.total_pnl,
+        });
+    }
+    (losing_reports, worst.unwrap_or(0.0))
+}
+
+fn guard_policy_report(guard: &[MultiGuardRule]) -> MultiGuardPolicyReport {
+    MultiGuardPolicyReport {
+        deny_regimes: guard
+            .iter()
+            .map(|rule| MultiGuardRuleReport {
+                regime: rule.label.clone(),
+                match_tags: rule.match_tags.clone(),
+                train_reports_with_trades: rule.reports_with_trades,
+                train_stats: stats_report(&rule.stats),
+            })
+            .collect(),
+    }
+}
+
+fn guard_rule_matches(rule: &MultiGuardRule, regime: &str) -> bool {
+    let tags = parse_regime_tags(regime);
+    rule.match_tags
+        .iter()
+        .all(|(dimension, value)| tags.get(dimension).is_some_and(|actual| actual == value))
+}
+
+fn guard_patterns_for_regime(
+    regime: &str,
+    pattern_guards: bool,
+) -> Vec<(String, BTreeMap<String, String>)> {
+    let tags = parse_regime_tags(regime);
+    if tags.is_empty() {
+        return Vec::new();
+    }
+
+    let mut patterns = BTreeMap::new();
+    patterns.insert(regime.to_string(), tags.clone());
+    if pattern_guards {
+        for dimensions in PATTERN_GUARD_DIMENSIONS {
+            let mut pattern = BTreeMap::new();
+            for dimension in *dimensions {
+                let Some(value) = tags.get(*dimension) else {
+                    pattern.clear();
+                    break;
+                };
+                pattern.insert((*dimension).to_string(), value.clone());
+            }
+            if !pattern.is_empty() && pattern.len() < tags.len() {
+                patterns.insert(pattern_label(&pattern), pattern);
+            }
+        }
+    }
+    patterns.into_iter().collect()
+}
+
+fn parse_regime_tags(regime: &str) -> BTreeMap<String, String> {
+    regime
+        .split('|')
+        .filter_map(|part| {
+            let (dimension, value) = part.split_once('=')?;
+            Some((dimension.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn pattern_label(tags: &BTreeMap<String, String>) -> String {
+    tags.iter()
+        .map(|(dimension, value)| format!("{dimension}={value}"))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
+    &["zone", "dir", "price", "edge", "z", "conf", "rev", "min"],
+    &["zone", "dir", "price", "edge", "z", "conf", "min"],
+    &["zone", "dir", "price", "z", "conf", "min"],
+    &["zone", "price", "edge", "z", "conf", "vol", "min"],
+    &["zone", "price", "edge", "z", "conf", "min"],
+    &["zone", "price", "z", "conf", "min"],
+    &["zone", "dir", "z", "conf", "vol", "min"],
+    &["zone", "dir", "price", "conf", "min"],
+    &["zone", "z", "conf", "min"],
+    &["price", "z", "conf", "min"],
+    &["z", "conf", "min"],
+];
 
 fn evaluate_adaptive_direction_candidate(
     folds: &[SelectivityFold],
@@ -1613,6 +2185,12 @@ fn stats_report(stats: &TradePnlDiagnostics) -> SelectivityStatsReport {
         wilson_win_rate_lower: wilson_lower(stats.wins as usize, stats.trades as usize),
         total_pnl: stats.total_pnl,
         avg_pnl: stats.avg_pnl,
+        gross_win_pnl: stats.gross_win_pnl,
+        gross_loss_pnl: stats.gross_loss_pnl,
+        avg_win_pnl: stats.avg_win_pnl,
+        avg_loss_pnl: stats.avg_loss_pnl,
+        max_win_pnl: stats.max_win_pnl,
+        max_loss_pnl: stats.max_loss_pnl,
         profit_factor: stats.profit_factor,
         payoff_ratio: stats.payoff_ratio,
         worst_loss_to_avg_win: stats.worst_loss_to_avg_win,
@@ -3024,6 +3602,176 @@ mod tests {
     }
 
     #[test]
+    fn multi_guard_search_combines_prior_toxic_regimes() {
+        let folds = vec![
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(4, 0, 4.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.75_0.90",
+                    pnl_stats(0, 2, 0.0, -8.0),
+                ),
+                (
+                    "regime=zone=primary|dir=up|price=0.75_0.90",
+                    pnl_stats(0, 1, 0.0, -3.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(4, 0, 4.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.75_0.90",
+                    pnl_stats(0, 1, 0.0, -4.0),
+                ),
+                (
+                    "regime=zone=primary|dir=up|price=0.75_0.90",
+                    pnl_stats(0, 1, 0.0, -3.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(5, 0, 5.0, 0.0),
+                ),
+                (
+                    "regime=zone=early|dir=down|price=0.75_0.90",
+                    pnl_stats(0, 1, 0.0, -4.0),
+                ),
+                (
+                    "regime=zone=primary|dir=up|price=0.75_0.90",
+                    pnl_stats(0, 1, 0.0, -3.0),
+                ),
+            ]),
+        ];
+
+        let search = multi_guard_search_from_folds(&folds, &multi_guard_input(5));
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("multi-guard candidate");
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(candidate.fold_forward.eligible_reports, 1);
+        assert_eq!(candidate.fold_forward.stats.trades, 5);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 5.0);
+        assert_eq!(
+            candidate.fold_forward.decisions[2].guard.deny_regimes.len(),
+            2
+        );
+        assert!(candidate
+            .final_guard
+            .deny_regimes
+            .iter()
+            .any(|rule| rule.regime == "zone=early|dir=down|price=0.75_0.90"));
+    }
+
+    #[test]
+    fn multi_guard_search_does_not_deny_future_only_loss() {
+        let folds = vec![
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(2, 0, 2.0, 0.0),
+                ),
+                (
+                    "regime=zone=primary|dir=down|price=0.75_0.90",
+                    pnl_stats(1, 0, 1.0, 0.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(2, 0, 2.0, 0.0),
+                ),
+                (
+                    "regime=zone=primary|dir=down|price=0.75_0.90",
+                    pnl_stats(1, 0, 1.0, 0.0),
+                ),
+            ]),
+            selectivity_fold(vec![
+                (
+                    "regime=zone=early|dir=up|price=0.50_0.75",
+                    pnl_stats(2, 0, 2.0, 0.0),
+                ),
+                (
+                    "regime=zone=primary|dir=down|price=0.75_0.90",
+                    pnl_stats(0, 2, 0.0, -10.0),
+                ),
+            ]),
+        ];
+
+        let mut input = multi_guard_input(5);
+        input.min_worst_oos_pnl = 0.0;
+        let search = multi_guard_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("multi-guard candidate");
+        let decision = &candidate.fold_forward.decisions[2];
+
+        assert!(!search.ok);
+        assert!(decision.guard.deny_regimes.is_empty());
+        assert_eq!(decision.oos.as_ref().unwrap().total_pnl, -8.0);
+        assert!(!candidate.passed);
+    }
+
+    #[test]
+    fn multi_guard_pattern_search_generalizes_prior_toxic_context() {
+        let prior_bad =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4";
+        let sibling_bad =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=0.40_0.80|rev=1_2|min=2_4";
+        let good =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (good, pnl_stats(4, 0, 4.0, 0.0)),
+                (prior_bad, pnl_stats(0, 2, 0.0, -8.0)),
+            ]),
+            selectivity_fold(vec![
+                (good, pnl_stats(4, 0, 4.0, 0.0)),
+                (prior_bad, pnl_stats(0, 1, 0.0, -4.0)),
+            ]),
+            selectivity_fold(vec![
+                (good, pnl_stats(5, 0, 5.0, 0.0)),
+                (sibling_bad, pnl_stats(0, 1, 0.0, -5.0)),
+            ]),
+        ];
+
+        let mut input = multi_guard_input(5);
+        input.pattern_guards = true;
+        input.max_rules = 1;
+        input.min_guard_loss_reports = 2;
+        let search = multi_guard_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("multi-guard candidate");
+        let guard = &candidate.fold_forward.decisions[2].guard.deny_regimes[0];
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 5.0);
+        assert_eq!(
+            guard.match_tags.get("zone").map(String::as_str),
+            Some("early")
+        );
+        assert_eq!(
+            guard.match_tags.get("conf").map(String::as_str),
+            Some("lt_0.50")
+        );
+        assert!(!guard.match_tags.contains_key("vol"));
+    }
+
+    #[test]
     fn adaptive_direction_search_switches_only_after_prior_evidence_changes() {
         let folds = vec![
             selectivity_fold(vec![
@@ -3207,14 +3955,43 @@ mod tests {
         }
     }
 
+    fn multi_guard_input(top: usize) -> StrategyBuilderMultiGuardSearchInput {
+        StrategyBuilderMultiGuardSearchInput {
+            report_paths: Vec::new(),
+            min_train_reports: 2,
+            min_train_trades: 4,
+            min_oos_trades: 4,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 1,
+            min_worst_oos_pnl: 0.0,
+            max_rules: 4,
+            min_guard_trades: 1,
+            min_guard_loss_pnl: 0.0,
+            min_guard_loss_reports: 1,
+            recent_report_lookback: 2,
+            pattern_guards: false,
+            top,
+        }
+    }
+
     fn selectivity_fold(buckets: Vec<(&str, TradePnlDiagnostics)>) -> SelectivityFold {
+        let bucket_map = buckets
+            .into_iter()
+            .map(|(key, stats)| (key.to_string(), stats))
+            .collect::<BTreeMap<_, _>>();
+        let regimes = bucket_map
+            .iter()
+            .filter_map(|(key, stats)| {
+                key.strip_prefix("regime=")
+                    .map(|regime| (regime.to_string(), stats.clone()))
+            })
+            .collect();
         SelectivityFold {
             variants: vec![SelectivityVariantFold {
                 name: "candidate".to_string(),
-                buckets: buckets
-                    .into_iter()
-                    .map(|(key, stats)| (key.to_string(), stats))
-                    .collect(),
+                buckets: bucket_map,
+                regimes,
             }],
         }
     }

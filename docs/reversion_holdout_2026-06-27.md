@@ -165,6 +165,71 @@ candidates and none passed. The best deny rule improved aggregate PnL to
 current single-rule search cannot explain away the bad window without
 post-hoc leakage.
 
+## Multi-Guard Search: 2026-06-28
+
+Added `strategy-builder multi-guard-search` to test composed feed-forward
+guards without using paper mode. The implementation:
+
+- Learns denied full-regime buckets only from strictly prior reports.
+- Scores each OOS fold only after that fold's guard is fixed.
+- Uses disjoint full-regime buckets for arithmetic, avoiding overlap between
+  causal dimensions.
+- Exposes payoff-asymmetry fields in search artifacts: gross win/loss, average
+  win/loss, max win/loss, profit factor, payoff ratio, and worst loss to
+  average win.
+- Supports optional broader pattern guards with `--pattern-guards`; these
+  still apply by matching full-regime buckets rather than summing overlapping
+  dimension buckets.
+
+Validation:
+
+- `cargo test --manifest-path rust_engine/Cargo.toml strategy_builder::tests:: -- --nocapture`
+  passed 19/19 tests.
+- Tests cover multi-rule composition, future-only loss rejection, and
+  feed-forward pattern generalization.
+
+Strict exact-regime multi-guard search:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_multi_guard_search.json`.
+- Gates: 42 reports, min 6 train reports, min 40 train trades, min 60 OOS
+  trades, min 18 profitable OOS reports, nonnegative worst OOS fold.
+- Result: failed.
+- Feed-forward OOS: 211 trades, 176 wins, 35 losses, +62.95658 PnL, Wilson
+  lower 0.77805, 23 profitable / 13 losing eligible reports, worst -12.05971.
+- Final static exact guard improved aggregate to +99.04789, but that is not
+  promotable because feed-forward worst fold stayed negative.
+
+Loose exact-regime search:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_multi_guard_loose_search.json`.
+- Loosened to min 1 guard trade/report and max 8 rules.
+- Result: failed.
+- Feed-forward OOS: 201 trades, 169 wins, 32 losses, +69.23991 PnL, Wilson
+  lower 0.78390, 22 profitable / 14 losing eligible reports, worst -12.05971.
+- Static aggregate looked excellent (+141.93770), but this was not
+  feed-forward robust.
+
+Pattern-guard search:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_multi_guard_pattern_search.json`.
+- Enabled `--pattern-guards`, max 6 rules, min 10 guard trades, min 2 guard
+  reports.
+- Result: failed.
+- Feed-forward OOS: 165 trades, 140 wins, 25 losses, +72.57082 PnL, Wilson
+  lower 0.78589, 25 profitable / 11 losing eligible reports, worst -12.88359.
+- Final static pattern guard improved aggregate to +142.79914 with 185 trades
+  and 2.4244 profit factor, but the feed-forward worst fold worsened. This is
+  a classic static-overfit warning, not a promotion signal.
+
+Adaptive direction comparison:
+
+- Artifact: `/private/tmp/polymomentum_reversion_combined_20260628_adaptive_direction_search.json`.
+- Result: failed.
+- Feed-forward OOS: 95 trades, 76 wins, 19 losses, +6.49206 PnL, Wilson lower
+  0.70862, 17 profitable / 12 losing eligible reports, worst -10.27148.
+- Direction selection reduced the Jun 10 08:00-15:00 UTC fold from -12.05971
+  to -1.78366, but introduced or left other bad folds, so it is not sufficient.
+
 ## Verdict
 
 The `reversion=1_2` candidate is still a strong research signal, not a
@@ -172,28 +237,31 @@ production strategy. Execution/replay mechanics were stable: no breaker trips,
 no fill failures in the reported fold summaries, and raw PMXT parquets were
 deleted after each downloaded hour. The blocker is not order mechanics or
 sample count anymore; it is strategy robustness under bad payoff-asymmetry
-windows.
+windows. The new multi-guard tooling makes this clearer: static aggregate
+guards can look excellent while feed-forward OOS still fails.
 
 Current grade for this candidate:
 
 - Execution harness: A
 - Storage discipline: A
-- Strategy edge: B
+- Strategy-lab tooling: A-
+- Strategy edge: B-
 - Production readiness: C+
 
 ## Next Steps
 
-1. Add multi-rule feed-forward guard search. The search must learn guards only
-   from prior folds, then evaluate each later fold without future information.
-2. Add explicit payoff-asymmetry guard features to the strategy lab: rolling
-   average win, rolling average loss, loss-to-win ratio, recent resolved loss
-   burst, and per-regime profit factor. These must be feed-forward only.
-3. Add neighbor evidence for the selected parameter point. Current promotion
+1. Do not promote `reversion=1_2` as-is. The exact, loose, pattern, and
+   adaptive-direction searches all failed feed-forward worst-fold gates.
+2. Move the search objective away from maximizing static aggregate PnL and
+   toward minimizing tail loss: worst-fold PnL, average loss size, and loss
+   burst frequency must be first-class objectives.
+3. Add a combined adaptive policy search that can choose among flat, direction,
+   and guarded modes per fold from prior evidence only. The current individual
+   pieces help different bad folds but do not solve all of them.
+4. Add neighbor evidence for any selected parameter point. Current promotion
    still has `neighbor_count=0`, so we cannot know if the result is a stable
    plateau or a narrow parameter spike.
-4. Rerun the full harness on the selected multi-rule candidate. Promotion
-   should require at least 250 trades, positive PnL, Wilson lower bound above
-   0.60, nonnegative worst fold, positive worst supported causal bucket, and
-   passing neighbor robustness.
-5. Only after that passes, run live-replay parity. Do not use paper mode for
+5. Only after a candidate passes 250+ trades, positive PnL, Wilson lower bound
+   above 0.60, nonnegative worst fold, positive worst supported causal bucket,
+   and neighbor robustness, run live-replay parity. Do not use paper mode for
    strategy validation when backtest/live-replay can prove the same behavior.
