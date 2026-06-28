@@ -286,6 +286,57 @@ not rescue this candidate. The bad folds are not predictable enough from the
 current prior-fold regime summaries: a prior-tail-ranked guarded mode still
 chooses the Jun 10 08:00-15:00 UTC window and loses -12.88359.
 
+## Causal Policy Search
+
+Implementation added on 2026-06-28:
+
+- New CLI: `strategy-builder causal-policy-search`.
+- Generates causal require-policy conjunctions from observed decision-time
+  regime tags, then evaluates each OOS fold using only earlier reports.
+- Learns optional prior-toxic single-tag deny rules inside each require policy.
+  The default single-tag deny shape maps directly to existing
+  `--require-causal-tag` and `--deny-causal-tag` harness/runtime controls.
+- Caches parsed causal tags per regime row, so the 42-report search runs in
+  about 14 seconds on the dev box instead of timing out from repeated string
+  parsing.
+- Tests cover feed-forward interaction selection, future-only luck rejection,
+  and prior-only deny learning.
+
+Strict A+ tail run:
+
+- Artifact:
+  `/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search.json`.
+- Gates: 80+ OOS trades, Wilson lower >= 0.70, 20+ profitable OOS reports,
+  positive PnL, worst OOS fold >= 0.
+- Result: failed.
+- Candidate count: 925.
+- Best ranked coverage policy:
+  - require: `zone=early`
+  - learned final deny: `z=gte_1.5`
+  - feed-forward OOS: 129 trades, +71.70188 PnL, Wilson lower 0.77263,
+    28 profitable / 8 losing reports
+  - blocker: worst OOS fold -16.40518
+- The worst fold was report index 40. The policy had strong prior train stats
+  before that fold, then the current fold produced 6 OOS trades, 2 wins, 4
+  losses, and -16.40518 PnL. This is a real tail cluster, not a selector
+  timestamp leak.
+
+Relaxed bounded-loss diagnostic:
+
+- Artifact:
+  `/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search_relaxed_tail.json`.
+- Same gates except worst OOS fold >= -13.
+- Result: 17 candidates passed the relaxed diagnostic.
+- Top policy:
+  - require: `reversion=1_2`
+  - learned final deny: `z=gte_1.5`
+  - feed-forward OOS: 186 trades, +68.28332 PnL, Wilson lower 0.77315,
+    26 profitable / 13 losing reports, worst -12.85440
+  - aggregate static final policy: 259 trades, +85.48637 PnL, Wilson lower
+    0.79229
+- This is useful as a research candidate, but it is not A+ because strict
+  zero-worst-fold robustness still fails.
+
 ## Verdict
 
 The `reversion=1_2` candidate is still a strong research signal, not a
@@ -314,10 +365,10 @@ Current grade for this candidate:
    toward minimizing tail loss: worst-fold PnL, average loss size, and loss
    burst frequency must be first-class objectives.
 3. Add richer pre-trade state features for the search lab. Current fold-level
-   causal summaries are too blunt. Next candidates should include distance to
-   BTC candle close, intra-candle path shape, local book imbalance, spread
-   stability, and loss-burst state computed strictly from already-resolved
-   prior positions.
+   causal summaries are better now but still too blunt for the report-40 tail.
+   Next candidates should include distance to BTC candle close, intra-candle
+   path shape, local book imbalance, spread stability, and loss-burst state
+   computed strictly from already-resolved prior positions.
 4. Add neighbor evidence for any selected parameter point. Current promotion
    still has `neighbor_count=0`, so we cannot know if the result is a stable
    plateau or a narrow parameter spike.

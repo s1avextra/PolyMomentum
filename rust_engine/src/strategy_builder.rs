@@ -158,6 +158,25 @@ pub struct StrategyBuilderAdaptiveModeInput {
     pub top: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderCausalPolicySearchInput {
+    pub report_paths: Vec<String>,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_require_terms: usize,
+    pub max_deny_rules: usize,
+    pub max_deny_terms: usize,
+    pub min_deny_trades: u64,
+    pub min_deny_loss_pnl: f64,
+    pub min_deny_loss_reports: usize,
+    pub top: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StrategyBuilderSelectivitySearch {
     pub schema_version: u32,
@@ -200,6 +219,17 @@ pub struct StrategyBuilderAdaptiveModeSearch {
     pub methodology: Vec<String>,
     pub gates: AdaptiveModeSearchGates,
     pub candidates: Vec<AdaptiveModeCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderCausalPolicySearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub methodology: Vec<String>,
+    pub gates: CausalPolicySearchGates,
+    pub candidates: Vec<CausalPolicyCandidateReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,6 +279,23 @@ pub struct AdaptiveModeSearchGates {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicySearchGates {
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_require_terms: usize,
+    pub max_deny_rules: usize,
+    pub max_deny_terms: usize,
+    pub min_deny_trades: u64,
+    pub min_deny_loss_pnl: f64,
+    pub min_deny_loss_reports: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectivityCandidateReport {
     pub rank: usize,
     pub passed: bool,
@@ -285,6 +332,18 @@ pub struct AdaptiveModeCandidateReport {
     pub passed: bool,
     pub variant: String,
     pub fold_forward: AdaptiveModeFoldForwardReport,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicyCandidateReport {
+    pub rank: usize,
+    pub passed: bool,
+    pub variant: String,
+    pub base_require: BTreeMap<String, String>,
+    pub final_policy: CausalPolicyReport,
+    pub aggregate_static_final_policy: SelectivityStatsReport,
+    pub fold_forward: CausalPolicyFoldForwardReport,
     pub notes: Vec<String>,
 }
 
@@ -418,6 +477,43 @@ pub struct AdaptiveModeTrainSummaryReport {
     pub worst_report_pnl: f64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicyFoldForwardReport {
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub abstained_reports: usize,
+    pub worst_report_pnl: f64,
+    pub stats: SelectivityStatsReport,
+    pub decisions: Vec<CausalPolicyDecisionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicyDecisionReport {
+    pub report_index: usize,
+    pub train_reports: usize,
+    pub policy: CausalPolicyReport,
+    pub train: Option<SelectivityStatsReport>,
+    pub oos: Option<SelectivityStatsReport>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicyReport {
+    pub require_tags: BTreeMap<String, String>,
+    pub deny_rules: Vec<CausalPolicyRuleReport>,
+    pub harness_require_args: Vec<String>,
+    pub harness_deny_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CausalPolicyRuleReport {
+    pub label: String,
+    pub match_tags: BTreeMap<String, String>,
+    pub train_reports_with_trades: usize,
+    pub train_stats: SelectivityStatsReport,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdaptiveModeKind {
@@ -450,12 +546,19 @@ struct SelectivityVariantFold {
     name: String,
     buckets: BTreeMap<String, TradePnlDiagnostics>,
     regimes: BTreeMap<String, TradePnlDiagnostics>,
+    tagged_regimes: Vec<TaggedRegimeStats>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SelectivityCandidateKey {
     variant: String,
     rule: SelectivityRule,
+}
+
+#[derive(Debug, Clone)]
+struct TaggedRegimeStats {
+    tags: BTreeMap<String, String>,
+    stats: TradePnlDiagnostics,
 }
 
 #[derive(Debug, Clone)]
@@ -1280,10 +1383,14 @@ pub fn selectivity_search(
         let variants = report
             .variants
             .iter()
-            .map(|variant| SelectivityVariantFold {
-                name: variant_report_name(variant),
-                buckets: selectivity_buckets_for_variant(variant),
-                regimes: variant.diagnostics.by_regime.clone(),
+            .map(|variant| {
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name: variant_report_name(variant),
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
             })
             .collect();
         folds.push(SelectivityFold { variants });
@@ -1319,10 +1426,14 @@ pub fn multi_guard_search(
         let variants = report
             .variants
             .iter()
-            .map(|variant| SelectivityVariantFold {
-                name: variant_report_name(variant),
-                buckets: selectivity_buckets_for_variant(variant),
-                regimes: variant.diagnostics.by_regime.clone(),
+            .map(|variant| {
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name: variant_report_name(variant),
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
             })
             .collect();
         folds.push(SelectivityFold { variants });
@@ -1355,10 +1466,14 @@ pub fn adaptive_direction_search(
         let variants = report
             .variants
             .iter()
-            .map(|variant| SelectivityVariantFold {
-                name: variant_report_name(variant),
-                buckets: selectivity_buckets_for_variant(variant),
-                regimes: variant.diagnostics.by_regime.clone(),
+            .map(|variant| {
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name: variant_report_name(variant),
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
             })
             .collect();
         folds.push(SelectivityFold { variants });
@@ -1394,16 +1509,63 @@ pub fn adaptive_mode_search(
         let variants = report
             .variants
             .iter()
-            .map(|variant| SelectivityVariantFold {
-                name: variant_report_name(variant),
-                buckets: selectivity_buckets_for_variant(variant),
-                regimes: variant.diagnostics.by_regime.clone(),
+            .map(|variant| {
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name: variant_report_name(variant),
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
             })
             .collect();
         folds.push(SelectivityFold { variants });
     }
 
     Ok(adaptive_mode_search_from_folds(&folds, &input))
+}
+
+pub fn causal_policy_search(
+    input: StrategyBuilderCausalPolicySearchInput,
+) -> Result<StrategyBuilderCausalPolicySearch> {
+    if input.report_paths.len() < 2 {
+        bail!("causal policy search needs at least two reports");
+    }
+    if input.min_train_reports == 0 {
+        bail!("--min-train-reports must be > 0");
+    }
+    if input.max_require_terms == 0 {
+        bail!("--max-require-terms must be > 0");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+
+    let mut folds = Vec::new();
+    for report_path in &input.report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load causal policy report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| {
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name: variant_report_name(variant),
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+
+    Ok(causal_policy_search_from_folds(&folds, &input))
 }
 
 fn selectivity_search_from_folds(
@@ -1688,6 +1850,109 @@ fn adaptive_mode_search_from_folds(
     }
 }
 
+fn causal_policy_search_from_folds(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+) -> StrategyBuilderCausalPolicySearch {
+    let mut candidates = causal_policy_candidate_keys(folds, input.max_require_terms)
+        .into_iter()
+        .map(|candidate| evaluate_causal_policy_candidate(folds, input, candidate))
+        .collect::<Vec<_>>();
+    let candidate_count = candidates.len();
+
+    candidates.sort_by(|a, b| {
+        let a_trade_gate = a.fold_forward.stats.trades >= input.min_oos_trades;
+        let b_trade_gate = b.fold_forward.stats.trades >= input.min_oos_trades;
+        let a_profitable_gate =
+            a.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let b_profitable_gate =
+            b.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let a_pnl_gate = a.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let b_pnl_gate = b.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let a_wilson_gate =
+            a.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let b_wilson_gate =
+            b.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let a_tail_gate = a.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let b_tail_gate = b.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        b.passed
+            .cmp(&a.passed)
+            .then_with(|| b_trade_gate.cmp(&a_trade_gate))
+            .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
+            .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
+            .then_with(|| b_wilson_gate.cmp(&a_wilson_gate))
+            .then_with(|| b_tail_gate.cmp(&a_tail_gate))
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.total_pnl,
+                    b.fold_forward.stats.total_pnl,
+                )
+            })
+            .then_with(|| {
+                b.fold_forward
+                    .stats
+                    .trades
+                    .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.stats.wilson_win_rate_lower,
+                    b.fold_forward.stats.wilson_win_rate_lower,
+                )
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.worst_report_pnl,
+                    b.fold_forward.worst_report_pnl,
+                )
+            })
+            .then_with(|| a.base_require.len().cmp(&b.base_require.len()))
+            .then_with(|| a.variant.cmp(&b.variant))
+            .then_with(|| policy_label(&a.base_require).cmp(&policy_label(&b.base_require)))
+    });
+
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let top = input.top.max(1);
+    candidates.truncate(top);
+
+    StrategyBuilderCausalPolicySearch {
+        schema_version: 1,
+        ok: candidates.iter().any(|candidate| candidate.passed),
+        report_count: folds.len(),
+        candidate_count,
+        methodology: vec![
+            "Generate causal require-policy conjunctions from observed pre-trade regime tags."
+                .to_string(),
+            "For each OOS report, train the require policy and optional deny tags on strictly prior reports only."
+                .to_string(),
+            "Default deny rules are single-tag vetoes so the result maps directly to existing --require-causal-tag and --deny-causal-tag runtime filters."
+                .to_string(),
+            "Rank candidates by pass status, worst OOS fold, aggregate OOS PnL, Wilson lower bound, trade count, and policy simplicity."
+                .to_string(),
+            "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
+                .to_string(),
+        ],
+        gates: CausalPolicySearchGates {
+            min_train_reports: input.min_train_reports,
+            min_train_trades: input.min_train_trades,
+            min_oos_trades: input.min_oos_trades,
+            min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+            min_oos_total_pnl: input.min_oos_total_pnl,
+            min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_worst_oos_pnl: input.min_worst_oos_pnl,
+            max_require_terms: input.max_require_terms,
+            max_deny_rules: input.max_deny_rules,
+            max_deny_terms: input.max_deny_terms,
+            min_deny_trades: input.min_deny_trades,
+            min_deny_loss_pnl: input.min_deny_loss_pnl,
+            min_deny_loss_reports: input.min_deny_loss_reports,
+        },
+        candidates,
+    }
+}
+
 fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
     let mut names = BTreeSet::new();
     for fold in folds {
@@ -1704,6 +1969,26 @@ struct MultiGuardRule {
     match_tags: BTreeMap<String, String>,
     reports_with_trades: usize,
     stats: TradePnlDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CausalPolicyKey {
+    variant: String,
+    require_tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct CausalPolicyRule {
+    label: String,
+    match_tags: BTreeMap<String, String>,
+    reports_with_trades: usize,
+    stats: TradePnlDiagnostics,
+}
+
+#[derive(Debug, Clone)]
+struct CausalPolicy {
+    require_tags: BTreeMap<String, String>,
+    deny_rules: Vec<CausalPolicyRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -2075,6 +2360,355 @@ fn adaptive_mode_train_summary_report(
     }
 }
 
+fn causal_policy_candidate_keys(
+    folds: &[SelectivityFold],
+    max_require_terms: usize,
+) -> Vec<CausalPolicyKey> {
+    let mut keys = BTreeSet::new();
+    for fold in folds {
+        for variant in &fold.variants {
+            for regime in &variant.tagged_regimes {
+                for require_tags in policy_tag_combinations(&regime.tags, max_require_terms) {
+                    keys.insert(CausalPolicyKey {
+                        variant: variant.name.clone(),
+                        require_tags,
+                    });
+                }
+            }
+        }
+    }
+    keys.into_iter().collect()
+}
+
+fn evaluate_causal_policy_candidate(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    candidate: CausalPolicyKey,
+) -> CausalPolicyCandidateReport {
+    let mut oos = TradePnlDiagnostics::default();
+    let mut eligible_reports = 0_usize;
+    let mut profitable_reports = 0_usize;
+    let mut losing_reports = 0_usize;
+    let mut abstained_reports = 0_usize;
+    let mut worst_report_pnl: Option<f64> = None;
+    let mut decisions = Vec::new();
+
+    for idx in 0..folds.len() {
+        if idx < input.min_train_reports {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&CausalPolicy {
+                    require_tags: candidate.require_tags.clone(),
+                    deny_rules: Vec::new(),
+                }),
+                train: None,
+                oos: None,
+                reason: "insufficient_prior_reports".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let prior_folds = &folds[..idx];
+        let deny_rules = learn_causal_policy_deny_rules(
+            prior_folds,
+            input,
+            &candidate.variant,
+            &candidate.require_tags,
+        );
+        let policy = CausalPolicy {
+            require_tags: candidate.require_tags.clone(),
+            deny_rules,
+        };
+        let train_stats = stats_for_causal_policy(prior_folds, &candidate.variant, &policy);
+        let train_reports_with_trades =
+            reports_with_causal_policy_trades(prior_folds, &candidate.variant, &policy);
+
+        if train_reports_with_trades < input.min_train_reports
+            || train_stats.trades < input.min_train_trades
+            || train_stats.total_pnl <= 0.0
+        {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                oos: None,
+                reason: "policy_prior_stats_failed_train_gates".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let fold_stats = stats_for_causal_policy(&folds[idx..=idx], &candidate.variant, &policy);
+        if fold_stats.trades == 0 {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                oos: None,
+                reason: "policy_had_no_oos_trades".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        eligible_reports += 1;
+        if fold_stats.total_pnl > 0.0 {
+            profitable_reports += 1;
+        } else if fold_stats.total_pnl < 0.0 {
+            losing_reports += 1;
+        }
+        worst_report_pnl = Some(match worst_report_pnl {
+            Some(current) => current.min(fold_stats.total_pnl),
+            None => fold_stats.total_pnl,
+        });
+        oos.merge_from(&fold_stats);
+        decisions.push(CausalPolicyDecisionReport {
+            report_index: idx,
+            train_reports: idx,
+            policy: causal_policy_report(&policy),
+            train: Some(stats_report(&train_stats)),
+            oos: Some(stats_report(&fold_stats)),
+            reason: "policy_selected_from_prior_causal_tags".to_string(),
+        });
+    }
+
+    let fold_forward = CausalPolicyFoldForwardReport {
+        eligible_reports,
+        profitable_reports,
+        losing_reports,
+        abstained_reports,
+        worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        stats: stats_report(&oos),
+        decisions,
+    };
+    let passed = fold_forward.stats.trades >= input.min_oos_trades
+        && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
+        && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
+        && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+
+    let final_policy = CausalPolicy {
+        require_tags: candidate.require_tags.clone(),
+        deny_rules: learn_causal_policy_deny_rules(
+            folds,
+            input,
+            &candidate.variant,
+            &candidate.require_tags,
+        ),
+    };
+    let aggregate_static_final_policy =
+        stats_for_causal_policy(folds, &candidate.variant, &final_policy);
+
+    let mut notes = vec![
+        "causal policy selector; rerun final require/deny tags in full harness before promotion"
+            .to_string(),
+        "fold decisions use only prior report causal-regime evidence".to_string(),
+        "require tags are conjunctions and map directly to --require-causal-tag".to_string(),
+    ];
+    if input.max_deny_terms > 1 {
+        notes.push(
+            "multi-term deny rules are analytic only unless runtime conjunction-deny support is added"
+                .to_string(),
+        );
+    }
+    if !passed {
+        notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+
+    CausalPolicyCandidateReport {
+        rank: 0,
+        passed,
+        variant: candidate.variant,
+        base_require: candidate.require_tags,
+        final_policy: causal_policy_report(&final_policy),
+        aggregate_static_final_policy: stats_report(&aggregate_static_final_policy),
+        fold_forward,
+        notes,
+    }
+}
+
+fn learn_causal_policy_deny_rules(
+    prior_folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    variant: &str,
+    require_tags: &BTreeMap<String, String>,
+) -> Vec<CausalPolicyRule> {
+    if input.max_deny_rules == 0 || input.max_deny_terms == 0 {
+        return Vec::new();
+    }
+
+    let mut patterns: BTreeMap<String, (BTreeMap<String, String>, TradePnlDiagnostics, usize)> =
+        BTreeMap::new();
+    for fold in prior_folds {
+        let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+            continue;
+        };
+        let mut fold_patterns: BTreeMap<String, (BTreeMap<String, String>, TradePnlDiagnostics)> =
+            BTreeMap::new();
+        for regime in &variant_fold.tagged_regimes {
+            if !policy_tags_match(require_tags, &regime.tags) {
+                continue;
+            }
+            for match_tags in policy_tag_combinations(&regime.tags, input.max_deny_terms) {
+                if policy_rule_is_redundant_with_require(&match_tags, require_tags) {
+                    continue;
+                }
+                let label = policy_label(&match_tags);
+                let entry = fold_patterns
+                    .entry(label)
+                    .or_insert_with(|| (match_tags, TradePnlDiagnostics::default()));
+                entry.1.merge_from(&regime.stats);
+            }
+        }
+        for (label, (match_tags, stats)) in fold_patterns {
+            let entry = patterns
+                .entry(label)
+                .or_insert_with(|| (match_tags, TradePnlDiagnostics::default(), 0_usize));
+            entry.1.merge_from(&stats);
+            if stats.trades > 0 {
+                entry.2 += 1;
+            }
+        }
+    }
+
+    let mut toxic = patterns
+        .into_iter()
+        .filter_map(|(label, (match_tags, stats, reports_with_trades))| {
+            if reports_with_trades < input.min_deny_loss_reports
+                || stats.trades < input.min_deny_trades
+                || stats.total_pnl >= -input.min_deny_loss_pnl.max(0.0)
+            {
+                return None;
+            }
+            Some(CausalPolicyRule {
+                label,
+                match_tags,
+                reports_with_trades,
+                stats,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    toxic.sort_by(|a, b| {
+        a.stats
+            .total_pnl
+            .partial_cmp(&b.stats.total_pnl)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                a.stats
+                    .profit_factor
+                    .partial_cmp(&b.stats.profit_factor)
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| b.stats.losses.cmp(&a.stats.losses))
+            .then_with(|| b.stats.trades.cmp(&a.stats.trades))
+            .then_with(|| a.label.cmp(&b.label))
+    });
+
+    let mut selected = Vec::new();
+    let mut current = stats_for_causal_policy(
+        prior_folds,
+        variant,
+        &CausalPolicy {
+            require_tags: require_tags.clone(),
+            deny_rules: Vec::new(),
+        },
+    );
+    for rule in toxic {
+        if selected.len() >= input.max_deny_rules {
+            break;
+        }
+        let mut trial_rules = selected.clone();
+        trial_rules.push(rule.clone());
+        let trial = stats_for_causal_policy(
+            prior_folds,
+            variant,
+            &CausalPolicy {
+                require_tags: require_tags.clone(),
+                deny_rules: trial_rules,
+            },
+        );
+        if trial.trades < input.min_train_trades {
+            continue;
+        }
+        if trial.total_pnl <= current.total_pnl + 1e-9 {
+            continue;
+        }
+        current = trial;
+        selected.push(rule);
+    }
+    selected
+}
+
+fn stats_for_causal_policy(
+    folds: &[SelectivityFold],
+    variant: &str,
+    policy: &CausalPolicy,
+) -> TradePnlDiagnostics {
+    let mut stats = TradePnlDiagnostics::default();
+    for fold in folds {
+        let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+            continue;
+        };
+        for regime in &variant_fold.tagged_regimes {
+            if !policy_tags_match(&policy.require_tags, &regime.tags) {
+                continue;
+            }
+            if policy
+                .deny_rules
+                .iter()
+                .any(|rule| policy_tags_match(&rule.match_tags, &regime.tags))
+            {
+                continue;
+            }
+            stats.merge_from(&regime.stats);
+        }
+    }
+    stats
+}
+
+fn reports_with_causal_policy_trades(
+    folds: &[SelectivityFold],
+    variant: &str,
+    policy: &CausalPolicy,
+) -> usize {
+    folds
+        .iter()
+        .filter(|fold| {
+            stats_for_causal_policy(std::slice::from_ref(fold), variant, policy).trades > 0
+        })
+        .count()
+}
+
+fn causal_policy_report(policy: &CausalPolicy) -> CausalPolicyReport {
+    let harness_require_args = policy.require_tags.iter().map(tag_arg).collect();
+    let harness_deny_args = policy
+        .deny_rules
+        .iter()
+        .filter(|rule| rule.match_tags.len() == 1)
+        .flat_map(|rule| rule.match_tags.iter().map(tag_arg))
+        .collect();
+    CausalPolicyReport {
+        require_tags: policy.require_tags.clone(),
+        deny_rules: policy
+            .deny_rules
+            .iter()
+            .map(|rule| CausalPolicyRuleReport {
+                label: rule.label.clone(),
+                match_tags: rule.match_tags.clone(),
+                train_reports_with_trades: rule.reports_with_trades,
+                train_stats: stats_report(&rule.stats),
+            })
+            .collect(),
+        harness_require_args,
+        harness_deny_args,
+    }
+}
+
 fn evaluate_multi_guard_candidate(
     folds: &[SelectivityFold],
     input: &StrategyBuilderMultiGuardSearchInput,
@@ -2400,12 +3034,107 @@ fn parse_regime_tags(regime: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn causal_tags_from_regime(regime: &str) -> BTreeMap<String, String> {
+    parse_regime_tags(regime)
+        .into_iter()
+        .filter_map(|(dimension, value)| {
+            let dimension = match dimension.as_str() {
+                "dir" => "direction",
+                "conf" => "confidence",
+                "vol" => "volatility",
+                "rev" => "reversion",
+                "min" => "minutes_remaining",
+                "zone" | "price" | "edge" | "z" => dimension.as_str(),
+                _ => return None,
+            };
+            Some((dimension.to_string(), value))
+        })
+        .collect()
+}
+
+fn policy_tag_combinations(
+    tags: &BTreeMap<String, String>,
+    max_terms: usize,
+) -> Vec<BTreeMap<String, String>> {
+    let max_terms = max_terms.min(CAUSAL_POLICY_DIMENSIONS.len());
+    let entries = CAUSAL_POLICY_DIMENSIONS
+        .iter()
+        .filter_map(|dimension| {
+            tags.get(*dimension)
+                .map(|value| ((*dimension).to_string(), value.clone()))
+        })
+        .collect::<Vec<_>>();
+    let mut combinations = Vec::new();
+    for terms in 1..=max_terms.min(entries.len()) {
+        push_policy_tag_combinations(&entries, terms, 0, &mut Vec::new(), &mut combinations);
+    }
+    combinations
+}
+
+fn push_policy_tag_combinations(
+    entries: &[(String, String)],
+    remaining: usize,
+    start: usize,
+    current: &mut Vec<(String, String)>,
+    out: &mut Vec<BTreeMap<String, String>>,
+) {
+    if remaining == 0 {
+        out.push(current.iter().cloned().collect());
+        return;
+    }
+    for idx in start..entries.len() {
+        current.push(entries[idx].clone());
+        push_policy_tag_combinations(entries, remaining - 1, idx + 1, current, out);
+        current.pop();
+    }
+}
+
+fn policy_tags_match(
+    expected: &BTreeMap<String, String>,
+    actual: &BTreeMap<String, String>,
+) -> bool {
+    expected
+        .iter()
+        .all(|(dimension, value)| actual.get(dimension).is_some_and(|actual| actual == value))
+}
+
+fn policy_rule_is_redundant_with_require(
+    rule: &BTreeMap<String, String>,
+    require: &BTreeMap<String, String>,
+) -> bool {
+    rule.iter().all(|(dimension, value)| {
+        require
+            .get(dimension)
+            .is_some_and(|required| required == value)
+    })
+}
+
+fn policy_label(tags: &BTreeMap<String, String>) -> String {
+    tags.iter().map(tag_arg).collect::<Vec<_>>().join("|")
+}
+
+fn tag_arg((dimension, value): (&String, &String)) -> String {
+    format!("{dimension}={value}")
+}
+
 fn pattern_label(tags: &BTreeMap<String, String>) -> String {
     tags.iter()
         .map(|(dimension, value)| format!("{dimension}={value}"))
         .collect::<Vec<_>>()
         .join("|")
 }
+
+const CAUSAL_POLICY_DIMENSIONS: &[&str] = &[
+    "direction",
+    "zone",
+    "price",
+    "edge",
+    "z",
+    "confidence",
+    "volatility",
+    "reversion",
+    "minutes_remaining",
+];
 
 const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
     &["zone", "dir", "price", "edge", "z", "conf", "rev", "min"],
@@ -2809,6 +3538,18 @@ fn selectivity_buckets_for_variant(
         buckets.insert(format!("regime={key}"), stats.clone());
     }
     buckets
+}
+
+fn tagged_regimes_from_map(
+    regimes: &BTreeMap<String, TradePnlDiagnostics>,
+) -> Vec<TaggedRegimeStats> {
+    regimes
+        .iter()
+        .map(|(regime, stats)| TaggedRegimeStats {
+            tags: causal_tags_from_regime(regime),
+            stats: stats.clone(),
+        })
+        .collect()
 }
 
 fn f64_desc(left: f64, right: f64) -> Ordering {
@@ -4362,6 +5103,135 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_search_selects_feed_forward_interaction() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(5, 0, 5.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+        ];
+
+        let mut input = causal_policy_input(200);
+        input.max_require_terms = 2;
+        input.max_deny_rules = 0;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+                    && candidate.base_require.get("zone").map(String::as_str) == Some("primary")
+            })
+            .expect("primary/down policy");
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(candidate.fold_forward.eligible_reports, 1);
+        assert_eq!(candidate.fold_forward.stats.trades, 5);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 5.0);
+        assert_eq!(
+            candidate.final_policy.harness_require_args,
+            vec!["direction=down".to_string(), "zone=primary".to_string()]
+        );
+    }
+
+    #[test]
+    fn causal_policy_search_does_not_promote_future_only_interaction() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 2, 0.0, -4.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 2, 0.0, -4.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(12, 0, 20.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(200);
+        input.max_require_terms = 2;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+                    && candidate.base_require.get("zone").map(String::as_str) == Some("primary")
+            })
+            .expect("primary/down policy");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.eligible_reports, 0);
+        assert_eq!(candidate.fold_forward.stats.trades, 0);
+        assert_eq!(
+            candidate.fold_forward.decisions[2].reason,
+            "policy_prior_stats_failed_train_gates"
+        );
+    }
+
+    #[test]
+    fn causal_policy_search_learns_prior_only_single_tag_deny() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(5, 0, 5.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -5.0)),
+            ]),
+        ];
+
+        let mut input = causal_policy_input(200);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 1;
+        input.min_deny_loss_reports = 2;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.len() == 1
+                    && candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+        let decision = &candidate.fold_forward.decisions[2];
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(decision.oos.as_ref().unwrap().total_pnl, 5.0);
+        assert_eq!(
+            decision.policy.deny_rules[0]
+                .match_tags
+                .get("zone")
+                .map(String::as_str),
+            Some("early")
+        );
+        assert_eq!(
+            decision.policy.harness_deny_args,
+            vec!["zone=early".to_string()]
+        );
+    }
+
+    #[test]
     fn adaptive_mode_search_does_not_flat_future_only_loss() {
         let folds = vec![
             selectivity_fold(vec![
@@ -4625,6 +5495,26 @@ mod tests {
         }
     }
 
+    fn causal_policy_input(top: usize) -> StrategyBuilderCausalPolicySearchInput {
+        StrategyBuilderCausalPolicySearchInput {
+            report_paths: Vec::new(),
+            min_train_reports: 2,
+            min_train_trades: 4,
+            min_oos_trades: 5,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 1,
+            min_worst_oos_pnl: 0.0,
+            max_require_terms: 3,
+            max_deny_rules: 1,
+            max_deny_terms: 1,
+            min_deny_trades: 1,
+            min_deny_loss_pnl: 0.0,
+            min_deny_loss_reports: 1,
+            top,
+        }
+    }
+
     fn multi_guard_input(top: usize) -> StrategyBuilderMultiGuardSearchInput {
         StrategyBuilderMultiGuardSearchInput {
             report_paths: Vec::new(),
@@ -4661,6 +5551,7 @@ mod tests {
             variants: vec![SelectivityVariantFold {
                 name: "candidate".to_string(),
                 buckets: bucket_map,
+                tagged_regimes: tagged_regimes_from_map(&regimes),
                 regimes,
             }],
         }
