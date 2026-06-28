@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-06-28T15:29:36.036261+00:00",
+  "entries": [
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "version_id": "sv_8e5ee8ac9f5e37f8",
+      "parent_id": null,
+      "status": "questionable",
+      "reason": "Positive OOS PnL and Wilson on May28-Jun10 reports, but tail-gated search found zero passing candidates; best reversion=1_2 has CVaR -7.9788 and max loss burst 5/5, so keep research-only.",
+      "artifact_path": "/private/tmp/polymomentum_reversion_combined_20260628_tail_gated_causal_policy_search.json",
+      "metrics_path": "/private/tmp/polymomentum_reversion_combined_20260628_tail_gated_causal_policy_search.json",
+      "evidence_paths": [
+        "/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search_relaxed_tail.json",
+        "/private/tmp/polymomentum_reversion_extension_20260627_jun07_10/reports/fold_011_20260610T080000Z_20260610T150000Z_sweep.json"
+      ],
+      "notes": [
+        "Do not promote until the burst/tail problem is removed by feed-forward backtest/live-replay evidence."
+      ],
+      "first_seen_at": "2026-06-28T15:29:27.160627+00:00",
+      "updated_at": "2026-06-28T15:29:27.160627+00:00",
+      "events": [
+        {
+          "at": "2026-06-28T15:29:27.160627+00:00",
+          "status": "questionable",
+          "reason": "Positive OOS PnL and Wilson on May28-Jun10 reports, but tail-gated search found zero passing candidates; best reversion=1_2 has CVaR -7.9788 and max loss burst 5/5, so keep research-only.",
+          "evidence_paths": [
+            "/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search_relaxed_tail.json",
+            "/private/tmp/polymomentum_reversion_extension_20260627_jun07_10/reports/fold_011_20260610T080000Z_20260610T150000Z_sweep.json"
+          ],
+          "notes": [
+            "Do not promote until the burst/tail problem is removed by feed-forward backtest/live-replay evidence."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "version_id": "sv_0da8a2e3a8125d40",
+      "parent_id": null,
+      "status": "dead_end",
+      "reason": "Strict zero-worst-fold causal policy gate produced no passing candidate on the 42-report May28-Jun10 set; the best prior artifact still had a deeply negative OOS fold.",
+      "artifact_path": "/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search.json",
+      "metrics_path": "/private/tmp/polymomentum_reversion_combined_20260628_causal_policy_search.json",
+      "evidence_paths": [
+        "/private/tmp/polymomentum_reversion_combined_20260628_tail_gated_causal_policy_search.json"
+      ],
+      "notes": [
+        "Use tail-aware or exposure-reduced variants instead of trying to promote this gate result."
+      ],
+      "first_seen_at": "2026-06-28T15:29:36.036261+00:00",
+      "updated_at": "2026-06-28T15:29:36.036261+00:00",
+      "events": [
+        {
+          "at": "2026-06-28T15:29:36.036261+00:00",
+          "status": "dead_end",
+          "reason": "Strict zero-worst-fold causal policy gate produced no passing candidate on the 42-report May28-Jun10 set; the best prior artifact still had a deeply negative OOS fold.",
+          "evidence_paths": [
+            "/private/tmp/polymomentum_reversion_combined_20260628_tail_gated_causal_policy_search.json"
+          ],
+          "notes": [
+            "Use tail-aware or exposure-reduced variants instead of trying to promote this gate result."
+          ]
+        }
+      ]
+    }
+  ]
+}

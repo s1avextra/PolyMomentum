@@ -1084,9 +1084,51 @@ enum StrategyBuilderCommand {
         /// Minimum prior reports with trades inside a deny candidate before it can be selected.
         #[arg(long, default_value_t = 2)]
         min_deny_loss_reports: usize,
+        /// Left-tail fraction for OOS fold CVaR diagnostics.
+        #[arg(long, default_value_t = 0.20)]
+        tail_alpha: f64,
+        /// Minimum OOS fold CVaR PnL. Very negative default makes this diagnostic-only.
+        #[arg(long, default_value_t = -1.0e9, allow_hyphen_values = true)]
+        min_oos_cvar_pnl: f64,
+        /// Rolling OOS report lookback for clustered-loss diagnostics. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        loss_burst_lookback: usize,
+        /// Maximum losing reports inside --loss-burst-lookback. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        max_loss_burst_reports: usize,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
+    },
+    /// Mark a strategy version as candidate, questionable, dead_end, promoted, or rejected.
+    RegistryMark {
+        /// Strategy registry JSON path.
+        #[arg(long, default_value = "docs/strategy_registry.json")]
+        registry: String,
+        /// Stable strategy/version label, e.g. reversion_tail_guard_v1.
+        #[arg(long)]
+        strategy_id: String,
+        /// Optional parent strategy id.
+        #[arg(long)]
+        parent_id: Option<String>,
+        /// candidate, active, questionable, dead_end, promoted, or rejected.
+        #[arg(long)]
+        status: String,
+        /// Short reason for this mark.
+        #[arg(long)]
+        reason: String,
+        /// Main search or promotion artifact path.
+        #[arg(long)]
+        artifact: Option<String>,
+        /// Optional metrics artifact path.
+        #[arg(long)]
+        metrics: Option<String>,
+        /// Evidence file path. Repeatable.
+        #[arg(long)]
+        evidence: Vec<String>,
+        /// Additional note. Repeatable.
+        #[arg(long)]
+        note: Vec<String>,
     },
     /// Compose multiple prior-losing full-regime deny rules with feed-forward OOS scoring.
     MultiGuardSearch {
@@ -1913,6 +1955,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_deny_trades,
             min_deny_loss_pnl,
             min_deny_loss_reports,
+            tail_alpha,
+            min_oos_cvar_pnl,
+            loss_burst_lookback,
+            max_loss_burst_reports,
             top,
         } => {
             let search = match strategy_builder::causal_policy_search(
@@ -1931,6 +1977,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     min_deny_trades,
                     min_deny_loss_pnl,
                     min_deny_loss_reports,
+                    tail_alpha,
+                    min_oos_cvar_pnl,
+                    loss_burst_lookback,
+                    max_loss_burst_reports,
                     top,
                 },
             ) {
@@ -1970,6 +2020,49 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 }
             }
             println!("{json}");
+        }
+        StrategyBuilderCommand::RegistryMark {
+            registry,
+            strategy_id,
+            parent_id,
+            status,
+            reason,
+            artifact,
+            metrics,
+            evidence,
+            note,
+        } => {
+            let status = match strategy_builder::StrategyRegistryStatus::parse(&status) {
+                Ok(status) => status,
+                Err(e) => {
+                    eprintln!("strategy-builder registry-mark failed: {e:#}");
+                    std::process::exit(2);
+                }
+            };
+            let registry = match strategy_builder::mark_strategy_version(
+                strategy_builder::StrategyRegistryMarkInput {
+                    registry_path: std::path::PathBuf::from(registry),
+                    strategy_id,
+                    parent_id,
+                    status,
+                    reason,
+                    artifact_path: artifact,
+                    metrics_path: metrics,
+                    evidence_paths: evidence,
+                    notes: note,
+                },
+            ) {
+                Ok(registry) => registry,
+                Err(e) => {
+                    eprintln!("strategy-builder registry-mark failed: {e:#}");
+                    std::process::exit(2);
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&registry)
+                    .expect("serialize strategy-builder registry")
+            );
         }
         StrategyBuilderCommand::MultiGuardSearch {
             report,
@@ -3091,6 +3184,21 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.edge = "0.07".to_string();
             profile.max_price = "0.85".to_string();
             profile.degraded_after_losses = "2".to_string();
+            profile.degraded_force_taker = true;
+            profile.taker_only = true;
+            profile
+        }
+        "a_plus5m_tail_guard" => {
+            let mut profile = rolling_history_profile("a_plus5m_causal_guard_selected")?;
+            profile.name = name.to_string();
+            profile.z = "0.90,1.10".to_string();
+            profile.position_pct = "0.025".to_string();
+            profile.max_per_market_usd = "10".to_string();
+            profile.max_total_exposure_usd = "8".to_string();
+            profile.max_projected_stressed_drawdown_pct = "0.12".to_string();
+            profile.degraded_after_losses = "1".to_string();
+            profile.degraded_min_z = "1.10".to_string();
+            profile.degraded_max_price = "0.75".to_string();
             profile.degraded_force_taker = true;
             profile.taker_only = true;
             profile
@@ -7291,6 +7399,20 @@ mod replay_validation_tests {
         assert_eq!(profile.conf, "0.60,0.70");
         assert_eq!(profile.z, "0.70,0.80");
         assert_eq!(profile.edge, "0.07,0.09");
+        assert!(profile.taker_only);
+        assert!(profile.degraded_force_taker);
+    }
+
+    #[test]
+    fn rolling_history_tail_guard_profile_has_non_inert_degraded_mode() {
+        let profile = rolling_history_profile("a_plus5m_tail_guard").unwrap();
+
+        assert_eq!(profile.position_pct, "0.025");
+        assert_eq!(profile.max_total_exposure_usd, "8");
+        assert_eq!(profile.degraded_after_losses, "1");
+        assert_eq!(profile.degraded_min_z, "1.10");
+        assert_eq!(profile.degraded_max_price, "0.75");
+        assert_ne!(profile.degraded_min_z, "0.90");
         assert!(profile.taker_only);
         assert!(profile.degraded_force_taker);
     }

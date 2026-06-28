@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::resolver::TradePnlDiagnostics;
@@ -174,7 +174,24 @@ pub struct StrategyBuilderCausalPolicySearchInput {
     pub min_deny_trades: u64,
     pub min_deny_loss_pnl: f64,
     pub min_deny_loss_reports: usize,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
     pub top: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyRegistryMarkInput {
+    pub registry_path: PathBuf,
+    pub strategy_id: String,
+    pub parent_id: Option<String>,
+    pub status: StrategyRegistryStatus,
+    pub reason: String,
+    pub artifact_path: Option<String>,
+    pub metrics_path: Option<String>,
+    pub evidence_paths: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,6 +310,10 @@ pub struct CausalPolicySearchGates {
     pub min_deny_trades: u64,
     pub min_deny_loss_pnl: f64,
     pub min_deny_loss_reports: usize,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,8 +505,21 @@ pub struct CausalPolicyFoldForwardReport {
     pub losing_reports: usize,
     pub abstained_reports: usize,
     pub worst_report_pnl: f64,
+    pub tail: TailRiskReport,
     pub stats: SelectivityStatsReport,
     pub decisions: Vec<CausalPolicyDecisionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TailRiskReport {
+    pub alpha: f64,
+    pub sample_count: usize,
+    pub tail_count: usize,
+    pub cvar_pnl: f64,
+    pub worst_pnl: f64,
+    pub losing_reports: usize,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -573,6 +607,65 @@ pub enum StrategyBuilderCheckStatus {
     Ok,
     Warn,
     Fail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyRegistry {
+    pub schema_version: u32,
+    pub updated_at: String,
+    pub entries: Vec<StrategyRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyRegistryEntry {
+    pub strategy_id: String,
+    pub version_id: String,
+    pub parent_id: Option<String>,
+    pub status: StrategyRegistryStatus,
+    pub reason: String,
+    pub artifact_path: Option<String>,
+    pub metrics_path: Option<String>,
+    pub evidence_paths: Vec<String>,
+    pub notes: Vec<String>,
+    pub first_seen_at: String,
+    pub updated_at: String,
+    pub events: Vec<StrategyRegistryEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyRegistryEvent {
+    pub at: String,
+    pub status: StrategyRegistryStatus,
+    pub reason: String,
+    pub evidence_paths: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyRegistryStatus {
+    Candidate,
+    Active,
+    Questionable,
+    DeadEnd,
+    Promoted,
+    Rejected,
+}
+
+impl StrategyRegistryStatus {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "candidate" => Ok(Self::Candidate),
+            "active" => Ok(Self::Active),
+            "questionable" | "questionnable" => Ok(Self::Questionable),
+            "dead_end" | "deadend" => Ok(Self::DeadEnd),
+            "promoted" => Ok(Self::Promoted),
+            "rejected" => Ok(Self::Rejected),
+            other => bail!(
+                "unknown strategy status `{other}`; use candidate, active, questionable, dead_end, promoted, or rejected"
+            ),
+        }
+    }
 }
 
 pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan> {
@@ -1359,6 +1452,72 @@ pub fn audit(input: StrategyBuilderAuditInput) -> StrategyBuilderAudit {
     }
 }
 
+pub fn mark_strategy_version(input: StrategyRegistryMarkInput) -> Result<StrategyRegistry> {
+    let strategy_id = input.strategy_id.trim();
+    if strategy_id.is_empty() {
+        bail!("--strategy-id must not be empty");
+    }
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        bail!("--reason must explain why this strategy is being marked");
+    }
+
+    let mut registry = read_strategy_registry(&input.registry_path)?;
+    let now = Utc::now().to_rfc3339();
+    registry.updated_at = now.clone();
+
+    let event = StrategyRegistryEvent {
+        at: now.clone(),
+        status: input.status,
+        reason: reason.to_string(),
+        evidence_paths: input.evidence_paths.clone(),
+        notes: input.notes.clone(),
+    };
+
+    if let Some(entry) = registry
+        .entries
+        .iter_mut()
+        .find(|entry| entry.strategy_id == strategy_id)
+    {
+        entry.status = input.status;
+        entry.reason = reason.to_string();
+        if input.parent_id.is_some() {
+            entry.parent_id = input.parent_id.clone();
+        }
+        if input.artifact_path.is_some() {
+            entry.artifact_path = input.artifact_path.clone();
+        }
+        if input.metrics_path.is_some() {
+            entry.metrics_path = input.metrics_path.clone();
+        }
+        merge_unique_strings(&mut entry.evidence_paths, &input.evidence_paths);
+        merge_unique_strings(&mut entry.notes, &input.notes);
+        entry.updated_at = now.clone();
+        entry.events.push(event);
+    } else {
+        registry.entries.push(StrategyRegistryEntry {
+            strategy_id: strategy_id.to_string(),
+            version_id: strategy_version_id(&input),
+            parent_id: input.parent_id.clone(),
+            status: input.status,
+            reason: reason.to_string(),
+            artifact_path: input.artifact_path.clone(),
+            metrics_path: input.metrics_path.clone(),
+            evidence_paths: input.evidence_paths.clone(),
+            notes: input.notes.clone(),
+            first_seen_at: now.clone(),
+            updated_at: now,
+            events: vec![event],
+        });
+    }
+
+    registry
+        .entries
+        .sort_by(|left, right| left.strategy_id.cmp(&right.strategy_id));
+    write_strategy_registry_atomic(&input.registry_path, &registry)?;
+    Ok(registry)
+}
+
 pub fn selectivity_search(
     input: StrategyBuilderSelectivitySearchInput,
 ) -> Result<StrategyBuilderSelectivitySearch> {
@@ -1536,6 +1695,9 @@ pub fn causal_policy_search(
     }
     if input.max_require_terms == 0 {
         bail!("--max-require-terms must be > 0");
+    }
+    if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
+        bail!("--tail-alpha must be in (0, 1]");
     }
     if input.report_paths.len() <= input.min_train_reports {
         bail!(
@@ -1875,6 +2037,12 @@ fn causal_policy_search_from_folds(
             b.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
         let a_tail_gate = a.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
         let b_tail_gate = b.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let a_cvar_gate = a.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let b_cvar_gate = b.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let a_burst_gate = input.max_loss_burst_reports == 0
+            || a.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
+        let b_burst_gate = input.max_loss_burst_reports == 0
+            || b.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
         b.passed
             .cmp(&a.passed)
             .then_with(|| b_trade_gate.cmp(&a_trade_gate))
@@ -1882,6 +2050,8 @@ fn causal_policy_search_from_folds(
             .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
             .then_with(|| b_wilson_gate.cmp(&a_wilson_gate))
             .then_with(|| b_tail_gate.cmp(&a_tail_gate))
+            .then_with(|| b_cvar_gate.cmp(&a_cvar_gate))
+            .then_with(|| b_burst_gate.cmp(&a_burst_gate))
             .then_with(|| {
                 f64_desc(
                     a.fold_forward.stats.total_pnl,
@@ -1906,6 +2076,13 @@ fn causal_policy_search_from_folds(
                     b.fold_forward.worst_report_pnl,
                 )
             })
+            .then_with(|| f64_desc(a.fold_forward.tail.cvar_pnl, b.fold_forward.tail.cvar_pnl))
+            .then_with(|| {
+                a.fold_forward
+                    .tail
+                    .max_loss_burst_reports
+                    .cmp(&b.fold_forward.tail.max_loss_burst_reports)
+            })
             .then_with(|| a.base_require.len().cmp(&b.base_require.len()))
             .then_with(|| a.variant.cmp(&b.variant))
             .then_with(|| policy_label(&a.base_require).cmp(&policy_label(&b.base_require)))
@@ -1929,7 +2106,9 @@ fn causal_policy_search_from_folds(
                 .to_string(),
             "Default deny rules are single-tag vetoes so the result maps directly to existing --require-causal-tag and --deny-causal-tag runtime filters."
                 .to_string(),
-            "Rank candidates by pass status, worst OOS fold, aggregate OOS PnL, Wilson lower bound, trade count, and policy simplicity."
+            "Report OOS fold-tail CVaR and recent loss-burst metrics so average-positive candidates with clustered drawdowns stay visible as tail risk."
+                .to_string(),
+            "Rank candidates by pass status, gate completion, aggregate OOS PnL, trade count, Wilson lower bound, worst fold, CVaR, loss-burst size, and policy simplicity."
                 .to_string(),
             "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
                 .to_string(),
@@ -1948,6 +2127,10 @@ fn causal_policy_search_from_folds(
             min_deny_trades: input.min_deny_trades,
             min_deny_loss_pnl: input.min_deny_loss_pnl,
             min_deny_loss_reports: input.min_deny_loss_reports,
+            tail_alpha: input.tail_alpha,
+            min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+            loss_burst_lookback: input.loss_burst_lookback,
+            max_loss_burst_reports: input.max_loss_burst_reports,
         },
         candidates,
     }
@@ -2391,6 +2574,7 @@ fn evaluate_causal_policy_candidate(
     let mut losing_reports = 0_usize;
     let mut abstained_reports = 0_usize;
     let mut worst_report_pnl: Option<f64> = None;
+    let mut eligible_report_pnls = Vec::new();
     let mut decisions = Vec::new();
 
     for idx in 0..folds.len() {
@@ -2465,6 +2649,7 @@ fn evaluate_causal_policy_candidate(
             Some(current) => current.min(fold_stats.total_pnl),
             None => fold_stats.total_pnl,
         });
+        eligible_report_pnls.push(fold_stats.total_pnl);
         oos.merge_from(&fold_stats);
         decisions.push(CausalPolicyDecisionReport {
             report_index: idx,
@@ -2482,6 +2667,11 @@ fn evaluate_causal_policy_candidate(
         losing_reports,
         abstained_reports,
         worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        tail: tail_risk_report(
+            &eligible_report_pnls,
+            input.tail_alpha,
+            input.loss_burst_lookback,
+        ),
         stats: stats_report(&oos),
         decisions,
     };
@@ -2489,7 +2679,10 @@ fn evaluate_causal_policy_candidate(
         && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
         && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
         && fold_forward.profitable_reports >= input.min_oos_profitable_reports
-        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
+        && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
+        && (input.max_loss_burst_reports == 0
+            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports);
 
     let final_policy = CausalPolicy {
         require_tags: candidate.require_tags.clone(),
@@ -2682,6 +2875,52 @@ fn reports_with_causal_policy_trades(
             stats_for_causal_policy(std::slice::from_ref(fold), variant, policy).trades > 0
         })
         .count()
+}
+
+fn tail_risk_report(fold_pnls: &[f64], alpha: f64, loss_burst_lookback: usize) -> TailRiskReport {
+    if fold_pnls.is_empty() {
+        return TailRiskReport {
+            alpha,
+            sample_count: 0,
+            tail_count: 0,
+            cvar_pnl: 0.0,
+            worst_pnl: 0.0,
+            losing_reports: 0,
+            loss_burst_lookback,
+            max_loss_burst_reports: 0,
+        };
+    }
+
+    let mut sorted = fold_pnls.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    let tail_count = ((sorted.len() as f64) * alpha).ceil().max(1.0) as usize;
+    let tail_count = tail_count.min(sorted.len());
+    let cvar_pnl = sorted.iter().take(tail_count).sum::<f64>() / tail_count as f64;
+    let losing_reports = fold_pnls.iter().filter(|pnl| **pnl < 0.0).count();
+    let max_loss_burst_reports = max_loss_burst_reports(fold_pnls, loss_burst_lookback);
+
+    TailRiskReport {
+        alpha,
+        sample_count: fold_pnls.len(),
+        tail_count,
+        cvar_pnl,
+        worst_pnl: sorted[0],
+        losing_reports,
+        loss_burst_lookback,
+        max_loss_burst_reports,
+    }
+}
+
+fn max_loss_burst_reports(fold_pnls: &[f64], lookback: usize) -> usize {
+    if lookback == 0 || fold_pnls.is_empty() {
+        return 0;
+    }
+    let lookback = lookback.min(fold_pnls.len());
+    fold_pnls
+        .windows(lookback)
+        .map(|window| window.iter().filter(|pnl| **pnl < 0.0).count())
+        .max()
+        .unwrap_or(0)
 }
 
 fn causal_policy_report(policy: &CausalPolicy) -> CausalPolicyReport {
@@ -3115,6 +3354,75 @@ fn policy_label(tags: &BTreeMap<String, String>) -> String {
 
 fn tag_arg((dimension, value): (&String, &String)) -> String {
     format!("{dimension}={value}")
+}
+
+#[derive(Serialize)]
+struct StrategyRegistryFingerprint<'a> {
+    strategy_id: &'a str,
+    parent_id: &'a Option<String>,
+    artifact_path: &'a Option<String>,
+    metrics_path: &'a Option<String>,
+}
+
+fn strategy_version_id(input: &StrategyRegistryMarkInput) -> String {
+    let fingerprint = StrategyRegistryFingerprint {
+        strategy_id: input.strategy_id.trim(),
+        parent_id: &input.parent_id,
+        artifact_path: &input.artifact_path,
+        metrics_path: &input.metrics_path,
+    };
+    let hash = stable_json_hash(&fingerprint);
+    format!("sv_{}", &hash[..16])
+}
+
+fn read_strategy_registry(path: &Path) -> Result<StrategyRegistry> {
+    if !path.exists() {
+        return Ok(StrategyRegistry {
+            schema_version: 1,
+            updated_at: Utc::now().to_rfc3339(),
+            entries: Vec::new(),
+        });
+    }
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("read strategy registry {}", path.display()))?;
+    let registry: StrategyRegistry = serde_json::from_str(&data)
+        .with_context(|| format!("parse strategy registry {}", path.display()))?;
+    if registry.schema_version != 1 {
+        bail!(
+            "unsupported strategy registry schema_version {}; expected 1",
+            registry.schema_version
+        );
+    }
+    Ok(registry)
+}
+
+fn write_strategy_registry_atomic(path: &Path, registry: &StrategyRegistry) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create strategy registry dir {}", parent.display()))?;
+        }
+    }
+    let mut payload = serde_json::to_vec_pretty(registry).context("serialize strategy registry")?;
+    payload.push(b'\n');
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("strategy_registry.json");
+    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, payload)
+        .with_context(|| format!("write strategy registry temp {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("rename strategy registry into {}", path.display()))?;
+    Ok(())
+}
+
+fn merge_unique_strings(target: &mut Vec<String>, source: &[String]) {
+    for value in source {
+        if !target.iter().any(|existing| existing == value) {
+            target.push(value.clone());
+        }
+    }
 }
 
 fn pattern_label(tags: &BTreeMap<String, String>) -> String {
@@ -4558,6 +4866,33 @@ impl StrategyBuilderProfile {
                 degraded_force_taker: true,
                 also_maker: false,
             }),
+            "a_plus5m_tail_guard" => Ok(Self {
+                name: "a_plus5m_tail_guard",
+                conf: "0.40",
+                z: "0.90,1.10",
+                edge: "0.07",
+                ev_buffer: "-1.0",
+                min_price: "0.10",
+                max_price: "0.85",
+                min_reversion_count: "0",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.025",
+                max_per_market_usd: "10",
+                max_total_exposure_usd: "8",
+                max_projected_stressed_drawdown_pct: "0.12",
+                degraded_after_losses: "1",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "1.10",
+                degraded_max_price: "0.75",
+                degraded_force_taker: true,
+                also_maker: false,
+            }),
             "a_plus5m_reversion_guard" => Ok(Self {
                 name: "a_plus5m_reversion_guard",
                 conf: "0.50",
@@ -4586,7 +4921,7 @@ impl StrategyBuilderProfile {
                 also_maker: true,
             }),
             _ => bail!(
-                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_causal_guard_selected, a_plus5m_reversion_guard, swift5m"
+                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_causal_guard_selected, a_plus5m_tail_guard, a_plus5m_reversion_guard, swift5m"
             ),
         }
     }
@@ -5232,6 +5567,117 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_search_reports_tail_cvar_and_loss_burst() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 4, 0.0, -8.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 4, 0.0, -6.0))]),
+        ];
+
+        let mut input = causal_policy_input(200);
+        input.max_require_terms = 2;
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 8;
+        input.min_oos_total_pnl = -20.0;
+        input.min_worst_oos_pnl = -10.0;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_profitable_reports = 1;
+        input.tail_alpha = 0.50;
+        input.min_oos_cvar_pnl = -5.0;
+        input.loss_burst_lookback = 2;
+        input.max_loss_burst_reports = 1;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+                    && candidate.base_require.get("zone").map(String::as_str) == Some("primary")
+            })
+            .expect("primary/down policy");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.tail.sample_count, 4);
+        assert_eq!(candidate.fold_forward.tail.tail_count, 2);
+        assert_eq!(candidate.fold_forward.tail.max_loss_burst_reports, 2);
+        assert!(candidate.fold_forward.tail.cvar_pnl < -5.0);
+    }
+
+    #[test]
+    fn tail_risk_report_uses_left_tail_and_windowed_bursts() {
+        let report = tail_risk_report(&[4.0, -2.0, -3.0, 1.0, -1.0], 0.40, 3);
+
+        assert_eq!(report.sample_count, 5);
+        assert_eq!(report.tail_count, 2);
+        assert_eq!(report.worst_pnl, -3.0);
+        assert_eq!(report.cvar_pnl, -2.5);
+        assert_eq!(report.losing_reports, 3);
+        assert_eq!(report.max_loss_burst_reports, 2);
+    }
+
+    #[test]
+    fn strategy_registry_mark_inserts_and_updates_evidence_history() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+
+        let registry = mark_strategy_version(StrategyRegistryMarkInput {
+            registry_path: path.clone(),
+            strategy_id: "tail_guard_v1".to_string(),
+            parent_id: None,
+            status: StrategyRegistryStatus::Questionable,
+            reason: "profitable mean but poor tail fold".to_string(),
+            artifact_path: Some("/tmp/search.json".to_string()),
+            metrics_path: None,
+            evidence_paths: vec!["/tmp/fold_40.json".to_string()],
+            notes: vec!["needs CVaR gate".to_string()],
+        })
+        .unwrap();
+
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(
+            registry.entries[0].status,
+            StrategyRegistryStatus::Questionable
+        );
+        assert_eq!(registry.entries[0].events.len(), 1);
+
+        let registry = mark_strategy_version(StrategyRegistryMarkInput {
+            registry_path: path,
+            strategy_id: "tail_guard_v1".to_string(),
+            parent_id: None,
+            status: StrategyRegistryStatus::DeadEnd,
+            reason: "failed strict CVaR and burst gates".to_string(),
+            artifact_path: None,
+            metrics_path: Some("/tmp/tail_metrics.json".to_string()),
+            evidence_paths: vec!["/tmp/fold_41.json".to_string()],
+            notes: vec!["do not promote".to_string()],
+        })
+        .unwrap();
+        let entry = &registry.entries[0];
+
+        assert_eq!(entry.status, StrategyRegistryStatus::DeadEnd);
+        assert_eq!(entry.events.len(), 2);
+        assert_eq!(entry.artifact_path.as_deref(), Some("/tmp/search.json"));
+        assert_eq!(
+            entry.metrics_path.as_deref(),
+            Some("/tmp/tail_metrics.json")
+        );
+        assert!(entry
+            .evidence_paths
+            .iter()
+            .any(|path| path == "/tmp/fold_40.json"));
+        assert!(entry
+            .evidence_paths
+            .iter()
+            .any(|path| path == "/tmp/fold_41.json"));
+    }
+
+    #[test]
     fn adaptive_mode_search_does_not_flat_future_only_loss() {
         let folds = vec![
             selectivity_fold(vec![
@@ -5446,6 +5892,18 @@ mod tests {
         assert!(profile.degraded_force_taker);
     }
 
+    #[test]
+    fn tail_guard_profile_reduces_exposure_and_tightens_after_loss() {
+        let profile = StrategyBuilderProfile::from_name("a_plus5m_tail_guard").unwrap();
+
+        assert_eq!(profile.position_pct, "0.025");
+        assert_eq!(profile.max_total_exposure_usd, "8");
+        assert_eq!(profile.degraded_after_losses, "1");
+        assert_eq!(profile.degraded_min_z, "1.10");
+        assert_eq!(profile.degraded_max_price, "0.75");
+        assert!(!profile.also_maker);
+    }
+
     fn selectivity_input(top: usize) -> StrategyBuilderSelectivitySearchInput {
         StrategyBuilderSelectivitySearchInput {
             report_paths: Vec::new(),
@@ -5511,6 +5969,10 @@ mod tests {
             min_deny_trades: 1,
             min_deny_loss_pnl: 0.0,
             min_deny_loss_reports: 1,
+            tail_alpha: 0.20,
+            min_oos_cvar_pnl: -1.0e9,
+            loss_burst_lookback: 0,
+            max_loss_burst_reports: 0,
             top,
         }
     }
