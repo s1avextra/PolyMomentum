@@ -84,14 +84,67 @@ Verdict: aggregate edge still exists, but the current strategy is not production
 
 See `docs/strategy_registry.json`.
 
+## Targeted Tail Probes
+
+Before paying the cost of a full 42-fold rerun, the new `a_plus5m_tail_guard`
+profile was tested on the two known tail clusters from the May28-Jun10 evidence.
+
+Jun10 08:00-15:00 UTC:
+
+- previous reversion candidate:
+  - trades: `9`
+  - wins/losses: `5/4`
+  - PnL: `-12.05971`
+  - early zone: `7` trades, `-13.67828` PnL
+  - primary zone: `2` trades, `+1.61857` PnL
+- `a_plus5m_tail_guard`:
+  - trades: `1`
+  - wins/losses: `1/0`
+  - PnL: `+2.36253`
+  - zone: primary only
+  - execution failures: `0`
+  - unresolved fills: `0`
+  - breaker tripped: `false`
+  - robustness status: rejected because one trade means zone concentration and Wilson evidence are too weak
+
+Jun7 00:00-07:00 UTC:
+
+- previous reversion candidate:
+  - trades: `7`
+  - wins/losses: `4/3`
+  - PnL: `-10.49522`
+  - early zone: `5` trades, `-12.42583` PnL
+  - primary zone: `2` trades, `+1.93061` PnL
+- `a_plus5m_tail_guard`:
+  - trades: `0`
+  - PnL: `0`
+  - execution failures: `0`
+  - unresolved fills: `0`
+  - breaker tripped: `false`
+  - coverage status: rejected because the fold has no trades
+
+Interpretation: the tail guard is doing the right protective thing on the
+sampled loss clusters, but it is not yet a production strategy. It mainly avoids
+early-zone tail losses by starving the fold. The next search should either build
+a primary-only challenger with explicit minimum trade-rate gates, or re-admit
+early-zone trades only under stricter confidence, price, timing, and reversal
+constraints.
+
 ## Next Loop
 
-1. Run `rolling-history` with `--profile a_plus5m_tail_guard` on the same May28-Jun10 window.
-2. Re-run `strategy-builder causal-policy-search` with the same tail gates.
-3. Promote only if all are true:
+1. Build a small targeted challenger set from the two tail clusters:
+   - primary-only
+   - early-zone re-entry with tighter confidence, price, timing, and reversal gates
+   - lower-exposure reversion with explicit minimum trade-rate gates
+2. Run those challengers on the known tail-cluster folds first.
+3. Only after the targeted subset has nonzero throughput without reintroducing
+   tail losses, run `rolling-history` on the full May28-Jun10 window.
+4. Re-run `strategy-builder causal-policy-search` with the same tail gates.
+5. Promote only if all are true:
    - `ok=true`
    - no loss burst above 2 in a 5-report window
    - CVaR clears the configured floor with margin
    - worst report is acceptable
    - no unresolved fills, execution failures, or breaker artifacts
-4. If still failing, mark that profile version `dead_end` and branch search toward either stronger selectivity or lower exposure, not paper mode.
+6. If still failing, mark that profile version `dead_end` and branch search
+   toward primary-only selectivity or lower exposure, not paper mode.
