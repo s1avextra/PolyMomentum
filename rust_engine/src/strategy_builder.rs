@@ -141,6 +141,10 @@ pub struct StrategyBuilderAdaptiveDirectionInput {
     pub min_oos_total_pnl: f64,
     pub min_oos_profitable_reports: usize,
     pub min_worst_oos_pnl: f64,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
     pub top: usize,
 }
 
@@ -161,6 +165,10 @@ pub struct StrategyBuilderAdaptiveModeInput {
     pub recent_report_lookback: usize,
     pub pattern_guards: bool,
     pub flat_if_worst_train_below: f64,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
     pub top: usize,
 }
 
@@ -242,7 +250,7 @@ pub struct StrategyBuilderAdaptiveDirectionSearch {
     pub report_count: usize,
     pub candidate_count: usize,
     pub methodology: Vec<String>,
-    pub gates: SelectivitySearchGates,
+    pub gates: AdaptiveDirectionSearchGates,
     pub candidates: Vec<AdaptiveDirectionCandidateReport>,
 }
 
@@ -355,6 +363,21 @@ pub struct MultiGuardSearchGates {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AdaptiveDirectionSearchGates {
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AdaptiveModeSearchGates {
     pub min_train_reports: usize,
     pub min_train_trades: u64,
@@ -370,6 +393,10 @@ pub struct AdaptiveModeSearchGates {
     pub recent_report_lookback: usize,
     pub pattern_guards: bool,
     pub flat_if_worst_train_below: f64,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -518,6 +545,7 @@ pub struct AdaptiveDirectionFoldForwardReport {
     pub losing_reports: usize,
     pub abstained_reports: usize,
     pub worst_report_pnl: f64,
+    pub tail: TailRiskReport,
     pub stats: SelectivityStatsReport,
     pub decisions: Vec<AdaptiveDirectionDecisionReport>,
 }
@@ -539,6 +567,7 @@ pub struct AdaptiveModeFoldForwardReport {
     pub losing_reports: usize,
     pub abstained_reports: usize,
     pub worst_report_pnl: f64,
+    pub tail: TailRiskReport,
     pub stats: SelectivityStatsReport,
     pub decisions: Vec<AdaptiveModeDecisionReport>,
 }
@@ -1955,6 +1984,9 @@ pub fn adaptive_direction_search(
     if input.min_train_reports == 0 {
         bail!("--min-train-reports must be > 0");
     }
+    if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
+        bail!("--tail-alpha must be in (0, 1]");
+    }
     if input.report_paths.len() <= input.min_train_reports {
         bail!(
             "report count ({}) must be greater than --min-train-reports ({})",
@@ -1997,6 +2029,9 @@ pub fn adaptive_mode_search(
     }
     if input.max_guard_rules == 0 {
         bail!("--max-guard-rules must be > 0");
+    }
+    if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
+        bail!("--tail-alpha must be in (0, 1]");
     }
     if input.report_paths.len() <= input.min_train_reports {
         bail!(
@@ -2171,8 +2206,35 @@ fn multi_guard_search_from_folds(
     let candidate_count = candidates.len();
 
     candidates.sort_by(|a, b| {
+        let a_trade_gate = a.fold_forward.stats.trades >= input.min_oos_trades;
+        let b_trade_gate = b.fold_forward.stats.trades >= input.min_oos_trades;
+        let a_profitable_gate =
+            a.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let b_profitable_gate =
+            b.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let a_pnl_gate = a.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let b_pnl_gate = b.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let a_wilson_gate =
+            a.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let b_wilson_gate =
+            b.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let a_tail_gate = a.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let b_tail_gate = b.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let a_cvar_gate = a.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let b_cvar_gate = b.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let a_burst_gate = input.max_loss_burst_reports == 0
+            || a.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
+        let b_burst_gate = input.max_loss_burst_reports == 0
+            || b.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
         b.passed
             .cmp(&a.passed)
+            .then_with(|| b_trade_gate.cmp(&a_trade_gate))
+            .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
+            .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
+            .then_with(|| b_wilson_gate.cmp(&a_wilson_gate))
+            .then_with(|| b_tail_gate.cmp(&a_tail_gate))
+            .then_with(|| b_cvar_gate.cmp(&a_cvar_gate))
+            .then_with(|| b_burst_gate.cmp(&a_burst_gate))
             .then_with(|| {
                 f64_desc(
                     a.fold_forward.stats.total_pnl,
@@ -2286,6 +2348,19 @@ fn adaptive_direction_search_from_folds(
                     .trades
                     .cmp(&a.fold_forward.stats.trades)
             })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.worst_report_pnl,
+                    b.fold_forward.worst_report_pnl,
+                )
+            })
+            .then_with(|| f64_desc(a.fold_forward.tail.cvar_pnl, b.fold_forward.tail.cvar_pnl))
+            .then_with(|| {
+                a.fold_forward
+                    .tail
+                    .max_loss_burst_reports
+                    .cmp(&b.fold_forward.tail.max_loss_burst_reports)
+            })
             .then_with(|| a.variant.cmp(&b.variant))
     });
 
@@ -2307,10 +2382,12 @@ fn adaptive_direction_search_from_folds(
                 .to_string(),
             "Apply the selected direction to the next report only after the choice is fixed; future folds never influence current choices."
                 .to_string(),
+            "Report OOS fold-tail CVaR and recent loss-burst metrics so adaptive direction cannot pass on average PnL while hiding clustered losses."
+                .to_string(),
             "Treat this as a regime-selection hypothesis; rerun any selected adaptive policy through full harness/live-replay before promotion."
                 .to_string(),
         ],
-        gates: SelectivitySearchGates {
+        gates: AdaptiveDirectionSearchGates {
             min_train_reports: input.min_train_reports,
             min_train_trades: input.min_train_trades,
             min_oos_trades: input.min_oos_trades,
@@ -2318,6 +2395,10 @@ fn adaptive_direction_search_from_folds(
             min_oos_total_pnl: input.min_oos_total_pnl,
             min_oos_profitable_reports: input.min_oos_profitable_reports,
             min_worst_oos_pnl: input.min_worst_oos_pnl,
+            tail_alpha: input.tail_alpha,
+            min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+            loss_burst_lookback: input.loss_burst_lookback,
+            max_loss_burst_reports: input.max_loss_burst_reports,
         },
         candidates,
     }
@@ -2334,8 +2415,35 @@ fn adaptive_mode_search_from_folds(
     let candidate_count = candidates.len();
 
     candidates.sort_by(|a, b| {
+        let a_trade_gate = a.fold_forward.stats.trades >= input.min_oos_trades;
+        let b_trade_gate = b.fold_forward.stats.trades >= input.min_oos_trades;
+        let a_profitable_gate =
+            a.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let b_profitable_gate =
+            b.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let a_pnl_gate = a.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let b_pnl_gate = b.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let a_wilson_gate =
+            a.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let b_wilson_gate =
+            b.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let a_tail_gate = a.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let b_tail_gate = b.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let a_cvar_gate = a.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let b_cvar_gate = b.fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl;
+        let a_burst_gate = input.max_loss_burst_reports == 0
+            || a.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
+        let b_burst_gate = input.max_loss_burst_reports == 0
+            || b.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
         b.passed
             .cmp(&a.passed)
+            .then_with(|| b_trade_gate.cmp(&a_trade_gate))
+            .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
+            .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
+            .then_with(|| b_wilson_gate.cmp(&a_wilson_gate))
+            .then_with(|| b_tail_gate.cmp(&a_tail_gate))
+            .then_with(|| b_cvar_gate.cmp(&a_cvar_gate))
+            .then_with(|| b_burst_gate.cmp(&a_burst_gate))
             .then_with(|| {
                 f64_desc(
                     a.fold_forward.stats.total_pnl,
@@ -2353,6 +2461,19 @@ fn adaptive_mode_search_from_folds(
                     .stats
                     .trades
                     .cmp(&a.fold_forward.stats.trades)
+            })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.worst_report_pnl,
+                    b.fold_forward.worst_report_pnl,
+                )
+            })
+            .then_with(|| f64_desc(a.fold_forward.tail.cvar_pnl, b.fold_forward.tail.cvar_pnl))
+            .then_with(|| {
+                a.fold_forward
+                    .tail
+                    .max_loss_burst_reports
+                    .cmp(&b.fold_forward.tail.max_loss_burst_reports)
             })
             .then_with(|| a.variant.cmp(&b.variant))
     });
@@ -2373,6 +2494,7 @@ fn adaptive_mode_search_from_folds(
             "Rank active options by prior worst-fold PnL first, then prior aggregate PnL, Wilson lower bound, profit factor, and trade count.".to_string(),
             "Choose flat when no active mode passes prior gates, or when the best active prior worst-fold PnL is below the configured flat threshold.".to_string(),
             "Score the selected mode on the current fold only after the mode is fixed; future folds never influence current choices.".to_string(),
+            "Report OOS fold-tail CVaR and recent loss-burst metrics so adaptive mode cannot pass on average PnL while hiding clustered losses.".to_string(),
             "Treat passing results as strategy hypotheses; rerun selected policies in full harness/live-replay before promotion.".to_string(),
         ],
         gates: AdaptiveModeSearchGates {
@@ -2390,6 +2512,10 @@ fn adaptive_mode_search_from_folds(
             recent_report_lookback: input.recent_report_lookback,
             pattern_guards: input.pattern_guards,
             flat_if_worst_train_below: input.flat_if_worst_train_below,
+            tail_alpha: input.tail_alpha,
+            min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+            loss_burst_lookback: input.loss_burst_lookback,
+            max_loss_burst_reports: input.max_loss_burst_reports,
         },
         candidates,
     }
@@ -2585,6 +2711,7 @@ fn evaluate_adaptive_mode_candidate(
     let mut losing_reports = 0_usize;
     let mut abstained_reports = 0_usize;
     let mut worst_report_pnl: Option<f64> = None;
+    let mut eligible_report_pnls = Vec::new();
     let mut decisions = Vec::new();
 
     for idx in 0..folds.len() {
@@ -2692,6 +2819,7 @@ fn evaluate_adaptive_mode_candidate(
             Some(current) => current.min(fold_stats.total_pnl),
             None => fold_stats.total_pnl,
         });
+        eligible_report_pnls.push(fold_stats.total_pnl);
         oos.merge_from(&fold_stats);
         decisions.push(AdaptiveModeDecisionReport {
             report_index: idx,
@@ -2715,6 +2843,11 @@ fn evaluate_adaptive_mode_candidate(
         losing_reports,
         abstained_reports,
         worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        tail: tail_risk_report(
+            &eligible_report_pnls,
+            input.tail_alpha,
+            input.loss_burst_lookback,
+        ),
         stats: stats_report(&oos),
         decisions,
     };
@@ -2722,7 +2855,10 @@ fn evaluate_adaptive_mode_candidate(
         && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
         && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
         && fold_forward.profitable_reports >= input.min_oos_profitable_reports
-        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
+        && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
+        && (input.max_loss_burst_reports == 0
+            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports);
 
     let mut notes = vec![
         "adaptive mode selector; rerun any selected policy in full harness before promotion"
@@ -2761,6 +2897,10 @@ fn adaptive_mode_options(
             min_oos_total_pnl: input.min_oos_total_pnl,
             min_oos_profitable_reports: input.min_oos_profitable_reports,
             min_worst_oos_pnl: input.min_worst_oos_pnl,
+            tail_alpha: input.tail_alpha,
+            min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+            loss_burst_lookback: input.loss_burst_lookback,
+            max_loss_burst_reports: input.max_loss_burst_reports,
             top: input.top,
         },
         variant,
@@ -2796,10 +2936,10 @@ fn adaptive_mode_options(
         min_guard_loss_reports: input.min_guard_loss_reports,
         recent_report_lookback: input.recent_report_lookback,
         pattern_guards: input.pattern_guards,
-        tail_alpha: 0.20,
-        min_oos_cvar_pnl: -1.0e9,
-        loss_burst_lookback: 0,
-        max_loss_burst_reports: 0,
+        tail_alpha: input.tail_alpha,
+        min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+        loss_burst_lookback: input.loss_burst_lookback,
+        max_loss_burst_reports: input.max_loss_burst_reports,
         top: input.top,
     };
     let guard = learn_multi_guard_from_prior_folds(prior_folds, &guard_input, variant);
@@ -3960,6 +4100,7 @@ fn evaluate_adaptive_direction_candidate(
     let mut losing_reports = 0_usize;
     let mut abstained_reports = 0_usize;
     let mut worst_report_pnl: Option<f64> = None;
+    let mut eligible_report_pnls = Vec::new();
     let mut decisions = Vec::new();
 
     for idx in 0..folds.len() {
@@ -4014,6 +4155,7 @@ fn evaluate_adaptive_direction_candidate(
             Some(current) => current.min(fold_stats.total_pnl),
             None => fold_stats.total_pnl,
         });
+        eligible_report_pnls.push(fold_stats.total_pnl);
         oos.merge_from(&fold_stats);
         decisions.push(AdaptiveDirectionDecisionReport {
             report_index: idx,
@@ -4031,6 +4173,11 @@ fn evaluate_adaptive_direction_candidate(
         losing_reports,
         abstained_reports,
         worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        tail: tail_risk_report(
+            &eligible_report_pnls,
+            input.tail_alpha,
+            input.loss_burst_lookback,
+        ),
         stats: stats_report(&oos),
         decisions,
     };
@@ -4038,7 +4185,10 @@ fn evaluate_adaptive_direction_candidate(
         && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
         && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
         && fold_forward.profitable_reports >= input.min_oos_profitable_reports
-        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
+        && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
+        && (input.max_loss_burst_reports == 0
+            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports);
 
     let mut notes = vec![
         "adaptive direction selector; rerun selected policy in full harness before promotion"
@@ -6472,6 +6622,37 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_mode_search_reports_tail_cvar_and_loss_burst() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(0, 1, 0.0, -6.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(0, 1, 0.0, -5.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(20, 0, 20.0, 0.0))]),
+        ];
+
+        let mut input = adaptive_mode_input(5);
+        input.min_worst_oos_pnl = -10.0;
+        input.min_oos_cvar_pnl = -10.0;
+        input.loss_burst_lookback = 2;
+        input.max_loss_burst_reports = 1;
+        let search = adaptive_mode_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive mode candidate");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.tail.sample_count, 4);
+        assert_eq!(candidate.fold_forward.tail.tail_count, 1);
+        assert_eq!(candidate.fold_forward.tail.max_loss_burst_reports, 2);
+        assert_eq!(candidate.fold_forward.tail.cvar_pnl, -6.0);
+    }
+
+    #[test]
     fn adaptive_direction_search_switches_only_after_prior_evidence_changes() {
         let folds = vec![
             selectivity_fold(vec![
@@ -6538,6 +6719,36 @@ mod tests {
                 .total_pnl
                 > 9.0
         );
+    }
+
+    #[test]
+    fn adaptive_direction_search_reports_tail_cvar_and_loss_burst() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(0, 1, 0.0, -6.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(0, 1, 0.0, -5.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(20, 0, 20.0, 0.0))]),
+        ];
+
+        let mut input = adaptive_input(5);
+        input.min_oos_cvar_pnl = -10.0;
+        input.loss_burst_lookback = 2;
+        input.max_loss_burst_reports = 1;
+        let search = adaptive_direction_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("adaptive candidate");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.tail.sample_count, 4);
+        assert_eq!(candidate.fold_forward.tail.tail_count, 1);
+        assert_eq!(candidate.fold_forward.tail.max_loss_burst_reports, 2);
+        assert_eq!(candidate.fold_forward.tail.cvar_pnl, -6.0);
     }
 
     #[test]
@@ -6691,6 +6902,10 @@ mod tests {
             min_oos_total_pnl: 0.0,
             min_oos_profitable_reports: 2,
             min_worst_oos_pnl: -10.0,
+            tail_alpha: 0.20,
+            min_oos_cvar_pnl: -1.0e9,
+            loss_burst_lookback: 0,
+            max_loss_burst_reports: 0,
             top,
         }
     }
@@ -6712,6 +6927,10 @@ mod tests {
             recent_report_lookback: 2,
             pattern_guards: false,
             flat_if_worst_train_below: -1.0e9,
+            tail_alpha: 0.20,
+            min_oos_cvar_pnl: -1.0e9,
+            loss_burst_lookback: 0,
+            max_loss_burst_reports: 0,
             top,
         }
     }

@@ -1251,6 +1251,18 @@ enum StrategyBuilderCommand {
         /// Minimum worst OOS report PnL.
         #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         min_worst_oos_pnl: f64,
+        /// Left-tail fraction for OOS fold CVaR diagnostics.
+        #[arg(long, default_value_t = 0.20)]
+        tail_alpha: f64,
+        /// Minimum OOS fold CVaR PnL. Very negative default makes this diagnostic-only.
+        #[arg(long, default_value_t = -1.0e9, allow_hyphen_values = true)]
+        min_oos_cvar_pnl: f64,
+        /// Rolling OOS report lookback for clustered-loss diagnostics. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        loss_burst_lookback: usize,
+        /// Maximum losing reports inside --loss-burst-lookback. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        max_loss_burst_reports: usize,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
@@ -1305,6 +1317,18 @@ enum StrategyBuilderCommand {
         /// Choose flat if the best active mode's prior worst-fold PnL is below this value.
         #[arg(long, default_value_t = -1.0e9, allow_hyphen_values = true)]
         flat_if_worst_train_below: f64,
+        /// Left-tail fraction for OOS fold CVaR diagnostics.
+        #[arg(long, default_value_t = 0.20)]
+        tail_alpha: f64,
+        /// Minimum OOS fold CVaR PnL. Very negative default makes this diagnostic-only.
+        #[arg(long, default_value_t = -1.0e9, allow_hyphen_values = true)]
+        min_oos_cvar_pnl: f64,
+        /// Rolling OOS report lookback for clustered-loss diagnostics. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        loss_burst_lookback: usize,
+        /// Maximum losing reports inside --loss-burst-lookback. Zero disables the gate.
+        #[arg(long, default_value_t = 0)]
+        max_loss_burst_reports: usize,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
@@ -2259,6 +2283,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_oos_total_pnl,
             min_oos_profitable_reports,
             min_worst_oos_pnl,
+            tail_alpha,
+            min_oos_cvar_pnl,
+            loss_burst_lookback,
+            max_loss_burst_reports,
             top,
         } => {
             let search = match strategy_builder::adaptive_direction_search(
@@ -2271,6 +2299,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     min_oos_total_pnl,
                     min_oos_profitable_reports,
                     min_worst_oos_pnl,
+                    tail_alpha,
+                    min_oos_cvar_pnl,
+                    loss_burst_lookback,
+                    max_loss_burst_reports,
                     top,
                 },
             ) {
@@ -2332,6 +2364,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             recent_report_lookback,
             pattern_guards,
             flat_if_worst_train_below,
+            tail_alpha,
+            min_oos_cvar_pnl,
+            loss_burst_lookback,
+            max_loss_burst_reports,
             top,
         } => {
             let search = match strategy_builder::adaptive_mode_search(
@@ -2351,6 +2387,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     recent_report_lookback,
                     pattern_guards,
                     flat_if_worst_train_below,
+                    tail_alpha,
+                    min_oos_cvar_pnl,
+                    loss_burst_lookback,
+                    max_loss_burst_reports,
                     top,
                 },
             ) {

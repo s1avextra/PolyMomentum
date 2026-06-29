@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-29T17:37:38.538160+00:00",
+  "updated_at": "2026-06-29T18:07:45.044795+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -96,6 +96,44 @@
           ],
           "notes": [
             "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "full_may28_jun10_strict_tail_loop_20260630",
+      "version_id": "sv_37d39f1ff2c4d419",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "dead_end",
+      "reason": "Full May28-Jun10 strict tail loop found no promotable candidate; positive aggregate variants fail loss-burst gates.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_multi_guard_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_direction_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_mode_tail.json"
+      ],
+      "notes": [
+        "Strict gates: min trades 80 where applicable, Wilson lower 0.70, positive PnL, profitable reports >=20/18, tail CVaR >= -8, loss-burst <=2 over 5 folds.",
+        "Adaptive direction previously appeared passable without tail gates; patched adaptive selectors now report tail CVaR and loss-burst and fail closed."
+      ],
+      "first_seen_at": "2026-06-29T18:07:45.044795+00:00",
+      "updated_at": "2026-06-29T18:07:45.044795+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T18:07:45.044795+00:00",
+          "status": "dead_end",
+          "reason": "Full May28-Jun10 strict tail loop found no promotable candidate; positive aggregate variants fail loss-burst gates.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_multi_guard_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_direction_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_mode_tail.json"
+          ],
+          "notes": [
+            "Strict gates: min trades 80 where applicable, Wilson lower 0.70, positive PnL, profitable reports >=20/18, tail CVaR >= -8, loss-burst <=2 over 5 folds.",
+            "Adaptive direction previously appeared passable without tail gates; patched adaptive selectors now report tail CVaR and loss-burst and fail closed."
           ]
         }
       ]
