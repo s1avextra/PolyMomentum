@@ -25,6 +25,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -34,6 +36,14 @@ jobs:
             ~/.cargo/git
             rust_engine/target
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust_engine/Cargo.lock', 'rust_engine/Cargo.toml') }}
+
+      - name: Format
+        working-directory: rust_engine
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: rust_engine
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
         working-directory: rust_engine

@@ -1132,6 +1132,18 @@ enum StrategyBuilderCommand {
         #[arg(long)]
         note: Vec<String>,
     },
+    /// Audit strategy registry evidence durability and live promotion status.
+    RegistryAudit {
+        /// Strategy registry JSON path.
+        #[arg(long, default_value = "docs/strategy_registry.json")]
+        registry: String,
+        /// Required durable archive prefix for registry evidence paths.
+        #[arg(long, default_value = "deploy/promotions/evidence/strategy_registry")]
+        durable_prefix: String,
+        /// Write the JSON audit artifact to this path.
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Copy registry evidence artifacts into a durable archive and optionally rewrite registry paths.
     EvidenceExport {
         /// Strategy registry JSON path.
@@ -2092,6 +2104,38 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 serde_json::to_string_pretty(&registry)
                     .expect("serialize strategy-builder registry")
             );
+        }
+        StrategyBuilderCommand::RegistryAudit {
+            registry,
+            durable_prefix,
+            output,
+        } => {
+            let audit = match strategy_builder::audit_strategy_registry(
+                strategy_builder::StrategyRegistryAuditInput {
+                    registry_path: std::path::PathBuf::from(registry),
+                    durable_prefix,
+                },
+            ) {
+                Ok(audit) => audit,
+                Err(e) => {
+                    eprintln!("strategy-builder registry-audit failed: {e:#}");
+                    std::process::exit(2);
+                }
+            };
+            if let Some(path) = output {
+                if let Err(e) = write_json_atomic(std::path::Path::new(&path), &audit, true) {
+                    eprintln!("strategy-builder registry-audit output write failed: {e:#}");
+                    std::process::exit(2);
+                }
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&audit)
+                    .expect("serialize strategy-builder registry audit")
+            );
+            if !audit.ok {
+                std::process::exit(1);
+            }
         }
         StrategyBuilderCommand::EvidenceExport {
             registry,

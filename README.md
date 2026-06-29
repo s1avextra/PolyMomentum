@@ -2,7 +2,7 @@
 
 Single-strategy bot trading **"Up or Down" 5/15-min crypto candle markets on Polymarket**, written in Rust. Multi-exchange momentum signal → BS-binary fair-value mispricing → CLOB execution.
 
-> **Status (2026-04-26):** Rust port complete. The Python implementation has been removed. Paper mode is production-ready and reaches 0.4-0.9 ms per cycle on a single binary. Live execution is wired through EIP-712 signed CLOB orders but gated behind `--i-understand-live`. Wallet ($6.03 USDC.e + ~5.37 POL) untouched throughout the port.
+> **Status (2026-06-30):** Rust-only engine. Offline execution, inventory, preflight, diagnostics, and strategy-builder gates are strong, but no strategy registry entry is live-ready. Live trading remains fail-closed behind explicit preflight, CLOB v2, reconciliation, wallet, and operator confirmation gates.
 
 ## What it does
 
@@ -13,9 +13,9 @@ For each active candle window:
 3. **Detect momentum** via `MomentumDetector`: z-score of the move from window-open against EWMA fast/slow realized vol, weighted with consistency + reversion penalty.
 4. **Compute BS fair value** of the binary "above strike" using observed Deribit IV + window time-to-expiry.
 5. **Decide** through `decide_candle_trade`: 4-zone gates (early / primary / late / terminal) with independent confidence/z/edge thresholds, dead-zone filter, entry-price EV gate, and an `edge_cap` brake against stale-data signals (relaxed in terminal zone).
-6. **Hold to resolution**, mark won/lost vs our BTC tape, and cross-check against Polymarket's on-chain CTF resolution (UMA's optimistic oracle).
+6. **Hold to resolution**, mark won/lost vs our BTC tape, and cross-check against Polymarket's on-chain CTF resolution.
 
-Zone gates split the window into bands with independent thresholds. The post-audit reality is that **only terminal-zone (last 5%) entries showed profit** in our backtests; the other zones are break-even or losing.
+Zone gates split the window into bands with independent thresholds. Current registry evidence is fail-closed: tail-guard and primary-only challengers are useful research hypotheses, but none has passed full chronological, tail-risk, and freshest-window promotion gates.
 
 ## Layout
 
@@ -105,7 +105,9 @@ Exit 0 = clean, 1 = decision drift.
 
 ```bash
 cd rust_engine
-cargo test                # 51 unit tests
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test                # 316 tests as of 2026-06-30
 cargo build --release     # ./target/release/polymomentum-engine
 ```
 
@@ -115,7 +117,7 @@ PolyMomentum shares the VPS (`193.24.234.202`, alias `vps`) with **adgts** (XRP/
 
 ## Strategy reality check
 
-Post-audit (after fixing 4 lookahead/precision bugs in 2026-04-25): backtests showed **break-even to losing** across baseline, ewma_15min, regime variants. The terminal-zone-only sub-strategy had +$7.66 on 13 trades in one window — promising but tiny sample. **Going live with capital today would be premature.** The current play is to collect 24h+ of Rust paper data, then iterate before flipping any live switch.
+Current strategy-builder evidence is stronger than the original April paper loop, but still not sufficient for capital. The latest registry marks the live candidates as `rejected`, `questionable`, or `dead_end`; the next productive work is strict backtest/live-replay research on fresh fully resolved windows, not paper validation unless the question is live venue plumbing.
 
 ---
 

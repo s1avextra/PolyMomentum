@@ -207,6 +207,12 @@ pub struct StrategyBuilderEvidenceExportInput {
     pub rewrite_registry: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyRegistryAuditInput {
+    pub registry_path: PathBuf,
+    pub durable_prefix: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StrategyBuilderSelectivitySearch {
     pub schema_version: u32,
@@ -287,6 +293,33 @@ pub struct StrategyBuilderEvidenceMissing {
     pub strategy_id: String,
     pub role: String,
     pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyRegistryAudit {
+    pub schema_version: u32,
+    pub registry_path: String,
+    pub durable_prefix: String,
+    pub ok: bool,
+    pub live_ready: bool,
+    pub grade: String,
+    pub entries: usize,
+    pub status_counts: BTreeMap<String, usize>,
+    pub live_candidate_count: usize,
+    pub missing_paths: Vec<StrategyRegistryPathIssue>,
+    pub non_durable_paths: Vec<StrategyRegistryPathIssue>,
+    pub checks: Vec<String>,
+    pub next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyRegistryPathIssue {
+    pub strategy_id: String,
+    pub status: StrategyRegistryStatus,
+    pub role: String,
+    pub path: String,
+    pub blocking_live: bool,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -711,6 +744,39 @@ impl StrategyRegistryStatus {
             ),
         }
     }
+}
+
+fn strategy_registry_status_label(status: StrategyRegistryStatus) -> &'static str {
+    match status {
+        StrategyRegistryStatus::Candidate => "candidate",
+        StrategyRegistryStatus::Active => "active",
+        StrategyRegistryStatus::Questionable => "questionable",
+        StrategyRegistryStatus::DeadEnd => "dead_end",
+        StrategyRegistryStatus::Promoted => "promoted",
+        StrategyRegistryStatus::Rejected => "rejected",
+    }
+}
+
+fn registry_entry_paths(entry: &StrategyRegistryEntry) -> Vec<(String, String)> {
+    let mut paths = Vec::new();
+    if let Some(path) = &entry.artifact_path {
+        paths.push(("artifact".to_string(), path.clone()));
+    }
+    if let Some(path) = &entry.metrics_path {
+        paths.push(("metrics".to_string(), path.clone()));
+    }
+    for (idx, path) in entry.evidence_paths.iter().enumerate() {
+        paths.push((format!("evidence_{idx:02}"), path.clone()));
+    }
+    for (event_idx, event) in entry.events.iter().enumerate() {
+        for (evidence_idx, path) in event.evidence_paths.iter().enumerate() {
+            paths.push((
+                format!("event_{event_idx:02}_evidence_{evidence_idx:02}"),
+                path.clone(),
+            ));
+        }
+    }
+    paths
 }
 
 pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan> {
@@ -1674,6 +1740,123 @@ pub fn export_strategy_evidence(
         registry_rewritten: input.rewrite_registry && !rewrites.is_empty(),
         copied,
         missing,
+    })
+}
+
+pub fn audit_strategy_registry(input: StrategyRegistryAuditInput) -> Result<StrategyRegistryAudit> {
+    let registry = read_strategy_registry(&input.registry_path)?;
+    let durable_prefix = input.durable_prefix.trim_end_matches('/').to_string();
+    if durable_prefix.is_empty() {
+        bail!("--durable-prefix must not be empty");
+    }
+
+    let mut status_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut missing_paths = Vec::new();
+    let mut non_durable_paths = Vec::new();
+    let mut live_candidate_count = 0_usize;
+
+    for entry in &registry.entries {
+        *status_counts
+            .entry(strategy_registry_status_label(entry.status).to_string())
+            .or_default() += 1;
+        let blocking_live = matches!(
+            entry.status,
+            StrategyRegistryStatus::Active | StrategyRegistryStatus::Promoted
+        );
+        if blocking_live {
+            live_candidate_count += 1;
+        }
+
+        for (role, path) in registry_entry_paths(entry) {
+            if path.trim().is_empty() {
+                continue;
+            }
+            if !Path::new(&path).is_file() {
+                missing_paths.push(StrategyRegistryPathIssue {
+                    strategy_id: entry.strategy_id.clone(),
+                    status: entry.status,
+                    role: role.clone(),
+                    path: path.clone(),
+                    blocking_live,
+                    detail: "path is not readable as a file".to_string(),
+                });
+            }
+            if !path.starts_with(&durable_prefix) {
+                non_durable_paths.push(StrategyRegistryPathIssue {
+                    strategy_id: entry.strategy_id.clone(),
+                    status: entry.status,
+                    role,
+                    path,
+                    blocking_live,
+                    detail: format!("path is outside durable prefix `{durable_prefix}`"),
+                });
+            }
+        }
+    }
+
+    let blocking_missing = missing_paths.iter().any(|issue| issue.blocking_live);
+    let blocking_non_durable = non_durable_paths.iter().any(|issue| issue.blocking_live);
+    let ok = !blocking_missing && !blocking_non_durable;
+    let live_ready = ok && live_candidate_count == 1;
+    let grade = if live_ready {
+        "A+"
+    } else if ok && missing_paths.is_empty() && non_durable_paths.is_empty() {
+        "A-"
+    } else if ok {
+        "B+"
+    } else {
+        "C"
+    }
+    .to_string();
+
+    let mut checks = Vec::new();
+    checks.push(format!("entries={}", registry.entries.len()));
+    checks.push(format!("live_candidate_count={live_candidate_count}"));
+    checks.push(format!("missing_paths={}", missing_paths.len()));
+    checks.push(format!("non_durable_paths={}", non_durable_paths.len()));
+
+    let mut next_steps = Vec::new();
+    if live_candidate_count == 0 {
+        next_steps.push(
+            "No active/promoted registry entry exists; keep live trading blocked and run fresh feed-forward search."
+                .to_string(),
+        );
+    } else if live_candidate_count > 1 {
+        next_steps.push(
+            "More than one active/promoted registry entry exists; demote all but one before live."
+                .to_string(),
+        );
+    }
+    if !missing_paths.is_empty() {
+        next_steps.push(
+            "Run strategy-builder evidence-export and commit any missing durable evidence before promotion."
+                .to_string(),
+        );
+    }
+    if !non_durable_paths.is_empty() {
+        next_steps.push(
+            "Rewrite registry evidence paths to the durable promotion archive before promotion."
+                .to_string(),
+        );
+    }
+    if next_steps.is_empty() {
+        next_steps.push("Registry evidence is internally promotion-ready.".to_string());
+    }
+
+    Ok(StrategyRegistryAudit {
+        schema_version: 1,
+        registry_path: input.registry_path.display().to_string(),
+        durable_prefix,
+        ok,
+        live_ready,
+        grade,
+        entries: registry.entries.len(),
+        status_counts,
+        live_candidate_count,
+        missing_paths,
+        non_durable_paths,
+        checks,
+        next_steps,
     })
 }
 
@@ -6157,6 +6340,76 @@ mod tests {
         );
         assert!(entry.evidence_paths[0].starts_with(out_dir.to_str().unwrap()));
         assert!(entry.events[0].evidence_paths[0].starts_with(out_dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn registry_audit_requires_promoted_evidence_to_be_durable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let registry_path = tmp.path().join("registry.json");
+        let scratch = tmp.path().join("scratch_report.json");
+        std::fs::write(&scratch, "{}").unwrap();
+
+        mark_strategy_version(StrategyRegistryMarkInput {
+            registry_path: registry_path.clone(),
+            strategy_id: "scratch_promoted".to_string(),
+            parent_id: None,
+            status: StrategyRegistryStatus::Promoted,
+            reason: "promotion points at scratch evidence".to_string(),
+            artifact_path: Some(scratch.display().to_string()),
+            metrics_path: None,
+            evidence_paths: vec![scratch.display().to_string()],
+            notes: Vec::new(),
+        })
+        .unwrap();
+
+        let audit = audit_strategy_registry(StrategyRegistryAuditInput {
+            registry_path,
+            durable_prefix: tmp.path().join("durable").display().to_string(),
+        })
+        .unwrap();
+
+        assert!(!audit.ok);
+        assert!(!audit.live_ready);
+        assert_eq!(audit.live_candidate_count, 1);
+        assert!(audit
+            .non_durable_paths
+            .iter()
+            .any(|issue| { issue.strategy_id == "scratch_promoted" && issue.blocking_live }));
+    }
+
+    #[test]
+    fn registry_audit_marks_single_durable_promoted_entry_live_ready() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let registry_path = tmp.path().join("registry.json");
+        let durable_dir = tmp.path().join("durable");
+        std::fs::create_dir_all(&durable_dir).unwrap();
+        let evidence = durable_dir.join("promotion.json");
+        std::fs::write(&evidence, "{}").unwrap();
+
+        mark_strategy_version(StrategyRegistryMarkInput {
+            registry_path: registry_path.clone(),
+            strategy_id: "durable_promoted".to_string(),
+            parent_id: None,
+            status: StrategyRegistryStatus::Promoted,
+            reason: "single durable promoted entry".to_string(),
+            artifact_path: Some(evidence.display().to_string()),
+            metrics_path: None,
+            evidence_paths: vec![evidence.display().to_string()],
+            notes: Vec::new(),
+        })
+        .unwrap();
+
+        let audit = audit_strategy_registry(StrategyRegistryAuditInput {
+            registry_path,
+            durable_prefix: durable_dir.display().to_string(),
+        })
+        .unwrap();
+
+        assert!(audit.ok);
+        assert!(audit.live_ready);
+        assert_eq!(audit.grade, "A+");
+        assert!(audit.missing_paths.is_empty());
+        assert!(audit.non_durable_paths.is_empty());
     }
 
     #[test]
