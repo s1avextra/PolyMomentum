@@ -142,7 +142,7 @@ fn load_session_logs(paths: &[PathBuf]) -> Result<(Vec<EvaluationRow>, Vec<Resol
         }
     }
     // Stable ordering for deterministic replay.
-    evals.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+    evals.sort_by_key(|eval| eval.ts_ms);
     Ok((evals, resolves))
 }
 

@@ -7,11 +7,13 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::resolver::TradePnlDiagnostics;
@@ -122,6 +124,10 @@ pub struct StrategyBuilderMultiGuardSearchInput {
     pub min_guard_loss_reports: usize,
     pub recent_report_lookback: usize,
     pub pattern_guards: bool,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
     pub top: usize,
 }
 
@@ -194,6 +200,13 @@ pub struct StrategyRegistryMarkInput {
     pub notes: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderEvidenceExportInput {
+    pub registry_path: PathBuf,
+    pub out_dir: PathBuf,
+    pub rewrite_registry: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StrategyBuilderSelectivitySearch {
     pub schema_version: u32,
@@ -250,6 +263,33 @@ pub struct StrategyBuilderCausalPolicySearch {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderEvidenceExport {
+    pub schema_version: u32,
+    pub registry_path: String,
+    pub out_dir: String,
+    pub registry_rewritten: bool,
+    pub copied: Vec<StrategyBuilderEvidenceCopy>,
+    pub missing: Vec<StrategyBuilderEvidenceMissing>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderEvidenceCopy {
+    pub strategy_id: String,
+    pub role: String,
+    pub source_path: String,
+    pub archived_path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderEvidenceMissing {
+    pub strategy_id: String,
+    pub role: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectivitySearchGates {
     pub min_train_reports: usize,
     pub min_train_trades: u64,
@@ -275,6 +315,10 @@ pub struct MultiGuardSearchGates {
     pub min_guard_loss_reports: usize,
     pub recent_report_lookback: usize,
     pub pattern_guards: bool,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -395,6 +439,7 @@ pub struct MultiGuardFoldForwardReport {
     pub losing_reports: usize,
     pub abstained_reports: usize,
     pub worst_report_pnl: f64,
+    pub tail: TailRiskReport,
     pub stats: SelectivityStatsReport,
     pub decisions: Vec<MultiGuardDecisionReport>,
 }
@@ -1518,6 +1563,120 @@ pub fn mark_strategy_version(input: StrategyRegistryMarkInput) -> Result<Strateg
     Ok(registry)
 }
 
+pub fn export_strategy_evidence(
+    input: StrategyBuilderEvidenceExportInput,
+) -> Result<StrategyBuilderEvidenceExport> {
+    let mut registry = read_strategy_registry(&input.registry_path)?;
+    let mut copied = Vec::new();
+    let mut missing = Vec::new();
+    let mut rewrites: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut source_rewrites: BTreeMap<String, String> = BTreeMap::new();
+
+    for entry in &registry.entries {
+        let mut paths = Vec::new();
+        if let Some(path) = &entry.artifact_path {
+            paths.push(("artifact".to_string(), path.clone()));
+        }
+        if let Some(path) = &entry.metrics_path {
+            paths.push(("metrics".to_string(), path.clone()));
+        }
+        for (idx, path) in entry.evidence_paths.iter().enumerate() {
+            paths.push((format!("evidence_{idx:02}"), path.clone()));
+        }
+        for (event_idx, event) in entry.events.iter().enumerate() {
+            for (evidence_idx, path) in event.evidence_paths.iter().enumerate() {
+                paths.push((
+                    format!("event_{event_idx:02}_evidence_{evidence_idx:02}"),
+                    path.clone(),
+                ));
+            }
+        }
+
+        for (role, source_path) in paths {
+            if source_path.trim().is_empty() {
+                continue;
+            }
+            let source = PathBuf::from(&source_path);
+            if !source.is_file() {
+                missing.push(StrategyBuilderEvidenceMissing {
+                    strategy_id: entry.strategy_id.clone(),
+                    role,
+                    source_path,
+                });
+                continue;
+            }
+            if let Some(archived) = source_rewrites.get(&source_path) {
+                rewrites.insert((entry.strategy_id.clone(), role), archived.clone());
+                continue;
+            }
+
+            let strategy_dir = input.out_dir.join(safe_path_component(&entry.strategy_id));
+            let (archived_path, bytes, sha256) =
+                archive_evidence_file(&source, &input.out_dir, &strategy_dir, &role, &source_path)
+                    .with_context(|| format!("archive evidence {}", source.display()))?;
+            let archived = archived_path.display().to_string();
+            rewrites.insert((entry.strategy_id.clone(), role.clone()), archived.clone());
+            source_rewrites
+                .entry(source_path.clone())
+                .or_insert_with(|| archived.clone());
+            copied.push(StrategyBuilderEvidenceCopy {
+                strategy_id: entry.strategy_id.clone(),
+                role,
+                source_path,
+                archived_path: archived,
+                bytes,
+                sha256,
+            });
+        }
+    }
+
+    if input.rewrite_registry && !rewrites.is_empty() {
+        let now = Utc::now().to_rfc3339();
+        registry.updated_at = now.clone();
+        for entry in &mut registry.entries {
+            if entry.artifact_path.is_some() {
+                if let Some(archived) =
+                    rewrites.get(&(entry.strategy_id.clone(), "artifact".to_string()))
+                {
+                    entry.artifact_path = Some(archived.clone());
+                }
+            }
+            if entry.metrics_path.is_some() {
+                if let Some(archived) =
+                    rewrites.get(&(entry.strategy_id.clone(), "metrics".to_string()))
+                {
+                    entry.metrics_path = Some(archived.clone());
+                }
+            }
+            for (idx, path) in entry.evidence_paths.iter_mut().enumerate() {
+                if let Some(archived) =
+                    rewrites.get(&(entry.strategy_id.clone(), format!("evidence_{idx:02}")))
+                {
+                    *path = archived.clone();
+                }
+            }
+            for event in &mut entry.events {
+                for path in &mut event.evidence_paths {
+                    if let Some(archived) = source_rewrites.get(path) {
+                        *path = archived.clone();
+                    }
+                }
+            }
+            entry.updated_at = now.clone();
+        }
+        write_strategy_registry_atomic(&input.registry_path, &registry)?;
+    }
+
+    Ok(StrategyBuilderEvidenceExport {
+        schema_version: 1,
+        registry_path: input.registry_path.display().to_string(),
+        out_dir: input.out_dir.display().to_string(),
+        registry_rewritten: input.rewrite_registry && !rewrites.is_empty(),
+        copied,
+        missing,
+    })
+}
+
 pub fn selectivity_search(
     input: StrategyBuilderSelectivitySearchInput,
 ) -> Result<StrategyBuilderSelectivitySearch> {
@@ -1569,6 +1728,9 @@ pub fn multi_guard_search(
     }
     if input.max_rules == 0 {
         bail!("--max-rules must be > 0");
+    }
+    if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
+        bail!("--tail-alpha must be in (0, 1]");
     }
     if input.report_paths.len() <= input.min_train_reports {
         bail!(
@@ -1741,8 +1903,27 @@ fn selectivity_search_from_folds(
     let candidate_count = candidates.len();
 
     candidates.sort_by(|a, b| {
+        let a_trade_gate = a.fold_forward.stats.trades >= input.min_oos_trades;
+        let b_trade_gate = b.fold_forward.stats.trades >= input.min_oos_trades;
+        let a_profitable_gate =
+            a.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let b_profitable_gate =
+            b.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
+        let a_pnl_gate = a.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let b_pnl_gate = b.fold_forward.stats.total_pnl >= input.min_oos_total_pnl;
+        let a_wilson_gate =
+            a.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let b_wilson_gate =
+            b.fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower;
+        let a_tail_gate = a.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        let b_tail_gate = b.fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
         b.passed
             .cmp(&a.passed)
+            .then_with(|| b_trade_gate.cmp(&a_trade_gate))
+            .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
+            .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
+            .then_with(|| b_wilson_gate.cmp(&a_wilson_gate))
+            .then_with(|| b_tail_gate.cmp(&a_tail_gate))
             .then_with(|| {
                 f64_desc(
                     a.fold_forward.stats.total_pnl,
@@ -1827,6 +2008,19 @@ fn multi_guard_search_from_folds(
                     .trades
                     .cmp(&a.fold_forward.stats.trades)
             })
+            .then_with(|| {
+                f64_desc(
+                    a.fold_forward.worst_report_pnl,
+                    b.fold_forward.worst_report_pnl,
+                )
+            })
+            .then_with(|| f64_desc(a.fold_forward.tail.cvar_pnl, b.fold_forward.tail.cvar_pnl))
+            .then_with(|| {
+                a.fold_forward
+                    .tail
+                    .max_loss_burst_reports
+                    .cmp(&b.fold_forward.tail.max_loss_burst_reports)
+            })
             .then_with(|| a.variant.cmp(&b.variant))
     });
 
@@ -1850,6 +2044,8 @@ fn multi_guard_search_from_folds(
                 .to_string(),
             "Guard ranking uses prior-fold loss support and payoff-asymmetry diagnostics: profit factor, average loss, payoff ratio, and worst loss to average win."
                 .to_string(),
+            "Report OOS fold-tail CVaR and recent loss-burst metrics so guarded candidates cannot hide clustered left-tail failures behind positive aggregate PnL."
+                .to_string(),
             "Treat the result as a strategy hypothesis; rerun any static guard through full harness/live-replay before promotion."
                 .to_string(),
         ],
@@ -1867,6 +2063,10 @@ fn multi_guard_search_from_folds(
             min_guard_loss_reports: input.min_guard_loss_reports,
             recent_report_lookback: input.recent_report_lookback,
             pattern_guards: input.pattern_guards,
+            tail_alpha: input.tail_alpha,
+            min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+            loss_burst_lookback: input.loss_burst_lookback,
+            max_loss_burst_reports: input.max_loss_burst_reports,
         },
         candidates,
     }
@@ -2413,6 +2613,10 @@ fn adaptive_mode_options(
         min_guard_loss_reports: input.min_guard_loss_reports,
         recent_report_lookback: input.recent_report_lookback,
         pattern_guards: input.pattern_guards,
+        tail_alpha: 0.20,
+        min_oos_cvar_pnl: -1.0e9,
+        loss_burst_lookback: 0,
+        max_loss_burst_reports: 0,
         top: input.top,
     };
     let guard = learn_multi_guard_from_prior_folds(prior_folds, &guard_input, variant);
@@ -2959,6 +3163,7 @@ fn evaluate_multi_guard_candidate(
     let mut losing_reports = 0_usize;
     let mut abstained_reports = 0_usize;
     let mut worst_report_pnl: Option<f64> = None;
+    let mut eligible_report_pnls = Vec::new();
     let mut decisions = Vec::new();
 
     for idx in 0..folds.len() {
@@ -3026,6 +3231,7 @@ fn evaluate_multi_guard_candidate(
             Some(current) => current.min(fold_stats.total_pnl),
             None => fold_stats.total_pnl,
         });
+        eligible_report_pnls.push(fold_stats.total_pnl);
         oos.merge_from(&fold_stats);
         decisions.push(MultiGuardDecisionReport {
             report_index: idx,
@@ -3045,6 +3251,11 @@ fn evaluate_multi_guard_candidate(
         losing_reports,
         abstained_reports,
         worst_report_pnl: worst_report_pnl.unwrap_or(0.0),
+        tail: tail_risk_report(
+            &eligible_report_pnls,
+            input.tail_alpha,
+            input.loss_burst_lookback,
+        ),
         stats: stats_report(&oos),
         decisions,
     };
@@ -3052,7 +3263,10 @@ fn evaluate_multi_guard_candidate(
         && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
         && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
         && fold_forward.profitable_reports >= input.min_oos_profitable_reports
-        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl;
+        && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
+        && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
+        && (input.max_loss_burst_reports == 0
+            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports);
 
     let final_guard = learn_multi_guard_from_prior_folds(folds, input, &variant);
     let aggregate_static_final_guard = stats_for_regime_guard(folds, &variant, &final_guard);
@@ -3415,6 +3629,100 @@ fn write_strategy_registry_atomic(path: &Path, registry: &StrategyRegistry) -> R
     std::fs::rename(&tmp_path, path)
         .with_context(|| format!("rename strategy registry into {}", path.display()))?;
     Ok(())
+}
+
+fn archived_evidence_path(strategy_dir: &Path, role: &str, source_path: &str) -> PathBuf {
+    let source = Path::new(source_path);
+    let extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| format!(".{}", safe_path_component(extension)))
+        .unwrap_or_default();
+    let source_hash = stable_json_hash(&source_path);
+    strategy_dir.join(format!(
+        "{}_{}{}",
+        safe_path_component(role),
+        &source_hash[..16],
+        extension
+    ))
+}
+
+fn archive_evidence_file(
+    source: &Path,
+    out_dir: &Path,
+    strategy_dir: &Path,
+    role: &str,
+    source_path: &str,
+) -> Result<(PathBuf, u64, String)> {
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("create evidence archive dir {}", out_dir.display()))?;
+    let source_canonical = source
+        .canonicalize()
+        .with_context(|| format!("canonicalize evidence source {}", source.display()))?;
+    let out_canonical = out_dir
+        .canonicalize()
+        .with_context(|| format!("canonicalize evidence archive dir {}", out_dir.display()))?;
+    if source_canonical.starts_with(&out_canonical) {
+        let (bytes, sha256) = file_sha256(source)?;
+        return Ok((source.to_path_buf(), bytes, sha256));
+    }
+
+    let archived_path = archived_evidence_path(strategy_dir, role, source_path);
+    let (bytes, sha256) = copy_file_atomic_with_sha256(source, &archived_path)?;
+    Ok((archived_path, bytes, sha256))
+}
+
+fn copy_file_atomic_with_sha256(source: &Path, dest: &Path) -> Result<(u64, String)> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create evidence archive dir {}", parent.display()))?;
+    }
+    let payload =
+        std::fs::read(source).with_context(|| format!("read evidence {}", source.display()))?;
+    let sha256 = sha256_bytes(&payload);
+    let file_name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("evidence");
+    let tmp_path = dest.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    let mut file = std::fs::File::create(&tmp_path)
+        .with_context(|| format!("create evidence temp {}", tmp_path.display()))?;
+    file.write_all(&payload)
+        .with_context(|| format!("write evidence temp {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("sync evidence temp {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, dest)
+        .with_context(|| format!("rename evidence archive into {}", dest.display()))?;
+    Ok((payload.len() as u64, sha256))
+}
+
+fn file_sha256(path: &Path) -> Result<(u64, String)> {
+    let payload =
+        std::fs::read(path).with_context(|| format!("read evidence {}", path.display()))?;
+    Ok((payload.len() as u64, sha256_bytes(&payload)))
+}
+
+fn sha256_bytes(payload: &[u8]) -> String {
+    hex::encode(Sha256::digest(payload))
+}
+
+fn safe_path_component(value: &str) -> String {
+    let cleaned = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if cleaned.is_empty() {
+        "unnamed".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn merge_unique_strings(target: &mut Vec<String>, source: &[String]) {
@@ -5519,6 +5827,45 @@ mod tests {
     }
 
     #[test]
+    fn multi_guard_search_reports_tail_cvar_and_loss_burst() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(8, 0, 8.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 3, 0.0, -3.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 2, 0.0, -2.0))]),
+        ];
+
+        let mut input = multi_guard_input(5);
+        input.min_oos_trades = 8;
+        input.min_oos_total_pnl = 0.0;
+        input.min_worst_oos_pnl = -10.0;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_profitable_reports = 1;
+        input.tail_alpha = 0.50;
+        input.min_oos_cvar_pnl = -2.0;
+        input.loss_burst_lookback = 2;
+        input.max_loss_burst_reports = 1;
+
+        let search = multi_guard_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| candidate.variant == "candidate")
+            .expect("multi-guard candidate");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 3.0);
+        assert_eq!(candidate.fold_forward.tail.sample_count, 3);
+        assert_eq!(candidate.fold_forward.tail.tail_count, 2);
+        assert_eq!(candidate.fold_forward.tail.max_loss_burst_reports, 2);
+        assert!(candidate.fold_forward.tail.cvar_pnl < -2.0);
+    }
+
+    #[test]
     fn causal_policy_search_selects_feed_forward_interaction() {
         let primary_down =
             "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
@@ -5756,6 +6103,60 @@ mod tests {
             .evidence_paths
             .iter()
             .any(|path| path == "/tmp/fold_41.json"));
+    }
+
+    #[test]
+    fn evidence_export_archives_existing_paths_and_rewrites_registry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let registry_path = tmp.path().join("registry.json");
+        let evidence_path = tmp.path().join("tail_report.json");
+        let missing_path = tmp.path().join("missing_zone_audit.json");
+        std::fs::write(&evidence_path, br#"{"ok":false,"pnl":-1.23}"#).unwrap();
+
+        mark_strategy_version(StrategyRegistryMarkInput {
+            registry_path: registry_path.clone(),
+            strategy_id: "tail_guard_test".to_string(),
+            parent_id: None,
+            status: StrategyRegistryStatus::Questionable,
+            reason: "temporary evidence under scratch path".to_string(),
+            artifact_path: Some(evidence_path.display().to_string()),
+            metrics_path: Some(missing_path.display().to_string()),
+            evidence_paths: vec![evidence_path.display().to_string()],
+            notes: Vec::new(),
+        })
+        .unwrap();
+
+        let out_dir = tmp.path().join("durable");
+        let export = export_strategy_evidence(StrategyBuilderEvidenceExportInput {
+            registry_path: registry_path.clone(),
+            out_dir: out_dir.clone(),
+            rewrite_registry: true,
+        })
+        .unwrap();
+
+        assert!(export.registry_rewritten);
+        assert_eq!(export.copied.len(), 1);
+        assert_eq!(export.missing.len(), 1);
+        for copy in &export.copied {
+            assert!(copy.archived_path.starts_with(out_dir.to_str().unwrap()));
+            assert_eq!(copy.bytes, 24);
+            assert_eq!(copy.sha256.len(), 64);
+            assert!(std::path::Path::new(&copy.archived_path).is_file());
+        }
+
+        let registry = read_strategy_registry(&registry_path).unwrap();
+        let entry = &registry.entries[0];
+        assert!(entry
+            .artifact_path
+            .as_ref()
+            .unwrap()
+            .starts_with(out_dir.to_str().unwrap()));
+        assert_eq!(
+            entry.metrics_path.as_ref().unwrap(),
+            &missing_path.display().to_string()
+        );
+        assert!(entry.evidence_paths[0].starts_with(out_dir.to_str().unwrap()));
+        assert!(entry.events[0].evidence_paths[0].starts_with(out_dir.to_str().unwrap()));
     }
 
     #[test]
@@ -6102,6 +6503,10 @@ mod tests {
             min_guard_loss_reports: 1,
             recent_report_lookback: 2,
             pattern_guards: false,
+            tail_alpha: 0.20,
+            min_oos_cvar_pnl: -1.0e9,
+            loss_burst_lookback: 0,
+            max_loss_burst_reports: 0,
             top,
         }
     }

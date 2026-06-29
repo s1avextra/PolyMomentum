@@ -864,7 +864,7 @@ pub async fn run_harness(
             .with_context(|| format!("create checkpoint dir {}", dir.display()))?;
         let loaded = load_existing_checkpoints(dir, variants)?;
         for (h, per_variant) in loaded {
-            for (acc, hour_res) in variant_state.iter_mut().zip(per_variant.into_iter()) {
+            for (acc, hour_res) in variant_state.iter_mut().zip(per_variant) {
                 acc.merge_from(hour_res);
             }
             hours_done.insert(h);
@@ -1053,7 +1053,7 @@ pub async fn run_harness(
 
         // Merge sequentially. Index-aligned with `variants`, so this preserves
         // the input order regardless of thread count.
-        for (acc, hour_res) in variant_state.iter_mut().zip(per_variant.into_iter()) {
+        for (acc, hour_res) in variant_state.iter_mut().zip(per_variant) {
             acc.merge_from(hour_res);
         }
         hours_done.insert(h);

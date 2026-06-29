@@ -227,7 +227,7 @@ impl PMXTv2Loader {
             anyhow::bail!("PMXT v2 returned HTTP {} for {}", resp.status(), url);
         }
         let expected_len = resp.content_length();
-        let mut f = std::fs::File::create(&tmp).context("create tmp file")?;
+        let mut f = std::fs::File::create(tmp).context("create tmp file")?;
         use std::io::Write;
         let mut bytes_written = 0_u64;
         while let Some(chunk) = resp.chunk().await.context("read chunk")? {
@@ -246,7 +246,7 @@ impl PMXTv2Loader {
         }
         f.flush().context("flush tmp file")?;
         drop(f);
-        std::fs::rename(&tmp, &path).context("rename tmp to final")?;
+        std::fs::rename(tmp, path).context("rename tmp to final")?;
         Ok(())
     }
 

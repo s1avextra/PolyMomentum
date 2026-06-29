@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "report_count": 1,
+  "variant_name": "primary_c0.40_z0.70_e0.07_ev-1.00_p0.10-0.85_sc2.0_minrv1_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL1d0.00z1.10p0.75tk_tk",
+  "params_hash": "2d91010e866071d8f8716a367f1ab2d8d74708659a0705ab9a278e570198c958",
+  "max_zone_trade_share": 1.0,
+  "min_zone_trades": 0,
+  "min_zone_pnl": 0.0,
+  "total": {
+    "trades": 7,
+    "wins": 7,
+    "losses": 0,
+    "win_rate": 1.0,
+    "total_pnl": 7.73694,
+    "total_fees": 0.46576,
+    "dominant_zone": "primary",
+    "dominant_zone_trade_share": 1.0,
+    "wilson_win_rate_lower": 0.6456611570247934
+  },
+  "zones": [
+    {
+      "zone": "primary",
+      "trades": 7,
+      "wins": 7,
+      "losses": 0,
+      "win_rate": 1.0,
+      "pnl": 7.73694,
+      "trade_share": 1.0,
+      "passes_min_trades": true,
+      "passes_min_pnl": true
+    }
+  ],
+  "folds": [
+    {
+      "label": "harness_sweep",
+      "start": "2026-06-07T00:00:00+00:00",
+      "end": "2026-06-07T07:00:00+00:00",
+      "trades": 7,
+      "wins": 7,
+      "losses": 0,
+      "total_pnl": 7.73694,
+      "total_fees": 0.46576,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 1.0,
+      "zones": [
+        {
+          "zone": "primary",
+          "trades": 7,
+          "wins": 7,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 7.73694,
+          "trade_share": 1.0,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        }
+      ]
+    }
+  ],
+  "pass": true,
+  "rejections": []
+}

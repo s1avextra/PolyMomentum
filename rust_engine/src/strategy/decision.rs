@@ -522,6 +522,7 @@ pub fn settlement_guard_buffer_usd(
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum DecisionResult {
     Trade(CandleDecision),
     Skip(SkipReason),

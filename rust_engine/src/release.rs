@@ -755,45 +755,31 @@ fn nearest_existing_path(path: &Path) -> PathBuf {
 fn disk_usage(path: &Path) -> std::io::Result<DiskUsage> {
     let output = Command::new("df").arg("-Pk").arg(path).output()?;
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let line = stdout
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .last()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "empty df output"))?;
+        .rfind(|line| !line.trim().is_empty())
+        .ok_or_else(|| std::io::Error::other("empty df output"))?;
     let fields: Vec<&str> = line.split_whitespace().collect();
     if fields.len() < 5 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("unparseable df output: {line}"),
-        ));
+        return Err(std::io::Error::other(format!(
+            "unparseable df output: {line}"
+        )));
     }
-    let total_kb = fields[1].parse::<u64>().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("parse df total blocks failed: {e}"),
-        )
-    })?;
-    let available_kb = fields[3].parse::<u64>().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("parse df available blocks failed: {e}"),
-        )
-    })?;
+    let total_kb = fields[1]
+        .parse::<u64>()
+        .map_err(|e| std::io::Error::other(format!("parse df total blocks failed: {e}")))?;
+    let available_kb = fields[3]
+        .parse::<u64>()
+        .map_err(|e| std::io::Error::other(format!("parse df available blocks failed: {e}")))?;
     let used_pct = fields[4]
         .trim_end_matches('%')
         .parse::<f64>()
-        .map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("parse df capacity failed: {e}"),
-            )
-        })?;
+        .map_err(|e| std::io::Error::other(format!("parse df capacity failed: {e}")))?;
     Ok(DiskUsage {
         checked_path: path.to_path_buf(),
         available_bytes: available_kb.saturating_mul(1024),

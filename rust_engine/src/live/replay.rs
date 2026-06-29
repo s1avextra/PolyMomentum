@@ -435,6 +435,7 @@ struct ReplayLifecycle {
 }
 
 impl LiveReplayStrategy {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         replay_strategy: ReplayStrategy,
         universe: &CandleUniverse,

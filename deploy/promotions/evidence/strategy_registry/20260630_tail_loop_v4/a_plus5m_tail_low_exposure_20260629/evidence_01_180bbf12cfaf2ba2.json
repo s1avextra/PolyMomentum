@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "report_count": 1,
+  "variant_name": "all_c0.50_z0.90_e0.07_ev-1.00_p0.10-0.90_sc2.0_minrv1_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL1d0.00z1.10p0.75tk_tk",
+  "params_hash": "002e12bf140d5947cd3f9f592979a30b939c1f382d8a2065f1945041f94351c6",
+  "max_zone_trade_share": 0.7,
+  "min_zone_trades": 0,
+  "min_zone_pnl": 0.0,
+  "total": {
+    "trades": 5,
+    "wins": 4,
+    "losses": 1,
+    "win_rate": 0.8,
+    "total_pnl": -1.4223499999999998,
+    "total_fees": 0.29385,
+    "dominant_zone": "primary",
+    "dominant_zone_trade_share": 0.6,
+    "wilson_win_rate_lower": 0.37552826411853885
+  },
+  "zones": [
+    {
+      "zone": "early",
+      "trades": 2,
+      "wins": 1,
+      "losses": 1,
+      "win_rate": 0.5,
+      "pnl": -4.2837499999999995,
+      "trade_share": 0.4,
+      "passes_min_trades": true,
+      "passes_min_pnl": false
+    },
+    {
+      "zone": "primary",
+      "trades": 3,
+      "wins": 3,
+      "losses": 0,
+      "win_rate": 1.0,
+      "pnl": 2.8613999999999997,
+      "trade_share": 0.6,
+      "passes_min_trades": true,
+      "passes_min_pnl": true
+    }
+  ],
+  "folds": [
+    {
+      "label": "harness_sweep",
+      "start": "2026-06-07T00:00:00+00:00",
+      "end": "2026-06-07T07:00:00+00:00",
+      "trades": 5,
+      "wins": 4,
+      "losses": 1,
+      "total_pnl": -1.4223499999999998,
+      "total_fees": 0.29385,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 0.6,
+      "zones": [
+        {
+          "zone": "early",
+          "trades": 2,
+          "wins": 1,
+          "losses": 1,
+          "win_rate": 0.5,
+          "pnl": -4.2837499999999995,
+          "trade_share": 0.4,
+          "passes_min_trades": true,
+          "passes_min_pnl": false
+        },
+        {
+          "zone": "primary",
+          "trades": 3,
+          "wins": 3,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 2.8613999999999997,
+          "trade_share": 0.6,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        }
+      ]
+    }
+  ],
+  "pass": false,
+  "rejections": [
+    "zone early pnl -4.2837 below minimum 0.0000"
+  ]
+}

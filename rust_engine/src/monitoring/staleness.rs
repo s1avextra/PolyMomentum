@@ -262,7 +262,7 @@ fn summarize_sample(
     let recent_wins = recent.iter().filter(|o| o.won).count();
     let recent_losses = recent.len().saturating_sub(recent_wins);
     let mut top_skip_reasons: Vec<(String, u64)> = skip_reasons.into_iter().collect();
-    top_skip_reasons.sort_by(|a, b| b.1.cmp(&a.1));
+    top_skip_reasons.sort_by_key(|item| std::cmp::Reverse(item.1));
     top_skip_reasons.truncate(8);
 
     StalenessSample {

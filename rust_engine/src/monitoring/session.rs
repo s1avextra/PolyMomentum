@@ -248,7 +248,7 @@ impl SessionMonitor {
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by_key(|item| std::cmp::Reverse(item.1));
         v.truncate(n);
         v
     }
@@ -587,7 +587,7 @@ impl SessionMonitor {
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        sorted_skips.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted_skips.sort_by_key(|item| std::cmp::Reverse(item.1));
 
         json!({
             "session_id": self.session_id,

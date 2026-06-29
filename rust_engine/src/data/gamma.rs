@@ -177,7 +177,7 @@ impl GammaClient {
             let mut markets = markets?;
             all.append(&mut markets);
             completed += 1;
-            if completed % 100 == 0 || completed == total {
+            if completed.is_multiple_of(100) || completed == total {
                 eprintln!("gamma: fetched {completed}/{total} slug metadata response(s)");
             }
         }

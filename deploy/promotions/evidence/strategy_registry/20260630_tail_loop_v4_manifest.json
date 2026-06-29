@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "registry_path": "docs/strategy_registry.json",
+  "out_dir": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4",
+  "registry_rewritten": true,
+  "copied": [
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "role": "artifact",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/artifact_7f3508185645fc50.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/artifact_7f3508185645fc50.json",
+      "bytes": 131860,
+      "sha256": "08466c90d94fab6dcc37c39512166ffcd269e73d05c2d9301ffba9774802cc54"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "role": "metrics",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/metrics_04146c303b5de808.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/metrics_04146c303b5de808.json",
+      "bytes": 131860,
+      "sha256": "08466c90d94fab6dcc37c39512166ffcd269e73d05c2d9301ffba9774802cc54"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "role": "evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/evidence_00_fae3c3032806aa25.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/evidence_00_fae3c3032806aa25.json",
+      "bytes": 131860,
+      "sha256": "08466c90d94fab6dcc37c39512166ffcd269e73d05c2d9301ffba9774802cc54"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "role": "event_00_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/event_00_evidence_00_f181834dd0420aa0.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/event_00_evidence_00_f181834dd0420aa0.json",
+      "bytes": 131860,
+      "sha256": "08466c90d94fab6dcc37c39512166ffcd269e73d05c2d9301ffba9774802cc54"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "artifact",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/artifact_895dbc6416220576.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/artifact_895dbc6416220576.json",
+      "bytes": 162237,
+      "sha256": "1012ff20af616eaf9b4f9c291c89cc299b380389fa00a6d12e6a15918a8b7f40"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "metrics",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/metrics_821e1e1ed24efe15.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/metrics_821e1e1ed24efe15.json",
+      "bytes": 2135,
+      "sha256": "5c55f9b53e3394abc5eeaad3e4211474404da971db098b14816ff0886e9525bb"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_00_ac48a31a57e22e39.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_00_ac48a31a57e22e39.json",
+      "bytes": 162237,
+      "sha256": "1012ff20af616eaf9b4f9c291c89cc299b380389fa00a6d12e6a15918a8b7f40"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_01_180bbf12cfaf2ba2.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_01_180bbf12cfaf2ba2.json",
+      "bytes": 2135,
+      "sha256": "5c55f9b53e3394abc5eeaad3e4211474404da971db098b14816ff0886e9525bb"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "event_00_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_00_0e81bd30511670e3.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_00_0e81bd30511670e3.json",
+      "bytes": 162237,
+      "sha256": "1012ff20af616eaf9b4f9c291c89cc299b380389fa00a6d12e6a15918a8b7f40"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "role": "event_00_evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_01_8de1f4f2aa30991d.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_01_8de1f4f2aa30991d.json",
+      "bytes": 2135,
+      "sha256": "5c55f9b53e3394abc5eeaad3e4211474404da971db098b14816ff0886e9525bb"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "artifact",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/artifact_98bd5f6edb210ea9.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/artifact_98bd5f6edb210ea9.json",
+      "bytes": 214636,
+      "sha256": "649d772ad03eff2fc26d48cbd7c8a00368424b68588221ae4ef7978272f48a84"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "metrics",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/metrics_65145792458cb08e.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/metrics_65145792458cb08e.json",
+      "bytes": 1672,
+      "sha256": "3162d53dabaa2d99efb9d5764eac95184716773a793a4f93b55b1280eb2bd9d3"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_00_9ee109495881e993.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_00_9ee109495881e993.json",
+      "bytes": 214636,
+      "sha256": "649d772ad03eff2fc26d48cbd7c8a00368424b68588221ae4ef7978272f48a84"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_01_1f04881deaf2981f.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_01_1f04881deaf2981f.json",
+      "bytes": 1520,
+      "sha256": "c0c00689827ad9a122bf35e2e6a65939ed60f7e3f330f5fba5cef82d34b0200a"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "evidence_02",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_02_5cb82ff99fb5682e.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_02_5cb82ff99fb5682e.json",
+      "bytes": 228074,
+      "sha256": "53674664082446de881b6d086d235ae35c375d3c3a668bef042872d4a816dc57"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "evidence_03",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_03_bd85c9986d10b176.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_03_bd85c9986d10b176.json",
+      "bytes": 1672,
+      "sha256": "3162d53dabaa2d99efb9d5764eac95184716773a793a4f93b55b1280eb2bd9d3"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "event_00_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_00_84d6a150a89f79b3.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_00_84d6a150a89f79b3.json",
+      "bytes": 214636,
+      "sha256": "649d772ad03eff2fc26d48cbd7c8a00368424b68588221ae4ef7978272f48a84"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "event_00_evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_01_ca5ded8ec605f3fe.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_01_ca5ded8ec605f3fe.json",
+      "bytes": 1520,
+      "sha256": "c0c00689827ad9a122bf35e2e6a65939ed60f7e3f330f5fba5cef82d34b0200a"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "event_00_evidence_02",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_02_b2c67be6f2ea02e4.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_02_b2c67be6f2ea02e4.json",
+      "bytes": 228074,
+      "sha256": "53674664082446de881b6d086d235ae35c375d3c3a668bef042872d4a816dc57"
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "role": "event_00_evidence_03",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_03_48dc8498e30d1a95.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_03_48dc8498e30d1a95.json",
+      "bytes": 1672,
+      "sha256": "3162d53dabaa2d99efb9d5764eac95184716773a793a4f93b55b1280eb2bd9d3"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "artifact",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/artifact_d04d627fe47a8fe2.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/artifact_d04d627fe47a8fe2.json",
+      "bytes": 2564798,
+      "sha256": "7e579898bca5552033ca87ed5d0dafa43757ee28910fb85d6250f8781c1e613e"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "metrics",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/metrics_2f7c2907686249ae.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/metrics_2f7c2907686249ae.json",
+      "bytes": 115337,
+      "sha256": "ed955b5e74a4da04b8386d34ad57c370081fe10c978b7fc0e15129774694c833"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_00_bf76150e3b253f73.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_00_bf76150e3b253f73.json",
+      "bytes": 2108885,
+      "sha256": "a9a2a109c700a10afa924df3870d13e508e2a1f4032544034b82f6260577b1f6"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_01_e017d20bcf580d87.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_01_e017d20bcf580d87.json",
+      "bytes": 129292,
+      "sha256": "1eac83d472f972da0c4935215113fa60a4ec2703a4e37563193b2cc3b83abd7f"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_02",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_02_3c29f4d64c782d8e.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_02_3c29f4d64c782d8e.json",
+      "bytes": 1573,
+      "sha256": "b6084cc7e8eb1535f4566996057c59b9980b69922696611d565d8adc40513955"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_03",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_03_7dd8a5ddda43106e.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_03_7dd8a5ddda43106e.json",
+      "bytes": 120184,
+      "sha256": "de10cddbf80f955653be2a37b810533ffcd38cdc6a536642fb840a1e355f0475"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_04",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_04_99be0b622c4ec72a.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_04_99be0b622c4ec72a.json",
+      "bytes": 108782,
+      "sha256": "c7b3bc1081a7c02fb75268a64205d09cd22cd066adf370f24fd875b55c641c07"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "evidence_05",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_05_275d9ba9a4b4c091.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_05_275d9ba9a4b4c091.json",
+      "bytes": 115337,
+      "sha256": "ed955b5e74a4da04b8386d34ad57c370081fe10c978b7fc0e15129774694c833"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_00_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_00_6c934e434f068fbb.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_00_6c934e434f068fbb.json",
+      "bytes": 2108885,
+      "sha256": "a9a2a109c700a10afa924df3870d13e508e2a1f4032544034b82f6260577b1f6"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_00_evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_01_b8b1fad9e79818d5.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_01_b8b1fad9e79818d5.json",
+      "bytes": 129292,
+      "sha256": "1eac83d472f972da0c4935215113fa60a4ec2703a4e37563193b2cc3b83abd7f"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_01_evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_01_evidence_01_b1b2d79ecdd65ef3.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_01_evidence_01_b1b2d79ecdd65ef3.json",
+      "bytes": 1573,
+      "sha256": "b6084cc7e8eb1535f4566996057c59b9980b69922696611d565d8adc40513955"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_02_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_00_168ea9ec7d3eff9c.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_00_168ea9ec7d3eff9c.json",
+      "bytes": 120184,
+      "sha256": "de10cddbf80f955653be2a37b810533ffcd38cdc6a536642fb840a1e355f0475"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_02_evidence_01",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_01_bae9168c5474ed4d.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_01_bae9168c5474ed4d.json",
+      "bytes": 108782,
+      "sha256": "c7b3bc1081a7c02fb75268a64205d09cd22cd066adf370f24fd875b55c641c07"
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "role": "event_02_evidence_02",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_02_b0da8257fdc593bd.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_02_b0da8257fdc593bd.json",
+      "bytes": 115337,
+      "sha256": "ed955b5e74a4da04b8386d34ad57c370081fe10c978b7fc0e15129774694c833"
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "role": "artifact",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/artifact_41c0cceaa9b51de6.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/artifact_41c0cceaa9b51de6.json",
+      "bytes": 5069992,
+      "sha256": "c0155db7299d8e791b292ca15375aded371f9b26a69ccf00f140388c2c57e56b"
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "role": "metrics",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/metrics_90185935a57908f5.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/metrics_90185935a57908f5.json",
+      "bytes": 5069992,
+      "sha256": "c0155db7299d8e791b292ca15375aded371f9b26a69ccf00f140388c2c57e56b"
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "role": "evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/evidence_00_6ee7670aed25b049.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/evidence_00_6ee7670aed25b049.json",
+      "bytes": 2564798,
+      "sha256": "7e579898bca5552033ca87ed5d0dafa43757ee28910fb85d6250f8781c1e613e"
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "role": "event_00_evidence_00",
+      "source_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/event_00_evidence_00_8646c56a5179746d.json",
+      "archived_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/event_00_evidence_00_8646c56a5179746d.json",
+      "bytes": 2564798,
+      "sha256": "7e579898bca5552033ca87ed5d0dafa43757ee28910fb85d6250f8781c1e613e"
+    }
+  ],
+  "missing": []
+}
