@@ -130,21 +130,78 @@ a primary-only challenger with explicit minimum trade-rate gates, or re-admit
 early-zone trades only under stricter confidence, price, timing, and reversal
 constraints.
 
+## Min-Order Primary Challenger - 2026-06-29
+
+The first primary-only challenger exposed a sizing bug in the search design:
+with a `$100` bankroll and `position_pct=0.025`, many otherwise eligible
+primary-zone decisions were rejected by `min_order_size_primary`. The challenger
+profiles were updated so candidate per-order notional is actionable while total
+exposure remains capped.
+
+Implementation changes:
+
+- Added targeted profiles:
+  - `a_plus5m_tail_primary`
+  - `a_plus5m_tail_early_reentry`
+  - `a_plus5m_tail_low_exposure`
+- Kept the original `a_plus5m_tail_guard` unchanged for historical
+  comparability.
+- Updated continuous harness loading to check shared distilled/per-tenant
+  sidecars before downloading raw PMXT parquet. This made reruns load cached
+  hours in about `22-26s` instead of redownloading each raw hour.
+- Added `AGENTS.md` rule: promotion evidence must include the freshest fully
+  resolved windows available. Old tail windows are regression/debug windows, not
+  promotion proof.
+
+Targeted results for `a_plus5m_tail_primary`, `--zone-mode primary`,
+`bankroll=100`, `position_pct=0.05`, `max_total_exposure_usd=8`:
+
+Jun7 00:00-07:00 UTC:
+
+- trades: `7`
+- wins/losses: `7/0`
+- PnL: `+7.73694`
+- fees: `0.46576`
+- fill rate: `100%`
+- execution failures: `0`
+- unresolved fills: `0`
+- breaker tripped: `false`
+- zone audit: passed on this one fold
+
+Jun10 08:00-15:00 UTC:
+
+- trades: `3`
+- wins/losses: `2/1`
+- PnL: `-2.10983`
+- fees: `0.23003`
+- fill rate: `100%`
+- execution failures: `0`
+- unresolved fills: `0`
+- breaker tripped: `false`
+- zone audit: failed because primary-zone PnL was negative
+
+Verdict: `a_plus5m_tail_primary` is useful but not sound. It proves that
+min-order-aware sizing can rescue one known tail cluster, but it fails the second
+known tail cluster and therefore remains `questionable` in
+`docs/strategy_registry.json`.
+
 ## Next Loop
 
-1. Build a small targeted challenger set from the two tail clusters:
-   - primary-only
+1. Test the remaining challenger families on both known tail clusters:
    - early-zone re-entry with tighter confidence, price, timing, and reversal gates
    - lower-exposure reversion with explicit minimum trade-rate gates
-2. Run those challengers on the known tail-cluster folds first.
-3. Only after the targeted subset has nonzero throughput without reintroducing
-   tail losses, run `rolling-history` on the full May28-Jun10 window.
-4. Re-run `strategy-builder causal-policy-search` with the same tail gates.
-5. Promote only if all are true:
+2. Reject any family that cannot pass both known tail clusters.
+3. For any family that passes both tail clusters, run the full May28-Jun10
+   window.
+4. Before any promotion step, run the same family on the freshest available
+   fully resolved windows.
+5. Re-run `strategy-builder causal-policy-search` with the same tail gates.
+6. Promote only if all are true:
    - `ok=true`
+   - freshest-window result passes
    - no loss burst above 2 in a 5-report window
    - CVaR clears the configured floor with margin
    - worst report is acceptable
    - no unresolved fills, execution failures, or breaker artifacts
-6. If still failing, mark that profile version `dead_end` and branch search
+7. If still failing, mark that profile version `dead_end` and branch search
    toward primary-only selectivity or lower exposure, not paper mode.

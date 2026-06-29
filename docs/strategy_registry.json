@@ -1,7 +1,43 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-28T18:05:59.317168+00:00",
+  "updated_at": "2026-06-29T10:44:35.402214+00:00",
   "entries": [
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "version_id": "sv_995b52d88b1177b5",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "questionable",
+      "reason": "Min-order-aware primary-only challenger fixed Jun7 tail cluster (+7.73694, 7/7 wins) but failed Jun10 tail cluster (-2.10983, 2/3 wins); keep research-only and require fresh-window validation before any promotion.",
+      "artifact_path": "/private/tmp/polymomentum_tail_challengers_20260629_jun07_primary_minorder/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+      "metrics_path": "/private/tmp/polymomentum_tail_challengers_20260629_jun10_primary_minorder/promotions/rolling_20260610T080000Z_20260610T150000Z_robust.zone_audit.json",
+      "evidence_paths": [
+        "/private/tmp/polymomentum_tail_challengers_20260629_jun07_primary_minorder/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+        "/private/tmp/polymomentum_tail_challengers_20260629_jun07_primary_minorder/promotions/rolling_20260607T000000Z_20260607T070000Z_robust.zone_audit.json",
+        "/private/tmp/polymomentum_tail_challengers_20260629_jun10_primary_minorder/reports/fold_001_20260610T080000Z_20260610T150000Z_sweep.json",
+        "/private/tmp/polymomentum_tail_challengers_20260629_jun10_primary_minorder/promotions/rolling_20260610T080000Z_20260610T150000Z_robust.zone_audit.json"
+      ],
+      "notes": [
+        "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+      ],
+      "first_seen_at": "2026-06-29T10:44:35.402214+00:00",
+      "updated_at": "2026-06-29T10:44:35.402214+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T10:44:35.402214+00:00",
+          "status": "questionable",
+          "reason": "Min-order-aware primary-only challenger fixed Jun7 tail cluster (+7.73694, 7/7 wins) but failed Jun10 tail cluster (-2.10983, 2/3 wins); keep research-only and require fresh-window validation before any promotion.",
+          "evidence_paths": [
+            "/private/tmp/polymomentum_tail_challengers_20260629_jun07_primary_minorder/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+            "/private/tmp/polymomentum_tail_challengers_20260629_jun07_primary_minorder/promotions/rolling_20260607T000000Z_20260607T070000Z_robust.zone_audit.json",
+            "/private/tmp/polymomentum_tail_challengers_20260629_jun10_primary_minorder/reports/fold_001_20260610T080000Z_20260610T150000Z_sweep.json",
+            "/private/tmp/polymomentum_tail_challengers_20260629_jun10_primary_minorder/promotions/rolling_20260610T080000Z_20260610T150000Z_robust.zone_audit.json"
+          ],
+          "notes": [
+            "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+          ]
+        }
+      ]
+    },
     {
       "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
       "version_id": "sv_8e5ee8ac9f5e37f8",

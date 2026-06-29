@@ -3203,6 +3203,48 @@ fn rolling_history_profile(name: &str) -> anyhow::Result<RollingHistoryProfile> 
             profile.taker_only = true;
             profile
         }
+        "a_plus5m_tail_primary" => {
+            let mut profile = rolling_history_profile("a_plus5m_tail_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.40,0.50".to_string();
+            profile.z = "0.70,0.90".to_string();
+            profile.max_price = "0.85,0.90".to_string();
+            profile.min_reversion_count = "1".to_string();
+            profile.max_reversion_count = "2".to_string();
+            profile.position_pct = "0.05".to_string();
+            profile
+        }
+        "a_plus5m_tail_early_reentry" => {
+            let mut profile = rolling_history_profile("a_plus5m_tail_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.60,0.70".to_string();
+            profile.z = "1.10,1.30".to_string();
+            profile.edge = "0.10,0.15".to_string();
+            profile.max_price = "0.75".to_string();
+            profile.min_reversion_count = "1".to_string();
+            profile.max_reversion_count = "2".to_string();
+            profile.position_pct = "0.05".to_string();
+            profile.max_per_market_usd = "5".to_string();
+            profile.max_total_exposure_usd = "5".to_string();
+            profile.max_projected_stressed_drawdown_pct = "0.08".to_string();
+            profile.degraded_min_z = "1.30".to_string();
+            profile.degraded_max_price = "0.65".to_string();
+            profile
+        }
+        "a_plus5m_tail_low_exposure" => {
+            let mut profile = rolling_history_profile("a_plus5m_tail_guard")?;
+            profile.name = name.to_string();
+            profile.conf = "0.50".to_string();
+            profile.z = "0.70,0.90".to_string();
+            profile.max_price = "0.85,0.90".to_string();
+            profile.min_reversion_count = "1".to_string();
+            profile.max_reversion_count = "2".to_string();
+            profile.position_pct = "0.05".to_string();
+            profile.max_per_market_usd = "5".to_string();
+            profile.max_total_exposure_usd = "5".to_string();
+            profile.max_projected_stressed_drawdown_pct = "0.08".to_string();
+            profile
+        }
         "a_plus5m_reversion_guard" => {
             let mut profile = rolling_history_profile("a_plus5m_causal_guard")?;
             profile.name = name.to_string();
@@ -7415,6 +7457,40 @@ mod replay_validation_tests {
         assert_ne!(profile.degraded_min_z, "0.90");
         assert!(profile.taker_only);
         assert!(profile.degraded_force_taker);
+    }
+
+    #[test]
+    fn rolling_history_tail_challenger_profiles_match_targeted_shapes() {
+        let primary = rolling_history_profile("a_plus5m_tail_primary").unwrap();
+        assert_eq!(primary.conf, "0.40,0.50");
+        assert_eq!(primary.z, "0.70,0.90");
+        assert_eq!(primary.max_price, "0.85,0.90");
+        assert_eq!(primary.min_reversion_count, "1");
+        assert_eq!(primary.max_reversion_count, "2");
+        assert_eq!(primary.position_pct, "0.05");
+        assert_eq!(primary.max_total_exposure_usd, "8");
+        assert!(primary.taker_only);
+
+        let early = rolling_history_profile("a_plus5m_tail_early_reentry").unwrap();
+        assert_eq!(early.conf, "0.60,0.70");
+        assert_eq!(early.z, "1.10,1.30");
+        assert_eq!(early.edge, "0.10,0.15");
+        assert_eq!(early.max_price, "0.75");
+        assert_eq!(early.position_pct, "0.05");
+        assert_eq!(early.max_per_market_usd, "5");
+        assert_eq!(early.max_total_exposure_usd, "5");
+        assert_eq!(early.degraded_min_z, "1.30");
+        assert_eq!(early.degraded_max_price, "0.65");
+        assert!(early.taker_only);
+
+        let low_exposure = rolling_history_profile("a_plus5m_tail_low_exposure").unwrap();
+        assert_eq!(low_exposure.conf, "0.50");
+        assert_eq!(low_exposure.z, "0.70,0.90");
+        assert_eq!(low_exposure.max_price, "0.85,0.90");
+        assert_eq!(low_exposure.position_pct, "0.05");
+        assert_eq!(low_exposure.max_per_market_usd, "5");
+        assert_eq!(low_exposure.max_total_exposure_usd, "5");
+        assert!(low_exposure.taker_only);
     }
 
     #[tokio::test]

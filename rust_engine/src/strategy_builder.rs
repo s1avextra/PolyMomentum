@@ -4666,7 +4666,7 @@ impl StrategyBuilderProfile {
                 micro_max_spread: "1.0",
                 micro_min_depth: "0.0",
                 micro_min_pressure: "-1.0",
-                position_pct: "0.05",
+                position_pct: "0.025",
                 max_per_market_usd: "20",
                 max_total_exposure_usd: "15",
                 max_projected_stressed_drawdown_pct: "0.24",
@@ -4893,6 +4893,87 @@ impl StrategyBuilderProfile {
                 degraded_force_taker: true,
                 also_maker: false,
             }),
+            "a_plus5m_tail_primary" => Ok(Self {
+                name: "a_plus5m_tail_primary",
+                conf: "0.40,0.50",
+                z: "0.70,0.90",
+                edge: "0.07",
+                ev_buffer: "-1.0",
+                min_price: "0.10",
+                max_price: "0.85,0.90",
+                min_reversion_count: "1",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "10",
+                max_total_exposure_usd: "8",
+                max_projected_stressed_drawdown_pct: "0.12",
+                degraded_after_losses: "1",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "1.10",
+                degraded_max_price: "0.75",
+                degraded_force_taker: true,
+                also_maker: false,
+            }),
+            "a_plus5m_tail_early_reentry" => Ok(Self {
+                name: "a_plus5m_tail_early_reentry",
+                conf: "0.60,0.70",
+                z: "1.10,1.30",
+                edge: "0.10,0.15",
+                ev_buffer: "-1.0",
+                min_price: "0.10",
+                max_price: "0.75",
+                min_reversion_count: "1",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "5",
+                max_total_exposure_usd: "5",
+                max_projected_stressed_drawdown_pct: "0.08",
+                degraded_after_losses: "1",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "1.30",
+                degraded_max_price: "0.65",
+                degraded_force_taker: true,
+                also_maker: false,
+            }),
+            "a_plus5m_tail_low_exposure" => Ok(Self {
+                name: "a_plus5m_tail_low_exposure",
+                conf: "0.50",
+                z: "0.70,0.90",
+                edge: "0.07",
+                ev_buffer: "-1.0",
+                min_price: "0.10",
+                max_price: "0.85,0.90",
+                min_reversion_count: "1",
+                max_reversion_count: "2",
+                settlement_floor: "10.0",
+                settlement_guard_minutes: "2.0",
+                settlement_sigma_buffer: "0.0",
+                micro_max_spread: "1.0",
+                micro_min_depth: "0.0",
+                micro_min_pressure: "-1.0",
+                position_pct: "0.05",
+                max_per_market_usd: "5",
+                max_total_exposure_usd: "5",
+                max_projected_stressed_drawdown_pct: "0.08",
+                degraded_after_losses: "1",
+                degraded_after_drawdown_pct: "0.0",
+                degraded_min_z: "1.10",
+                degraded_max_price: "0.75",
+                degraded_force_taker: true,
+                also_maker: false,
+            }),
             "a_plus5m_reversion_guard" => Ok(Self {
                 name: "a_plus5m_reversion_guard",
                 conf: "0.50",
@@ -4921,7 +5002,7 @@ impl StrategyBuilderProfile {
                 also_maker: true,
             }),
             _ => bail!(
-                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_causal_guard_selected, a_plus5m_tail_guard, a_plus5m_reversion_guard, swift5m"
+                "unknown strategy-builder profile `{name}`; supported profiles: guarded5m, a_plus5m, a_plus5m_regime, a_plus5m_adaptive, a_plus5m_adaptive_price, a_plus5m_ev_guard, a_plus5m_causal_guard_selected, a_plus5m_tail_guard, a_plus5m_tail_primary, a_plus5m_tail_early_reentry, a_plus5m_tail_low_exposure, a_plus5m_reversion_guard, swift5m"
             ),
         }
     }
@@ -5902,6 +5983,34 @@ mod tests {
         assert_eq!(profile.degraded_min_z, "1.10");
         assert_eq!(profile.degraded_max_price, "0.75");
         assert!(!profile.also_maker);
+    }
+
+    #[test]
+    fn tail_challenger_profiles_pin_targeted_risk_shapes() {
+        let primary = StrategyBuilderProfile::from_name("a_plus5m_tail_primary").unwrap();
+        assert_eq!(primary.z, "0.70,0.90");
+        assert_eq!(primary.max_price, "0.85,0.90");
+        assert_eq!(primary.min_reversion_count, "1");
+        assert_eq!(primary.position_pct, "0.05");
+        assert!(!primary.also_maker);
+        assert!(primary.degraded_force_taker);
+
+        let early = StrategyBuilderProfile::from_name("a_plus5m_tail_early_reentry").unwrap();
+        assert_eq!(early.conf, "0.60,0.70");
+        assert_eq!(early.z, "1.10,1.30");
+        assert_eq!(early.edge, "0.10,0.15");
+        assert_eq!(early.max_price, "0.75");
+        assert_eq!(early.position_pct, "0.05");
+        assert_eq!(early.max_per_market_usd, "5");
+        assert_eq!(early.max_total_exposure_usd, "5");
+
+        let low_exposure = StrategyBuilderProfile::from_name("a_plus5m_tail_low_exposure").unwrap();
+        assert_eq!(low_exposure.conf, "0.50");
+        assert_eq!(low_exposure.z, "0.70,0.90");
+        assert_eq!(low_exposure.position_pct, "0.05");
+        assert_eq!(low_exposure.max_per_market_usd, "5");
+        assert_eq!(low_exposure.max_total_exposure_usd, "5");
+        assert!(!low_exposure.also_maker);
     }
 
     fn selectivity_input(top: usize) -> StrategyBuilderSelectivitySearchInput {

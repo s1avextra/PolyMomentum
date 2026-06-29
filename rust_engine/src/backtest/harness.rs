@@ -918,7 +918,6 @@ pub async fn run_harness(
             continue;
         }
 
-        let (_, downloaded_hour) = loader.download_hour_with_status(h, false).await?;
         let load_t0 = std::time::Instant::now();
         let hour_filter = cfg.universe.condition_id_set_for_hour(h);
         eprintln!(
@@ -932,7 +931,8 @@ pub async fn run_harness(
 
         // Reader fallback chain: shared distilled → per-tenant sidecar → parquet.
         let mut events_vec: Vec<L2Event> = Vec::new();
-        let mut source = "parquet";
+        let mut source = "sidecar_or_cached_parquet";
+        let mut downloaded_hour = false;
         if let Some(shared_dir) = &cfg.shared_distilled_dir {
             let path = crate::backtest::distill::shared_cache_path_for_hour(shared_dir, h);
             if path.exists() {
@@ -949,7 +949,22 @@ pub async fn run_harness(
             }
         }
         if events_vec.is_empty() {
-            events_vec = loader.load_with_sidecar(h, &hour_filter)?;
+            match loader.load_with_sidecar(h, &hour_filter) {
+                Ok(events) => {
+                    events_vec = events;
+                }
+                Err(cache_err) => {
+                    let (_, did_download) = loader.download_hour_with_status(h, false).await?;
+                    downloaded_hour = did_download;
+                    source = "parquet";
+                    events_vec = loader.load_with_sidecar(h, &hour_filter).with_context(|| {
+                        format!(
+                            "load PMXT hour {} after download; initial cache load failed: {cache_err:#}",
+                            h
+                        )
+                    })?;
+                }
+            }
         }
         events_vec.sort_by(|a, b| {
             a.timestamp_s
@@ -1149,7 +1164,6 @@ async fn run_harness_continuous(
             break;
         }
 
-        let (_, downloaded_hour) = loader.download_hour_with_status(h, false).await?;
         let load_t0 = std::time::Instant::now();
         let hour_filter = cfg.universe.condition_id_set_for_hour(h);
         eprintln!(
@@ -1162,7 +1176,8 @@ async fn run_harness_continuous(
         );
 
         let mut events_vec: Vec<L2Event> = Vec::new();
-        let mut source = "parquet";
+        let mut source = "sidecar_or_cached_parquet";
+        let mut downloaded_hour = false;
         if let Some(shared_dir) = &cfg.shared_distilled_dir {
             let path = crate::backtest::distill::shared_cache_path_for_hour(shared_dir, h);
             if path.exists() {
@@ -1179,7 +1194,22 @@ async fn run_harness_continuous(
             }
         }
         if events_vec.is_empty() {
-            events_vec = loader.load_with_sidecar(h, &hour_filter)?;
+            match loader.load_with_sidecar(h, &hour_filter) {
+                Ok(events) => {
+                    events_vec = events;
+                }
+                Err(cache_err) => {
+                    let (_, did_download) = loader.download_hour_with_status(h, false).await?;
+                    downloaded_hour = did_download;
+                    source = "parquet";
+                    events_vec = loader.load_with_sidecar(h, &hour_filter).with_context(|| {
+                        format!(
+                            "load PMXT hour {} after download; initial cache load failed: {cache_err:#}",
+                            h
+                        )
+                    })?;
+                }
+            }
         }
         events_vec.sort_by(|a, b| {
             a.timestamp_s

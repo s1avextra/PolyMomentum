@@ -73,7 +73,18 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
-## 6. Parquet & shared-cache rules (multi-tenant VPS)
+## 6. Fresh-Window Strategy Validation
+
+**Promotion evidence must include the freshest fully resolved data available.**
+
+- Old windows are allowed for bug reproduction, tail-cluster diagnosis, and regression tests against known failures.
+- Any strategy candidate meant for promotion must be re-tested on the newest available fully resolved windows before it can advance.
+- A candidate is not sound if it only works on one historic slice. It must keep the same feed-forward behavior across older diagnostic windows, holdout windows, and the freshest available windows.
+- If fresh PMXT/Gamma data is temporarily unavailable, mark the candidate as blocked or research-only. Do not substitute paper mode for a backtest that fresh cached data can prove.
+
+---
+
+## 7. Parquet & shared-cache rules (multi-tenant VPS)
 
 PolyMomentum shares the multibot VPS with **adgts** and **polyarbitrage**.
 The PMXT v2 archive cache (`/opt/shared/pmxt_v2_cache/`) and the distilled
