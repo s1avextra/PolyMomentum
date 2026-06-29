@@ -1,7 +1,69 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-29T10:44:35.402214+00:00",
+  "updated_at": "2026-06-29T16:30:01.014056+00:00",
   "entries": [
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "version_id": "sv_f6580d73f7d86904",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "rejected",
+      "reason": "Early-zone re-entry challenger produced zero trades on the required Jun7 00-07 tail cluster; current gates are coverage-limited and do not qualify for Jun10, full-window, or freshest-window promotion.",
+      "artifact_path": "/private/tmp/polymomentum_tail_remaining_20260629_jun07_early_reentry/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+      "metrics_path": "/private/tmp/polymomentum_tail_remaining_20260629_jun07_early_reentry/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+      "evidence_paths": [
+        "/private/tmp/polymomentum_tail_remaining_20260629_jun07_early_reentry/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json"
+      ],
+      "notes": [
+        "Fail-fast rule: a challenger must pass the known Jun7 tail cluster before spending downloads or CPU on Jun10 and freshest-window promotion."
+      ],
+      "first_seen_at": "2026-06-29T16:30:00.956925+00:00",
+      "updated_at": "2026-06-29T16:30:00.956925+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T16:30:00.956925+00:00",
+          "status": "rejected",
+          "reason": "Early-zone re-entry challenger produced zero trades on the required Jun7 00-07 tail cluster; current gates are coverage-limited and do not qualify for Jun10, full-window, or freshest-window promotion.",
+          "evidence_paths": [
+            "/private/tmp/polymomentum_tail_remaining_20260629_jun07_early_reentry/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json"
+          ],
+          "notes": [
+            "Fail-fast rule: a challenger must pass the known Jun7 tail cluster before spending downloads or CPU on Jun10 and freshest-window promotion."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "version_id": "sv_df442d536b5eab79",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "rejected",
+      "reason": "Low-exposure reversion challenger failed the required Jun7 00-07 tail cluster: 5 trades, 4 wins, 1 loss, total PnL -1.42235, early-zone PnL -4.28375, profit factor 0.72237.",
+      "artifact_path": "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+      "metrics_path": "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/promotions/rolling_20260607T000000Z_20260607T070000Z_robust.zone_audit.json",
+      "evidence_paths": [
+        "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+        "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/promotions/rolling_20260607T000000Z_20260607T070000Z_robust.zone_audit.json"
+      ],
+      "notes": [
+        "Primary bucket was positive (+2.86140), but the early bucket remained toxic (-4.28375); do not advance this parameterization to promotion."
+      ],
+      "first_seen_at": "2026-06-29T16:30:01.014056+00:00",
+      "updated_at": "2026-06-29T16:30:01.014056+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T16:30:01.014056+00:00",
+          "status": "rejected",
+          "reason": "Low-exposure reversion challenger failed the required Jun7 00-07 tail cluster: 5 trades, 4 wins, 1 loss, total PnL -1.42235, early-zone PnL -4.28375, profit factor 0.72237.",
+          "evidence_paths": [
+            "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/reports/fold_001_20260607T000000Z_20260607T070000Z_sweep.json",
+            "/private/tmp/polymomentum_tail_remaining_20260629_jun07_low_exposure/promotions/rolling_20260607T000000Z_20260607T070000Z_robust.zone_audit.json"
+          ],
+          "notes": [
+            "Primary bucket was positive (+2.86140), but the early bucket remained toxic (-4.28375); do not advance this parameterization to promotion."
+          ]
+        }
+      ]
+    },
     {
       "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
       "version_id": "sv_995b52d88b1177b5",

@@ -185,11 +185,53 @@ min-order-aware sizing can rescue one known tail cluster, but it fails the secon
 known tail cluster and therefore remains `questionable` in
 `docs/strategy_registry.json`.
 
+## Remaining Challenger Fail-Fast - 2026-06-29
+
+The remaining challenger families were run against the first required tail
+cluster, Jun7 00:00-07:00 UTC. Neither qualified for Jun10, full-window, or
+freshest-window promotion runs.
+
+`a_plus5m_tail_early_reentry`, `--zone-mode early`:
+
+- variants tested: `8`
+- trades: `0` on every variant
+- execution attempts: `0`
+- execution failures: `0`
+- unresolved fills: `0`
+- breaker tripped: `false`
+- main skip reasons: `low_reversion_count_early`, `settlement_cutoff_*`,
+  `low_confidence_*`, and `high_reversion_count_*`
+- verdict: rejected as coverage-limited. The current gates are too strict to
+  prove a tradable edge.
+
+`a_plus5m_tail_low_exposure`, `--zone-mode all`:
+
+- best variant trades: `5`
+- wins/losses: `4/1`
+- PnL: `-1.42235`
+- fees: `0.29385`
+- fill rate: `100%`
+- execution failures: `0`
+- unresolved fills: `0`
+- breaker tripped: `false`
+- early zone: `2` trades, `-4.28375` PnL
+- primary zone: `3` trades, `+2.86140` PnL
+- profit factor: `0.72237`
+- zone audit: failed because early-zone PnL was below zero
+- verdict: rejected. Lower exposure reduced damage but did not remove the toxic
+  early bucket.
+
+Fail-fast result: no challenger family passed the known tail clusters. The only
+surviving variant remains `a_plus5m_tail_primary_minorder_20260629` as
+`questionable`, not promotable, because it passed Jun7 but failed Jun10. The next
+search should learn or explicitly deny toxic early buckets before any paper/live
+step; old tail clusters remain regression/debug gates, and freshest fully
+resolved windows remain mandatory for promotion evidence.
+
 ## Next Loop
 
-1. Test the remaining challenger families on both known tail clusters:
-   - early-zone re-entry with tighter confidence, price, timing, and reversal gates
-   - lower-exposure reversion with explicit minimum trade-rate gates
+1. Build the next search around explicit toxic-early-bucket denial or
+   feed-forward learned deny rules from Jun7 and Jun10.
 2. Reject any family that cannot pass both known tail clusters.
 3. For any family that passes both tail clusters, run the full May28-Jun10
    window.
