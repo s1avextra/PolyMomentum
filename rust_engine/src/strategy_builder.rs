@@ -195,6 +195,10 @@ pub struct StrategyBuilderCausalPolicySearchInput {
     pub tail_first_ranking: bool,
     pub min_oos_payoff_ratio: f64,
     pub max_oos_worst_loss_to_avg_win: f64,
+    pub prior_loss_cluster_lookback: usize,
+    pub max_prior_loss_burst_reports: usize,
+    pub min_prior_payoff_ratio: f64,
+    pub max_prior_worst_loss_to_avg_win: f64,
     pub top: usize,
 }
 
@@ -424,6 +428,10 @@ pub struct CausalPolicySearchGates {
     pub tail_first_ranking: bool,
     pub min_oos_payoff_ratio: f64,
     pub max_oos_worst_loss_to_avg_win: f64,
+    pub prior_loss_cluster_lookback: usize,
+    pub max_prior_loss_burst_reports: usize,
+    pub min_prior_payoff_ratio: f64,
+    pub max_prior_worst_loss_to_avg_win: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -641,6 +649,8 @@ pub struct CausalPolicyDecisionReport {
     pub train_reports: usize,
     pub policy: CausalPolicyReport,
     pub train: Option<SelectivityStatsReport>,
+    pub prior_tail: Option<TailRiskReport>,
+    pub prior_recent_loss_reports: usize,
     pub oos: Option<SelectivityStatsReport>,
     pub reason: String,
 }
@@ -2688,6 +2698,10 @@ fn causal_policy_search_from_folds(
                 .to_string(),
             "Optional tail-first ranking prioritizes loss-burst size, worst fold, CVaR, and payoff asymmetry before aggregate PnL."
                 .to_string(),
+            "Optional prior-only risk gates flatten the next fold when the selected policy already shows a loss cluster or poor payoff geometry in previous folds."
+                .to_string(),
+            "The loss-cluster sentinel uses only the most recent configured prior window, so a policy can resume after the bad state rolls out."
+                .to_string(),
             "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
                 .to_string(),
         ],
@@ -2712,6 +2726,10 @@ fn causal_policy_search_from_folds(
             tail_first_ranking: input.tail_first_ranking,
             min_oos_payoff_ratio: input.min_oos_payoff_ratio,
             max_oos_worst_loss_to_avg_win: input.max_oos_worst_loss_to_avg_win,
+            prior_loss_cluster_lookback: input.prior_loss_cluster_lookback,
+            max_prior_loss_burst_reports: input.max_prior_loss_burst_reports,
+            min_prior_payoff_ratio: input.min_prior_payoff_ratio,
+            max_prior_worst_loss_to_avg_win: input.max_prior_worst_loss_to_avg_win,
         },
         candidates,
     }
@@ -3186,6 +3204,8 @@ fn evaluate_causal_policy_candidate(
                     deny_rules: Vec::new(),
                 }),
                 train: None,
+                prior_tail: None,
+                prior_recent_loss_reports: 0,
                 oos: None,
                 reason: "insufficient_prior_reports".to_string(),
             });
@@ -3207,6 +3227,16 @@ fn evaluate_causal_policy_candidate(
         let train_stats = stats_for_causal_policy(prior_folds, &candidate.variant, &policy);
         let train_reports_with_trades =
             reports_with_causal_policy_trades(prior_folds, &candidate.variant, &policy);
+        let prior_policy_pnls =
+            report_pnls_for_causal_policy(prior_folds, &candidate.variant, &policy);
+        let prior_tail = tail_risk_report(
+            &prior_policy_pnls,
+            input.tail_alpha,
+            input.loss_burst_lookback,
+        );
+        let prior_loss_cluster_lookback = effective_prior_loss_cluster_lookback(input);
+        let prior_recent_loss_reports =
+            recent_loss_reports(&prior_policy_pnls, prior_loss_cluster_lookback);
 
         if train_reports_with_trades < input.min_train_reports
             || train_stats.trades < input.min_train_trades
@@ -3217,8 +3247,59 @@ fn evaluate_causal_policy_candidate(
                 train_reports: idx,
                 policy: causal_policy_report(&policy),
                 train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
                 oos: None,
                 reason: "policy_prior_stats_failed_train_gates".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+        if input.max_prior_loss_burst_reports > 0
+            && prior_loss_cluster_lookback > 0
+            && prior_recent_loss_reports >= input.max_prior_loss_burst_reports
+        {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
+                oos: None,
+                reason: "prior_loss_cluster_sentinel_flat".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+        if input.min_prior_payoff_ratio > 0.0
+            && train_stats.payoff_ratio < input.min_prior_payoff_ratio
+        {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
+                oos: None,
+                reason: "prior_payoff_ratio_below_budget".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+        if input.max_prior_worst_loss_to_avg_win > 0.0
+            && train_stats.worst_loss_to_avg_win > input.max_prior_worst_loss_to_avg_win
+        {
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
+                oos: None,
+                reason: "prior_worst_loss_to_avg_win_above_budget".to_string(),
             });
             abstained_reports += 1;
             continue;
@@ -3231,6 +3312,8 @@ fn evaluate_causal_policy_candidate(
                 train_reports: idx,
                 policy: causal_policy_report(&policy),
                 train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
                 oos: None,
                 reason: "policy_had_no_oos_trades".to_string(),
             });
@@ -3255,6 +3338,8 @@ fn evaluate_causal_policy_candidate(
             train_reports: idx,
             policy: causal_policy_report(&policy),
             train: Some(stats_report(&train_stats)),
+            prior_tail: Some(prior_tail),
+            prior_recent_loss_reports,
             oos: Some(stats_report(&fold_stats)),
             reason: "policy_selected_from_prior_causal_tags".to_string(),
         });
@@ -3480,6 +3565,28 @@ fn reports_with_causal_policy_trades(
         .count()
 }
 
+fn report_pnls_for_causal_policy(
+    folds: &[SelectivityFold],
+    variant: &str,
+    policy: &CausalPolicy,
+) -> Vec<f64> {
+    folds
+        .iter()
+        .filter_map(|fold| {
+            let stats = stats_for_causal_policy(std::slice::from_ref(fold), variant, policy);
+            (stats.trades > 0).then_some(stats.total_pnl)
+        })
+        .collect()
+}
+
+fn effective_prior_loss_cluster_lookback(input: &StrategyBuilderCausalPolicySearchInput) -> usize {
+    if input.prior_loss_cluster_lookback > 0 {
+        input.prior_loss_cluster_lookback
+    } else {
+        input.loss_burst_lookback
+    }
+}
+
 fn tail_risk_report(fold_pnls: &[f64], alpha: f64, loss_burst_lookback: usize) -> TailRiskReport {
     if fold_pnls.is_empty() {
         return TailRiskReport {
@@ -3524,6 +3631,14 @@ fn max_loss_burst_reports(fold_pnls: &[f64], lookback: usize) -> usize {
         .map(|window| window.iter().filter(|pnl| **pnl < 0.0).count())
         .max()
         .unwrap_or(0)
+}
+
+fn recent_loss_reports(fold_pnls: &[f64], lookback: usize) -> usize {
+    if lookback == 0 || fold_pnls.is_empty() {
+        return 0;
+    }
+    let start = fold_pnls.len().saturating_sub(lookback);
+    fold_pnls[start..].iter().filter(|pnl| **pnl < 0.0).count()
 }
 
 fn causal_policy_report(policy: &CausalPolicy) -> CausalPolicyReport {
@@ -6538,6 +6653,126 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_prior_loss_cluster_sentinel_flattens_after_warning() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -3.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -3.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -3.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 1;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_total_pnl = -10.0;
+        input.min_oos_profitable_reports = 0;
+        input.min_worst_oos_pnl = -10.0;
+        input.loss_burst_lookback = 5;
+        input.max_loss_burst_reports = 2;
+        input.max_prior_loss_burst_reports = 2;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+
+        assert_eq!(
+            candidate.fold_forward.decisions[4].reason,
+            "prior_loss_cluster_sentinel_flat"
+        );
+        assert_eq!(
+            candidate.fold_forward.decisions[4]
+                .prior_tail
+                .as_ref()
+                .unwrap()
+                .max_loss_burst_reports,
+            2
+        );
+        assert_eq!(
+            candidate.fold_forward.decisions[4].prior_recent_loss_reports,
+            2
+        );
+        assert!(candidate.fold_forward.decisions[4].oos.is_none());
+        assert_eq!(candidate.fold_forward.tail.max_loss_burst_reports, 2);
+    }
+
+    #[test]
+    fn causal_policy_prior_payoff_budget_flattens_bad_asymmetry() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -5.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_train_trades = 1;
+        input.min_prior_payoff_ratio = 0.3;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+
+        assert_eq!(
+            candidate.fold_forward.decisions[2].reason,
+            "prior_payoff_ratio_below_budget"
+        );
+        assert!(candidate.fold_forward.decisions[2].oos.is_none());
+        assert_eq!(candidate.fold_forward.eligible_reports, 0);
+    }
+
+    #[test]
+    fn causal_policy_prior_worst_loss_budget_flattens_bad_asymmetry() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(10, 0, 10.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -5.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_train_trades = 1;
+        input.max_prior_worst_loss_to_avg_win = 4.0;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+
+        assert_eq!(
+            candidate.fold_forward.decisions[2].reason,
+            "prior_worst_loss_to_avg_win_above_budget"
+        );
+        assert!(candidate.fold_forward.decisions[2].oos.is_none());
+        assert_eq!(candidate.fold_forward.eligible_reports, 0);
+    }
+
+    #[test]
     fn tail_risk_report_uses_left_tail_and_windowed_bursts() {
         let report = tail_risk_report(&[4.0, -2.0, -3.0, 1.0, -1.0], 0.40, 3);
 
@@ -7125,6 +7360,10 @@ mod tests {
             tail_first_ranking: false,
             min_oos_payoff_ratio: 0.0,
             max_oos_worst_loss_to_avg_win: 0.0,
+            prior_loss_cluster_lookback: 0,
+            max_prior_loss_burst_reports: 0,
+            min_prior_payoff_ratio: 0.0,
+            max_prior_worst_loss_to_avg_win: 0.0,
             top,
         }
     }

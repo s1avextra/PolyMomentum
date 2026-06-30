@@ -1107,6 +1107,18 @@ enum StrategyBuilderCommand {
         /// Maximum worst-loss / average-win ratio; 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_oos_worst_loss_to_avg_win: f64,
+        /// Prior window for the loss-cluster sentinel; 0 reuses --loss-burst-lookback.
+        #[arg(long, default_value_t = 0)]
+        prior_loss_cluster_lookback: usize,
+        /// Flatten when prior selected folds already show this many losses in the configured burst lookback.
+        #[arg(long, default_value_t = 0)]
+        max_prior_loss_burst_reports: usize,
+        /// Minimum prior average-win / average-loss payoff ratio before scoring the next fold; 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        min_prior_payoff_ratio: f64,
+        /// Maximum prior worst-loss / average-win ratio before scoring the next fold; 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        max_prior_worst_loss_to_avg_win: f64,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
@@ -2036,6 +2048,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             tail_first_ranking,
             min_oos_payoff_ratio,
             max_oos_worst_loss_to_avg_win,
+            prior_loss_cluster_lookback,
+            max_prior_loss_burst_reports,
+            min_prior_payoff_ratio,
+            max_prior_worst_loss_to_avg_win,
             top,
         } => {
             let search = match strategy_builder::causal_policy_search(
@@ -2061,6 +2077,10 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     tail_first_ranking,
                     min_oos_payoff_ratio,
                     max_oos_worst_loss_to_avg_win,
+                    prior_loss_cluster_lookback,
+                    max_prior_loss_burst_reports,
+                    min_prior_payoff_ratio,
+                    max_prior_worst_loss_to_avg_win,
                     top,
                 },
             ) {

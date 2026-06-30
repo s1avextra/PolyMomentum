@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-30T08:20:03.328896+00:00",
+  "updated_at": "2026-06-30T08:47:18.218240+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -134,6 +134,48 @@
           "notes": [
             "Strict gates: min trades 80 where applicable, Wilson lower 0.70, positive PnL, profitable reports >=20/18, tail CVaR >= -8, loss-burst <=2 over 5 folds.",
             "Adaptive direction previously appeared passable without tail gates; patched adaptive selectors now report tail CVaR and loss-burst and fail closed."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "loss_cluster_sentinel_causal_policy_20260630",
+      "version_id": "sv_f72ca8324f41e7d9",
+      "parent_id": "tail_first_causal_policy_payoff_20260630",
+      "status": "dead_end",
+      "reason": "Prior-only loss-cluster sentinel reduced burst risk but found no promotable candidate; best 2-fold cooldown kept 96 trades and burst 2 but failed CVaR -8.183, payoff 0.283, and profitable-report count 15/20.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_sentinel.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2_budget028.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown1.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown3.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_budget.json"
+      ],
+      "notes": [
+        "Implemented feed-forward prior loss-cluster flattening, separate sentinel lookback, and prior payoff/worst-loss budget gates.",
+        "Strict 42-fold result remains fail-closed: ok=false, live_ready=false; do not paper-validate or promote."
+      ],
+      "first_seen_at": "2026-06-30T08:47:18.218240+00:00",
+      "updated_at": "2026-06-30T08:47:18.218240+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T08:47:18.218240+00:00",
+          "status": "dead_end",
+          "reason": "Prior-only loss-cluster sentinel reduced burst risk but found no promotable candidate; best 2-fold cooldown kept 96 trades and burst 2 but failed CVaR -8.183, payoff 0.283, and profitable-report count 15/20.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_sentinel.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2_budget028.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown1.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown3.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_budget.json"
+          ],
+          "notes": [
+            "Implemented feed-forward prior loss-cluster flattening, separate sentinel lookback, and prior payoff/worst-loss budget gates.",
+            "Strict 42-fold result remains fail-closed: ok=false, live_ready=false; do not paper-validate or promote."
           ]
         }
       ]
