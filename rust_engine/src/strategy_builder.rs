@@ -199,6 +199,12 @@ pub struct StrategyBuilderCausalPolicySearchInput {
     pub max_prior_loss_burst_reports: usize,
     pub min_prior_payoff_ratio: f64,
     pub max_prior_worst_loss_to_avg_win: f64,
+    pub meta_label_min_support: usize,
+    pub meta_label_alpha: f64,
+    pub meta_label_min_quantile_pnl: f64,
+    pub meta_label_max_loss_rate: f64,
+    pub meta_label_require_supported: bool,
+    pub meta_label_max_generalization_terms: usize,
     pub top: usize,
 }
 
@@ -432,6 +438,12 @@ pub struct CausalPolicySearchGates {
     pub max_prior_loss_burst_reports: usize,
     pub min_prior_payoff_ratio: f64,
     pub max_prior_worst_loss_to_avg_win: f64,
+    pub meta_label_min_support: usize,
+    pub meta_label_alpha: f64,
+    pub meta_label_min_quantile_pnl: f64,
+    pub meta_label_max_loss_rate: f64,
+    pub meta_label_require_supported: bool,
+    pub meta_label_max_generalization_terms: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -651,8 +663,40 @@ pub struct CausalPolicyDecisionReport {
     pub train: Option<SelectivityStatsReport>,
     pub prior_tail: Option<TailRiskReport>,
     pub prior_recent_loss_reports: usize,
+    pub meta_label: Option<MetaLabelRiskReport>,
     pub oos: Option<SelectivityStatsReport>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MetaLabelRiskReport {
+    pub active_buckets: usize,
+    pub supported_buckets: usize,
+    pub unsupported_buckets: usize,
+    pub min_support: usize,
+    pub alpha: f64,
+    pub min_quantile_pnl: f64,
+    pub max_loss_rate: f64,
+    pub require_supported: bool,
+    pub max_generalization_terms: usize,
+    pub worst_quantile_pnl: f64,
+    pub worst_prior_pnl: f64,
+    pub max_loss_rate_seen: f64,
+    pub flattened: bool,
+    pub reason: String,
+    pub buckets: Vec<MetaLabelBucketReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MetaLabelBucketReport {
+    pub kind: String,
+    pub label: String,
+    pub match_tags: BTreeMap<String, String>,
+    pub support: usize,
+    pub supported: bool,
+    pub loss_rate: f64,
+    pub quantile_pnl: f64,
+    pub worst_pnl: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2095,6 +2139,17 @@ pub fn causal_policy_search(
     if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
         bail!("--tail-alpha must be in (0, 1]");
     }
+    if input.meta_label_min_support > 0 {
+        if !(0.0..=1.0).contains(&input.meta_label_alpha) || input.meta_label_alpha <= 0.0 {
+            bail!("--meta-label-alpha must be in (0, 1]");
+        }
+        if !(0.0..=1.0).contains(&input.meta_label_max_loss_rate) {
+            bail!("--meta-label-max-loss-rate must be in [0, 1]");
+        }
+        if input.meta_label_max_generalization_terms > CAUSAL_POLICY_DIMENSIONS.len() {
+            bail!("--meta-label-max-generalization-terms is larger than the causal tag space");
+        }
+    }
     if input.report_paths.len() <= input.min_train_reports {
         bail!(
             "report count ({}) must be greater than --min-train-reports ({})",
@@ -2702,6 +2757,10 @@ fn causal_policy_search_from_folds(
                 .to_string(),
             "The loss-cluster sentinel uses only the most recent configured prior window, so a policy can resume after the bad state rolls out."
                 .to_string(),
+            "Optional meta-label risk control checks active full-regime buckets against strictly prior outcomes before scoring the next fold."
+                .to_string(),
+            "Optional meta-label generalization backs off from sparse exact regimes to broader causal tag combinations, still using only prior fold outcomes."
+                .to_string(),
             "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
                 .to_string(),
         ],
@@ -2730,6 +2789,12 @@ fn causal_policy_search_from_folds(
             max_prior_loss_burst_reports: input.max_prior_loss_burst_reports,
             min_prior_payoff_ratio: input.min_prior_payoff_ratio,
             max_prior_worst_loss_to_avg_win: input.max_prior_worst_loss_to_avg_win,
+            meta_label_min_support: input.meta_label_min_support,
+            meta_label_alpha: input.meta_label_alpha,
+            meta_label_min_quantile_pnl: input.meta_label_min_quantile_pnl,
+            meta_label_max_loss_rate: input.meta_label_max_loss_rate,
+            meta_label_require_supported: input.meta_label_require_supported,
+            meta_label_max_generalization_terms: input.meta_label_max_generalization_terms,
         },
         candidates,
     }
@@ -3206,6 +3271,7 @@ fn evaluate_causal_policy_candidate(
                 train: None,
                 prior_tail: None,
                 prior_recent_loss_reports: 0,
+                meta_label: None,
                 oos: None,
                 reason: "insufficient_prior_reports".to_string(),
             });
@@ -3249,6 +3315,7 @@ fn evaluate_causal_policy_candidate(
                 train: Some(stats_report(&train_stats)),
                 prior_tail: Some(prior_tail),
                 prior_recent_loss_reports,
+                meta_label: None,
                 oos: None,
                 reason: "policy_prior_stats_failed_train_gates".to_string(),
             });
@@ -3266,6 +3333,7 @@ fn evaluate_causal_policy_candidate(
                 train: Some(stats_report(&train_stats)),
                 prior_tail: Some(prior_tail),
                 prior_recent_loss_reports,
+                meta_label: None,
                 oos: None,
                 reason: "prior_loss_cluster_sentinel_flat".to_string(),
             });
@@ -3282,6 +3350,7 @@ fn evaluate_causal_policy_candidate(
                 train: Some(stats_report(&train_stats)),
                 prior_tail: Some(prior_tail),
                 prior_recent_loss_reports,
+                meta_label: None,
                 oos: None,
                 reason: "prior_payoff_ratio_below_budget".to_string(),
             });
@@ -3298,8 +3367,31 @@ fn evaluate_causal_policy_candidate(
                 train: Some(stats_report(&train_stats)),
                 prior_tail: Some(prior_tail),
                 prior_recent_loss_reports,
+                meta_label: None,
                 oos: None,
                 reason: "prior_worst_loss_to_avg_win_above_budget".to_string(),
+            });
+            abstained_reports += 1;
+            continue;
+        }
+
+        let meta_label =
+            meta_label_risk_report(prior_folds, &folds[idx], &candidate.variant, &policy, input);
+        if meta_label.as_ref().is_some_and(|report| report.flattened) {
+            let reason = meta_label
+                .as_ref()
+                .map(|report| format!("meta_label_{}", report.reason))
+                .unwrap_or_else(|| "meta_label_risk_gate_flat".to_string());
+            decisions.push(CausalPolicyDecisionReport {
+                report_index: idx,
+                train_reports: idx,
+                policy: causal_policy_report(&policy),
+                train: Some(stats_report(&train_stats)),
+                prior_tail: Some(prior_tail),
+                prior_recent_loss_reports,
+                meta_label,
+                oos: None,
+                reason,
             });
             abstained_reports += 1;
             continue;
@@ -3314,6 +3406,7 @@ fn evaluate_causal_policy_candidate(
                 train: Some(stats_report(&train_stats)),
                 prior_tail: Some(prior_tail),
                 prior_recent_loss_reports,
+                meta_label,
                 oos: None,
                 reason: "policy_had_no_oos_trades".to_string(),
             });
@@ -3340,6 +3433,7 @@ fn evaluate_causal_policy_candidate(
             train: Some(stats_report(&train_stats)),
             prior_tail: Some(prior_tail),
             prior_recent_loss_reports,
+            meta_label,
             oos: Some(stats_report(&fold_stats)),
             reason: "policy_selected_from_prior_causal_tags".to_string(),
         });
@@ -3577,6 +3671,254 @@ fn report_pnls_for_causal_policy(
             (stats.trades > 0).then_some(stats.total_pnl)
         })
         .collect()
+}
+
+fn meta_label_risk_report(
+    prior_folds: &[SelectivityFold],
+    current_fold: &SelectivityFold,
+    variant: &str,
+    policy: &CausalPolicy,
+    input: &StrategyBuilderCausalPolicySearchInput,
+) -> Option<MetaLabelRiskReport> {
+    if input.meta_label_min_support == 0 {
+        return None;
+    }
+
+    let active_labels = active_policy_regime_labels(current_fold, variant, policy);
+    let active_buckets = active_labels.len();
+    let mut buckets = Vec::new();
+    let mut prior_pattern_pnls: Option<BTreeMap<String, Vec<f64>>> = None;
+    let mut flattened = false;
+    let mut reason = "ok".to_string();
+
+    for label in active_labels {
+        let tags = causal_tags_from_regime(&label);
+        let exact_prior_pnls = prior_regime_pnls_for_policy(prior_folds, variant, policy, &label);
+        let exact_report = meta_label_bucket_report(
+            "exact",
+            label.clone(),
+            tags.clone(),
+            exact_prior_pnls,
+            input,
+        );
+        let mut has_supported_evidence = exact_report.supported;
+        buckets.push(exact_report);
+
+        if !has_supported_evidence && input.meta_label_max_generalization_terms > 0 {
+            if prior_pattern_pnls.is_none() {
+                prior_pattern_pnls = Some(prior_pnls_by_policy_tag_pattern(
+                    prior_folds,
+                    variant,
+                    policy,
+                    input.meta_label_max_generalization_terms,
+                ));
+            }
+            let pattern_pnls = prior_pattern_pnls.as_ref().expect("pattern pnl cache");
+            let mut seen_patterns = BTreeSet::new();
+            for match_tags in
+                policy_tag_combinations(&tags, input.meta_label_max_generalization_terms)
+            {
+                let label = policy_label(&match_tags);
+                if !seen_patterns.insert(label.clone()) {
+                    continue;
+                }
+                let prior_pnls = pattern_pnls.get(&label).cloned().unwrap_or_default();
+                let report =
+                    meta_label_bucket_report("generalized", label, match_tags, prior_pnls, input);
+                if report.supported {
+                    has_supported_evidence = true;
+                    buckets.push(report);
+                }
+            }
+        }
+
+        if input.meta_label_require_supported && !has_supported_evidence {
+            flattened = true;
+            reason = "unsupported_bucket_flat".to_string();
+        }
+    }
+
+    let mut supported_buckets = 0_usize;
+    let mut worst_quantile_pnl: Option<f64> = None;
+    let mut worst_prior_pnl: Option<f64> = None;
+    let mut max_loss_rate_seen = 0.0_f64;
+    for bucket in &buckets {
+        if !bucket.supported {
+            continue;
+        }
+        supported_buckets += 1;
+        worst_quantile_pnl = Some(match worst_quantile_pnl {
+            Some(current) => current.min(bucket.quantile_pnl),
+            None => bucket.quantile_pnl,
+        });
+        worst_prior_pnl = Some(match worst_prior_pnl {
+            Some(current) => current.min(bucket.worst_pnl),
+            None => bucket.worst_pnl,
+        });
+        max_loss_rate_seen = max_loss_rate_seen.max(bucket.loss_rate);
+        if bucket.quantile_pnl < input.meta_label_min_quantile_pnl {
+            flattened = true;
+            reason = "quantile_below_budget_flat".to_string();
+        }
+        if bucket.loss_rate > input.meta_label_max_loss_rate {
+            flattened = true;
+            reason = "loss_rate_above_budget_flat".to_string();
+        }
+    }
+
+    if buckets.is_empty() {
+        reason = "no_active_policy_regimes".to_string();
+    }
+
+    Some(MetaLabelRiskReport {
+        active_buckets,
+        supported_buckets,
+        unsupported_buckets: buckets.len().saturating_sub(supported_buckets),
+        min_support: input.meta_label_min_support,
+        alpha: input.meta_label_alpha,
+        min_quantile_pnl: input.meta_label_min_quantile_pnl,
+        max_loss_rate: input.meta_label_max_loss_rate,
+        require_supported: input.meta_label_require_supported,
+        max_generalization_terms: input.meta_label_max_generalization_terms,
+        worst_quantile_pnl: worst_quantile_pnl.unwrap_or(0.0),
+        worst_prior_pnl: worst_prior_pnl.unwrap_or(0.0),
+        max_loss_rate_seen,
+        flattened,
+        reason,
+        buckets,
+    })
+}
+
+fn meta_label_bucket_report(
+    kind: &str,
+    label: String,
+    match_tags: BTreeMap<String, String>,
+    prior_pnls: Vec<f64>,
+    input: &StrategyBuilderCausalPolicySearchInput,
+) -> MetaLabelBucketReport {
+    let support = prior_pnls.len();
+    let supported = support >= input.meta_label_min_support;
+    let (loss_rate, quantile_pnl, worst_pnl) = if prior_pnls.is_empty() {
+        (0.0, 0.0, 0.0)
+    } else {
+        let loss_rate = prior_pnls.iter().filter(|pnl| **pnl < 0.0).count() as f64 / support as f64;
+        let quantile_pnl = left_tail_quantile(&prior_pnls, input.meta_label_alpha);
+        let worst_pnl = prior_pnls
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, |current, pnl| current.min(pnl));
+        (loss_rate, quantile_pnl, worst_pnl)
+    };
+
+    MetaLabelBucketReport {
+        kind: kind.to_string(),
+        label,
+        match_tags,
+        support,
+        supported,
+        loss_rate,
+        quantile_pnl,
+        worst_pnl,
+    }
+}
+
+fn active_policy_regime_labels(
+    fold: &SelectivityFold,
+    variant: &str,
+    policy: &CausalPolicy,
+) -> Vec<String> {
+    let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+        return Vec::new();
+    };
+    variant_fold
+        .regimes
+        .iter()
+        .filter_map(|(label, stats)| {
+            if stats.trades == 0 {
+                return None;
+            }
+            let tags = causal_tags_from_regime(label);
+            policy_applies_to_tags(policy, &tags).then(|| label.clone())
+        })
+        .collect()
+}
+
+fn prior_pnls_by_policy_tag_pattern(
+    folds: &[SelectivityFold],
+    variant: &str,
+    policy: &CausalPolicy,
+    max_terms: usize,
+) -> BTreeMap<String, Vec<f64>> {
+    let mut pattern_pnls = BTreeMap::new();
+    for fold in folds {
+        let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+            continue;
+        };
+        let mut fold_patterns: BTreeMap<String, TradePnlDiagnostics> = BTreeMap::new();
+        for (label, regime_stats) in &variant_fold.regimes {
+            if regime_stats.trades == 0 {
+                continue;
+            }
+            let tags = causal_tags_from_regime(label);
+            if !policy_applies_to_tags(policy, &tags) {
+                continue;
+            }
+            for match_tags in policy_tag_combinations(&tags, max_terms) {
+                let pattern = policy_label(&match_tags);
+                fold_patterns
+                    .entry(pattern)
+                    .or_insert_with(TradePnlDiagnostics::default)
+                    .merge_from(regime_stats);
+            }
+        }
+        for (pattern, stats) in fold_patterns {
+            if stats.trades > 0 {
+                pattern_pnls
+                    .entry(pattern)
+                    .or_insert_with(Vec::new)
+                    .push(stats.total_pnl);
+            }
+        }
+    }
+    pattern_pnls
+}
+
+fn prior_regime_pnls_for_policy(
+    folds: &[SelectivityFold],
+    variant: &str,
+    policy: &CausalPolicy,
+    label: &str,
+) -> Vec<f64> {
+    folds
+        .iter()
+        .filter_map(|fold| {
+            let variant_fold = fold.variants.iter().find(|entry| entry.name == variant)?;
+            let stats = variant_fold.regimes.get(label)?;
+            if stats.trades == 0 {
+                return None;
+            }
+            let tags = causal_tags_from_regime(label);
+            policy_applies_to_tags(policy, &tags).then_some(stats.total_pnl)
+        })
+        .collect()
+}
+
+fn policy_applies_to_tags(policy: &CausalPolicy, tags: &BTreeMap<String, String>) -> bool {
+    policy_tags_match(&policy.require_tags, tags)
+        && !policy
+            .deny_rules
+            .iter()
+            .any(|rule| policy_tags_match(&rule.match_tags, tags))
+}
+
+fn left_tail_quantile(values: &[f64], alpha: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    let idx = ((sorted.len() as f64) * alpha).ceil().max(1.0) as usize - 1;
+    sorted[idx.min(sorted.len() - 1)]
 }
 
 fn effective_prior_loss_cluster_lookback(input: &StrategyBuilderCausalPolicySearchInput) -> usize {
@@ -6707,6 +7049,155 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_meta_label_gate_flattens_supported_bad_regime() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let late_down =
+            "regime=zone=late|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(6, 0, 6.0, 0.0)),
+                (late_down, pnl_stats(0, 1, 0.0, -2.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(6, 0, 6.0, 0.0)),
+                (late_down, pnl_stats(0, 1, 0.0, -2.0)),
+            ]),
+            selectivity_fold(vec![(late_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 1;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_total_pnl = -10.0;
+        input.min_oos_profitable_reports = 0;
+        input.min_worst_oos_pnl = -10.0;
+        input.meta_label_min_support = 2;
+        input.meta_label_min_quantile_pnl = 0.0;
+        input.meta_label_max_loss_rate = 0.40;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.len() == 1
+                    && candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+        let decision = &candidate.fold_forward.decisions[2];
+        let meta_label = decision.meta_label.as_ref().expect("meta-label report");
+
+        assert_eq!(decision.reason, "meta_label_loss_rate_above_budget_flat");
+        assert!(meta_label.flattened);
+        assert_eq!(meta_label.active_buckets, 1);
+        assert_eq!(meta_label.supported_buckets, 1);
+        assert_eq!(meta_label.buckets[0].support, 2);
+        assert_eq!(meta_label.buckets[0].loss_rate, 1.0);
+        assert!(decision.oos.is_none());
+        assert_eq!(candidate.fold_forward.eligible_reports, 0);
+    }
+
+    #[test]
+    fn causal_policy_meta_label_gate_uses_prior_only() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -8.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 1;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_total_pnl = -10.0;
+        input.min_oos_profitable_reports = 0;
+        input.min_worst_oos_pnl = -10.0;
+        input.meta_label_min_support = 2;
+        input.meta_label_min_quantile_pnl = 0.0;
+        input.meta_label_max_loss_rate = 0.40;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.len() == 1
+                    && candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+        let decision = &candidate.fold_forward.decisions[2];
+        let meta_label = decision.meta_label.as_ref().expect("meta-label report");
+
+        assert_eq!(decision.reason, "policy_selected_from_prior_causal_tags");
+        assert!(!meta_label.flattened);
+        assert_eq!(meta_label.buckets[0].support, 2);
+        assert_eq!(meta_label.buckets[0].loss_rate, 0.0);
+        assert_eq!(decision.oos.as_ref().unwrap().total_pnl, -8.0);
+    }
+
+    #[test]
+    fn causal_policy_meta_label_generalizes_sparse_exact_regime() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down_prior =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down_new =
+            "regime=zone=early|dir=down|price=0.50_0.75|edge=0.07_0.15|z=1.1_1.5|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(8, 0, 8.0, 0.0)),
+                (early_down_prior, pnl_stats(0, 1, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(8, 0, 8.0, 0.0)),
+                (early_down_prior, pnl_stats(0, 1, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![(early_down_new, pnl_stats(4, 0, 4.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 1;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_oos_total_pnl = -10.0;
+        input.min_oos_profitable_reports = 0;
+        input.min_worst_oos_pnl = -10.0;
+        input.meta_label_min_support = 2;
+        input.meta_label_min_quantile_pnl = 0.0;
+        input.meta_label_max_loss_rate = 0.40;
+        input.meta_label_max_generalization_terms = 1;
+
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.len() == 1
+                    && candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+        let decision = &candidate.fold_forward.decisions[2];
+        let meta_label = decision.meta_label.as_ref().expect("meta-label report");
+
+        assert_eq!(decision.reason, "meta_label_loss_rate_above_budget_flat");
+        assert!(meta_label.flattened);
+        assert!(meta_label.buckets.iter().any(|bucket| {
+            bucket.kind == "generalized"
+                && bucket.match_tags.get("zone").map(String::as_str) == Some("early")
+                && bucket.support == 2
+                && bucket.loss_rate == 1.0
+        }));
+        assert!(decision.oos.is_none());
+    }
+
+    #[test]
     fn causal_policy_prior_payoff_budget_flattens_bad_asymmetry() {
         let primary_down =
             "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
@@ -7364,6 +7855,12 @@ mod tests {
             max_prior_loss_burst_reports: 0,
             min_prior_payoff_ratio: 0.0,
             max_prior_worst_loss_to_avg_win: 0.0,
+            meta_label_min_support: 0,
+            meta_label_alpha: 0.20,
+            meta_label_min_quantile_pnl: -1.0e9,
+            meta_label_max_loss_rate: 1.0,
+            meta_label_require_supported: false,
+            meta_label_max_generalization_terms: 0,
             top,
         }
     }

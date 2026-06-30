@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-30T08:47:18.218240+00:00",
+  "updated_at": "2026-06-30T12:08:42.592783+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -176,6 +176,38 @@
           "notes": [
             "Implemented feed-forward prior loss-cluster flattening, separate sentinel lookback, and prior payoff/worst-loss budget gates.",
             "Strict 42-fold result remains fail-closed: ok=false, live_ready=false; do not paper-validate or promote."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "meta_label_causal_policy_20260630",
+      "version_id": "sv_62d68444336e3c41",
+      "parent_id": "loss_cluster_sentinel_causal_policy_20260630",
+      "status": "dead_end",
+      "reason": "Meta-label hard gates cleaned tails but starved sample size below the 80-trade promotion gate on May28-Jun10 folds.",
+  "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json",
+  "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json",
+  "evidence_paths": [
+    "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json"
+      ],
+      "notes": [
+        "Use meta_label diagnostics as a research lens, not as live/paper promotion evidence.",
+        "Next A+ loop should add orderbook causal buckets before trying meta-label promotion again."
+      ],
+      "first_seen_at": "2026-06-30T12:08:42.592783+00:00",
+      "updated_at": "2026-06-30T12:08:42.592783+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T12:08:42.592783+00:00",
+          "status": "dead_end",
+          "reason": "Meta-label hard gates cleaned tails but starved sample size below the 80-trade promotion gate on May28-Jun10 folds.",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json"
+          ],
+          "notes": [
+            "Use meta_label diagnostics as a research lens, not as live/paper promotion evidence.",
+            "Next A+ loop should add orderbook causal buckets before trying meta-label promotion again."
           ]
         }
       ]

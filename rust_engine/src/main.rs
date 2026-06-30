@@ -1119,6 +1119,24 @@ enum StrategyBuilderCommand {
         /// Maximum prior worst-loss / average-win ratio before scoring the next fold; 0 disables.
         #[arg(long, default_value_t = 0.0)]
         max_prior_worst_loss_to_avg_win: f64,
+        /// Minimum prior exact-regime observations needed before the meta-label risk gate can act; 0 disables.
+        #[arg(long, default_value_t = 0)]
+        meta_label_min_support: usize,
+        /// Left-tail quantile used by the exact-regime meta-label risk gate.
+        #[arg(long, default_value_t = 0.20)]
+        meta_label_alpha: f64,
+        /// Minimum prior meta-label left-tail quantile PnL before scoring the next fold.
+        #[arg(long, default_value_t = -1.0e9, allow_hyphen_values = true)]
+        meta_label_min_quantile_pnl: f64,
+        /// Maximum prior meta-label loss rate before scoring the next fold.
+        #[arg(long, default_value_t = 1.0)]
+        meta_label_max_loss_rate: f64,
+        /// Flatten when the current context does not have enough prior exact or generalized support.
+        #[arg(long, default_value_t = false)]
+        meta_label_require_supported: bool,
+        /// When exact-regime support is thin, test broader causal tag combinations up to this term count; 0 disables.
+        #[arg(long, default_value_t = 0)]
+        meta_label_max_generalization_terms: usize,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
@@ -2052,6 +2070,12 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             max_prior_loss_burst_reports,
             min_prior_payoff_ratio,
             max_prior_worst_loss_to_avg_win,
+            meta_label_min_support,
+            meta_label_alpha,
+            meta_label_min_quantile_pnl,
+            meta_label_max_loss_rate,
+            meta_label_require_supported,
+            meta_label_max_generalization_terms,
             top,
         } => {
             let search = match strategy_builder::causal_policy_search(
@@ -2081,6 +2105,12 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     max_prior_loss_burst_reports,
                     min_prior_payoff_ratio,
                     max_prior_worst_loss_to_avg_win,
+                    meta_label_min_support,
+                    meta_label_alpha,
+                    meta_label_min_quantile_pnl,
+                    meta_label_max_loss_rate,
+                    meta_label_require_supported,
+                    meta_label_max_generalization_terms,
                     top,
                 },
             ) {

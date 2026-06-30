@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-06-30T12:20:00Z",
+  "window": {
+    "start": "2026-05-28T00:00:00Z",
+    "end": "2026-06-10T23:00:00Z",
+    "fold_reports": 42,
+    "fold_hours": 8
+  },
+  "implementation": {
+    "module": "strategy-builder causal-policy-search",
+    "treatment": "feed_forward_meta_label_risk_gate",
+    "default_enabled": false,
+    "current_fold_pnl_used_for_current_decision": false,
+    "supports_exact_full_regime": true,
+    "supports_generalized_sparse_context_fallback": true
+  },
+  "runs": [
+    {
+      "name": "strict_exact",
+      "ok": false,
+      "passed_candidates": 0,
+      "stored_candidates": 50,
+      "max_stored_trades": 32,
+      "top": {
+        "trades": 10,
+        "pnl": 25.52355,
+        "wilson_win_rate_lower": 0.7224598312333834,
+        "profitable_reports": 6,
+        "losing_reports": 0,
+        "worst_report_pnl": 1.2974499999999998,
+        "cvar_pnl": 1.8391949999999997,
+        "loss_burst": 0,
+        "payoff_ratio": 999.0,
+        "worst_loss_to_avg_win": 0.0,
+        "meta_flats": 3,
+        "base_require": {
+          "confidence": "lt_0.50",
+          "edge": "gte_0.15"
+        }
+      }
+    },
+    {
+      "name": "mild_exact_fullrank",
+      "ok": false,
+      "passed_candidates": 0,
+      "stored_candidates": 925,
+      "trade80_candidates": 0,
+      "max_trades": 34,
+      "top": {
+        "trades": 10,
+        "pnl": 25.52355,
+        "wilson_win_rate_lower": 0.7224598312333834,
+        "profitable_reports": 6,
+        "losing_reports": 0,
+        "worst_report_pnl": 1.2974499999999998,
+        "cvar_pnl": 1.8391949999999997,
+        "loss_burst": 0,
+        "payoff_ratio": 999.0,
+        "worst_loss_to_avg_win": 0.0,
+        "meta_flats": 3,
+        "base_require": {
+          "confidence": "lt_0.50",
+          "edge": "gte_0.15"
+        }
+      }
+    },
+    {
+      "name": "diagnostic_exact_no_flatten",
+      "ok": false,
+      "passed_candidates": 0,
+      "top": {
+        "trades": 96,
+        "wins": 80,
+        "losses": 16,
+        "pnl": 34.421039999999984,
+        "wilson_win_rate_lower": 0.7462882947885029,
+        "profitable_reports": 15,
+        "losing_reports": 5,
+        "worst_report_pnl": -12.8544,
+        "cvar_pnl": -8.1832075,
+        "loss_burst": 2,
+        "payoff_ratio": 0.2826966162561692,
+        "worst_loss_to_avg_win": 3.8219122189891026,
+        "base_require": {
+          "reversion": "1_2"
+        },
+        "meta_summary": {
+          "scored_reports": 20,
+          "active_exact_contexts": 83,
+          "supported_exact_contexts": 44,
+          "unsupported_exact_contexts": 39,
+          "worst_prior_bucket_pnl": -10.16848,
+          "worst_left_tail_quantile_pnl": -5.82161,
+          "max_prior_bucket_loss_rate": 0.5
+        }
+      }
+    },
+    {
+      "name": "generalized_sparse_context_hard_gate",
+      "ok": false,
+      "passed_candidates": 0,
+      "stored_candidates": 925,
+      "trade80_candidates": 0,
+      "max_trades": 38,
+      "top": {
+        "trades": 10,
+        "pnl": 12.123809999999999,
+        "wilson_win_rate_lower": 0.7224598312333834,
+        "profitable_reports": 7,
+        "losing_reports": 0,
+        "worst_report_pnl": 0.7946900000000001,
+        "cvar_pnl": 0.8758099999999999,
+        "loss_burst": 0,
+        "payoff_ratio": 999.0,
+        "worst_loss_to_avg_win": 0.0,
+        "meta_flats": 1,
+        "base_require": {
+          "edge": "0.07_0.15",
+          "minutes_remaining": "2_4",
+          "z": "1.1_1.5"
+        }
+      }
+    }
+  ],
+  "verdict": {
+    "live_ready": false,
+    "hard_gate_status": "dead_end",
+    "diagnostic_status": "useful",
+    "reason": "Hard meta-label gates cleaned tails but starved sample size below the 80-trade promotion gate. Diagnostic mode shows sparse and unstable causal contexts remain a primary tail-risk source."
+  },
+  "next": [
+    "Expose orderbook-derived causal buckets in fold diagnostics.",
+    "Rerun meta-label diagnostics after spread, depth, pressure, bookwalk-slippage, and book-age buckets exist.",
+    "Keep live and paper promotion blocked until a candidate passes fresh feed-forward gates."
+  ]
+}
