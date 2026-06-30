@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-06-30T14:09:14Z",
+  "git_head": "3833095139e324f0c12d18eb1075534ee67b6302",
+  "git_head_summary": "3833095 feat: add orderbook quality buckets",
+  "purpose": "Fresh PMXT coverage probe for the orderbook causal and quality buckets added on 2026-06-30.",
+  "verdict": {
+    "promotion_ready": false,
+    "live_ready": false,
+    "status": "KEEP_REPLAY_RESEARCH",
+    "reason": "Fresh available PMXT/Gamma overlap for BTC 5m markets is coverage-limited after 2026-06-12T03:00:00Z, and the consolidated covered slice failed robust promotion gates."
+  },
+  "data_source": {
+    "pmxt_base_url": "https://r2v2.pmxt.dev",
+    "archive_template": "polymarket_orderbook_YYYY-MM-DDTHH.parquet",
+    "cache_policy": "local /private/tmp cache roots with --atomic-parquet --delete-after-process",
+    "profile": "a_plus5m_causal_guard_selected",
+    "required_causal_tag": "reversion=1_2",
+    "window_minutes": 5,
+    "bankroll": 100,
+    "latency_ms": 50
+  },
+  "coverage_boundary": {
+    "newest_nonzero_event_hour_observed": "2026-06-12T03:00:00Z",
+    "first_empty_hour_after_boundary_observed": "2026-06-12T04:00:00Z",
+    "later_empty_hours_observed": [
+      "2026-06-12T05:00:00Z",
+      "2026-06-12T06:00:00Z",
+      "2026-06-12T12:00:00Z",
+      "2026-06-12T18:00:00Z",
+      "2026-06-12T23:00:00Z",
+      "2026-06-13T00:00:00Z",
+      "2026-06-14T00:00:00Z",
+      "2026-06-15T00:00:00Z",
+      "2026-06-20T00:00:00Z",
+      "2026-06-28T00:00:00Z",
+      "2026-06-29T00:00:00Z",
+      "2026-06-29T01:00:00Z",
+      "2026-06-29T02:00:00Z",
+      "2026-06-29T03:00:00Z",
+      "2026-06-29T04:00:00Z",
+      "2026-06-29T05:00:00Z",
+      "2026-06-29T06:00:00Z",
+      "2026-06-29T07:00:00Z"
+    ],
+    "interpretation": "Archive parquet files may exist for later hours, but the BTC 5m Gamma condition IDs used by this profile had zero matching PMXT events in the probed later hours."
+  },
+  "single_hour_probe_summary": [
+    {
+      "start": "2026-06-11T00:00:00Z",
+      "events_seen": 3558066,
+      "trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 1.77805,
+      "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_probe_jun11_00/reports/fold_001_20260611T000000Z_20260611T000000Z_sweep.json"
+    },
+    {
+      "start": "2026-06-12T00:00:00Z",
+      "events_seen": 5053615,
+      "trades": 1,
+      "wins": 0,
+      "losses": 1,
+      "total_pnl": -5.11344,
+      "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_probe_jun12_00/reports/fold_001_20260612T000000Z_20260612T000000Z_sweep.json"
+    },
+    {
+      "start": "2026-06-12T01:00:00Z",
+      "events_seen": 5367746,
+      "trades": 3,
+      "wins": 2,
+      "losses": 1,
+      "total_pnl": -0.51728,
+      "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_probe_jun12_01/reports/fold_001_20260612T010000Z_20260612T010000Z_sweep.json"
+    },
+    {
+      "start": "2026-06-12T02:00:00Z",
+      "events_seen": 5416246,
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "total_pnl": 0.0,
+      "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_probe_jun12_02/reports/fold_001_20260612T020000Z_20260612T020000Z_sweep.json"
+    },
+    {
+      "start": "2026-06-12T03:00:00Z",
+      "events_seen": 2138511,
+      "trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 2.97713,
+      "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_probe_jun12_03/reports/fold_001_20260612T030000Z_20260612T030000Z_sweep.json"
+    }
+  ],
+  "consolidated_covered_slice": {
+    "start": "2026-06-12T00:00:00Z",
+    "end": "2026-06-12T03:00:00Z",
+    "fold_hours": 4,
+    "events_seen": 17976118,
+    "events_for_known_token": 17976118,
+    "trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -5.11344,
+    "fill_rate": 1.0,
+    "report": "/private/tmp/polymomentum_orderbook_buckets_20260630_jun12_covered_00_03/reports/fold_001_20260612T000000Z_20260612T030000Z_sweep.json",
+    "robust_promotion": {
+      "passed": false,
+      "primary_rejections": [
+        "active zones 1 below minimum 2",
+        "win_rate 0.0000 below minimum 0.7000",
+        "total_pnl -5.1134 below minimum 0.0000",
+        "zone primary trade share 1.0000 above maximum 0.7000",
+        "worst_window_pnl -5.1134 below minimum 0.0000"
+      ]
+    },
+    "orderbook_bucket_stats": {
+      "book_age=lte_100ms": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      },
+      "book_imbalance=strong_negative": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      },
+      "book_min_depth=gte_250": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      },
+      "book_pressure=strong_negative": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      },
+      "book_spread=0.01_0.03": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      },
+      "bookwalk_slippage=zero": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "total_pnl": -5.11344
+      }
+    }
+  },
+  "commands": {
+    "release_build": "cargo build --release --manifest-path rust_engine/Cargo.toml",
+    "consolidated_run": "./rust_engine/target/release/polymomentum-engine strategy-builder rolling-history --start 2026-06-12T00:00:00Z --end 2026-06-12T03:00:00Z --out-dir /private/tmp/polymomentum_orderbook_buckets_20260630_jun12_covered_00_03 --cache-root /private/tmp/polymomentum_orderbook_buckets_20260630_jun12_covered_00_03_cache --profile a_plus5m_causal_guard_selected --require-causal-tag reversion=1_2 --zone-mode all --fold-hours 4 --window-minutes 5 --bankroll 100 --latency-ms 50 --threads 4 --preflight-pmxt-hours --stop-at-first-missing-hour --require-full-folds --max-folds 1 --execute --delete-after-process --atomic-parquet --max-cache-gb 4 --min-fold-trades 1 --min-fold-target-events 1 --min-fold-top-trades 0 --min-promotion-trades 1 --min-promotion-daily-trades 0 --min-promotion-profitable-reports 0 --min-promotion-losses 0 --min-neighbor-observations 0"
+  }
+}
