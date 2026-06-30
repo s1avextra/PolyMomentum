@@ -301,6 +301,18 @@ impl CandleBacktestStrategy {
             .unwrap_or_default()
     }
 
+    fn book_age_ms_for_token(&self, token_id: &str, now_ts: f64) -> Option<f64> {
+        self.books
+            .get(token_id)
+            .map(|b| ((now_ts - b.last_update_ts_s) * 1000.0).max(0.0))
+            .filter(|age_ms| *age_ms <= 30_000.0)
+    }
+
+    fn bookwalk_buy_slippage_for_token(&self, token_id: &str, size: f64) -> Option<f64> {
+        let book = self.books.get(token_id)?;
+        bookwalk_buy_slippage(book, size)
+    }
+
     fn open_exposure(&self) -> f64 {
         self.open_positions
             .values()
@@ -605,6 +617,43 @@ impl Strategy for CandleBacktestStrategy {
             micro.pressure,
             micro.imbalance,
         );
+        let (mut position, exposure_available) = self.position_budget_before_stress(used_exposure);
+        if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
+            used_exposure,
+            self.bankroll_usd.max(1.0),
+            self.variant.max_projected_stressed_drawdown_pct,
+        ) {
+            position = position.min(stress_headroom);
+        }
+        let market_price = decision.market_price;
+        let prefer_maker = self.variant.effective_prefer_maker(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
+        let pending_limit_price = if prefer_maker {
+            resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+        } else {
+            None
+        };
+        let estimated_sizing_price = if prefer_maker {
+            pending_limit_price
+        } else if market_price > 0.0 {
+            Some(market_price)
+        } else {
+            None
+        };
+        let estimated_size = if position >= 1.0 {
+            estimated_sizing_price
+                .filter(|price| *price > 0.0)
+                .and_then(|price| shares_from_budget(position, price, self.min_order_size_shares))
+        } else {
+            None
+        };
+        decision.regime.attach_orderbook_quality_inputs(
+            estimated_size
+                .and_then(|size| self.bookwalk_buy_slippage_for_token(traded_token, size)),
+            self.book_age_ms_for_token(traded_token, timestamp_s),
+        );
         if let Some(reason) = self.variant.selectivity.reject_reason(&decision.regime) {
             self.skipped_decision += 1;
             let key = format!("{}_{}", reason, decision.zone);
@@ -617,14 +666,6 @@ impl Strategy for CandleBacktestStrategy {
             let key = format!("{}_{}", skip.reason, decision.zone);
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
-        }
-        let (mut position, exposure_available) = self.position_budget_before_stress(used_exposure);
-        if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
-            used_exposure,
-            self.bankroll_usd.max(1.0),
-            self.variant.max_projected_stressed_drawdown_pct,
-        ) {
-            position = position.min(stress_headroom);
         }
         if position < 1.0 {
             self.skipped_decision += 1;
@@ -639,18 +680,11 @@ impl Strategy for CandleBacktestStrategy {
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
-        let market_price = decision.market_price;
         if market_price <= 0.0 {
             return Vec::new();
         }
-        let prefer_maker = self.variant.effective_prefer_maker(
-            self.breaker_state.losses,
-            breaker_metrics.realized_drawdown_pct,
-        );
         let (order_type, limit_price, sizing_price) = if prefer_maker {
-            let Some(lp) =
-                resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
-            else {
+            let Some(lp) = pending_limit_price else {
                 self.skipped_decision += 1;
                 let key = format!("maker_invalid_book_{}", decision.zone);
                 *self.skip_reasons.entry(key).or_insert(0) += 1;
@@ -741,6 +775,42 @@ fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
         .map(|(price, size)| BookLevelView { price, size })
         .collect();
     BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
+}
+
+fn bookwalk_buy_slippage(book: &TokenBook, size: f64) -> Option<f64> {
+    if size <= 0.0 {
+        return None;
+    }
+    let asks = book.ask_levels();
+    if asks.is_empty() {
+        return None;
+    }
+    let touch = asks[0].0;
+    if touch <= 0.0 {
+        return None;
+    }
+
+    let mut remaining = size;
+    let mut total_cost = 0.0;
+    for (price, available) in &asks {
+        if remaining <= 0.0 {
+            break;
+        }
+        if *price <= 0.0 || *available <= 0.0 {
+            continue;
+        }
+        let take = remaining.min(*available);
+        total_cost += take * *price;
+        remaining -= take;
+    }
+    if remaining > 0.0 {
+        let last = asks.last().map(|(price, _)| *price)?;
+        let synthetic = (last + DEFAULT_TICK).clamp(DEFAULT_TICK, 1.0 - DEFAULT_TICK);
+        total_cost += remaining * synthetic;
+    }
+
+    let vwap = total_cost / size;
+    Some((vwap - touch).max(0.0))
 }
 
 fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
@@ -1512,6 +1582,17 @@ mod tests {
     use crate::backtest::strategies::StrategyVariant;
     use crate::data::models::{Market, Outcome};
     use crate::data::scanner::CandleContract;
+
+    #[test]
+    fn bookwalk_slippage_walks_visible_ask_depth() {
+        let mut book = TokenBook::default();
+        book.asks.insert(500_000_000, 100.0);
+        book.asks.insert(600_000_000, 50.0);
+
+        let slippage = bookwalk_buy_slippage(&book, 130.0).unwrap();
+        let expected_vwap = (0.50 * 100.0 + 0.60 * 30.0) / 130.0;
+        assert!((slippage - (expected_vwap - 0.50)).abs() < 1e-9);
+    }
 
     /// Build a tiny synthetic universe + history for the parallel-vs-serial
     /// determinism test. We don't need the harness to find any trades — we

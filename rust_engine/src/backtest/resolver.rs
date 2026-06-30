@@ -682,6 +682,9 @@ mod tests {
         decision
             .regime
             .attach_orderbook_inputs(0.49, 0.51, 0.02, 125.0, 80.0, 0.20, -0.22);
+        decision
+            .regime
+            .attach_orderbook_quality_inputs(Some(0.006), Some(120.0));
 
         let res = resolve_fills(&fills, &[decision], &windows, &h);
         let by_regime = res.by_regime();
@@ -697,5 +700,7 @@ mod tests {
         assert_eq!(by_bucket["reversion=1_2"].wins, 1);
         assert_eq!(by_bucket["book_min_depth=50_100"].trades, 1);
         assert_eq!(by_bucket["book_pressure=positive"].wins, 1);
+        assert_eq!(by_bucket["bookwalk_slippage=0.005_0.01"].trades, 1);
+        assert_eq!(by_bucket["book_age=100_500ms"].wins, 1);
     }
 }

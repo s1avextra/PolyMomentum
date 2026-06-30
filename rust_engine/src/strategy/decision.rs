@@ -57,6 +57,10 @@ pub struct DecisionRegime {
     pub book_pressure_bucket: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_imbalance_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookwalk_slippage_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_age_bucket: Option<String>,
 }
 
 impl Default for DecisionRegime {
@@ -76,6 +80,8 @@ impl Default for DecisionRegime {
             book_min_depth_bucket: None,
             book_pressure_bucket: None,
             book_imbalance_bucket: None,
+            bookwalk_slippage_bucket: None,
+            book_age_bucket: None,
         }
     }
 }
@@ -104,6 +110,8 @@ impl DecisionRegime {
             book_min_depth_bucket: None,
             book_pressure_bucket: None,
             book_imbalance_bucket: None,
+            bookwalk_slippage_bucket: None,
+            book_age_bucket: None,
         }
     }
 
@@ -130,6 +138,12 @@ impl DecisionRegime {
         }
         if let Some(bucket) = &self.book_imbalance_bucket {
             parts.push(format!("book_imbalance={bucket}"));
+        }
+        if let Some(bucket) = &self.bookwalk_slippage_bucket {
+            parts.push(format!("bookwalk_slippage={bucket}"));
+        }
+        if let Some(bucket) = &self.book_age_bucket {
+            parts.push(format!("book_age={bucket}"));
         }
         parts.join("|")
     }
@@ -162,6 +176,12 @@ impl DecisionRegime {
         if let Some(bucket) = &self.book_imbalance_bucket {
             tags.push(("book_imbalance".to_string(), bucket.clone()));
         }
+        if let Some(bucket) = &self.bookwalk_slippage_bucket {
+            tags.push(("bookwalk_slippage".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.book_age_bucket {
+            tags.push(("book_age".to_string(), bucket.clone()));
+        }
         tags
     }
 
@@ -187,6 +207,19 @@ impl DecisionRegime {
         self.book_min_depth_bucket = Some(bucket_book_min_depth(bid_depth.min(ask_depth)));
         self.book_pressure_bucket = Some(bucket_signed_book_value(pressure));
         self.book_imbalance_bucket = Some(bucket_signed_book_value(imbalance));
+    }
+
+    pub fn attach_orderbook_quality_inputs(
+        &mut self,
+        bookwalk_slippage: Option<f64>,
+        book_age_ms: Option<f64>,
+    ) {
+        if let Some(slippage) = bookwalk_slippage {
+            self.bookwalk_slippage_bucket = Some(bucket_bookwalk_slippage(slippage));
+        }
+        if let Some(age_ms) = book_age_ms {
+            self.book_age_bucket = Some(bucket_book_age_ms(age_ms));
+        }
     }
 }
 
@@ -422,6 +455,40 @@ fn bucket_signed_book_value(value: f64) -> String {
         "positive".to_string()
     } else {
         "strong_positive".to_string()
+    }
+}
+
+fn bucket_bookwalk_slippage(slippage: f64) -> String {
+    if !slippage.is_finite() || slippage < 0.0 {
+        "unknown".to_string()
+    } else if slippage <= 0.0001 {
+        "zero".to_string()
+    } else if slippage <= 0.005 {
+        "lte_0.005".to_string()
+    } else if slippage <= 0.01 {
+        "0.005_0.01".to_string()
+    } else if slippage <= 0.03 {
+        "0.01_0.03".to_string()
+    } else {
+        "gt_0.03".to_string()
+    }
+}
+
+fn bucket_book_age_ms(age_ms: f64) -> String {
+    if !age_ms.is_finite() || age_ms < 0.0 {
+        "unknown".to_string()
+    } else if age_ms <= 100.0 {
+        "lte_100ms".to_string()
+    } else if age_ms <= 500.0 {
+        "100_500ms".to_string()
+    } else if age_ms <= 1_000.0 {
+        "500_1000ms".to_string()
+    } else if age_ms <= 5_000.0 {
+        "1_5s".to_string()
+    } else if age_ms <= 30_000.0 {
+        "5_30s".to_string()
+    } else {
+        "gt_30s".to_string()
     }
 }
 
@@ -1190,9 +1257,19 @@ mod tests {
         assert_eq!(with_book.book_min_depth_bucket.as_deref(), Some("50_100"));
         assert_eq!(with_book.book_pressure_bucket.as_deref(), Some("positive"));
         assert_eq!(with_book.book_imbalance_bucket.as_deref(), Some("negative"));
+        with_book.attach_orderbook_quality_inputs(Some(0.012), Some(750.0));
+        assert_eq!(
+            with_book.bookwalk_slippage_bucket.as_deref(),
+            Some("0.01_0.03")
+        );
+        assert_eq!(with_book.book_age_bucket.as_deref(), Some("500_1000ms"));
         assert!(with_book.key().contains("book_spread=0.01_0.03"));
+        assert!(with_book.key().contains("bookwalk_slippage=0.01_0.03"));
         assert!(with_book
             .causal_tags()
             .contains(&("book_min_depth".to_string(), "50_100".to_string())));
+        assert!(with_book
+            .causal_tags()
+            .contains(&("book_age".to_string(), "500_1000ms".to_string())));
     }
 }

@@ -4354,7 +4354,9 @@ fn causal_tags_from_regime(regime: &str) -> BTreeMap<String, String> {
                 "rev" => "reversion",
                 "min" => "minutes_remaining",
                 "zone" | "price" | "edge" | "z" | "book_spread" | "book_min_depth"
-                | "book_pressure" | "book_imbalance" => dimension.as_str(),
+                | "book_pressure" | "book_imbalance" | "bookwalk_slippage" | "book_age" => {
+                    dimension.as_str()
+                }
                 _ => return None,
             };
             Some((dimension.to_string(), value))
@@ -4611,6 +4613,8 @@ const CAUSAL_POLICY_DIMENSIONS: &[&str] = &[
     "book_min_depth",
     "book_pressure",
     "book_imbalance",
+    "bookwalk_slippage",
+    "book_age",
 ];
 
 const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
@@ -6788,9 +6792,9 @@ mod tests {
     #[test]
     fn causal_policy_search_can_select_orderbook_bucket() {
         let tight_book =
-            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=lte_0.01|book_min_depth=100_250|book_pressure=positive|book_imbalance=neutral";
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=lte_0.01|book_min_depth=100_250|book_pressure=positive|book_imbalance=neutral|bookwalk_slippage=zero|book_age=lte_100ms";
         let wide_book =
-            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=gt_0.05|book_min_depth=10_50|book_pressure=negative|book_imbalance=negative";
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=gt_0.05|book_min_depth=10_50|book_pressure=negative|book_imbalance=negative|bookwalk_slippage=gt_0.03|book_age=5_30s";
         let folds = vec![
             selectivity_fold(vec![
                 (tight_book, pnl_stats(4, 0, 4.0, 0.0)),
@@ -6816,11 +6820,11 @@ mod tests {
             .find(|candidate| {
                 candidate
                     .base_require
-                    .get("book_spread")
+                    .get("bookwalk_slippage")
                     .map(String::as_str)
-                    == Some("lte_0.01")
+                    == Some("zero")
             })
-            .expect("tight book-spread policy");
+            .expect("zero bookwalk-slippage policy");
 
         assert!(search.ok);
         assert!(candidate.passed);
