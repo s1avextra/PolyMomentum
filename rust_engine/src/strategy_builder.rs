@@ -4353,7 +4353,8 @@ fn causal_tags_from_regime(regime: &str) -> BTreeMap<String, String> {
                 "vol" => "volatility",
                 "rev" => "reversion",
                 "min" => "minutes_remaining",
-                "zone" | "price" | "edge" | "z" => dimension.as_str(),
+                "zone" | "price" | "edge" | "z" | "book_spread" | "book_min_depth"
+                | "book_pressure" | "book_imbalance" => dimension.as_str(),
                 _ => return None,
             };
             Some((dimension.to_string(), value))
@@ -4606,6 +4607,10 @@ const CAUSAL_POLICY_DIMENSIONS: &[&str] = &[
     "volatility",
     "reversion",
     "minutes_remaining",
+    "book_spread",
+    "book_min_depth",
+    "book_pressure",
+    "book_imbalance",
 ];
 
 const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
@@ -6778,6 +6783,49 @@ mod tests {
             candidate.final_policy.harness_require_args,
             vec!["direction=down".to_string(), "zone=primary".to_string()]
         );
+    }
+
+    #[test]
+    fn causal_policy_search_can_select_orderbook_bucket() {
+        let tight_book =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=lte_0.01|book_min_depth=100_250|book_pressure=positive|book_imbalance=neutral";
+        let wide_book =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=gt_0.05|book_min_depth=10_50|book_pressure=negative|book_imbalance=negative";
+        let folds = vec![
+            selectivity_fold(vec![
+                (tight_book, pnl_stats(4, 0, 4.0, 0.0)),
+                (wide_book, pnl_stats(0, 2, 0.0, -6.0)),
+            ]),
+            selectivity_fold(vec![
+                (tight_book, pnl_stats(4, 0, 4.0, 0.0)),
+                (wide_book, pnl_stats(0, 2, 0.0, -6.0)),
+            ]),
+            selectivity_fold(vec![
+                (tight_book, pnl_stats(5, 0, 5.0, 0.0)),
+                (wide_book, pnl_stats(0, 2, 0.0, -8.0)),
+            ]),
+        ];
+
+        let mut input = causal_policy_input(50);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .base_require
+                    .get("book_spread")
+                    .map(String::as_str)
+                    == Some("lte_0.01")
+            })
+            .expect("tight book-spread policy");
+
+        assert!(search.ok);
+        assert!(candidate.passed);
+        assert_eq!(candidate.fold_forward.stats.trades, 5);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 5.0);
     }
 
     #[test]

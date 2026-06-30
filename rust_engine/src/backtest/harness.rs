@@ -581,7 +581,7 @@ impl Strategy for CandleBacktestStrategy {
             &effective_zone_config,
             0.0,
         );
-        let decision = match res {
+        let mut decision = match res {
             DecisionResult::Trade(d) => d,
             DecisionResult::Skip(skip) => {
                 self.skipped_decision += 1;
@@ -590,6 +590,21 @@ impl Strategy for CandleBacktestStrategy {
                 return Vec::new();
             }
         };
+        let traded_token = if decision.direction == "up" {
+            contract.up_token_id.as_str()
+        } else {
+            contract.down_token_id.as_str()
+        };
+        let micro = self.microstructure_for_token(traded_token, timestamp_s);
+        decision.regime.attach_orderbook_inputs(
+            micro.best_bid,
+            micro.best_ask,
+            micro.spread,
+            micro.bid_depth,
+            micro.ask_depth,
+            micro.pressure,
+            micro.imbalance,
+        );
         if let Some(reason) = self.variant.selectivity.reject_reason(&decision.regime) {
             self.skipped_decision += 1;
             let key = format!("{}_{}", reason, decision.zone);
@@ -597,12 +612,6 @@ impl Strategy for CandleBacktestStrategy {
             return Vec::new();
         }
 
-        let traded_token = if decision.direction == "up" {
-            contract.up_token_id.as_str()
-        } else {
-            contract.down_token_id.as_str()
-        };
-        let micro = self.microstructure_for_token(traded_token, timestamp_s);
         if let Err(skip) = micro.check_long_entry(&self.variant.microstructure) {
             self.skipped_decision += 1;
             let key = format!("{}_{}", skip.reason, decision.zone);

@@ -49,6 +49,14 @@ pub struct DecisionRegime {
     pub reversion_bucket: String,
     pub reversion_count: u32,
     pub minutes_remaining_bucket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_spread_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_min_depth_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_pressure_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_imbalance_bucket: Option<String>,
 }
 
 impl Default for DecisionRegime {
@@ -64,6 +72,10 @@ impl Default for DecisionRegime {
             reversion_bucket: "unknown".to_string(),
             reversion_count: 0,
             minutes_remaining_bucket: "unknown".to_string(),
+            book_spread_bucket: None,
+            book_min_depth_bucket: None,
+            book_pressure_bucket: None,
+            book_imbalance_bucket: None,
         }
     }
 }
@@ -88,26 +100,42 @@ impl DecisionRegime {
             reversion_bucket: bucket_reversions(signal.reversion_count),
             reversion_count: signal.reversion_count,
             minutes_remaining_bucket: bucket_minutes_remaining(minutes_remaining),
+            book_spread_bucket: None,
+            book_min_depth_bucket: None,
+            book_pressure_bucket: None,
+            book_imbalance_bucket: None,
         }
     }
 
     pub fn key(&self) -> String {
-        format!(
-            "zone={}|dir={}|price={}|edge={}|z={}|conf={}|vol={}|rev={}|min={}",
-            self.zone,
-            self.direction,
-            self.price_bucket,
-            self.edge_bucket,
-            self.z_bucket,
-            self.confidence_bucket,
-            self.volatility_bucket,
-            self.reversion_bucket,
-            self.minutes_remaining_bucket
-        )
+        let mut parts = vec![
+            format!("zone={}", self.zone),
+            format!("dir={}", self.direction),
+            format!("price={}", self.price_bucket),
+            format!("edge={}", self.edge_bucket),
+            format!("z={}", self.z_bucket),
+            format!("conf={}", self.confidence_bucket),
+            format!("vol={}", self.volatility_bucket),
+            format!("rev={}", self.reversion_bucket),
+            format!("min={}", self.minutes_remaining_bucket),
+        ];
+        if let Some(bucket) = &self.book_spread_bucket {
+            parts.push(format!("book_spread={bucket}"));
+        }
+        if let Some(bucket) = &self.book_min_depth_bucket {
+            parts.push(format!("book_min_depth={bucket}"));
+        }
+        if let Some(bucket) = &self.book_pressure_bucket {
+            parts.push(format!("book_pressure={bucket}"));
+        }
+        if let Some(bucket) = &self.book_imbalance_bucket {
+            parts.push(format!("book_imbalance={bucket}"));
+        }
+        parts.join("|")
     }
 
     pub fn causal_tags(&self) -> Vec<(String, String)> {
-        vec![
+        let mut tags = vec![
             ("regime".to_string(), self.key()),
             ("zone".to_string(), self.zone.clone()),
             ("direction".to_string(), self.direction.clone()),
@@ -121,7 +149,44 @@ impl DecisionRegime {
                 "minutes_remaining".to_string(),
                 self.minutes_remaining_bucket.clone(),
             ),
-        ]
+        ];
+        if let Some(bucket) = &self.book_spread_bucket {
+            tags.push(("book_spread".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.book_min_depth_bucket {
+            tags.push(("book_min_depth".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.book_pressure_bucket {
+            tags.push(("book_pressure".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.book_imbalance_bucket {
+            tags.push(("book_imbalance".to_string(), bucket.clone()));
+        }
+        tags
+    }
+
+    pub fn attach_orderbook_inputs(
+        &mut self,
+        best_bid: f64,
+        best_ask: f64,
+        spread: f64,
+        bid_depth: f64,
+        ask_depth: f64,
+        pressure: f64,
+        imbalance: f64,
+    ) {
+        if !best_bid.is_finite()
+            || !best_ask.is_finite()
+            || best_bid <= 0.0
+            || best_ask <= 0.0
+            || best_bid >= best_ask
+        {
+            return;
+        }
+        self.book_spread_bucket = Some(bucket_book_spread(spread));
+        self.book_min_depth_bucket = Some(bucket_book_min_depth(bid_depth.min(ask_depth)));
+        self.book_pressure_bucket = Some(bucket_signed_book_value(pressure));
+        self.book_imbalance_bucket = Some(bucket_signed_book_value(imbalance));
     }
 }
 
@@ -311,6 +376,52 @@ fn bucket_minutes_remaining(minutes_remaining: f64) -> String {
         "2_4".to_string()
     } else {
         "gt_4".to_string()
+    }
+}
+
+fn bucket_book_spread(spread: f64) -> String {
+    if !spread.is_finite() || spread < 0.0 {
+        "unknown".to_string()
+    } else if spread <= 0.01 {
+        "lte_0.01".to_string()
+    } else if spread <= 0.03 {
+        "0.01_0.03".to_string()
+    } else if spread <= 0.05 {
+        "0.03_0.05".to_string()
+    } else {
+        "gt_0.05".to_string()
+    }
+}
+
+fn bucket_book_min_depth(depth: f64) -> String {
+    if !depth.is_finite() || depth < 0.0 {
+        "unknown".to_string()
+    } else if depth < 10.0 {
+        "lt_10".to_string()
+    } else if depth < 50.0 {
+        "10_50".to_string()
+    } else if depth < 100.0 {
+        "50_100".to_string()
+    } else if depth < 250.0 {
+        "100_250".to_string()
+    } else {
+        "gte_250".to_string()
+    }
+}
+
+fn bucket_signed_book_value(value: f64) -> String {
+    if !value.is_finite() {
+        "unknown".to_string()
+    } else if value <= -0.50 {
+        "strong_negative".to_string()
+    } else if value < -0.15 {
+        "negative".to_string()
+    } else if value <= 0.15 {
+        "neutral".to_string()
+    } else if value < 0.50 {
+        "positive".to_string()
+    } else {
+        "strong_positive".to_string()
     }
 }
 
@@ -1067,5 +1178,21 @@ mod tests {
         assert_eq!(regime.reversion_bucket, "1_2");
         assert_eq!(regime.minutes_remaining_bucket, "lte_1");
         assert!(regime.key().contains("zone=terminal"));
+        assert!(!regime.key().contains("book_"));
+
+        let mut invalid_book = regime.clone();
+        invalid_book.attach_orderbook_inputs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(invalid_book.key(), regime.key());
+
+        let mut with_book = regime.clone();
+        with_book.attach_orderbook_inputs(0.50, 0.52, 0.02, 200.0, 70.0, 0.20, -0.48);
+        assert_eq!(with_book.book_spread_bucket.as_deref(), Some("0.01_0.03"));
+        assert_eq!(with_book.book_min_depth_bucket.as_deref(), Some("50_100"));
+        assert_eq!(with_book.book_pressure_bucket.as_deref(), Some("positive"));
+        assert_eq!(with_book.book_imbalance_bucket.as_deref(), Some("negative"));
+        assert!(with_book.key().contains("book_spread=0.01_0.03"));
+        assert!(with_book
+            .causal_tags()
+            .contains(&("book_min_depth".to_string(), "50_100".to_string())));
     }
 }

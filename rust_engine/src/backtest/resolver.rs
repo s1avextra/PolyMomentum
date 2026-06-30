@@ -677,14 +677,25 @@ mod tests {
             reversion_bucket: "1_2".to_string(),
             reversion_count: 1,
             minutes_remaining_bucket: "lte_1".to_string(),
+            ..DecisionRegime::default()
         };
+        decision
+            .regime
+            .attach_orderbook_inputs(0.49, 0.51, 0.02, 125.0, 80.0, 0.20, -0.22);
 
         let res = resolve_fills(&fills, &[decision], &windows, &h);
         let by_regime = res.by_regime();
         let by_bucket = res.by_causal_bucket();
 
         assert_eq!(by_regime.len(), 1);
+        assert!(by_regime
+            .keys()
+            .next()
+            .unwrap()
+            .contains("book_spread=0.01_0.03"));
         assert_eq!(by_bucket["price=0.25_0.50"].trades, 1);
         assert_eq!(by_bucket["reversion=1_2"].wins, 1);
+        assert_eq!(by_bucket["book_min_depth=50_100"].trades, 1);
+        assert_eq!(by_bucket["book_pressure=positive"].wins, 1);
     }
 }

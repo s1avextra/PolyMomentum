@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-06-30T13:08:00Z",
+  "purpose": "Continuation after the 2026-06-30 crash boundary: expose orderbook-derived causal buckets in fold diagnostics before rerunning meta-label diagnostics.",
+  "implementation": {
+    "decision_regime_fields": [
+      "book_spread_bucket",
+      "book_min_depth_bucket",
+      "book_pressure_bucket",
+      "book_imbalance_bucket"
+    ],
+    "causal_dimensions_added": [
+      "book_spread",
+      "book_min_depth",
+      "book_pressure",
+      "book_imbalance"
+    ],
+    "notes": [
+      "Orderbook buckets are optional so legacy reports and no-book synthetic tests keep their original regime keys.",
+      "Backtest decisions attach valid traded-token microstructure before selectivity filters read the regime.",
+      "Depth-at-size, bookwalk slippage, book age, and maker-fill risk are not yet present in fold regime tags because the current decision-regime path does not expose those inputs."
+    ]
+  },
+  "validation": {
+    "tests": [
+      "cargo test --manifest-path rust_engine/Cargo.toml decision_regime_uses_only_pre_trade_inputs",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_bucket_diagnostics_use_decision_regime",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_policy_search_can_select_orderbook_bucket",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_policy",
+      "cargo test --manifest-path rust_engine/Cargo.toml selectivity_filter_requires_and_denies_causal_tags",
+      "cargo test --manifest-path rust_engine/Cargo.toml microstructure",
+      "cargo test --manifest-path rust_engine/Cargo.toml strategy_builder",
+      "cargo build --manifest-path rust_engine/Cargo.toml",
+      "cargo fmt --manifest-path rust_engine/Cargo.toml -- --check",
+      "git diff --check -- rust_engine/src/strategy/decision.rs rust_engine/src/backtest/harness.rs rust_engine/src/backtest/resolver.rs rust_engine/src/strategy_builder.rs"
+    ],
+    "result": "passed"
+  },
+  "rolling_history_smoke": {
+    "command": "./rust_engine/target/debug/polymomentum-engine strategy-builder rolling-history --start 2026-05-28T00:00:00Z --end 2026-05-28T00:00:00Z --out-dir /private/tmp/polymomentum_orderbook_buckets_20260630_smoke_1h --cache-root /private/tmp/polymomentum_orderbook_buckets_20260630_smoke_1h_cache --profile a_plus5m_causal_guard_selected --require-causal-tag reversion=1_2 --zone-mode all --fold-hours 1 --window-minutes 5 --bankroll 100 --latency-ms 50 --threads 4 --preflight-pmxt-hours --stop-at-first-missing-hour --require-full-folds --max-folds 1 --execute --delete-after-process --atomic-parquet --max-cache-gb 2 --min-fold-trades 1 --min-fold-target-events 1 --min-fold-top-trades 0 --min-promotion-trades 1 --min-promotion-daily-trades 0 --min-promotion-profitable-reports 0 --min-promotion-losses 0 --min-neighbor-observations 0",
+    "report_path": "/private/tmp/polymomentum_orderbook_buckets_20260630_smoke_1h/reports/fold_001_20260528T000000Z_20260528T000000Z_sweep.json",
+    "exit_code": 2,
+    "exit_code_note": "rolling-history wrote the fold report, then robust promotion rejected the intentionally tiny one-fold sample; this is expected and not a diagnostics failure.",
+    "report_summary": {
+      "trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 1.1201699999999994,
+      "book_causal_buckets_observed": [
+        "book_spread=0.01_0.03",
+        "book_min_depth=gte_250",
+        "book_pressure=neutral",
+        "book_imbalance=neutral"
+      ],
+      "regime_key_observed": "zone=early|dir=up|price=0.75_0.90|edge=0.07_0.15|z=1.1_1.5|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=gt_4|book_spread=0.01_0.03|book_min_depth=gte_250|book_pressure=neutral|book_imbalance=neutral"
+    }
+  },
+  "full_rerun_status": {
+    "status": "pending",
+    "reason": "Existing May28-Jun10 fold reports predate the code change and do not contain book_* regime tags. A full meta-label rerun requires regenerating all 42 rolling-history fold reports first.",
+    "runtime_observation": "The one-hour smoke loaded 3,893,421 parquet events and took about four minutes including download retries and replay; the earlier 8-hour smoke took roughly 25 minutes. Full 42-fold regeneration is therefore a long local batch, not a quick CLI rerun."
+  },
+  "promotion_verdict": {
+    "live_ready": false,
+    "reason": "This continuation exposes orderbook diagnostics but does not produce fresh full-window promotion evidence."
+  }
+}
