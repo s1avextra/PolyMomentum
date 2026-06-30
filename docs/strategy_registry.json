@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-29T18:07:45.044795+00:00",
+  "updated_at": "2026-06-30T08:20:03.328896+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -197,6 +197,40 @@
           ],
           "notes": [
             "Tail guard is research-only: it blocks early-zone tail losses but may over-filter. Next search should preserve early-zone only under stricter confidence/price/timing gates or build a primary-only challenger with explicit minimum trade-rate gates."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "tail_first_causal_policy_payoff_20260630",
+      "version_id": "sv_c26b21e56513ffb0",
+      "parent_id": "full_may28_jun10_strict_tail_loop_20260630",
+      "status": "dead_end",
+      "reason": "Tail-first causal-policy search improved top tail shape but found no promotable candidate; best direction=up deny zone=primary still has burst 3/5 and payoff ratio 0.279 below the 0.30 gate.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_diagnostic.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json"
+      ],
+      "notes": [
+        "Implemented opt-in tail-first ranking and payoff-asymmetry gates for causal-policy search.",
+        "Strict result remains fail-closed: ok=false, live-ready=false; do not promote or paper-validate."
+      ],
+      "first_seen_at": "2026-06-30T08:20:03.328896+00:00",
+      "updated_at": "2026-06-30T08:20:03.328896+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T08:20:03.328896+00:00",
+          "status": "dead_end",
+          "reason": "Tail-first causal-policy search improved top tail shape but found no promotable candidate; best direction=up deny zone=primary still has burst 3/5 and payoff ratio 0.279 below the 0.30 gate.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_diagnostic.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json"
+          ],
+          "notes": [
+            "Implemented opt-in tail-first ranking and payoff-asymmetry gates for causal-policy search.",
+            "Strict result remains fail-closed: ok=false, live-ready=false; do not promote or paper-validate."
           ]
         }
       ]

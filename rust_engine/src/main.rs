@@ -1098,6 +1098,15 @@ enum StrategyBuilderCommand {
         /// Maximum losing reports inside --loss-burst-lookback. Zero disables the gate.
         #[arg(long, default_value_t = 0)]
         max_loss_burst_reports: usize,
+        /// Rank by burst, worst fold, CVaR, and payoff asymmetry before aggregate PnL.
+        #[arg(long, default_value_t = false)]
+        tail_first_ranking: bool,
+        /// Minimum aggregate average-win / average-loss payoff ratio; 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        min_oos_payoff_ratio: f64,
+        /// Maximum worst-loss / average-win ratio; 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        max_oos_worst_loss_to_avg_win: f64,
         /// Show top N candidates.
         #[arg(long, default_value_t = 25)]
         top: usize,
@@ -2024,6 +2033,9 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_oos_cvar_pnl,
             loss_burst_lookback,
             max_loss_burst_reports,
+            tail_first_ranking,
+            min_oos_payoff_ratio,
+            max_oos_worst_loss_to_avg_win,
             top,
         } => {
             let search = match strategy_builder::causal_policy_search(
@@ -2046,6 +2058,9 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     min_oos_cvar_pnl,
                     loss_burst_lookback,
                     max_loss_burst_reports,
+                    tail_first_ranking,
+                    min_oos_payoff_ratio,
+                    max_oos_worst_loss_to_avg_win,
                     top,
                 },
             ) {

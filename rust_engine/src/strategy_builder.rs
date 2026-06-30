@@ -192,6 +192,9 @@ pub struct StrategyBuilderCausalPolicySearchInput {
     pub min_oos_cvar_pnl: f64,
     pub loss_burst_lookback: usize,
     pub max_loss_burst_reports: usize,
+    pub tail_first_ranking: bool,
+    pub min_oos_payoff_ratio: f64,
+    pub max_oos_worst_loss_to_avg_win: f64,
     pub top: usize,
 }
 
@@ -418,6 +421,9 @@ pub struct CausalPolicySearchGates {
     pub min_oos_cvar_pnl: f64,
     pub loss_burst_lookback: usize,
     pub max_loss_burst_reports: usize,
+    pub tail_first_ranking: bool,
+    pub min_oos_payoff_ratio: f64,
+    pub max_oos_worst_loss_to_avg_win: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2552,7 +2558,16 @@ fn causal_policy_search_from_folds(
             || a.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
         let b_burst_gate = input.max_loss_burst_reports == 0
             || b.fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports;
-        b.passed
+        let a_payoff_gate = input.min_oos_payoff_ratio <= 0.0
+            || a.fold_forward.stats.payoff_ratio >= input.min_oos_payoff_ratio;
+        let b_payoff_gate = input.min_oos_payoff_ratio <= 0.0
+            || b.fold_forward.stats.payoff_ratio >= input.min_oos_payoff_ratio;
+        let a_worst_loss_gate = input.max_oos_worst_loss_to_avg_win <= 0.0
+            || a.fold_forward.stats.worst_loss_to_avg_win <= input.max_oos_worst_loss_to_avg_win;
+        let b_worst_loss_gate = input.max_oos_worst_loss_to_avg_win <= 0.0
+            || b.fold_forward.stats.worst_loss_to_avg_win <= input.max_oos_worst_loss_to_avg_win;
+        let gate_order = b
+            .passed
             .cmp(&a.passed)
             .then_with(|| b_trade_gate.cmp(&a_trade_gate))
             .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
@@ -2561,6 +2576,58 @@ fn causal_policy_search_from_folds(
             .then_with(|| b_tail_gate.cmp(&a_tail_gate))
             .then_with(|| b_cvar_gate.cmp(&a_cvar_gate))
             .then_with(|| b_burst_gate.cmp(&a_burst_gate))
+            .then_with(|| b_payoff_gate.cmp(&a_payoff_gate))
+            .then_with(|| b_worst_loss_gate.cmp(&a_worst_loss_gate));
+        if input.tail_first_ranking {
+            return gate_order
+                .then_with(|| {
+                    a.fold_forward
+                        .tail
+                        .max_loss_burst_reports
+                        .cmp(&b.fold_forward.tail.max_loss_burst_reports)
+                })
+                .then_with(|| {
+                    f64_desc(
+                        a.fold_forward.worst_report_pnl,
+                        b.fold_forward.worst_report_pnl,
+                    )
+                })
+                .then_with(|| f64_desc(a.fold_forward.tail.cvar_pnl, b.fold_forward.tail.cvar_pnl))
+                .then_with(|| {
+                    f64_asc(
+                        a.fold_forward.stats.worst_loss_to_avg_win,
+                        b.fold_forward.stats.worst_loss_to_avg_win,
+                    )
+                })
+                .then_with(|| {
+                    f64_desc(
+                        a.fold_forward.stats.payoff_ratio,
+                        b.fold_forward.stats.payoff_ratio,
+                    )
+                })
+                .then_with(|| {
+                    f64_desc(
+                        a.fold_forward.stats.profit_factor,
+                        b.fold_forward.stats.profit_factor,
+                    )
+                })
+                .then_with(|| {
+                    b.fold_forward
+                        .stats
+                        .trades
+                        .cmp(&a.fold_forward.stats.trades)
+                })
+                .then_with(|| {
+                    f64_desc(
+                        a.fold_forward.stats.total_pnl,
+                        b.fold_forward.stats.total_pnl,
+                    )
+                })
+                .then_with(|| a.base_require.len().cmp(&b.base_require.len()))
+                .then_with(|| a.variant.cmp(&b.variant))
+                .then_with(|| policy_label(&a.base_require).cmp(&policy_label(&b.base_require)));
+        }
+        gate_order
             .then_with(|| {
                 f64_desc(
                     a.fold_forward.stats.total_pnl,
@@ -2619,6 +2686,8 @@ fn causal_policy_search_from_folds(
                 .to_string(),
             "Rank candidates by pass status, gate completion, aggregate OOS PnL, trade count, Wilson lower bound, worst fold, CVaR, loss-burst size, and policy simplicity."
                 .to_string(),
+            "Optional tail-first ranking prioritizes loss-burst size, worst fold, CVaR, and payoff asymmetry before aggregate PnL."
+                .to_string(),
             "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
                 .to_string(),
         ],
@@ -2640,6 +2709,9 @@ fn causal_policy_search_from_folds(
             min_oos_cvar_pnl: input.min_oos_cvar_pnl,
             loss_burst_lookback: input.loss_burst_lookback,
             max_loss_burst_reports: input.max_loss_burst_reports,
+            tail_first_ranking: input.tail_first_ranking,
+            min_oos_payoff_ratio: input.min_oos_payoff_ratio,
+            max_oos_worst_loss_to_avg_win: input.max_oos_worst_loss_to_avg_win,
         },
         candidates,
     }
@@ -3209,7 +3281,11 @@ fn evaluate_causal_policy_candidate(
         && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
         && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
         && (input.max_loss_burst_reports == 0
-            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports);
+            || fold_forward.tail.max_loss_burst_reports <= input.max_loss_burst_reports)
+        && (input.min_oos_payoff_ratio <= 0.0
+            || fold_forward.stats.payoff_ratio >= input.min_oos_payoff_ratio)
+        && (input.max_oos_worst_loss_to_avg_win <= 0.0
+            || fold_forward.stats.worst_loss_to_avg_win <= input.max_oos_worst_loss_to_avg_win);
 
     let final_policy = CausalPolicy {
         require_tags: candidate.require_tags.clone(),
@@ -4503,6 +4579,10 @@ fn tagged_regimes_from_map(
 
 fn f64_desc(left: f64, right: f64) -> Ordering {
     right.partial_cmp(&left).unwrap_or(Ordering::Equal)
+}
+
+fn f64_asc(left: f64, right: f64) -> Ordering {
+    left.partial_cmp(&right).unwrap_or(Ordering::Equal)
 }
 
 fn only_passive_execution_failures(reject_reasons: &BTreeMap<String, usize>) -> bool {
@@ -6371,6 +6451,93 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_tail_first_ranking_prefers_cleaner_tail_over_higher_pnl() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let primary_up =
+            "regime=zone=primary|dir=up|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (primary_up, pnl_stats(4, 0, 4.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (primary_up, pnl_stats(4, 0, 4.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(10, 0, 10.0, 0.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(0, 1, 0.0, -4.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(0, 1, 0.0, -4.0)),
+                (primary_up, pnl_stats(0, 1, 0.0, -1.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(20, 0, 20.0, 0.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_worst_oos_pnl = -10.0;
+        input.min_oos_trades = 4;
+        input.loss_burst_lookback = 2;
+        input.tail_first_ranking = true;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let top = search.candidates.first().expect("top candidate");
+
+        assert_eq!(
+            top.base_require.get("direction").map(String::as_str),
+            Some("up")
+        );
+        assert_eq!(top.fold_forward.tail.max_loss_burst_reports, 1);
+        assert_eq!(top.fold_forward.stats.total_pnl, 8.0);
+    }
+
+    #[test]
+    fn causal_policy_payoff_asymmetry_gate_rejects_high_win_rate_candidate() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(0, 1, 0.0, -5.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+        ];
+
+        let mut input = causal_policy_input(10);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 0;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_worst_oos_pnl = -10.0;
+        input.min_oos_payoff_ratio = 0.5;
+        input.max_oos_worst_loss_to_avg_win = 4.0;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+            })
+            .expect("direction/down policy");
+
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert!(candidate.fold_forward.stats.payoff_ratio < 0.5);
+        assert!(candidate.fold_forward.stats.worst_loss_to_avg_win > 4.0);
+    }
+
+    #[test]
     fn tail_risk_report_uses_left_tail_and_windowed_bursts() {
         let report = tail_risk_report(&[4.0, -2.0, -3.0, 1.0, -1.0], 0.40, 3);
 
@@ -6955,6 +7122,9 @@ mod tests {
             min_oos_cvar_pnl: -1.0e9,
             loss_burst_lookback: 0,
             max_loss_burst_reports: 0,
+            tail_first_ranking: false,
+            min_oos_payoff_ratio: 0.0,
+            max_oos_worst_loss_to_avg_win: 0.0,
             top,
         }
     }
