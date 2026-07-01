@@ -147,6 +147,21 @@ impl GammaClient {
         slugs: &[String],
         closed: bool,
     ) -> Result<Vec<Market>> {
+        let raw = self.fetch_raw_markets_by_slugs(slugs, closed).await?;
+        let mut all: Vec<Market> = raw.iter().filter_map(parse_gamma_market).collect();
+        all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
+        all.dedup_by(|a, b| a.condition_id == b.condition_id);
+        Ok(all)
+    }
+
+    /// Fetch exact market slugs as raw Gamma JSON. This preserves metadata
+    /// fields that are not part of the common market model, such as
+    /// `resolutionSource`.
+    pub async fn fetch_raw_markets_by_slugs(
+        &self,
+        slugs: &[String],
+        closed: bool,
+    ) -> Result<Vec<Value>> {
         let mut all = Vec::new();
         let total = slugs.len();
         let concurrency = total.clamp(1, MAX_SLUG_FETCH_CONCURRENCY);
@@ -162,27 +177,19 @@ impl GammaClient {
                     .await
                     .with_context(|| format!("fetch gamma slug {slug}"))?;
                 let (items, _) = unwrap_market_page(v);
-                let mut markets = Vec::new();
-                for raw in &items {
-                    if let Some(m) = parse_gamma_market(raw) {
-                        markets.push(m);
-                    }
-                }
-                Ok::<_, anyhow::Error>(markets)
+                Ok::<_, anyhow::Error>(items)
             })
             .buffer_unordered(concurrency);
 
         let mut completed = 0usize;
-        while let Some(markets) = responses.next().await {
-            let mut markets = markets?;
-            all.append(&mut markets);
+        while let Some(items) = responses.next().await {
+            let mut items = items?;
+            all.append(&mut items);
             completed += 1;
             if completed.is_multiple_of(100) || completed == total {
                 eprintln!("gamma: fetched {completed}/{total} slug metadata response(s)");
             }
         }
-        all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
-        all.dedup_by(|a, b| a.condition_id == b.condition_id);
         Ok(all)
     }
 

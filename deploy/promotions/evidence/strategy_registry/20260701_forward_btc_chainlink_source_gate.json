@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T12:59:05.041804+00:00",
+  "purpose": "Record the next A+ blocker from the forward BTC capture smoke: official Polymarket BTC Up/Down markets settle from Chainlink BTC/USD Data Streams, so Binance BTCUSDT tape is only a proxy diagnostic.",
+  "change": {
+    "code_paths": [
+      "rust_engine/src/data/gamma.rs: fetch_raw_markets_by_slugs preserves Gamma resolutionSource metadata",
+      "rust_engine/src/main.rs: finalize-recorded-btc-books separates terminal ground truth, official source matching, and proxy BTC alignment"
+    ],
+    "fail_closed_rule": "settlement_alignment_ready requires terminal outcomes, BTC tape coverage, zero proxy disagreements/ties, and a BTC tape source kind that matches the official Gamma resolution source kind"
+  },
+  "smoke_input": {
+    "converted_forward_capture_dir": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701",
+    "raw_resolution_manifest": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701/resolution_manifest_source_gate.json",
+    "command": "./rust_engine/target/debug/polymomentum-engine finalize-recorded-btc-books --input-dir /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701 --output /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701/resolution_manifest_source_gate.json"
+  },
+  "smoke_result": {
+    "a_plus_gate": {
+      "terminal_ground_truth_ready": true,
+      "resolution_manifest_ready": true,
+      "btc_tape_ready": true,
+      "official_settlement_source_ready": false,
+      "proxy_btc_alignment_ready": false,
+      "settlement_alignment_ready": false,
+      "verdict": "OFFICIAL_CHAINLINK_TAPE_REQUIRED"
+    },
+    "official_settlement_sources": {
+      "kinds": [
+        "chainlink_btc_usd_data_stream"
+      ],
+      "known": 3,
+      "unknown": 0,
+      "matched_to_btc_tape": 0,
+      "mismatched_to_btc_tape": 3,
+      "chainlink_btc_usd_data_stream": 3
+    },
+    "btc_tape": {
+      "settlement_source_kind": "binance_btcusdt_klines",
+      "settlement_source_kind_input": "auto",
+      "source": {
+        "kind": "binance_public_klines",
+        "symbol": "BTCUSDT",
+        "interval": "1s",
+        "start_ms": 1782904495000,
+        "end_ms": 1782905405000
+      },
+      "rows": 911,
+      "first_timestamp_ms": 1782904495999,
+      "last_timestamp_ms": 1782905405999
+    },
+    "stats": {
+      "markets": 3,
+      "gamma_refreshed": 3,
+      "closed": 3,
+      "terminal": 3,
+      "pending": 0,
+      "btc_tape_covered": 3,
+      "btc_tape_missing": 0,
+      "proxy_oracle_checks": 3,
+      "proxy_oracle_disagreements": 0,
+      "proxy_oracle_ties": 1
+    },
+    "markets": [
+      {
+        "slug": "btc-updown-5m-1782905100",
+        "terminal_direction": "down",
+        "official_resolution_source_kind": "chainlink_btc_usd_data_stream",
+        "btc_settlement_source_kind": "binance_btcusdt_klines",
+        "official_source_matches_btc_tape": false,
+        "proxy_settlement_aligned": true,
+        "btc_move": -13.759999999994761
+      },
+      {
+        "slug": "btc-updown-5m-1782904800",
+        "terminal_direction": "up",
+        "official_resolution_source_kind": "chainlink_btc_usd_data_stream",
+        "btc_settlement_source_kind": "binance_btcusdt_klines",
+        "official_source_matches_btc_tape": false,
+        "proxy_settlement_aligned": true,
+        "btc_move": 5.9799999999959255
+      },
+      {
+        "slug": "btc-updown-5m-1782904500",
+        "terminal_direction": "up",
+        "official_resolution_source_kind": "chainlink_btc_usd_data_stream",
+        "btc_settlement_source_kind": "binance_btcusdt_klines",
+        "official_source_matches_btc_tape": false,
+        "proxy_settlement_aligned": false,
+        "btc_move": 0.0,
+        "proxy_note": "Binance close-to-close tie while Gamma terminal outcome is Up; not actionable as official disagreement because the market declares Chainlink BTC/USD as the source."
+      }
+    ]
+  },
+  "interpretation": {
+    "ground_truth_status": "Gamma terminal outcomes are sufficient for resolved forward replay labels, but they do not validate local BTC settlement math.",
+    "promotion_status": "KEEP_REPLAY_RESEARCH",
+    "next_required_data": "Collect or import BTC/USD observations from Chainlink Data Streams for each market open and close, then rerun finalize-recorded-btc-books with --btc-csv and --settlement-source-kind chainlink_btc_usd_data_stream."
+  },
+  "verification": [
+    "cargo fmt --manifest-path rust_engine/Cargo.toml --check",
+    "cargo test --manifest-path rust_engine/Cargo.toml recorded_",
+    "cargo test --manifest-path rust_engine/Cargo.toml terminal_direction_requires_closed_terminal_market",
+    "cargo build --manifest-path rust_engine/Cargo.toml",
+    "cargo build --release --manifest-path rust_engine/Cargo.toml",
+    "./rust_engine/target/debug/polymomentum-engine finalize-recorded-btc-books --input-dir /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701 --output /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701/resolution_manifest_source_gate.json"
+  ]
+}

@@ -181,6 +181,9 @@ enum Command {
         /// BTC tick/kline CSV used for settlement-alignment checks. If omitted, pull Binance klines.
         #[arg(long)]
         btc_csv: Option<String>,
+        /// Declared source kind for --btc-csv; use chainlink_btc_usd_data_stream for official BTC markets.
+        #[arg(long, default_value = "auto")]
+        settlement_source_kind: String,
         /// Output JSON path. Defaults to <input-dir>/resolution_manifest.json.
         #[arg(long)]
         output: Option<String>,
@@ -1664,12 +1667,14 @@ async fn main() {
         Command::FinalizeRecordedBtcBooks {
             input_dir,
             btc_csv,
+            settlement_source_kind,
             output,
         } => {
             if let Err(e) = cmd_finalize_recorded_btc_books(
                 &settings,
                 &input_dir,
                 btc_csv.as_deref(),
+                &settlement_source_kind,
                 output.as_deref(),
             )
             .await
@@ -5142,10 +5147,11 @@ async fn cmd_finalize_recorded_btc_books(
     settings: &config::Settings,
     input_dir: &str,
     btc_csv: Option<&str>,
+    settlement_source_kind: &str,
     output: Option<&str>,
 ) -> anyhow::Result<()> {
     use anyhow::{bail, Context};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     let input_dir = std::path::PathBuf::from(input_dir);
     let manifest_path = input_dir.join("manifest.json");
@@ -5183,13 +5189,21 @@ async fn cmd_finalize_recorded_btc_books(
     let max_close_s = slug_windows.values().map(|(_, close, _)| *close).max();
 
     let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-    let refreshed = gamma
-        .fetch_markets_by_slugs(&slugs, true)
+    let refreshed_raw = gamma
+        .fetch_raw_markets_by_slugs(&slugs, true)
         .await
-        .context("fetch closed Gamma metadata for recorded BTC slugs")?;
+        .context("fetch raw closed Gamma metadata for recorded BTC slugs")?;
+    let refreshed: Vec<data::models::Market> = refreshed_raw
+        .iter()
+        .filter_map(data::gamma::parse_gamma_market)
+        .collect();
     let refreshed_by_slug: BTreeMap<String, data::models::Market> = refreshed
         .into_iter()
         .map(|market| (market.slug.clone(), market))
+        .collect();
+    let resolution_source_by_slug: BTreeMap<String, serde_json::Value> = refreshed_raw
+        .iter()
+        .filter_map(recorded_gamma_resolution_source)
         .collect();
 
     let mut btc = backtest::btc_history::BTCHistory::new();
@@ -5238,6 +5252,8 @@ async fn cmd_finalize_recorded_btc_books(
             0,
         )
     };
+    let btc_settlement_source_kind =
+        recorded_btc_settlement_source_kind(&btc_source, settlement_source_kind);
 
     let mut rows = Vec::new();
     let mut refreshed_count = 0_u64;
@@ -5247,10 +5263,41 @@ async fn cmd_finalize_recorded_btc_books(
     let mut oracle_checks = 0_u64;
     let mut oracle_disagreements = 0_u64;
     let mut oracle_ties = 0_u64;
+    let mut official_source_known = 0_u64;
+    let mut official_source_mismatches = 0_u64;
+    let mut official_chainlink_sources = 0_u64;
+    let mut official_source_kinds = BTreeSet::new();
     for original in original_markets.values() {
         let market = refreshed_by_slug.get(&original.slug).unwrap_or(original);
         if refreshed_by_slug.contains_key(&original.slug) {
             refreshed_count += 1;
+        }
+        let official_resolution_source = resolution_source_by_slug
+            .get(&market.slug)
+            .cloned()
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "kind": "unknown",
+                    "resolution_source": null,
+                    "description": null
+                })
+            });
+        let official_source_kind = official_resolution_source
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        if official_source_kind != "unknown" {
+            official_source_known += 1;
+        }
+        if official_source_kind == "chainlink_btc_usd_data_stream" {
+            official_chainlink_sources += 1;
+        }
+        official_source_kinds.insert(official_source_kind.clone());
+        let official_source_matches_btc_tape =
+            recorded_settlement_source_matches(&official_source_kind, &btc_settlement_source_kind);
+        if !official_source_matches_btc_tape {
+            official_source_mismatches += 1;
         }
         if market.closed {
             closed_count += 1;
@@ -5311,7 +5358,11 @@ async fn cmd_finalize_recorded_btc_books(
             "btc_close": close_btc,
             "btc_move": close_btc - open_btc,
             "btc_direction": btc_direction,
+            "btc_settlement_source_kind": btc_settlement_source_kind,
+            "official_resolution_source": official_resolution_source,
+            "official_source_matches_btc_tape": official_source_matches_btc_tape,
             "settlement_aligned": settlement_aligned,
+            "proxy_settlement_aligned": settlement_aligned,
             "outcomes": market.outcomes,
         }));
     }
@@ -5319,8 +5370,32 @@ async fn cmd_finalize_recorded_btc_books(
     let total = rows.len() as u64;
     let resolution_ready = terminal_count == total;
     let btc_tape_ready = btc_tape_count == total;
-    let settlement_alignment_ready =
+    let official_source_ready = official_source_known == total && official_source_mismatches == 0;
+    let proxy_btc_alignment_ready =
         resolution_ready && btc_tape_ready && oracle_disagreements == 0 && oracle_ties == 0;
+    let settlement_alignment_ready = proxy_btc_alignment_ready && official_source_ready;
+    let official_source_unknown = total.saturating_sub(official_source_known);
+    let official_source_kinds: Vec<String> = official_source_kinds.into_iter().collect();
+    let verdict = if !resolution_ready {
+        "WAIT_FOR_TERMINAL_MARKETS"
+    } else if !btc_tape_ready {
+        "BTC_TAPE_MISSING"
+    } else if official_source_unknown > 0 {
+        "OFFICIAL_SETTLEMENT_SOURCE_UNKNOWN"
+    } else if official_source_mismatches > 0
+        && official_chainlink_sources > 0
+        && btc_settlement_source_kind != "chainlink_btc_usd_data_stream"
+    {
+        "OFFICIAL_CHAINLINK_TAPE_REQUIRED"
+    } else if official_source_mismatches > 0 {
+        "OFFICIAL_SETTLEMENT_SOURCE_MISMATCH"
+    } else if oracle_ties > 0 {
+        "BTC_TIE_NEEDS_REVIEW"
+    } else if oracle_disagreements > 0 {
+        "SETTLEMENT_DISAGREEMENT"
+    } else {
+        "FORWARD_GROUND_TRUTH_READY_NEEDS_SAMPLE_SIZE"
+    };
     let summary = serde_json::json!({
         "schema_version": 1,
         "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -5328,9 +5403,19 @@ async fn cmd_finalize_recorded_btc_books(
         "output": output_path.display().to_string(),
         "btc_tape": {
             "source": btc_source,
+            "settlement_source_kind": btc_settlement_source_kind,
+            "settlement_source_kind_input": settlement_source_kind,
             "rows": btc_rows,
             "first_timestamp_ms": btc.first_timestamp_ms(),
             "last_timestamp_ms": btc.last_timestamp_ms()
+        },
+        "official_settlement_sources": {
+            "kinds": official_source_kinds,
+            "known": official_source_known,
+            "unknown": official_source_unknown,
+            "matched_to_btc_tape": total.saturating_sub(official_source_mismatches),
+            "mismatched_to_btc_tape": official_source_mismatches,
+            "chainlink_btc_usd_data_stream": official_chainlink_sources
         },
         "stats": {
             "markets": total,
@@ -5342,23 +5427,19 @@ async fn cmd_finalize_recorded_btc_books(
             "btc_tape_missing": total.saturating_sub(btc_tape_count),
             "oracle_checks": oracle_checks,
             "oracle_disagreements": oracle_disagreements,
-            "oracle_ties": oracle_ties
+            "oracle_ties": oracle_ties,
+            "proxy_oracle_checks": oracle_checks,
+            "proxy_oracle_disagreements": oracle_disagreements,
+            "proxy_oracle_ties": oracle_ties
         },
         "a_plus_gate": {
+            "terminal_ground_truth_ready": resolution_ready,
             "resolution_manifest_ready": resolution_ready,
             "btc_tape_ready": btc_tape_ready,
+            "official_settlement_source_ready": official_source_ready,
+            "proxy_btc_alignment_ready": proxy_btc_alignment_ready,
             "settlement_alignment_ready": settlement_alignment_ready,
-            "verdict": if !resolution_ready {
-                "WAIT_FOR_TERMINAL_MARKETS"
-            } else if !btc_tape_ready {
-                "BTC_TAPE_MISSING"
-            } else if oracle_ties > 0 {
-                "BTC_TIE_NEEDS_REVIEW"
-            } else if oracle_disagreements > 0 {
-                "SETTLEMENT_DISAGREEMENT"
-            } else {
-                "FORWARD_GROUND_TRUTH_READY_NEEDS_SAMPLE_SIZE"
-            }
+            "verdict": verdict
         },
         "markets": rows,
     });
@@ -5394,6 +5475,74 @@ fn recorded_btc_direction(open_btc: f64, close_btc: f64) -> Option<String> {
     } else {
         Some("down".to_string())
     }
+}
+
+fn recorded_gamma_resolution_source(
+    raw: &serde_json::Value,
+) -> Option<(String, serde_json::Value)> {
+    let slug = raw.get("slug").and_then(|v| v.as_str())?.to_string();
+    let resolution_source = raw
+        .get("resolutionSource")
+        .or_else(|| raw.get("resolution_source"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let description = raw
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let kind = recorded_resolution_source_kind(
+        resolution_source.as_deref().unwrap_or(""),
+        description.as_deref().unwrap_or(""),
+    );
+    Some((
+        slug,
+        serde_json::json!({
+            "kind": kind,
+            "resolution_source": resolution_source,
+            "description": description
+        }),
+    ))
+}
+
+fn recorded_resolution_source_kind(resolution_source: &str, description: &str) -> String {
+    let text = format!("{resolution_source}\n{description}").to_ascii_lowercase();
+    if text.contains("chain.link") || text.contains("chainlink") {
+        if text.contains("btc") || text.contains("bitcoin") {
+            return "chainlink_btc_usd_data_stream".to_string();
+        }
+        return "chainlink_data_stream".to_string();
+    }
+    if text.contains("binance") || text.contains("btcusdt") {
+        return "binance_btcusdt_klines".to_string();
+    }
+    if text.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+fn recorded_btc_settlement_source_kind(
+    btc_source: &serde_json::Value,
+    settlement_source_kind: &str,
+) -> String {
+    let declared = settlement_source_kind.trim().to_ascii_lowercase();
+    if !declared.is_empty() && declared != "auto" {
+        return declared;
+    }
+    match btc_source.get("kind").and_then(|v| v.as_str()) {
+        Some("binance_public_klines") => "binance_btcusdt_klines".to_string(),
+        Some("csv") => "csv_unclassified".to_string(),
+        Some("none") => "none".to_string(),
+        Some(other) if !other.trim().is_empty() => other.trim().to_ascii_lowercase(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn recorded_settlement_source_matches(official_kind: &str, btc_tape_kind: &str) -> bool {
+    let official = official_kind.trim();
+    let tape = btc_tape_kind.trim();
+    !official.is_empty() && official != "unknown" && official == tape
 }
 
 fn terminal_direction_from_market(market: &data::models::Market) -> Option<String> {
@@ -8593,6 +8742,52 @@ mod replay_validation_tests {
         assert_eq!(recorded_btc_direction(100.0, 100.0), Some("tie".into()));
         assert_eq!(recorded_btc_direction(0.0, 100.0), None);
         assert_eq!(recorded_btc_direction(100.0, 0.0), None);
+    }
+
+    #[test]
+    fn recorded_resolution_source_kind_detects_chainlink_btc_streams() {
+        assert_eq!(
+            recorded_resolution_source_kind(
+                "https://data.chain.link/streams/btc-usd",
+                "Resolution uses Chainlink BTC/USD data stream"
+            ),
+            "chainlink_btc_usd_data_stream"
+        );
+        assert_eq!(recorded_resolution_source_kind("", ""), "unknown");
+    }
+
+    #[test]
+    fn recorded_btc_settlement_source_kind_keeps_binance_proxy_fail_closed() {
+        let binance = serde_json::json!({"kind": "binance_public_klines"});
+        assert_eq!(
+            recorded_btc_settlement_source_kind(&binance, "auto"),
+            "binance_btcusdt_klines"
+        );
+        let csv = serde_json::json!({"kind": "csv"});
+        assert_eq!(
+            recorded_btc_settlement_source_kind(&csv, "auto"),
+            "csv_unclassified"
+        );
+        assert_eq!(
+            recorded_btc_settlement_source_kind(&csv, "chainlink_btc_usd_data_stream"),
+            "chainlink_btc_usd_data_stream"
+        );
+    }
+
+    #[test]
+    fn recorded_settlement_source_matching_requires_explicit_official_kind() {
+        assert!(recorded_settlement_source_matches(
+            "chainlink_btc_usd_data_stream",
+            "chainlink_btc_usd_data_stream"
+        ));
+        assert!(!recorded_settlement_source_matches(
+            "chainlink_btc_usd_data_stream",
+            "binance_btcusdt_klines"
+        ));
+        assert!(!recorded_settlement_source_matches(
+            "unknown",
+            "chainlink_btc_usd_data_stream"
+        ));
     }
 
     #[test]
