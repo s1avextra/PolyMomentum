@@ -178,6 +178,9 @@ enum Command {
         /// Directory produced by convert-recorded-btc-books.
         #[arg(long)]
         input_dir: String,
+        /// BTC tick/kline CSV used for settlement-alignment checks. If omitted, pull Binance klines.
+        #[arg(long)]
+        btc_csv: Option<String>,
         /// Output JSON path. Defaults to <input-dir>/resolution_manifest.json.
         #[arg(long)]
         output: Option<String>,
@@ -1658,9 +1661,18 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Command::FinalizeRecordedBtcBooks { input_dir, output } => {
-            if let Err(e) =
-                cmd_finalize_recorded_btc_books(&settings, &input_dir, output.as_deref()).await
+        Command::FinalizeRecordedBtcBooks {
+            input_dir,
+            btc_csv,
+            output,
+        } => {
+            if let Err(e) = cmd_finalize_recorded_btc_books(
+                &settings,
+                &input_dir,
+                btc_csv.as_deref(),
+                output.as_deref(),
+            )
+            .await
             {
                 eprintln!("finalize-recorded-btc-books failed: {e:#}");
                 std::process::exit(1);
@@ -5129,6 +5141,7 @@ fn recorded_json_string(value: &serde_json::Value) -> String {
 async fn cmd_finalize_recorded_btc_books(
     settings: &config::Settings,
     input_dir: &str,
+    btc_csv: Option<&str>,
     output: Option<&str>,
 ) -> anyhow::Result<()> {
     use anyhow::{bail, Context};
@@ -5162,6 +5175,12 @@ async fn cmd_finalize_recorded_btc_books(
     if slugs.is_empty() {
         bail!("{} had no market slugs", manifest_path.display());
     }
+    let slug_windows: BTreeMap<String, (i64, i64, i64)> = slugs
+        .iter()
+        .filter_map(|slug| recorded_btc_slug_window(slug).map(|w| (slug.clone(), w)))
+        .collect();
+    let min_open_s = slug_windows.values().map(|(open, _, _)| *open).min();
+    let max_close_s = slug_windows.values().map(|(_, close, _)| *close).max();
 
     let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
     let refreshed = gamma
@@ -5173,10 +5192,61 @@ async fn cmd_finalize_recorded_btc_books(
         .map(|market| (market.slug.clone(), market))
         .collect();
 
+    let mut btc = backtest::btc_history::BTCHistory::new();
+    let (btc_source, btc_rows) = if let Some(path) = btc_csv {
+        let rows = btc
+            .load_csv(path)
+            .with_context(|| format!("load BTC CSV {path}"))?;
+        (serde_json::json!({"kind": "csv", "path": path}), rows)
+    } else if let (Some(start_s), Some(end_s)) = (min_open_s, max_close_s) {
+        let start_ms = (start_s * 1000).saturating_sub(5_000);
+        let end_ms = (end_s * 1000).saturating_add(5_000);
+        let rows_1s = btc
+            .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
+            .await
+            .unwrap_or(0);
+        if rows_1s > 0 {
+            (
+                serde_json::json!({
+                    "kind": "binance_public_klines",
+                    "symbol": "BTCUSDT",
+                    "interval": "1s",
+                    "start_ms": start_ms,
+                    "end_ms": end_ms
+                }),
+                rows_1s,
+            )
+        } else {
+            let rows_1m = btc
+                .load_from_binance(start_ms, end_ms, "BTCUSDT", "1m")
+                .await
+                .context("load Binance BTCUSDT klines")?;
+            (
+                serde_json::json!({
+                    "kind": "binance_public_klines",
+                    "symbol": "BTCUSDT",
+                    "interval": "1m",
+                    "start_ms": start_ms,
+                    "end_ms": end_ms
+                }),
+                rows_1m,
+            )
+        }
+    } else {
+        (
+            serde_json::json!({"kind": "none", "reason": "no parseable btc-updown slug windows"}),
+            0,
+        )
+    };
+
     let mut rows = Vec::new();
     let mut refreshed_count = 0_u64;
     let mut closed_count = 0_u64;
     let mut terminal_count = 0_u64;
+    let mut btc_tape_count = 0_u64;
+    let mut oracle_checks = 0_u64;
+    let mut oracle_disagreements = 0_u64;
+    let mut oracle_ties = 0_u64;
     for original in original_markets.values() {
         let market = refreshed_by_slug.get(&original.slug).unwrap_or(original);
         if refreshed_by_slug.contains_key(&original.slug) {
@@ -5189,39 +5259,105 @@ async fn cmd_finalize_recorded_btc_books(
         if terminal_direction.is_some() {
             terminal_count += 1;
         }
+        let (open_ts_s, close_ts_s, window_seconds) =
+            slug_windows.get(&market.slug).copied().unwrap_or((0, 0, 0));
+        let open_btc = if open_ts_s > 0 {
+            btc.price_at_seconds(open_ts_s as f64)
+        } else {
+            0.0
+        };
+        let close_btc = if close_ts_s > 0 {
+            btc.price_at_seconds(close_ts_s as f64)
+        } else {
+            0.0
+        };
+        let btc_direction = recorded_btc_direction(open_btc, close_btc);
+        if open_btc > 0.0 && close_btc > 0.0 {
+            btc_tape_count += 1;
+        }
+        let settlement_aligned = terminal_direction
+            .as_deref()
+            .zip(btc_direction.as_deref())
+            .and_then(|(terminal, local)| {
+                if local == "tie" {
+                    Some(false)
+                } else if terminal == "up" || terminal == "down" {
+                    Some(terminal == local)
+                } else {
+                    None
+                }
+            });
+        if let Some(aligned) = settlement_aligned {
+            oracle_checks += 1;
+            if btc_direction.as_deref() == Some("tie") {
+                oracle_ties += 1;
+            } else if !aligned {
+                oracle_disagreements += 1;
+            }
+        }
         rows.push(serde_json::json!({
             "condition_id": market.condition_id,
             "slug": market.slug,
             "question": market.question,
             "event_title": market.event_title,
             "end_date": market.end_date,
+            "open_ts_s": open_ts_s,
+            "close_ts_s": close_ts_s,
+            "window_seconds": window_seconds,
             "active": market.active,
             "closed": market.closed,
             "terminal_direction": terminal_direction,
+            "btc_open": open_btc,
+            "btc_close": close_btc,
+            "btc_move": close_btc - open_btc,
+            "btc_direction": btc_direction,
+            "settlement_aligned": settlement_aligned,
             "outcomes": market.outcomes,
         }));
     }
 
     let total = rows.len() as u64;
+    let resolution_ready = terminal_count == total;
+    let btc_tape_ready = btc_tape_count == total;
+    let settlement_alignment_ready =
+        resolution_ready && btc_tape_ready && oracle_disagreements == 0 && oracle_ties == 0;
     let summary = serde_json::json!({
         "schema_version": 1,
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "source_manifest": manifest_path.display().to_string(),
         "output": output_path.display().to_string(),
+        "btc_tape": {
+            "source": btc_source,
+            "rows": btc_rows,
+            "first_timestamp_ms": btc.first_timestamp_ms(),
+            "last_timestamp_ms": btc.last_timestamp_ms()
+        },
         "stats": {
             "markets": total,
             "gamma_refreshed": refreshed_count,
             "closed": closed_count,
             "terminal": terminal_count,
             "pending": total.saturating_sub(terminal_count),
+            "btc_tape_covered": btc_tape_count,
+            "btc_tape_missing": total.saturating_sub(btc_tape_count),
+            "oracle_checks": oracle_checks,
+            "oracle_disagreements": oracle_disagreements,
+            "oracle_ties": oracle_ties
         },
         "a_plus_gate": {
-            "resolution_manifest_ready": terminal_count == total,
-            "btc_tape_required": true,
-            "verdict": if terminal_count == total {
-                "RESOLUTION_READY_BTC_TAPE_STILL_REQUIRED"
-            } else {
+            "resolution_manifest_ready": resolution_ready,
+            "btc_tape_ready": btc_tape_ready,
+            "settlement_alignment_ready": settlement_alignment_ready,
+            "verdict": if !resolution_ready {
                 "WAIT_FOR_TERMINAL_MARKETS"
+            } else if !btc_tape_ready {
+                "BTC_TAPE_MISSING"
+            } else if oracle_ties > 0 {
+                "BTC_TIE_NEEDS_REVIEW"
+            } else if oracle_disagreements > 0 {
+                "SETTLEMENT_DISAGREEMENT"
+            } else {
+                "FORWARD_GROUND_TRUTH_READY_NEEDS_SAMPLE_SIZE"
             }
         },
         "markets": rows,
@@ -5233,6 +5369,31 @@ async fn cmd_finalize_recorded_btc_books(
         serde_json::to_string_pretty(&summary).expect("serialize resolution manifest")
     );
     Ok(())
+}
+
+fn recorded_btc_slug_window(slug: &str) -> Option<(i64, i64, i64)> {
+    let (prefix, window_s) = if let Some(prefix) = slug.strip_prefix("btc-updown-5m-") {
+        (prefix, 300)
+    } else if let Some(prefix) = slug.strip_prefix("btc-updown-15m-") {
+        (prefix, 900)
+    } else {
+        return None;
+    };
+    let open_s = prefix.parse::<i64>().ok()?;
+    Some((open_s, open_s + window_s, window_s))
+}
+
+fn recorded_btc_direction(open_btc: f64, close_btc: f64) -> Option<String> {
+    if open_btc <= 0.0 || close_btc <= 0.0 {
+        return None;
+    }
+    if (close_btc - open_btc).abs() <= f64::EPSILON {
+        Some("tie".to_string())
+    } else if close_btc > open_btc {
+        Some("up".to_string())
+    } else {
+        Some("down".to_string())
+    }
 }
 
 fn terminal_direction_from_market(market: &data::models::Market) -> Option<String> {
@@ -8410,6 +8571,28 @@ mod replay_validation_tests {
         market.outcomes[0].price = 0.5;
         market.outcomes[1].price = 0.5;
         assert_eq!(terminal_direction_from_market(&market), None);
+    }
+
+    #[test]
+    fn recorded_btc_slug_window_parses_supported_windows() {
+        assert_eq!(
+            recorded_btc_slug_window("btc-updown-5m-1782904500"),
+            Some((1782904500, 1782904800, 300))
+        );
+        assert_eq!(
+            recorded_btc_slug_window("btc-updown-15m-1782904500"),
+            Some((1782904500, 1782905400, 900))
+        );
+        assert_eq!(recorded_btc_slug_window("eth-updown-5m-1782904500"), None);
+    }
+
+    #[test]
+    fn recorded_btc_direction_is_fail_closed_for_missing_prices() {
+        assert_eq!(recorded_btc_direction(100.0, 101.0), Some("up".into()));
+        assert_eq!(recorded_btc_direction(100.0, 99.0), Some("down".into()));
+        assert_eq!(recorded_btc_direction(100.0, 100.0), Some("tie".into()));
+        assert_eq!(recorded_btc_direction(0.0, 100.0), None);
+        assert_eq!(recorded_btc_direction(100.0, 0.0), None);
     }
 
     #[test]
