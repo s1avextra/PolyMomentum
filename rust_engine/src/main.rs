@@ -164,6 +164,15 @@ enum Command {
         #[arg(long)]
         out_dir: String,
     },
+    /// Convert a record-btc-books capture into distilled replay-cache files.
+    ConvertRecordedBtcBooks {
+        /// Directory produced by record-btc-books.
+        #[arg(long)]
+        input_dir: String,
+        /// Output directory for <hour>.v1.candles.jsonl.gz plus manifest.json.
+        #[arg(long)]
+        output_dir: String,
+    },
     /// Print wallet balances (pUSD, USDC diagnostics, POL).
     Wallet {
         /// Emit machine-readable JSON including live_ready.
@@ -1628,6 +1637,15 @@ async fn main() {
             .await
             {
                 eprintln!("record-btc-books failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Command::ConvertRecordedBtcBooks {
+            input_dir,
+            output_dir,
+        } => {
+            if let Err(e) = cmd_convert_recorded_btc_books(&input_dir, &output_dir) {
+                eprintln!("convert-recorded-btc-books failed: {e:#}");
                 std::process::exit(1);
             }
         }
@@ -4567,6 +4585,527 @@ fn record_market_ws_value(
             }
         }
         _ => stats.other_messages += 1,
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+struct RecordedBooksConvertStats {
+    raw_frames: u64,
+    json_messages: u64,
+    book_events: u64,
+    change_events: u64,
+    bytes_written: u64,
+    skipped_binary_frames: u64,
+    skipped_malformed_lines: u64,
+    skipped_malformed_raw: u64,
+    skipped_other_messages: u64,
+    skipped_unknown_market: u64,
+    skipped_unknown_token: u64,
+    skipped_missing_fields: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+struct RecordedBooksHourStats {
+    book_events: u64,
+    change_events: u64,
+    bytes_written: u64,
+}
+
+struct RecordedDistilledWriter {
+    hour: chrono::DateTime<chrono::Utc>,
+    path: std::path::PathBuf,
+    tmp_path: std::path::PathBuf,
+    gz: flate2::write::GzEncoder<std::io::BufWriter<std::fs::File>>,
+    stats: RecordedBooksHourStats,
+}
+
+impl RecordedDistilledWriter {
+    fn new(
+        output_dir: &std::path::Path,
+        hour: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<Self> {
+        use anyhow::Context;
+
+        std::fs::create_dir_all(output_dir)
+            .with_context(|| format!("create {}", output_dir.display()))?;
+        let path = backtest::distill::shared_cache_path_for_hour(output_dir, hour);
+        let tmp_path = path.with_extension(format!("jsonl.gz.tmp.{}", std::process::id()));
+        let file = std::fs::File::create(&tmp_path)
+            .with_context(|| format!("create tmp {}", tmp_path.display()))?;
+        let writer = std::io::BufWriter::new(file);
+        let gz = flate2::write::GzEncoder::new(writer, flate2::Compression::fast());
+        Ok(Self {
+            hour,
+            path,
+            tmp_path,
+            gz,
+            stats: RecordedBooksHourStats::default(),
+        })
+    }
+
+    fn write_event(&mut self, event: &backtest::distill::DistilledEvent) -> anyhow::Result<u64> {
+        use anyhow::Context;
+        use std::io::Write;
+
+        let line = serde_json::to_string(event).context("serialize distilled event")?;
+        self.gz
+            .write_all(line.as_bytes())
+            .context("write distilled event")?;
+        self.gz
+            .write_all(b"\n")
+            .context("write distilled newline")?;
+        let bytes = line.len() as u64 + 1;
+        match event {
+            backtest::distill::DistilledEvent::Book { .. } => self.stats.book_events += 1,
+            backtest::distill::DistilledEvent::Change { .. } => self.stats.change_events += 1,
+            backtest::distill::DistilledEvent::Trade { .. } => {}
+        }
+        self.stats.bytes_written += bytes;
+        Ok(bytes)
+    }
+
+    fn finish(self) -> anyhow::Result<serde_json::Value> {
+        use anyhow::Context;
+
+        let mut gz = self.gz;
+        gz.try_finish().context("finish gzip stream")?;
+        let inner = gz.finish().context("flush gzip stream")?;
+        inner
+            .into_inner()
+            .context("flush distilled writer")?
+            .sync_all()
+            .ok();
+        std::fs::rename(&self.tmp_path, &self.path).with_context(|| {
+            format!(
+                "rename {} -> {}",
+                self.tmp_path.display(),
+                self.path.display()
+            )
+        })?;
+        Ok(serde_json::json!({
+            "hour": self.hour.to_rfc3339(),
+            "path": self.path.display().to_string(),
+            "stats": self.stats,
+        }))
+    }
+}
+
+fn cmd_convert_recorded_btc_books(input_dir: &str, output_dir: &str) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use chrono::TimeZone;
+    use serde_json::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::BufRead;
+
+    let input_dir = std::path::PathBuf::from(input_dir);
+    let output_dir = std::path::PathBuf::from(output_dir);
+    let frames_path = input_dir.join("market_ws_frames.jsonl");
+    let gamma_path = input_dir.join("gamma_market_cache.json");
+    let manifest_path = output_dir.join("manifest.json");
+
+    let gamma_file = std::fs::File::open(&gamma_path)
+        .with_context(|| format!("open {}", gamma_path.display()))?;
+    let gamma_by_condition: BTreeMap<String, data::models::Market> =
+        serde_json::from_reader(gamma_file)
+            .with_context(|| format!("decode {}", gamma_path.display()))?;
+    if gamma_by_condition.is_empty() {
+        bail!("{} had no markets", gamma_path.display());
+    }
+
+    let mut market_ids = BTreeSet::new();
+    let mut token_to_market = BTreeMap::new();
+    let mut token_outcomes = BTreeMap::new();
+    for (cid, market) in &gamma_by_condition {
+        market_ids.insert(cid.clone());
+        for outcome in &market.outcomes {
+            if !outcome.token_id.is_empty() {
+                token_to_market.insert(outcome.token_id.clone(), cid.clone());
+                token_outcomes.insert(
+                    outcome.token_id.clone(),
+                    serde_json::json!({
+                        "condition_id": cid,
+                        "slug": market.slug,
+                        "outcome": outcome.name,
+                    }),
+                );
+            }
+        }
+    }
+    if token_to_market.is_empty() {
+        bail!("{} had no outcome token IDs", gamma_path.display());
+    }
+
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("create {}", output_dir.display()))?;
+    let frames_file = std::fs::File::open(&frames_path)
+        .with_context(|| format!("open {}", frames_path.display()))?;
+    let reader = std::io::BufReader::new(frames_file);
+    let mut stats = RecordedBooksConvertStats::default();
+    let mut writers: BTreeMap<i64, RecordedDistilledWriter> = BTreeMap::new();
+
+    for line_res in reader.lines() {
+        let line = match line_res {
+            Ok(line) => line,
+            Err(_) => {
+                stats.skipped_malformed_lines += 1;
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: Value = match serde_json::from_str(&line) {
+            Ok(row) => row,
+            Err(_) => {
+                stats.skipped_malformed_lines += 1;
+                continue;
+            }
+        };
+        if row.get("raw_binary_len").is_some() {
+            stats.skipped_binary_frames += 1;
+            continue;
+        }
+        let Some(raw) = row.get("raw").and_then(|v| v.as_str()) else {
+            stats.skipped_malformed_lines += 1;
+            continue;
+        };
+        stats.raw_frames += 1;
+        let raw_value: Value = match serde_json::from_str(raw) {
+            Ok(value) => value,
+            Err(_) => {
+                stats.skipped_malformed_raw += 1;
+                continue;
+            }
+        };
+        let row_ts_ms = row.get("ts_received_ms").and_then(recorded_json_i64);
+        let mut events = Vec::new();
+        recorded_ws_value_to_distilled_events(
+            &raw_value,
+            row_ts_ms,
+            &market_ids,
+            &token_to_market,
+            &mut events,
+            &mut stats,
+        );
+        for event in events {
+            let ts = recorded_distilled_event_ts(&event);
+            let hour_s = (ts.floor() as i64).div_euclid(3600) * 3600;
+            let hour = chrono::Utc
+                .timestamp_opt(hour_s, 0)
+                .single()
+                .with_context(|| format!("build hour from timestamp {ts}"))?;
+            let writer = match writers.entry(hour_s) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(RecordedDistilledWriter::new(&output_dir, hour)?)
+                }
+            };
+            let bytes = writer.write_event(&event)?;
+            stats.bytes_written += bytes;
+            match event {
+                backtest::distill::DistilledEvent::Book { .. } => stats.book_events += 1,
+                backtest::distill::DistilledEvent::Change { .. } => stats.change_events += 1,
+                backtest::distill::DistilledEvent::Trade { .. } => {}
+            }
+        }
+    }
+
+    if stats.book_events + stats.change_events == 0 {
+        bail!(
+            "no distilled book/change events emitted from {}",
+            frames_path.display()
+        );
+    }
+
+    let mut hours = Vec::new();
+    for (_, writer) in writers {
+        hours.push(writer.finish()?);
+    }
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "source": {
+            "input_dir": input_dir.display().to_string(),
+            "frames_jsonl": frames_path.display().to_string(),
+            "gamma_market_cache": gamma_path.display().to_string(),
+        },
+        "output": {
+            "output_dir": output_dir.display().to_string(),
+            "manifest": manifest_path.display().to_string(),
+            "distilled_schema": backtest::distill::SCHEMA_VERSION,
+            "harness_flag": "--shared-distilled-dir",
+        },
+        "stats": stats,
+        "hours": hours,
+        "markets": gamma_by_condition,
+        "token_outcomes": token_outcomes,
+    });
+    write_json_atomic(&manifest_path, &manifest, true)
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&manifest).expect("serialize converter manifest")
+    );
+    Ok(())
+}
+
+fn recorded_ws_value_to_distilled_events(
+    value: &serde_json::Value,
+    row_ts_ms: Option<i64>,
+    market_ids: &std::collections::BTreeSet<String>,
+    token_to_market: &std::collections::BTreeMap<String, String>,
+    out: &mut Vec<backtest::distill::DistilledEvent>,
+    stats: &mut RecordedBooksConvertStats,
+) {
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            recorded_ws_value_to_distilled_events(
+                item,
+                row_ts_ms,
+                market_ids,
+                token_to_market,
+                out,
+                stats,
+            );
+        }
+        return;
+    }
+
+    stats.json_messages += 1;
+    let msg_type = value
+        .get("event_type")
+        .or_else(|| value.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let data = value.get("data").unwrap_or(value);
+    match msg_type {
+        "book" => {
+            recorded_book_to_distilled(data, row_ts_ms, market_ids, token_to_market, out, stats)
+        }
+        "price_change" => {
+            recorded_change_to_distilled(data, row_ts_ms, market_ids, token_to_market, out, stats)
+        }
+        _ => stats.skipped_other_messages += 1,
+    }
+}
+
+fn recorded_book_to_distilled(
+    data: &serde_json::Value,
+    row_ts_ms: Option<i64>,
+    market_ids: &std::collections::BTreeSet<String>,
+    token_to_market: &std::collections::BTreeMap<String, String>,
+    out: &mut Vec<backtest::distill::DistilledEvent>,
+    stats: &mut RecordedBooksConvertStats,
+) {
+    let Some(mkt) = data.get("market").and_then(|v| v.as_str()) else {
+        stats.skipped_missing_fields += 1;
+        return;
+    };
+    let Some(tok) = data.get("asset_id").and_then(|v| v.as_str()) else {
+        stats.skipped_missing_fields += 1;
+        return;
+    };
+    if !recorded_market_token_is_known(mkt, tok, market_ids, token_to_market, stats) {
+        return;
+    }
+    let ts = recorded_message_ts_s(data, row_ts_ms);
+    let bids = recorded_levels(data.get("bids"));
+    let asks = recorded_levels(data.get("asks"));
+    let bb = bids
+        .iter()
+        .filter_map(|[p, _]| p.parse::<f64>().ok())
+        .fold(0.0, f64::max);
+    let ba = asks
+        .iter()
+        .filter_map(|[p, _]| p.parse::<f64>().ok())
+        .filter(|p| *p > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    out.push(backtest::distill::DistilledEvent::Book {
+        ts,
+        mkt: mkt.to_string(),
+        tok: tok.to_string(),
+        bb,
+        ba: if ba.is_finite() { ba } else { 0.0 },
+        bids,
+        asks,
+    });
+}
+
+fn recorded_change_to_distilled(
+    data: &serde_json::Value,
+    row_ts_ms: Option<i64>,
+    market_ids: &std::collections::BTreeSet<String>,
+    token_to_market: &std::collections::BTreeMap<String, String>,
+    out: &mut Vec<backtest::distill::DistilledEvent>,
+    stats: &mut RecordedBooksConvertStats,
+) {
+    let Some(mkt) = data.get("market").and_then(|v| v.as_str()) else {
+        stats.skipped_missing_fields += 1;
+        return;
+    };
+    if !market_ids.contains(mkt) {
+        stats.skipped_unknown_market += 1;
+        return;
+    }
+    let Some(changes) = data
+        .get("price_changes")
+        .or_else(|| data.get("changes"))
+        .and_then(|v| v.as_array())
+    else {
+        stats.skipped_missing_fields += 1;
+        return;
+    };
+    let ts = recorded_message_ts_s(data, row_ts_ms);
+    for ch in changes {
+        let token = ch
+            .get("asset_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| data.get("asset_id").and_then(|v| v.as_str()));
+        let Some(tok) = token else {
+            stats.skipped_missing_fields += 1;
+            continue;
+        };
+        if !recorded_market_token_is_known(mkt, tok, market_ids, token_to_market, stats) {
+            continue;
+        }
+        let s = ch
+            .get("side")
+            .map(recorded_json_string)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        let p = ch
+            .get("price")
+            .map(recorded_json_string)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        let sz = ch
+            .get("size")
+            .map(recorded_json_string)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        if s.is_empty() || p.is_empty() || sz.is_empty() {
+            stats.skipped_missing_fields += 1;
+            continue;
+        }
+        let bb = ch
+            .get("best_bid")
+            .and_then(recorded_json_f64)
+            .unwrap_or(0.0);
+        let ba = ch
+            .get("best_ask")
+            .and_then(recorded_json_f64)
+            .unwrap_or(0.0);
+        out.push(backtest::distill::DistilledEvent::Change {
+            ts,
+            mkt: mkt.to_string(),
+            tok: tok.to_string(),
+            s,
+            bb,
+            ba,
+            p,
+            sz,
+        });
+    }
+}
+
+fn recorded_market_token_is_known(
+    market_id: &str,
+    token_id: &str,
+    market_ids: &std::collections::BTreeSet<String>,
+    token_to_market: &std::collections::BTreeMap<String, String>,
+    stats: &mut RecordedBooksConvertStats,
+) -> bool {
+    if !market_ids.contains(market_id) {
+        stats.skipped_unknown_market += 1;
+        return false;
+    }
+    if token_to_market
+        .get(token_id)
+        .map(|m| m == market_id)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    stats.skipped_unknown_token += 1;
+    false
+}
+
+fn recorded_distilled_event_ts(event: &backtest::distill::DistilledEvent) -> f64 {
+    match event {
+        backtest::distill::DistilledEvent::Book { ts, .. }
+        | backtest::distill::DistilledEvent::Change { ts, .. }
+        | backtest::distill::DistilledEvent::Trade { ts, .. } => *ts,
+    }
+}
+
+fn recorded_message_ts_s(data: &serde_json::Value, row_ts_ms: Option<i64>) -> f64 {
+    data.get("timestamp")
+        .and_then(recorded_json_f64)
+        .map(|ts| {
+            if ts > 10_000_000_000.0 {
+                ts / 1000.0
+            } else {
+                ts
+            }
+        })
+        .or_else(|| row_ts_ms.map(|ms| ms as f64 / 1000.0))
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() as f64 / 1000.0)
+}
+
+fn recorded_levels(value: Option<&serde_json::Value>) -> Vec<[String; 2]> {
+    let Some(serde_json::Value::Array(arr)) = value else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for entry in arr {
+        match entry {
+            serde_json::Value::Array(pair) if pair.len() >= 2 => {
+                let p = recorded_json_string(&pair[0]);
+                let s = recorded_json_string(&pair[1]);
+                if !p.is_empty() && !s.is_empty() {
+                    out.push([p, s]);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                let p = obj
+                    .get("price")
+                    .map(recorded_json_string)
+                    .unwrap_or_default();
+                let s = obj
+                    .get("size")
+                    .map(recorded_json_string)
+                    .unwrap_or_default();
+                if !p.is_empty() && !s.is_empty() {
+                    out.push([p, s]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn recorded_json_f64(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn recorded_json_i64(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Number(n) => n.as_i64(),
+        serde_json::Value::String(s) => s.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn recorded_json_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => String::new(),
     }
 }
 
@@ -7635,6 +8174,64 @@ mod replay_validation_tests {
         assert_eq!(stats.price_change_messages, 1);
         assert!(seen.contains("up-token"));
         assert!(seen.contains("down-token"));
+    }
+
+    #[test]
+    fn recorded_book_converter_emits_distilled_events() {
+        let payload = serde_json::json!([
+            {
+                "event_type": "book",
+                "market": "0xabc",
+                "asset_id": "up-token",
+                "timestamp": "1782898923000",
+                "bids": [{"price": "0.41", "size": "10"}, {"price": "0.42", "size": "9"}],
+                "asks": [{"price": "0.43", "size": "8"}]
+            },
+            {
+                "event_type": "price_change",
+                "market": "0xabc",
+                "timestamp": "1782898923500",
+                "price_changes": [{
+                    "asset_id": "up-token",
+                    "price": "0.42",
+                    "side": "BUY",
+                    "size": "12",
+                    "best_bid": "0.42",
+                    "best_ask": "0.43"
+                }]
+            }
+        ]);
+        let mut market_ids = std::collections::BTreeSet::new();
+        market_ids.insert("0xabc".to_string());
+        let mut token_to_market = std::collections::BTreeMap::new();
+        token_to_market.insert("up-token".to_string(), "0xabc".to_string());
+        let mut out = Vec::new();
+        let mut stats = RecordedBooksConvertStats::default();
+
+        recorded_ws_value_to_distilled_events(
+            &payload,
+            None,
+            &market_ids,
+            &token_to_market,
+            &mut out,
+            &mut stats,
+        );
+
+        assert_eq!(stats.json_messages, 2);
+        assert_eq!(stats.skipped_unknown_token, 0);
+        assert_eq!(out.len(), 2);
+        let backtest::distill::DistilledEvent::Book { bb, ba, bids, .. } = &out[0] else {
+            panic!("first event should be a book snapshot")
+        };
+        assert!((*bb - 0.42).abs() < 1e-9);
+        assert!((*ba - 0.43).abs() < 1e-9);
+        assert_eq!(bids.len(), 2);
+        let backtest::distill::DistilledEvent::Change { p, sz, s, .. } = &out[1] else {
+            panic!("second event should be a price change")
+        };
+        assert_eq!(p, "0.42");
+        assert_eq!(sz, "12");
+        assert_eq!(s, "BUY");
     }
 
     #[test]
