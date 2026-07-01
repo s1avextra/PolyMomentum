@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T14:42:06.158730+00:00",
+  "label": "harness_sweep",
+  "mode": "backtest",
+  "start": "2026-07-01T11:00:00+00:00",
+  "end": "2026-07-01T11:00:00+00:00",
+  "bankroll_usd": 100.0,
+  "latency_ms": 366,
+  "market_catalog": {
+    "markets": {
+      "0x0127f99a71008e64443d85324587451cdcd91c122f8f7ac98b9f2ce5a828fa5c": {
+        "condition_id": "0x0127f99a71008e64443d85324587451cdcd91c122f8f7ac98b9f2ce5a828fa5c",
+        "question": "Bitcoin Up or Down - July 1, 7:25AM-7:30AM ET",
+        "slug": "btc-updown-5m-1782905100",
+        "asset": "BTC",
+        "window_description": "July 1, 7:25AM-7:30AM ET",
+        "end_date": "2026-07-01T11:30:00Z",
+        "up_token_id": "46884580028222177176144107406874891599104318287281169012446205873585776838605",
+        "down_token_id": "42465370596075279764914449485952355235293871027712069873834896777904669627241",
+        "neg_risk": false,
+        "liquidity": 13999.6693,
+        "volume": 19.960783
+      },
+      "0x30c85973b52052e65675ccf5490e5e9b64d1aa0772776b9513894aa40f423f65": {
+        "condition_id": "0x30c85973b52052e65675ccf5490e5e9b64d1aa0772776b9513894aa40f423f65",
+        "question": "Bitcoin Up or Down - July 1, 7:20AM-7:25AM ET",
+        "slug": "btc-updown-5m-1782904800",
+        "asset": "BTC",
+        "window_description": "July 1, 7:20AM-7:25AM ET",
+        "end_date": "2026-07-01T11:25:00Z",
+        "up_token_id": "78138031659806528275094236255052125788034215320973100516094520935751625230761",
+        "down_token_id": "35004881221560811828263064140680131043252678769718571797692170830985083418248",
+        "neg_risk": false,
+        "liquidity": 19120.6779,
+        "volume": 62.039210999999995
+      },
+      "0x34e9619a808a6b132994fcd1ed27df63cc17a1d44a79d1c1fb395d4e5bc13989": {
+        "condition_id": "0x34e9619a808a6b132994fcd1ed27df63cc17a1d44a79d1c1fb395d4e5bc13989",
+        "question": "Bitcoin Up or Down - July 1, 7:15AM-7:20AM ET",
+        "slug": "btc-updown-5m-1782904500",
+        "asset": "BTC",
+        "window_description": "July 1, 7:15AM-7:20AM ET",
+        "end_date": "2026-07-01T11:20:00Z",
+        "up_token_id": "63670662404828738216279251375354230342009507220419454546132481344604617867401",
+        "down_token_id": "108271497377250703323229307288651629468323056457361485348016031198936425984118",
+        "neg_risk": false,
+        "liquidity": 22954.1012,
+        "volume": 168.80391699999998
+      }
+    },
+    "token_to_condition": {
+      "108271497377250703323229307288651629468323056457361485348016031198936425984118": "0x34e9619a808a6b132994fcd1ed27df63cc17a1d44a79d1c1fb395d4e5bc13989",
+      "35004881221560811828263064140680131043252678769718571797692170830985083418248": "0x30c85973b52052e65675ccf5490e5e9b64d1aa0772776b9513894aa40f423f65",
+      "42465370596075279764914449485952355235293871027712069873834896777904669627241": "0x0127f99a71008e64443d85324587451cdcd91c122f8f7ac98b9f2ce5a828fa5c",
+      "46884580028222177176144107406874891599104318287281169012446205873585776838605": "0x0127f99a71008e64443d85324587451cdcd91c122f8f7ac98b9f2ce5a828fa5c",
+      "63670662404828738216279251375354230342009507220419454546132481344604617867401": "0x34e9619a808a6b132994fcd1ed27df63cc17a1d44a79d1c1fb395d4e5bc13989",
+      "78138031659806528275094236255052125788034215320973100516094520935751625230761": "0x30c85973b52052e65675ccf5490e5e9b64d1aa0772776b9513894aa40f423f65"
+    }
+  },
+  "data_manifest": {
+    "schema_version": 1,
+    "complete": true,
+    "sources": [
+      {
+        "name": "pmxt_v2_archive",
+        "kind": "order_book_l2",
+        "path": "/private/tmp/polymomentum_record_btc_books_a_plus_smoke_20260701",
+        "start": "2026-07-01T11:00:00+00:00",
+        "end": "2026-07-01T11:00:00+00:00",
+        "row_count": 1,
+        "checksum_sha256": null,
+        "complete": true,
+        "metadata": {
+          "assets": "BTC",
+          "hours": "1",
+          "market_count": "3",
+          "shared_distilled_dir": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701",
+          "token_count": "6"
+        }
+      },
+      {
+        "name": "btc_price_tape",
+        "kind": "external_price",
+        "path": null,
+        "start": "2026-07-01T11:00:00+00:00",
+        "end": "2026-07-01T11:00:00+00:00",
+        "row_count": 10801,
+        "checksum_sha256": null,
+        "complete": true,
+        "metadata": {
+          "symbol": "BTCUSDT"
+        }
+      }
+    ],
+    "notes": [],
+    "manifest_hash": "552fd7b1e4107e1c84397adbae6da91393b0cc657060e9877bd5fa07cdef2216"
+  },
+  "variants": [
+    {
+      "strategy": {
+        "name": "candle_momentum",
+        "version": "1",
+        "params_hash": "17372c7acaf104154204917d23049623de312075b20dff60420df73456b2f10d",
+        "risk_profile": "position_pct=0.0500;max_per_market_usd=20.00;stress_dd_cap=0.2400"
+      },
+      "strategy_params": {
+        "default_fee_rate": 0.07,
+        "maker_fee_rate": 0.0,
+        "maker_fill_prob": 0.65,
+        "maker_seed": 42,
+        "max_per_market_usd": 20.0,
+        "max_projected_stressed_drawdown_pct": 0.24,
+        "microstructure": {
+          "max_spread": 1.0,
+          "min_book_depth": 0.0,
+          "min_book_pressure": -1.0
+        },
+        "min_confidence": 0.3,
+        "min_edge": 0.03,
+        "name": "all_c0.30_z0.50_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_tk",
+        "position_pct": 0.05,
+        "prefer_maker": false,
+        "skip_dead_zone": true,
+        "use_perfect_fill": false,
+        "zone_config": {
+          "dead_zone_hi": 0.9,
+          "dead_zone_lo": 0.8,
+          "early_min_confidence": 0.3,
+          "early_min_edge": 0.03,
+          "early_min_z": 0.5,
+          "edge_cap": 0.25,
+          "late_min_confidence": 0.3,
+          "late_min_edge": 0.03,
+          "late_min_z": 0.5,
+          "max_price": 0.9,
+          "min_ev_buffer": -1.0,
+          "min_price": 0.1,
+          "primary_min_z": 0.5,
+          "settlement_guard_minutes": 1.0,
+          "settlement_min_abs_move_usd": 10.0,
+          "settlement_sigma_buffer": 0.0,
+          "terminal_min_confidence": 0.3,
+          "terminal_min_edge": 0.03,
+          "terminal_min_z": 0.5
+        }
+      },
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "unresolved_fills": 0,
+      "execution_attempts": 0,
+      "fills_success": 0,
+      "fills_failed": 0,
+      "fill_rate": 0.0,
+      "reject_reasons": {},
+      "breaker_tripped": false,
+      "breaker_reason": null,
+      "breaker_tripped_at_s": null,
+      "breaker_realized_drawdown_pct": 0.0,
+      "breaker_stressed_drawdown_pct": 0.0,
+      "diagnostics": {
+        "events_seen": 22472,
+        "events_for_known_token": 22472,
+        "skipped_resolved": 0,
+        "skipped_too_early": 500,
+        "skipped_no_btc": 0,
+        "skipped_no_signal": 44,
+        "skipped_decision": 354,
+        "skipped_throttled": 21574,
+        "breaker_paused_events": 0,
+        "adaptive_rearms": 0,
+        "trade_pnl": {
+          "trades": 0,
+          "wins": 0,
+          "losses": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0.0,
+          "avg_pnl": 0.0,
+          "gross_win_pnl": 0.0,
+          "gross_loss_pnl": 0.0,
+          "avg_win_pnl": 0.0,
+          "avg_loss_pnl": 0.0,
+          "max_win_pnl": 0.0,
+          "max_loss_pnl": 0.0,
+          "profit_factor": 0.0,
+          "payoff_ratio": 0.0,
+          "worst_loss_to_avg_win": 0.0
+        },
+        "by_regime": {},
+        "by_causal_bucket": {},
+        "skip_reasons": {
+          "low_confidence_early": 14,
+          "low_edge_early": 200,
+          "low_z_score_early": 140
+        }
+      },
+      "win_rate": 0.0,
+      "total_pnl": -0.0,
+      "avg_pnl": 0.0,
+      "total_fees": -0.0,
+      "sharpe_like": 0.0,
+      "by_zone": {}
+    }
+  ]
+}
