@@ -146,6 +146,24 @@ enum Command {
         #[arg(long, default_value_t = 100.0)]
         min_liquidity: f64,
     },
+    /// Bounded read-only recorder for current BTC candle L2 market data.
+    RecordBtcBooks {
+        /// Optional UTC anchor for the first slug. Defaults to now, floored to the window.
+        #[arg(long)]
+        start: Option<String>,
+        /// Candle window length. Currently supports 5 or 15 minutes.
+        #[arg(long, default_value_t = 5.0)]
+        window_minutes: f64,
+        /// Number of consecutive candle windows to subscribe to.
+        #[arg(long, default_value_t = 3)]
+        windows: usize,
+        /// Capture duration in seconds.
+        #[arg(long, default_value_t = 60)]
+        duration_seconds: u64,
+        /// Output directory for gamma metadata, raw JSONL frames, and summary.
+        #[arg(long)]
+        out_dir: String,
+    },
     /// Print wallet balances (pUSD, USDC diagnostics, POL).
     Wallet {
         /// Emit machine-readable JSON including live_ready.
@@ -1591,6 +1609,27 @@ async fn main() {
             min_liquidity,
         } => {
             cmd_scan(&settings, max_hours, min_liquidity).await;
+        }
+        Command::RecordBtcBooks {
+            start,
+            window_minutes,
+            windows,
+            duration_seconds,
+            out_dir,
+        } => {
+            if let Err(e) = cmd_record_btc_books(
+                &settings,
+                start.as_deref(),
+                window_minutes,
+                windows,
+                duration_seconds,
+                &out_dir,
+            )
+            .await
+            {
+                eprintln!("record-btc-books failed: {e:#}");
+                std::process::exit(1);
+            }
         }
         Command::Wallet { json } => cmd_wallet(&settings, json).await,
         Command::Clob { command } => cmd_clob(&settings, command).await,
@@ -4286,6 +4325,248 @@ async fn cmd_scan(s: &config::Settings, max_hours: f64, min_liquidity: f64) {
             eprintln!("scan failed: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct MarketWsRecordStats {
+    frames: u64,
+    json_messages: u64,
+    book_messages: u64,
+    price_change_messages: u64,
+    other_messages: u64,
+    bytes: u64,
+}
+
+async fn cmd_record_btc_books(
+    settings: &config::Settings,
+    start: Option<&str>,
+    window_minutes: f64,
+    windows: usize,
+    duration_seconds: u64,
+    out_dir: &str,
+) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use futures_util::{SinkExt, StreamExt};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write;
+    use tokio::time::{timeout, Duration, Instant};
+    use tokio_tungstenite::tungstenite::Message;
+
+    if windows == 0 {
+        bail!("--windows must be greater than zero");
+    }
+    let step_s = btc_updown_slug_step_seconds(Some(window_minutes))
+        .context("--window-minutes must be 5 or 15 for BTC slug recording")?;
+    let anchor = if let Some(raw) = start {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .with_context(|| format!("parse --start {raw}"))?
+            .with_timezone(&chrono::Utc)
+    } else {
+        chrono::Utc::now()
+    };
+    let base_s = anchor.timestamp() - anchor.timestamp().rem_euclid(step_s);
+    let slugs: Vec<String> = (0..windows)
+        .map(|i| {
+            let t = base_s + (i as i64 * step_s);
+            if step_s == 300 {
+                format!("btc-updown-5m-{t}")
+            } else {
+                format!("btc-updown-15m-{t}")
+            }
+        })
+        .collect();
+
+    let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+    let markets = gamma
+        .fetch_markets_by_slugs(&slugs, false)
+        .await
+        .context("fetch active BTC candle Gamma metadata")?;
+    if markets.is_empty() {
+        bail!(
+            "Gamma returned no active markets for slugs {}",
+            slugs.join(",")
+        );
+    }
+
+    let mut gamma_by_condition = BTreeMap::new();
+    let mut token_ids = BTreeSet::new();
+    for market in markets {
+        for outcome in &market.outcomes {
+            if !outcome.token_id.is_empty() {
+                token_ids.insert(outcome.token_id.clone());
+            }
+        }
+        gamma_by_condition.insert(market.condition_id.clone(), market);
+    }
+    if token_ids.is_empty() {
+        bail!(
+            "Gamma metadata had no CLOB token IDs for slugs {}",
+            slugs.join(",")
+        );
+    }
+
+    let out_dir = std::path::PathBuf::from(out_dir);
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("create {}", out_dir.display()))?;
+    let gamma_path = out_dir.join("gamma_market_cache.json");
+    write_json_atomic(&gamma_path, &gamma_by_condition, true)
+        .with_context(|| format!("write {}", gamma_path.display()))?;
+
+    let frames_path = out_dir.join("market_ws_frames.jsonl");
+    let summary_path = out_dir.join("summary.json");
+    let mut writer = std::io::BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&frames_path)
+            .with_context(|| format!("open {}", frames_path.display()))?,
+    );
+
+    let token_vec: Vec<String> = token_ids.iter().cloned().collect();
+    let (ws, _) =
+        tokio_tungstenite::connect_async("wss://ws-subscriptions-clob.polymarket.com/ws/market")
+            .await
+            .context("connect Polymarket market websocket")?;
+    let (mut write, mut read) = ws.split();
+    let sub = serde_json::json!({
+        "type": "market",
+        "assets_ids": token_vec,
+    });
+    write
+        .send(Message::Text(sub.to_string().into()))
+        .await
+        .context("send websocket subscription")?;
+
+    let capture_for = Duration::from_secs(duration_seconds.max(1));
+    let started = Instant::now();
+    let mut stats = MarketWsRecordStats::default();
+    let mut seen_tokens = BTreeSet::new();
+
+    while started.elapsed() < capture_for {
+        let remaining = capture_for
+            .checked_sub(started.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+        if remaining.is_zero() {
+            break;
+        }
+        let wait_for = remaining.min(Duration::from_secs(10));
+        match timeout(wait_for, read.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let text = text.to_string();
+                stats.frames += 1;
+                stats.bytes += text.len() as u64;
+                record_market_ws_text(&text, &mut stats, &mut seen_tokens);
+                let row = serde_json::json!({
+                    "ts_received_ms": chrono::Utc::now().timestamp_millis(),
+                    "raw": text,
+                });
+                serde_json::to_writer(&mut writer, &row).context("serialize ws frame")?;
+                writer.write_all(b"\n").context("write ws frame newline")?;
+            }
+            Ok(Some(Ok(Message::Binary(bytes)))) => {
+                stats.frames += 1;
+                stats.bytes += bytes.len() as u64;
+                let row = serde_json::json!({
+                    "ts_received_ms": chrono::Utc::now().timestamp_millis(),
+                    "raw_binary_len": bytes.len(),
+                });
+                serde_json::to_writer(&mut writer, &row).context("serialize binary ws frame")?;
+                writer
+                    .write_all(b"\n")
+                    .context("write binary ws frame newline")?;
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                let _ = write.send(Message::Pong(payload)).await;
+            }
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow::anyhow!("websocket read failed: {e}")),
+            Err(_) => {}
+        }
+    }
+    writer.flush().context("flush market ws frames")?;
+
+    if stats.frames == 0 {
+        bail!("websocket capture received zero frames");
+    }
+
+    let summary = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "slugs": slugs,
+        "condition_ids": gamma_by_condition.keys().cloned().collect::<Vec<_>>(),
+        "token_ids": token_ids.iter().cloned().collect::<Vec<_>>(),
+        "seen_token_ids": seen_tokens.iter().cloned().collect::<Vec<_>>(),
+        "duration_seconds": duration_seconds.max(1),
+        "gamma_market_cache": gamma_path.display().to_string(),
+        "frames_jsonl": frames_path.display().to_string(),
+        "stats": stats,
+    });
+    write_json_atomic(&summary_path, &summary, true)
+        .with_context(|| format!("write {}", summary_path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&summary).expect("serialize record summary")
+    );
+    Ok(())
+}
+
+fn record_market_ws_text(
+    text: &str,
+    stats: &mut MarketWsRecordStats,
+    seen_tokens: &mut std::collections::BTreeSet<String>,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        stats.other_messages += 1;
+        return;
+    };
+    record_market_ws_value(&value, stats, seen_tokens);
+}
+
+fn record_market_ws_value(
+    value: &serde_json::Value,
+    stats: &mut MarketWsRecordStats,
+    seen_tokens: &mut std::collections::BTreeSet<String>,
+) {
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            record_market_ws_value(item, stats, seen_tokens);
+        }
+        return;
+    }
+    stats.json_messages += 1;
+    let msg_type = value
+        .get("event_type")
+        .or_else(|| value.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let data = value.get("data").unwrap_or(value);
+    match msg_type {
+        "book" => {
+            stats.book_messages += 1;
+            if let Some(token) = data.get("asset_id").and_then(|v| v.as_str()) {
+                seen_tokens.insert(token.to_string());
+            }
+        }
+        "price_change" => {
+            stats.price_change_messages += 1;
+            if let Some(token) = data.get("asset_id").and_then(|v| v.as_str()) {
+                seen_tokens.insert(token.to_string());
+            }
+            if let Some(changes) = data
+                .get("price_changes")
+                .or_else(|| data.get("changes"))
+                .and_then(|v| v.as_array())
+            {
+                for ch in changes {
+                    if let Some(token) = ch.get("asset_id").and_then(|v| v.as_str()) {
+                        seen_tokens.insert(token.to_string());
+                    }
+                }
+            }
+        }
+        _ => stats.other_messages += 1,
     }
 }
 
@@ -7322,6 +7603,39 @@ fn u32opt(v: &serde_json::Value, key: &str) -> Option<u32> {
 #[cfg(test)]
 mod replay_validation_tests {
     use super::*;
+
+    #[test]
+    fn record_market_ws_stats_tracks_books_and_price_changes() {
+        let payload = serde_json::json!([
+            {
+                "event_type": "book",
+                "asset_id": "up-token",
+                "bids": [],
+                "asks": []
+            },
+            {
+                "event_type": "price_change",
+                "price_changes": [
+                    {
+                        "asset_id": "down-token",
+                        "price": "0.42",
+                        "side": "BUY",
+                        "size": "12"
+                    }
+                ]
+            }
+        ]);
+        let mut stats = MarketWsRecordStats::default();
+        let mut seen = std::collections::BTreeSet::new();
+
+        record_market_ws_text(&payload.to_string(), &mut stats, &mut seen);
+
+        assert_eq!(stats.json_messages, 2);
+        assert_eq!(stats.book_messages, 1);
+        assert_eq!(stats.price_change_messages, 1);
+        assert!(seen.contains("up-token"));
+        assert!(seen.contains("down-token"));
+    }
 
     #[test]
     fn runtime_event_updates_validation_config_from_inline_strategy() {
