@@ -173,6 +173,15 @@ enum Command {
         #[arg(long)]
         output_dir: String,
     },
+    /// Refresh converted forward BTC captures with terminal Gamma outcomes.
+    FinalizeRecordedBtcBooks {
+        /// Directory produced by convert-recorded-btc-books.
+        #[arg(long)]
+        input_dir: String,
+        /// Output JSON path. Defaults to <input-dir>/resolution_manifest.json.
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Print wallet balances (pUSD, USDC diagnostics, POL).
     Wallet {
         /// Emit machine-readable JSON including live_ready.
@@ -1646,6 +1655,14 @@ async fn main() {
         } => {
             if let Err(e) = cmd_convert_recorded_btc_books(&input_dir, &output_dir) {
                 eprintln!("convert-recorded-btc-books failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Command::FinalizeRecordedBtcBooks { input_dir, output } => {
+            if let Err(e) =
+                cmd_finalize_recorded_btc_books(&settings, &input_dir, output.as_deref()).await
+            {
+                eprintln!("finalize-recorded-btc-books failed: {e:#}");
                 std::process::exit(1);
             }
         }
@@ -5109,6 +5126,136 @@ fn recorded_json_string(value: &serde_json::Value) -> String {
     }
 }
 
+async fn cmd_finalize_recorded_btc_books(
+    settings: &config::Settings,
+    input_dir: &str,
+    output: Option<&str>,
+) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use std::collections::BTreeMap;
+
+    let input_dir = std::path::PathBuf::from(input_dir);
+    let manifest_path = input_dir.join("manifest.json");
+    let output_path = output
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| input_dir.join("resolution_manifest.json"));
+
+    let manifest_file = std::fs::File::open(&manifest_path)
+        .with_context(|| format!("open {}", manifest_path.display()))?;
+    let manifest_value: serde_json::Value = serde_json::from_reader(manifest_file)
+        .with_context(|| format!("decode {}", manifest_path.display()))?;
+    let markets_value = manifest_value
+        .get("markets")
+        .cloned()
+        .context("manifest missing `markets`")?;
+    let original_markets: BTreeMap<String, data::models::Market> =
+        serde_json::from_value(markets_value).context("decode manifest markets")?;
+    if original_markets.is_empty() {
+        bail!("{} had no markets", manifest_path.display());
+    }
+
+    let slugs: Vec<String> = original_markets
+        .values()
+        .map(|m| m.slug.clone())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if slugs.is_empty() {
+        bail!("{} had no market slugs", manifest_path.display());
+    }
+
+    let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+    let refreshed = gamma
+        .fetch_markets_by_slugs(&slugs, true)
+        .await
+        .context("fetch closed Gamma metadata for recorded BTC slugs")?;
+    let refreshed_by_slug: BTreeMap<String, data::models::Market> = refreshed
+        .into_iter()
+        .map(|market| (market.slug.clone(), market))
+        .collect();
+
+    let mut rows = Vec::new();
+    let mut refreshed_count = 0_u64;
+    let mut closed_count = 0_u64;
+    let mut terminal_count = 0_u64;
+    for original in original_markets.values() {
+        let market = refreshed_by_slug.get(&original.slug).unwrap_or(original);
+        if refreshed_by_slug.contains_key(&original.slug) {
+            refreshed_count += 1;
+        }
+        if market.closed {
+            closed_count += 1;
+        }
+        let terminal_direction = terminal_direction_from_market(market);
+        if terminal_direction.is_some() {
+            terminal_count += 1;
+        }
+        rows.push(serde_json::json!({
+            "condition_id": market.condition_id,
+            "slug": market.slug,
+            "question": market.question,
+            "event_title": market.event_title,
+            "end_date": market.end_date,
+            "active": market.active,
+            "closed": market.closed,
+            "terminal_direction": terminal_direction,
+            "outcomes": market.outcomes,
+        }));
+    }
+
+    let total = rows.len() as u64;
+    let summary = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "source_manifest": manifest_path.display().to_string(),
+        "output": output_path.display().to_string(),
+        "stats": {
+            "markets": total,
+            "gamma_refreshed": refreshed_count,
+            "closed": closed_count,
+            "terminal": terminal_count,
+            "pending": total.saturating_sub(terminal_count),
+        },
+        "a_plus_gate": {
+            "resolution_manifest_ready": terminal_count == total,
+            "btc_tape_required": true,
+            "verdict": if terminal_count == total {
+                "RESOLUTION_READY_BTC_TAPE_STILL_REQUIRED"
+            } else {
+                "WAIT_FOR_TERMINAL_MARKETS"
+            }
+        },
+        "markets": rows,
+    });
+    write_json_atomic(&output_path, &summary, true)
+        .with_context(|| format!("write {}", output_path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&summary).expect("serialize resolution manifest")
+    );
+    Ok(())
+}
+
+fn terminal_direction_from_market(market: &data::models::Market) -> Option<String> {
+    if !market.closed {
+        return None;
+    }
+    let mut winners = market
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.price >= 0.999)
+        .collect::<Vec<_>>();
+    if winners.len() != 1 {
+        return None;
+    }
+    let winner = winners.pop()?;
+    let name = winner.name.trim().to_ascii_lowercase();
+    match name.as_str() {
+        "up" | "yes" => Some("up".to_string()),
+        "down" | "no" => Some("down".to_string()),
+        _ => Some(name),
+    }
+}
+
 async fn cmd_wallet(s: &config::Settings, json: bool) {
     if s.private_key.is_empty() {
         eprintln!("PRIVATE_KEY not set");
@@ -8232,6 +8379,37 @@ mod replay_validation_tests {
         assert_eq!(p, "0.42");
         assert_eq!(sz, "12");
         assert_eq!(s, "BUY");
+    }
+
+    #[test]
+    fn terminal_direction_requires_closed_terminal_market() {
+        let mut market = data::models::Market {
+            condition_id: "0xabc".into(),
+            question: "Bitcoin Up or Down".into(),
+            slug: "btc-updown-5m-1".into(),
+            closed: true,
+            outcomes: vec![
+                data::models::Outcome {
+                    token_id: "up".into(),
+                    name: "Up".into(),
+                    price: 1.0,
+                },
+                data::models::Outcome {
+                    token_id: "down".into(),
+                    name: "Down".into(),
+                    price: 0.0,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(terminal_direction_from_market(&market), Some("up".into()));
+        market.closed = false;
+        assert_eq!(terminal_direction_from_market(&market), None);
+        market.closed = true;
+        market.outcomes[0].price = 0.5;
+        market.outcomes[1].price = 0.5;
+        assert_eq!(terminal_direction_from_market(&market), None);
     }
 
     #[test]
