@@ -173,6 +173,57 @@ enum Command {
         #[arg(long)]
         output_dir: String,
     },
+    /// Audit CLOB websocket delay and token coverage in a record-btc-books capture.
+    ForwardLatencyAudit {
+        /// Directory produced by record-btc-books.
+        #[arg(long)]
+        input_dir: String,
+        /// Output JSON path. Defaults to <input-dir>/forward_latency_audit.json.
+        #[arg(long)]
+        output: Option<String>,
+        /// Maximum acceptable p99 CLOB message delay for promotion evidence.
+        #[arg(long, default_value_t = 500.0)]
+        max_p99_delay_ms: f64,
+        /// Maximum acceptable observed gap between updates for any subscribed token.
+        #[arg(long, default_value_t = 2_000.0)]
+        max_token_gap_ms: f64,
+        /// Minimum observed events before a token participates in the update-gap gate.
+        #[arg(long, default_value_t = 100)]
+        min_gap_gate_events: u64,
+        /// Maximum acceptable share of book/change events without CLOB event timestamps.
+        #[arg(long, default_value_t = 0.0)]
+        max_missing_timestamp_rate: f64,
+    },
+    /// Probe Chainlink Data Streams REST reports as an official settlement shadow feed.
+    ChainlinkDataStreamsProbe {
+        /// Data Streams REST endpoint.
+        #[arg(
+            long,
+            env = "CHAINLINK_DATA_STREAMS_REST_URL",
+            default_value = data::chainlink::DEFAULT_DATA_STREAMS_REST_URL
+        )]
+        endpoint: String,
+        /// Data Streams feed ID. Repeat or pass comma-separated CHAINLINK_DATA_STREAMS_FEED_IDS.
+        #[arg(
+            long = "feed-id",
+            env = "CHAINLINK_DATA_STREAMS_FEED_IDS",
+            value_delimiter = ','
+        )]
+        feed_ids: Vec<String>,
+        /// Data Streams API key.
+        #[arg(long, env = "CHAINLINK_DATA_STREAMS_API_KEY", hide_env_values = true)]
+        api_key: Option<String>,
+        /// Data Streams API secret.
+        #[arg(
+            long,
+            env = "CHAINLINK_DATA_STREAMS_API_SECRET",
+            hide_env_values = true
+        )]
+        api_secret: Option<String>,
+        /// Output JSON path.
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Refresh converted forward BTC captures with terminal Gamma outcomes.
     FinalizeRecordedBtcBooks {
         /// Directory produced by convert-recorded-btc-books.
@@ -1437,6 +1488,9 @@ enum StrategyBuilderCommand {
         /// Simulated insert latency in milliseconds.
         #[arg(long, default_value_t = 50)]
         latency_ms: u64,
+        /// Forward latency audit JSON; overrides --latency-ms upward to the measured p99 recommendation.
+        #[arg(long)]
+        latency_audit_json: Option<String>,
         /// Variant-fan-out thread count for harness-sweep.
         #[arg(long, default_value_t = 0)]
         threads: usize,
@@ -1661,6 +1715,46 @@ async fn main() {
         } => {
             if let Err(e) = cmd_convert_recorded_btc_books(&input_dir, &output_dir) {
                 eprintln!("convert-recorded-btc-books failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Command::ForwardLatencyAudit {
+            input_dir,
+            output,
+            max_p99_delay_ms,
+            max_token_gap_ms,
+            min_gap_gate_events,
+            max_missing_timestamp_rate,
+        } => {
+            if let Err(e) = cmd_forward_latency_audit(
+                &input_dir,
+                output.as_deref(),
+                max_p99_delay_ms,
+                max_token_gap_ms,
+                min_gap_gate_events,
+                max_missing_timestamp_rate,
+            ) {
+                eprintln!("forward-latency-audit failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Command::ChainlinkDataStreamsProbe {
+            endpoint,
+            feed_ids,
+            api_key,
+            api_secret,
+            output,
+        } => {
+            if let Err(e) = cmd_chainlink_data_streams_probe(
+                &endpoint,
+                &feed_ids,
+                api_key.as_deref(),
+                api_secret.as_deref(),
+                output.as_deref(),
+            )
+            .await
+            {
+                eprintln!("chainlink-data-streams-probe failed: {e:#}");
                 std::process::exit(1);
             }
         }
@@ -2622,6 +2716,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_neighbor_positive_rate,
             max_pbo,
             min_median_oos_percentile,
+            latency_audit_json,
         } => {
             let input = RollingHistoryInput {
                 start,
@@ -2631,6 +2726,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 btc_csv,
                 bankroll,
                 latency_ms,
+                latency_audit_json: latency_audit_json.map(std::path::PathBuf::from),
                 threads,
                 window_minutes,
                 fold_hours,
@@ -2683,6 +2779,7 @@ struct RollingHistoryInput {
     btc_csv: Option<String>,
     bankroll: f64,
     latency_ms: u64,
+    latency_audit_json: Option<std::path::PathBuf>,
     threads: usize,
     window_minutes: f64,
     fold_hours: i64,
@@ -2775,6 +2872,66 @@ struct RollingCoveragePolicy {
     min_fold_top_trades: usize,
 }
 
+fn rolling_history_latency_policy(
+    requested_latency_ms: u64,
+    latency_audit_json: Option<&std::path::Path>,
+) -> anyhow::Result<(u64, serde_json::Value)> {
+    use anyhow::{bail, Context};
+
+    let Some(path) = latency_audit_json else {
+        return Ok((
+            requested_latency_ms,
+            serde_json::json!({
+                "source": "cli",
+                "requested_latency_ms": requested_latency_ms,
+                "effective_latency_ms": requested_latency_ms,
+                "audit_applied": false,
+                "override_applied": false,
+            }),
+        ));
+    };
+    let audit = read_json_value(path)?;
+    let gate = audit
+        .get("a_plus_latency_gate")
+        .context("latency audit missing a_plus_latency_gate")?;
+    let stream_latency_ready = gate
+        .get("stream_latency_ready")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !stream_latency_ready {
+        bail!(
+            "latency audit {} is not stream-ready; verdict={}",
+            path.display(),
+            gate.get("verdict")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+        );
+    }
+    let recommended_latency_ms = gate
+        .get("recommended_retest_latency_ms")
+        .and_then(|v| v.as_u64())
+        .context("latency audit missing recommended_retest_latency_ms")?;
+    let effective_latency_ms = requested_latency_ms.max(recommended_latency_ms);
+    Ok((
+        effective_latency_ms,
+        serde_json::json!({
+            "source": "forward_latency_audit",
+            "audit_path": path.display().to_string(),
+            "requested_latency_ms": requested_latency_ms,
+            "recommended_retest_latency_ms": recommended_latency_ms,
+            "effective_latency_ms": effective_latency_ms,
+            "audit_applied": true,
+            "override_applied": effective_latency_ms != requested_latency_ms,
+            "audit_verdict": gate.get("verdict").cloned().unwrap_or(serde_json::Value::Null),
+            "audit_p99_delay_ms": audit
+                .get("delay_ms")
+                .and_then(|v| v.get("p99"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        }),
+    ))
+}
+
 async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
     use anyhow::{bail, Context};
     use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -2801,6 +2958,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
     if input.max_cache_gb < 0.0 || !input.max_cache_gb.is_finite() {
         bail!("--max-cache-gb must be finite and non-negative");
     }
+    let (effective_latency_ms, latency_policy) =
+        rolling_history_latency_policy(input.latency_ms, input.latency_audit_json.as_deref())?;
 
     let profile = rolling_history_profile(&input.profile)?;
     let zone_mode = backtest::sweep::ZoneMode::parse(&input.zone_mode)
@@ -2888,6 +3047,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "promotion_error": promotion_error,
             "profile": profile,
             "fold_hours": input.fold_hours,
+            "latency_policy": latency_policy.clone(),
             "min_fold_trades": input.min_fold_trades,
             "coverage_policy": coverage_policy,
             "promotion_policy": {
@@ -2963,7 +3123,7 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "--max-total-exposure-usd".to_string(),
             profile.max_total_exposure_usd.clone(),
             "--latency-ms".to_string(),
-            input.latency_ms.to_string(),
+            effective_latency_ms.to_string(),
             "--threads".to_string(),
             input.threads.to_string(),
             "--max-contracts".to_string(),
@@ -3043,6 +3203,8 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
             "20".to_string(),
             "--threads".to_string(),
             input.threads.to_string(),
+            "--latency-ms".to_string(),
+            effective_latency_ms.to_string(),
             "--window-minutes".to_string(),
             cli_float_arg(input.window_minutes),
             "--continuous".to_string(),
@@ -3331,6 +3493,10 @@ async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde
         &promote_args,
         &zone_audit_args,
     );
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("create {}", out_dir.display()))?;
+    let manifest = out_dir.join("rolling_history_manifest.json");
+    write_json_atomic(&manifest, &summary, false)
+        .with_context(|| format!("write {}", manifest.display()))?;
     Ok(summary)
 }
 
@@ -4620,6 +4786,624 @@ fn record_market_ws_value(
         }
         _ => stats.other_messages += 1,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ForwardLatencyAuditThresholds {
+    max_p99_delay_ms: f64,
+    max_token_gap_ms: f64,
+    min_gap_gate_events: u64,
+    max_missing_timestamp_rate: f64,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+struct ForwardLatencyAuditStats {
+    raw_frames: u64,
+    binary_frames: u64,
+    json_messages: u64,
+    book_events: u64,
+    change_events: u64,
+    other_messages: u64,
+    malformed_lines: u64,
+    malformed_raw: u64,
+    missing_received_timestamp: u64,
+    missing_event_timestamp: u64,
+    timestamped_events: u64,
+    delay_samples: u64,
+    negative_delay_samples: u64,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+struct ForwardLatencyTokenStats {
+    events: u64,
+    book_events: u64,
+    change_events: u64,
+    first_received_ms: Option<i64>,
+    last_received_ms: Option<i64>,
+    max_gap_ms: i64,
+}
+
+impl ForwardLatencyTokenStats {
+    fn observe(&mut self, msg_type: &str, row_ts_ms: Option<i64>) {
+        self.events += 1;
+        match msg_type {
+            "book" => self.book_events += 1,
+            "price_change" => self.change_events += 1,
+            _ => {}
+        }
+        let Some(ts) = row_ts_ms else {
+            return;
+        };
+        if self.first_received_ms.is_none() {
+            self.first_received_ms = Some(ts);
+        }
+        if let Some(prev) = self.last_received_ms {
+            self.max_gap_ms = self.max_gap_ms.max(ts.saturating_sub(prev));
+        }
+        self.last_received_ms = Some(ts);
+    }
+}
+
+#[derive(Debug, Default)]
+struct ForwardLatencyAuditAccumulator {
+    stats: ForwardLatencyAuditStats,
+    delay_ms: Vec<f64>,
+    delay_sum_ms: f64,
+    token_stats: std::collections::BTreeMap<String, ForwardLatencyTokenStats>,
+}
+
+fn cmd_forward_latency_audit(
+    input_dir: &str,
+    output: Option<&str>,
+    max_p99_delay_ms: f64,
+    max_token_gap_ms: f64,
+    min_gap_gate_events: u64,
+    max_missing_timestamp_rate: f64,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use serde_json::Value;
+    use std::io::BufRead;
+
+    let input_dir = std::path::PathBuf::from(input_dir);
+    let frames_path = input_dir.join("market_ws_frames.jsonl");
+    let output_path = output
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| input_dir.join("forward_latency_audit.json"));
+    let expected_token_ids = forward_latency_expected_tokens(&input_dir)?;
+    let token_outcomes = forward_latency_token_outcomes(&input_dir)?;
+    let thresholds = ForwardLatencyAuditThresholds {
+        max_p99_delay_ms,
+        max_token_gap_ms,
+        min_gap_gate_events,
+        max_missing_timestamp_rate,
+    };
+
+    let frames_file = std::fs::File::open(&frames_path)
+        .with_context(|| format!("open {}", frames_path.display()))?;
+    let reader = std::io::BufReader::new(frames_file);
+    let mut acc = ForwardLatencyAuditAccumulator::default();
+
+    for line_res in reader.lines() {
+        let line = match line_res {
+            Ok(line) => line,
+            Err(_) => {
+                acc.stats.malformed_lines += 1;
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: Value = match serde_json::from_str(&line) {
+            Ok(row) => row,
+            Err(_) => {
+                acc.stats.malformed_lines += 1;
+                continue;
+            }
+        };
+        if row.get("raw_binary_len").is_some() {
+            acc.stats.binary_frames += 1;
+            continue;
+        }
+        let Some(raw) = row.get("raw").and_then(|v| v.as_str()) else {
+            acc.stats.malformed_lines += 1;
+            continue;
+        };
+        acc.stats.raw_frames += 1;
+        let raw_value: Value = match serde_json::from_str(raw) {
+            Ok(value) => value,
+            Err(_) => {
+                acc.stats.malformed_raw += 1;
+                continue;
+            }
+        };
+        let row_ts_ms = row.get("ts_received_ms").and_then(recorded_json_i64);
+        forward_latency_audit_ws_value(&raw_value, row_ts_ms, &mut acc);
+    }
+
+    let report = forward_latency_audit_report(
+        &input_dir,
+        &frames_path,
+        &output_path,
+        acc,
+        &expected_token_ids,
+        &token_outcomes,
+        thresholds,
+    );
+    write_json_atomic(&output_path, &report, true)
+        .with_context(|| format!("write {}", output_path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize latency audit")
+    );
+    Ok(())
+}
+
+fn forward_latency_expected_tokens(
+    input_dir: &std::path::Path,
+) -> anyhow::Result<std::collections::BTreeSet<String>> {
+    use anyhow::Context;
+
+    let summary_path = input_dir.join("summary.json");
+    if !summary_path.exists() {
+        return Ok(std::collections::BTreeSet::new());
+    }
+    let file = std::fs::File::open(&summary_path)
+        .with_context(|| format!("open {}", summary_path.display()))?;
+    let value: serde_json::Value = serde_json::from_reader(file)
+        .with_context(|| format!("decode {}", summary_path.display()))?;
+    let mut tokens = std::collections::BTreeSet::new();
+    if let Some(arr) = value.get("token_ids").and_then(|v| v.as_array()) {
+        for token in arr.iter().filter_map(|v| v.as_str()) {
+            tokens.insert(token.to_string());
+        }
+    }
+    Ok(tokens)
+}
+
+fn forward_latency_token_outcomes(
+    input_dir: &std::path::Path,
+) -> anyhow::Result<std::collections::BTreeMap<String, serde_json::Value>> {
+    use anyhow::Context;
+
+    let gamma_path = input_dir.join("gamma_market_cache.json");
+    if !gamma_path.exists() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let file = std::fs::File::open(&gamma_path)
+        .with_context(|| format!("open {}", gamma_path.display()))?;
+    let gamma_by_condition: std::collections::BTreeMap<String, data::models::Market> =
+        serde_json::from_reader(file)
+            .with_context(|| format!("decode {}", gamma_path.display()))?;
+    let mut out = std::collections::BTreeMap::new();
+    for (condition_id, market) in gamma_by_condition {
+        for outcome in market.outcomes {
+            if outcome.token_id.is_empty() {
+                continue;
+            }
+            out.insert(
+                outcome.token_id,
+                serde_json::json!({
+                    "condition_id": condition_id,
+                    "slug": market.slug,
+                    "outcome": outcome.name,
+                }),
+            );
+        }
+    }
+    Ok(out)
+}
+
+fn forward_latency_audit_ws_value(
+    value: &serde_json::Value,
+    row_ts_ms: Option<i64>,
+    acc: &mut ForwardLatencyAuditAccumulator,
+) {
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            forward_latency_audit_ws_value(item, row_ts_ms, acc);
+        }
+        return;
+    }
+
+    acc.stats.json_messages += 1;
+    let msg_type = value
+        .get("event_type")
+        .or_else(|| value.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let data = value.get("data").unwrap_or(value);
+    match msg_type {
+        "book" => {
+            acc.stats.book_events += 1;
+            forward_latency_observe_delay(acc, row_ts_ms, forward_latency_event_timestamp_ms(data));
+            if let Some(token) = data.get("asset_id").and_then(|v| v.as_str()) {
+                forward_latency_observe_token(acc, token, msg_type, row_ts_ms);
+            }
+        }
+        "price_change" => {
+            acc.stats.change_events += 1;
+            forward_latency_observe_delay(acc, row_ts_ms, forward_latency_event_timestamp_ms(data));
+            let mut observed_token = false;
+            if let Some(changes) = data
+                .get("price_changes")
+                .or_else(|| data.get("changes"))
+                .and_then(|v| v.as_array())
+            {
+                for change in changes {
+                    if let Some(token) = change
+                        .get("asset_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| data.get("asset_id").and_then(|v| v.as_str()))
+                    {
+                        forward_latency_observe_token(acc, token, msg_type, row_ts_ms);
+                        observed_token = true;
+                    }
+                }
+            }
+            if !observed_token {
+                if let Some(token) = data.get("asset_id").and_then(|v| v.as_str()) {
+                    forward_latency_observe_token(acc, token, msg_type, row_ts_ms);
+                }
+            }
+        }
+        _ => acc.stats.other_messages += 1,
+    }
+}
+
+fn forward_latency_observe_delay(
+    acc: &mut ForwardLatencyAuditAccumulator,
+    row_ts_ms: Option<i64>,
+    event_ts_ms: Option<i64>,
+) {
+    match (row_ts_ms, event_ts_ms) {
+        (Some(received_ms), Some(event_ms)) => {
+            let delay_ms = received_ms as f64 - event_ms as f64;
+            if received_ms < event_ms {
+                acc.stats.negative_delay_samples += 1;
+            }
+            acc.stats.timestamped_events += 1;
+            acc.stats.delay_samples += 1;
+            acc.delay_sum_ms += delay_ms;
+            acc.delay_ms.push(delay_ms);
+        }
+        (None, Some(_)) => acc.stats.missing_received_timestamp += 1,
+        (_, None) => acc.stats.missing_event_timestamp += 1,
+    }
+}
+
+fn forward_latency_observe_token(
+    acc: &mut ForwardLatencyAuditAccumulator,
+    token: &str,
+    msg_type: &str,
+    row_ts_ms: Option<i64>,
+) {
+    acc.token_stats
+        .entry(token.to_string())
+        .or_default()
+        .observe(msg_type, row_ts_ms);
+}
+
+fn forward_latency_event_timestamp_ms(data: &serde_json::Value) -> Option<i64> {
+    data.get("timestamp").and_then(recorded_json_f64).map(|ts| {
+        if ts > 10_000_000_000.0 {
+            ts.round() as i64
+        } else {
+            (ts * 1000.0).round() as i64
+        }
+    })
+}
+
+fn forward_latency_audit_report(
+    input_dir: &std::path::Path,
+    frames_path: &std::path::Path,
+    output_path: &std::path::Path,
+    acc: ForwardLatencyAuditAccumulator,
+    expected_token_ids: &std::collections::BTreeSet<String>,
+    token_outcomes: &std::collections::BTreeMap<String, serde_json::Value>,
+    thresholds: ForwardLatencyAuditThresholds,
+) -> serde_json::Value {
+    let mut delays = acc.delay_ms.clone();
+    delays.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50_delay_ms = forward_latency_percentile(&delays, 0.50);
+    let p95_delay_ms = forward_latency_percentile(&delays, 0.95);
+    let p99_delay_ms = forward_latency_percentile(&delays, 0.99);
+    let min_delay_ms = delays.first().copied();
+    let max_delay_ms = delays.last().copied();
+    let avg_delay_ms = if acc.stats.delay_samples > 0 {
+        Some(acc.delay_sum_ms / acc.stats.delay_samples as f64)
+    } else {
+        None
+    };
+    let clob_events = acc.stats.book_events + acc.stats.change_events;
+    let missing_timestamp_rate = if clob_events > 0 {
+        acc.stats.missing_event_timestamp as f64 / clob_events as f64
+    } else {
+        1.0
+    };
+    let observed_token_ids = acc.token_stats.keys().cloned().collect::<Vec<_>>();
+    let missing_token_ids = expected_token_ids
+        .iter()
+        .filter(|token| !acc.token_stats.contains_key(*token))
+        .cloned()
+        .collect::<Vec<_>>();
+    let max_observed_token_gap_ms = acc
+        .token_stats
+        .values()
+        .map(|stats| stats.max_gap_ms)
+        .max()
+        .unwrap_or(0) as f64;
+    let gap_gate_token_ids = acc
+        .token_stats
+        .iter()
+        .filter(|(_, stats)| stats.events >= thresholds.min_gap_gate_events)
+        .map(|(token, _)| token.clone())
+        .collect::<Vec<_>>();
+    let max_gate_token_gap_ms = acc
+        .token_stats
+        .iter()
+        .filter(|(_, stats)| stats.events >= thresholds.min_gap_gate_events)
+        .map(|(_, stats)| stats.max_gap_ms)
+        .max()
+        .unwrap_or(0) as f64;
+    let stream_latency_ready = acc.stats.delay_samples > 0
+        && acc.stats.negative_delay_samples == 0
+        && p99_delay_ms
+            .map(|p99| p99 <= thresholds.max_p99_delay_ms)
+            .unwrap_or(false);
+    let timestamp_ready =
+        clob_events > 0 && missing_timestamp_rate <= thresholds.max_missing_timestamp_rate;
+    let coverage_ready = expected_token_ids.is_empty() || missing_token_ids.is_empty();
+    let gap_ready =
+        !gap_gate_token_ids.is_empty() && max_gate_token_gap_ms <= thresholds.max_token_gap_ms;
+    let assumed_backtest_latency_ms = 50.0;
+    let backtest_latency_assumption_ready = p99_delay_ms
+        .map(|p99| p99 <= assumed_backtest_latency_ms)
+        .unwrap_or(false);
+    let recommended_retest_latency_ms = p99_delay_ms.map(|p99| p99.ceil().max(50.0) as u64);
+    let ready = stream_latency_ready
+        && timestamp_ready
+        && coverage_ready
+        && gap_ready
+        && backtest_latency_assumption_ready;
+    let verdict = if clob_events == 0 {
+        "NO_CLOB_EVENTS"
+    } else if !coverage_ready {
+        "TOKEN_COVERAGE_MISSING"
+    } else if acc.stats.delay_samples == 0 {
+        "NO_TIMESTAMPED_CLOB_EVENTS"
+    } else if acc.stats.negative_delay_samples > 0 {
+        "CLOCK_SKEW_NEGATIVE_DELAYS"
+    } else if !timestamp_ready {
+        "MISSING_CLOB_TIMESTAMPS"
+    } else if !stream_latency_ready {
+        "CLOB_P99_DELAY_TOO_HIGH"
+    } else if !gap_ready {
+        "TOKEN_UPDATE_GAP_TOO_HIGH"
+    } else if !backtest_latency_assumption_ready {
+        "MEASURED_LATENCY_RETEST_REQUIRED"
+    } else {
+        "LATENCY_READY"
+    };
+
+    serde_json::json!({
+        "schema_version": 1,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "source": {
+            "input_dir": input_dir.display().to_string(),
+            "frames_jsonl": frames_path.display().to_string(),
+        },
+        "output": output_path.display().to_string(),
+        "thresholds": {
+            "max_p99_delay_ms": thresholds.max_p99_delay_ms,
+            "max_token_gap_ms": thresholds.max_token_gap_ms,
+            "min_gap_gate_events": thresholds.min_gap_gate_events,
+            "max_missing_timestamp_rate": thresholds.max_missing_timestamp_rate,
+            "assumed_backtest_latency_ms": assumed_backtest_latency_ms,
+        },
+        "stats": {
+            "raw_frames": acc.stats.raw_frames,
+            "binary_frames": acc.stats.binary_frames,
+            "json_messages": acc.stats.json_messages,
+            "book_events": acc.stats.book_events,
+            "change_events": acc.stats.change_events,
+            "clob_events": clob_events,
+            "other_messages": acc.stats.other_messages,
+            "malformed_lines": acc.stats.malformed_lines,
+            "malformed_raw": acc.stats.malformed_raw,
+            "missing_received_timestamp": acc.stats.missing_received_timestamp,
+            "missing_event_timestamp": acc.stats.missing_event_timestamp,
+            "missing_event_timestamp_rate": missing_timestamp_rate,
+            "timestamped_events": acc.stats.timestamped_events,
+            "delay_samples": acc.stats.delay_samples,
+            "negative_delay_samples": acc.stats.negative_delay_samples,
+        },
+        "delay_ms": {
+            "min": min_delay_ms,
+            "avg": avg_delay_ms,
+            "p50": p50_delay_ms,
+            "p95": p95_delay_ms,
+            "p99": p99_delay_ms,
+            "max": max_delay_ms,
+        },
+        "token_coverage": {
+            "expected_token_ids": expected_token_ids.iter().cloned().collect::<Vec<_>>(),
+            "observed_token_ids": observed_token_ids,
+            "missing_token_ids": missing_token_ids,
+            "expected_count": expected_token_ids.len(),
+            "observed_count": acc.token_stats.len(),
+            "token_outcomes": token_outcomes,
+            "per_token": acc.token_stats,
+            "max_observed_gap_ms": max_observed_token_gap_ms,
+            "gap_gate_token_ids": gap_gate_token_ids,
+            "max_gap_gate_ms": max_gate_token_gap_ms,
+        },
+        "a_plus_latency_gate": {
+            "ready": ready,
+            "stream_latency_ready": stream_latency_ready,
+            "timestamp_ready": timestamp_ready,
+            "coverage_ready": coverage_ready,
+            "token_gap_ready": gap_ready,
+            "backtest_latency_assumption_ready": backtest_latency_assumption_ready,
+            "strategy_retest_required": !backtest_latency_assumption_ready,
+            "recommended_retest_latency_ms": recommended_retest_latency_ms,
+            "verdict": verdict,
+        }
+    })
+}
+
+fn forward_latency_percentile(sorted: &[f64], quantile: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let q = quantile.clamp(0.0, 1.0);
+    let rank = (sorted.len() as f64 * q).ceil() as usize;
+    let idx = rank.saturating_sub(1).min(sorted.len() - 1);
+    Some(sorted[idx])
+}
+
+async fn cmd_chainlink_data_streams_probe(
+    endpoint: &str,
+    feed_ids: &[String],
+    api_key: Option<&str>,
+    api_secret: Option<&str>,
+    output: Option<&str>,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let feed_ids = feed_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    let api_key = api_key.map(str::trim).filter(|s| !s.is_empty());
+    let api_secret = api_secret.map(str::trim).filter(|s| !s.is_empty());
+    let credentials_ready = api_key.is_some() && api_secret.is_some();
+    let output_path = output.map(std::path::PathBuf::from);
+    let mut probes = Vec::new();
+    let mut request_errors = Vec::new();
+
+    if credentials_ready && !feed_ids.is_empty() {
+        let client = data::chainlink::ChainlinkDataStreamsClient::new(
+            endpoint,
+            api_key.unwrap_or_default(),
+            api_secret.unwrap_or_default(),
+        );
+        for feed_id in &feed_ids {
+            match client.latest_report(feed_id).await {
+                Ok(probe) => probes.push(probe),
+                Err(e) => request_errors.push(serde_json::json!({
+                    "feed_id": feed_id,
+                    "error": format!("{e:#}"),
+                })),
+            }
+        }
+    }
+
+    let requested = feed_ids.len() as u64;
+    let successful_http = probes
+        .iter()
+        .filter(|probe| (200..300).contains(&probe.http_status))
+        .count() as u64;
+    let reports_with_metadata = probes.iter().filter(|probe| probe.report.is_some()).count() as u64;
+    let reports_with_observation_ts = probes
+        .iter()
+        .filter(|probe| {
+            probe
+                .report
+                .as_ref()
+                .and_then(|report| report.observations_timestamp)
+                .is_some()
+        })
+        .count() as u64;
+    let reports_with_decoded_price = probes
+        .iter()
+        .filter(|probe| {
+            probe
+                .report
+                .as_ref()
+                .and_then(|report| report.decoded_price.as_ref())
+                .is_some()
+        })
+        .count() as u64;
+    let max_latency_ms = probes
+        .iter()
+        .map(|probe| probe.latency_ms)
+        .max()
+        .unwrap_or(0);
+    let max_observation_lag_ms = probes
+        .iter()
+        .filter_map(|probe| probe.observation_lag_ms)
+        .max();
+    let transport_ready = credentials_ready
+        && requested > 0
+        && request_errors.is_empty()
+        && successful_http == requested;
+    let report_metadata_ready = transport_ready
+        && reports_with_metadata == requested
+        && reports_with_observation_ts == requested;
+    let decoded_price_ready = report_metadata_ready && reports_with_decoded_price == requested;
+    let settlement_alignment_ready = false;
+    let verdict = if feed_ids.is_empty() && !credentials_ready {
+        "CHAINLINK_FEED_ID_AND_CREDENTIALS_REQUIRED"
+    } else if feed_ids.is_empty() {
+        "CHAINLINK_FEED_ID_REQUIRED"
+    } else if !credentials_ready {
+        "CHAINLINK_CREDENTIALS_REQUIRED"
+    } else if !request_errors.is_empty() {
+        "CHAINLINK_TRANSPORT_REQUEST_FAILED"
+    } else if !transport_ready {
+        "CHAINLINK_TRANSPORT_NOT_READY"
+    } else if !report_metadata_ready {
+        "CHAINLINK_REPORT_METADATA_MISSING"
+    } else if !decoded_price_ready {
+        "CHAINLINK_TRANSPORT_READY_DECODER_REQUIRED"
+    } else {
+        "CHAINLINK_DECODED_TAPE_READY_NEEDS_WINDOW_ALIGNMENT"
+    };
+
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "source_kind": "chainlink_btc_usd_data_stream",
+        "endpoint": endpoint,
+        "feed_ids": feed_ids,
+        "auth": {
+            "api_key_present": api_key.is_some(),
+            "api_secret_present": api_secret.is_some(),
+            "credentials_ready": credentials_ready,
+        },
+        "stats": {
+            "requested": requested,
+            "successful_http": successful_http,
+            "reports_with_metadata": reports_with_metadata,
+            "reports_with_observation_timestamp": reports_with_observation_ts,
+            "reports_with_decoded_price": reports_with_decoded_price,
+            "request_errors": request_errors.len(),
+            "max_latency_ms": max_latency_ms,
+            "max_observation_lag_ms": max_observation_lag_ms,
+        },
+        "chainlink_shadow_gate": {
+            "ready": decoded_price_ready && settlement_alignment_ready,
+            "transport_ready": transport_ready,
+            "report_metadata_ready": report_metadata_ready,
+            "decoded_price_ready": decoded_price_ready,
+            "settlement_alignment_ready": settlement_alignment_ready,
+            "verdict": verdict,
+        },
+        "request_errors": request_errors,
+        "reports": probes,
+    });
+
+    if let Some(path) = output_path {
+        write_json_atomic(&path, &report, true)
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize Chainlink probe report")
+    );
+    Ok(())
 }
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
@@ -8634,6 +9418,231 @@ mod replay_validation_tests {
     }
 
     #[test]
+    fn forward_latency_audit_requires_retest_when_p99_exceeds_backtest_assumption() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        forward_latency_audit_ws_value(
+            &serde_json::json!({
+                "event_type": "book",
+                "market": "0xabc",
+                "asset_id": "up-token",
+                "timestamp": "1782908899760",
+                "bids": [],
+                "asks": []
+            }),
+            Some(1_782_908_900_000),
+            &mut acc,
+        );
+        forward_latency_audit_ws_value(
+            &serde_json::json!({
+                "event_type": "price_change",
+                "market": "0xabc",
+                "timestamp": "1782908901200",
+                "price_changes": [
+                    {"asset_id": "up-token", "price": "0.52", "side": "BUY", "size": "10"},
+                    {"asset_id": "down-token", "price": "0.48", "side": "SELL", "size": "10"}
+                ]
+            }),
+            Some(1_782_908_901_400),
+            &mut acc,
+        );
+        let expected = ["down-token".to_string(), "up-token".to_string()]
+            .into_iter()
+            .collect();
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            acc,
+            &expected,
+            &std::collections::BTreeMap::new(),
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 2_000.0,
+                min_gap_gate_events: 1,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(report["delay_ms"]["p99"].as_f64(), Some(240.0));
+        assert_eq!(
+            report["a_plus_latency_gate"]["stream_latency_ready"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["backtest_latency_assumption_ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["verdict"].as_str(),
+            Some("MEASURED_LATENCY_RETEST_REQUIRED")
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["recommended_retest_latency_ms"].as_u64(),
+            Some(240)
+        );
+    }
+
+    #[test]
+    fn forward_latency_audit_fails_closed_without_clob_timestamps() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        forward_latency_audit_ws_value(
+            &serde_json::json!({
+                "event_type": "book",
+                "market": "0xabc",
+                "asset_id": "up-token",
+                "bids": [],
+                "asks": []
+            }),
+            Some(1_000),
+            &mut acc,
+        );
+        let expected = ["up-token".to_string()].into_iter().collect();
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            acc,
+            &expected,
+            &std::collections::BTreeMap::new(),
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 2_000.0,
+                min_gap_gate_events: 1,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(
+            report["a_plus_latency_gate"]["ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["verdict"].as_str(),
+            Some("NO_TIMESTAMPED_CLOB_EVENTS")
+        );
+        assert_eq!(report["stats"]["missing_event_timestamp"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn forward_latency_gap_gate_ignores_sparse_future_tokens() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        for row_ts in [1_782_908_900_000_i64, 1_782_908_900_100, 1_782_908_900_200] {
+            forward_latency_audit_ws_value(
+                &serde_json::json!({
+                    "event_type": "price_change",
+                    "market": "0xactive",
+                    "asset_id": "active-token",
+                    "timestamp": (row_ts - 20).to_string(),
+                    "price_changes": []
+                }),
+                Some(row_ts),
+                &mut acc,
+            );
+        }
+        for row_ts in [1_782_908_900_000_i64, 1_782_908_905_000] {
+            forward_latency_audit_ws_value(
+                &serde_json::json!({
+                    "event_type": "price_change",
+                    "market": "0xfuture",
+                    "asset_id": "future-token",
+                    "timestamp": (row_ts - 20).to_string(),
+                    "price_changes": []
+                }),
+                Some(row_ts),
+                &mut acc,
+            );
+        }
+        let expected = ["active-token".to_string(), "future-token".to_string()]
+            .into_iter()
+            .collect();
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            acc,
+            &expected,
+            &std::collections::BTreeMap::new(),
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 1_000.0,
+                min_gap_gate_events: 3,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(
+            report["token_coverage"]["max_observed_gap_ms"].as_f64(),
+            Some(5_000.0)
+        );
+        assert_eq!(
+            report["token_coverage"]["max_gap_gate_ms"].as_f64(),
+            Some(100.0)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["token_gap_ready"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn forward_latency_percentile_uses_nearest_rank() {
+        let values = [10.0, 20.0, 30.0, 40.0];
+        assert_eq!(forward_latency_percentile(&values, 0.50), Some(20.0));
+        assert_eq!(forward_latency_percentile(&values, 0.95), Some(40.0));
+        assert_eq!(forward_latency_percentile(&[], 0.50), None);
+    }
+
+    #[test]
+    fn rolling_history_latency_policy_applies_forward_audit_recommendation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let audit_path = tmp.path().join("latency_audit.json");
+        write_json_atomic(
+            &audit_path,
+            &serde_json::json!({
+                "a_plus_latency_gate": {
+                    "stream_latency_ready": true,
+                    "recommended_retest_latency_ms": 366,
+                    "verdict": "MEASURED_LATENCY_RETEST_REQUIRED"
+                },
+                "delay_ms": {"p99": 366.0}
+            }),
+            true,
+        )
+        .unwrap();
+
+        let (effective, policy) = rolling_history_latency_policy(50, Some(&audit_path)).unwrap();
+
+        assert_eq!(effective, 366);
+        assert_eq!(policy["override_applied"].as_bool(), Some(true));
+        assert_eq!(
+            policy["audit_verdict"].as_str(),
+            Some("MEASURED_LATENCY_RETEST_REQUIRED")
+        );
+    }
+
+    #[test]
+    fn rolling_history_latency_policy_rejects_non_ready_audit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let audit_path = tmp.path().join("latency_audit.json");
+        write_json_atomic(
+            &audit_path,
+            &serde_json::json!({
+                "a_plus_latency_gate": {
+                    "stream_latency_ready": false,
+                    "recommended_retest_latency_ms": 500,
+                    "verdict": "CLOB_P99_DELAY_TOO_HIGH"
+                }
+            }),
+            true,
+        )
+        .unwrap();
+
+        let err = rolling_history_latency_policy(50, Some(&audit_path)).unwrap_err();
+
+        assert!(err.to_string().contains("not stream-ready"));
+    }
+
+    #[test]
     fn recorded_book_converter_emits_distilled_events() {
         let payload = serde_json::json!([
             {
@@ -8943,6 +9952,7 @@ mod replay_validation_tests {
             btc_csv: Some("/tmp/btc.csv".to_string()),
             bankroll: 100.0,
             latency_ms: 50,
+            latency_audit_json: None,
             threads: 1,
             window_minutes: 5.0,
             fold_hours: 2,
@@ -9020,6 +10030,23 @@ mod replay_validation_tests {
         assert_eq!(summary["coverage_policy"]["min_fold_target_events"], 1);
         assert_eq!(summary["coverage_policy"]["min_fold_top_trades"], 20);
         assert!(summary["folds"][0]["coverage"].is_null());
+        assert_eq!(summary["latency_policy"]["effective_latency_ms"], 50);
+        assert!(
+            summary["folds"][0]["hydrate_args"]
+                .as_array()
+                .unwrap()
+                .windows(2)
+                .any(|pair| pair[0].as_str() == Some("--latency-ms")
+                    && pair[1].as_str() == Some("50"))
+        );
+        assert!(
+            summary["folds"][0]["sweep_args"]
+                .as_array()
+                .unwrap()
+                .windows(2)
+                .any(|pair| pair[0].as_str() == Some("--latency-ms")
+                    && pair[1].as_str() == Some("50"))
+        );
         assert!(summary["folds"][0]["sweep_args"]
             .as_array()
             .unwrap()
@@ -9043,6 +10070,7 @@ mod replay_validation_tests {
             btc_csv: Some("/tmp/btc.csv".to_string()),
             bankroll: 100.0,
             latency_ms: 50,
+            latency_audit_json: None,
             threads: 1,
             window_minutes: 5.0,
             fold_hours: 2,
@@ -9186,6 +10214,7 @@ mod replay_validation_tests {
             btc_csv: None,
             bankroll: 100.0,
             latency_ms: 50,
+            latency_audit_json: None,
             threads: 1,
             window_minutes: 5.0,
             fold_hours: 2,

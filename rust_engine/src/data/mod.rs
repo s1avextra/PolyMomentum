@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod chainlink;
 pub mod ctf;
 pub mod gamma;
 pub mod manifest;
