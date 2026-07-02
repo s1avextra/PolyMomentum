@@ -210,14 +210,20 @@ enum Command {
             value_delimiter = ','
         )]
         feed_ids: Vec<String>,
-        /// Data Streams REST Authorization ID / API key UUID.
+        /// Data Streams REST/WebSocket username from the Chainlink credentials screen.
         #[arg(
-            long = "auth-id",
-            visible_alias = "api-key",
-            env = "CHAINLINK_DATA_STREAMS_AUTH_ID",
+            long = "username",
+            env = "CHAINLINK_DATA_STREAMS_REST_WEBSOCKET_USERNAME",
             hide_env_values = true
         )]
-        auth_id: Option<String>,
+        rest_websocket_username: Option<String>,
+        /// Data Streams API key from the Chainlink credentials screen.
+        #[arg(
+            long = "api-key",
+            env = "CHAINLINK_DATA_STREAMS_API_KEY",
+            hide_env_values = true
+        )]
+        api_key: Option<String>,
         /// Data Streams HMAC/shared secret.
         #[arg(
             long = "hmac-secret",
@@ -1751,14 +1757,16 @@ async fn main() {
         Command::ChainlinkDataStreamsProbe {
             endpoint,
             feed_ids,
-            auth_id,
+            rest_websocket_username,
+            api_key,
             hmac_secret,
             output,
         } => {
             if let Err(e) = cmd_chainlink_data_streams_probe(
                 &endpoint,
                 &feed_ids,
-                auth_id.as_deref(),
+                rest_websocket_username.as_deref(),
+                api_key.as_deref(),
                 hmac_secret.as_deref(),
                 output.as_deref(),
             )
@@ -5275,7 +5283,8 @@ fn forward_latency_percentile(sorted: &[f64], quantile: f64) -> Option<f64> {
 async fn cmd_chainlink_data_streams_probe(
     endpoint: &str,
     feed_ids: &[String],
-    auth_id: Option<&str>,
+    rest_websocket_username: Option<&str>,
+    api_key: Option<&str>,
     hmac_secret: Option<&str>,
     output: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -5286,13 +5295,15 @@ async fn cmd_chainlink_data_streams_probe(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
-    let auth_id = chainlink_credential_value(
-        auth_id,
+    let rest_websocket_username = chainlink_credential_value(
+        rest_websocket_username,
         &[
+            "CHAINLINK_DATA_STREAMS_REST_WEBSOCKET_USERNAME",
+            "CHAINLINK_DATA_STREAMS_USERNAME",
             "CHAINLINK_DATA_STREAMS_AUTH_ID",
-            "CHAINLINK_DATA_STREAMS_API_KEY",
         ],
     );
+    let api_key = chainlink_credential_value(api_key, &["CHAINLINK_DATA_STREAMS_API_KEY"]);
     let hmac_secret = chainlink_credential_value(
         hmac_secret,
         &[
@@ -5300,7 +5311,11 @@ async fn cmd_chainlink_data_streams_probe(
             "CHAINLINK_DATA_STREAMS_API_SECRET",
         ],
     );
-    let credentials_ready = auth_id.is_some() && hmac_secret.is_some();
+    let authorization_value = api_key
+        .as_deref()
+        .or(rest_websocket_username.as_deref())
+        .map(str::to_string);
+    let credentials_ready = authorization_value.is_some() && hmac_secret.is_some();
     let malformed_feed_id_count = feed_ids
         .iter()
         .filter(|id| !looks_like_chainlink_feed_id(id))
@@ -5313,7 +5328,7 @@ async fn cmd_chainlink_data_streams_probe(
     if credentials_ready && !feed_ids.is_empty() && feed_id_shape_ready {
         let client = data::chainlink::ChainlinkDataStreamsClient::new(
             endpoint,
-            auth_id.as_deref().unwrap_or_default(),
+            authorization_value.as_deref().unwrap_or_default(),
             hmac_secret.as_deref().unwrap_or_default(),
         );
         for feed_id in &feed_ids {
@@ -5399,7 +5414,8 @@ async fn cmd_chainlink_data_streams_probe(
         "endpoint": endpoint,
         "feed_ids": feed_ids,
         "auth": {
-            "auth_id_present": auth_id.is_some(),
+            "rest_websocket_username_present": rest_websocket_username.is_some(),
+            "api_key_present": api_key.is_some(),
             "hmac_secret_present": hmac_secret.is_some(),
             "credentials_ready": credentials_ready,
         },

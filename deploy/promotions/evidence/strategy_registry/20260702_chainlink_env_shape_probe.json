@@ -1,8 +1,9 @@
 {
   "auth": {
-    "auth_id_present": true,
+    "api_key_present": false,
     "credentials_ready": false,
-    "hmac_secret_present": false
+    "hmac_secret_present": false,
+    "rest_websocket_username_present": false
   },
   "chainlink_shadow_gate": {
     "decoded_price_ready": false,
@@ -14,7 +15,7 @@
   },
   "endpoint": "https://api.dataengine.chain.link",
   "feed_ids": [],
-  "generated_at": "2026-07-02T08:24:44.730618+00:00",
+  "generated_at": "2026-07-02T09:49:30.421052+00:00",
   "reports": [],
   "request_errors": [],
   "schema_version": 1,
