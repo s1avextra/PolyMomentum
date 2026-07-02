@@ -363,7 +363,7 @@ impl Settings {
     }
 }
 
-fn load_dotenv_best_effort(path: &str) -> std::io::Result<()> {
+pub(crate) fn load_dotenv_best_effort(path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(path)?;
     for line in content.lines() {
         let line = line.trim();

@@ -1,0 +1,34 @@
+{
+  "auth": {
+    "auth_id_present": true,
+    "credentials_ready": false,
+    "hmac_secret_present": false
+  },
+  "chainlink_shadow_gate": {
+    "decoded_price_ready": false,
+    "ready": false,
+    "report_metadata_ready": false,
+    "settlement_alignment_ready": false,
+    "transport_ready": false,
+    "verdict": "CHAINLINK_FEED_ID_AND_CREDENTIALS_REQUIRED"
+  },
+  "endpoint": "https://api.dataengine.chain.link",
+  "feed_ids": [],
+  "generated_at": "2026-07-02T08:24:44.730618+00:00",
+  "reports": [],
+  "request_errors": [],
+  "schema_version": 1,
+  "source_kind": "chainlink_btc_usd_data_stream",
+  "stats": {
+    "feed_id_shape_ready": true,
+    "malformed_feed_id_count": 0,
+    "max_latency_ms": 0,
+    "max_observation_lag_ms": null,
+    "reports_with_decoded_price": 0,
+    "reports_with_metadata": 0,
+    "reports_with_observation_timestamp": 0,
+    "request_errors": 0,
+    "requested": 0,
+    "successful_http": 0
+  }
+}

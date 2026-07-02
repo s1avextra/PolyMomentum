@@ -210,16 +210,22 @@ enum Command {
             value_delimiter = ','
         )]
         feed_ids: Vec<String>,
-        /// Data Streams API key.
-        #[arg(long, env = "CHAINLINK_DATA_STREAMS_API_KEY", hide_env_values = true)]
-        api_key: Option<String>,
-        /// Data Streams API secret.
+        /// Data Streams REST Authorization ID / API key UUID.
         #[arg(
-            long,
-            env = "CHAINLINK_DATA_STREAMS_API_SECRET",
+            long = "auth-id",
+            visible_alias = "api-key",
+            env = "CHAINLINK_DATA_STREAMS_AUTH_ID",
             hide_env_values = true
         )]
-        api_secret: Option<String>,
+        auth_id: Option<String>,
+        /// Data Streams HMAC/shared secret.
+        #[arg(
+            long = "hmac-secret",
+            visible_alias = "api-secret",
+            env = "CHAINLINK_DATA_STREAMS_HMAC_SECRET",
+            hide_env_values = true
+        )]
+        hmac_secret: Option<String>,
         /// Output JSON path.
         #[arg(long)]
         output: Option<String>,
@@ -1577,6 +1583,10 @@ enum StrategyBuilderCommand {
 
 #[tokio::main]
 async fn main() {
+    // Clap reads environment-backed args while parsing, so load local `.env`
+    // before `Cli::parse()`. Settings::from_env repeats this as a harmless
+    // fallback for non-CLI runtime config.
+    let _ = config::load_dotenv_best_effort(".env");
     let cli = Cli::parse();
     init_tracing(&cli.log);
     let settings = config::Settings::from_env();
@@ -1741,15 +1751,15 @@ async fn main() {
         Command::ChainlinkDataStreamsProbe {
             endpoint,
             feed_ids,
-            api_key,
-            api_secret,
+            auth_id,
+            hmac_secret,
             output,
         } => {
             if let Err(e) = cmd_chainlink_data_streams_probe(
                 &endpoint,
                 &feed_ids,
-                api_key.as_deref(),
-                api_secret.as_deref(),
+                auth_id.as_deref(),
+                hmac_secret.as_deref(),
                 output.as_deref(),
             )
             .await
@@ -5265,8 +5275,8 @@ fn forward_latency_percentile(sorted: &[f64], quantile: f64) -> Option<f64> {
 async fn cmd_chainlink_data_streams_probe(
     endpoint: &str,
     feed_ids: &[String],
-    api_key: Option<&str>,
-    api_secret: Option<&str>,
+    auth_id: Option<&str>,
+    hmac_secret: Option<&str>,
     output: Option<&str>,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
@@ -5276,18 +5286,35 @@ async fn cmd_chainlink_data_streams_probe(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
-    let api_key = api_key.map(str::trim).filter(|s| !s.is_empty());
-    let api_secret = api_secret.map(str::trim).filter(|s| !s.is_empty());
-    let credentials_ready = api_key.is_some() && api_secret.is_some();
+    let auth_id = chainlink_credential_value(
+        auth_id,
+        &[
+            "CHAINLINK_DATA_STREAMS_AUTH_ID",
+            "CHAINLINK_DATA_STREAMS_API_KEY",
+        ],
+    );
+    let hmac_secret = chainlink_credential_value(
+        hmac_secret,
+        &[
+            "CHAINLINK_DATA_STREAMS_HMAC_SECRET",
+            "CHAINLINK_DATA_STREAMS_API_SECRET",
+        ],
+    );
+    let credentials_ready = auth_id.is_some() && hmac_secret.is_some();
+    let malformed_feed_id_count = feed_ids
+        .iter()
+        .filter(|id| !looks_like_chainlink_feed_id(id))
+        .count() as u64;
+    let feed_id_shape_ready = malformed_feed_id_count == 0;
     let output_path = output.map(std::path::PathBuf::from);
     let mut probes = Vec::new();
     let mut request_errors = Vec::new();
 
-    if credentials_ready && !feed_ids.is_empty() {
+    if credentials_ready && !feed_ids.is_empty() && feed_id_shape_ready {
         let client = data::chainlink::ChainlinkDataStreamsClient::new(
             endpoint,
-            api_key.unwrap_or_default(),
-            api_secret.unwrap_or_default(),
+            auth_id.as_deref().unwrap_or_default(),
+            hmac_secret.as_deref().unwrap_or_default(),
         );
         for feed_id in &feed_ids {
             match client.latest_report(feed_id).await {
@@ -5337,6 +5364,7 @@ async fn cmd_chainlink_data_streams_probe(
         .max();
     let transport_ready = credentials_ready
         && requested > 0
+        && feed_id_shape_ready
         && request_errors.is_empty()
         && successful_http == requested;
     let report_metadata_ready = transport_ready
@@ -5350,6 +5378,8 @@ async fn cmd_chainlink_data_streams_probe(
         "CHAINLINK_FEED_ID_REQUIRED"
     } else if !credentials_ready {
         "CHAINLINK_CREDENTIALS_REQUIRED"
+    } else if !feed_id_shape_ready {
+        "CHAINLINK_FEED_ID_LOOKS_INVALID"
     } else if !request_errors.is_empty() {
         "CHAINLINK_TRANSPORT_REQUEST_FAILED"
     } else if !transport_ready {
@@ -5369,12 +5399,14 @@ async fn cmd_chainlink_data_streams_probe(
         "endpoint": endpoint,
         "feed_ids": feed_ids,
         "auth": {
-            "api_key_present": api_key.is_some(),
-            "api_secret_present": api_secret.is_some(),
+            "auth_id_present": auth_id.is_some(),
+            "hmac_secret_present": hmac_secret.is_some(),
             "credentials_ready": credentials_ready,
         },
         "stats": {
             "requested": requested,
+            "feed_id_shape_ready": feed_id_shape_ready,
+            "malformed_feed_id_count": malformed_feed_id_count,
             "successful_http": successful_http,
             "reports_with_metadata": reports_with_metadata,
             "reports_with_observation_timestamp": reports_with_observation_ts,
@@ -5404,6 +5436,28 @@ async fn cmd_chainlink_data_streams_probe(
         serde_json::to_string_pretty(&report).expect("serialize Chainlink probe report")
     );
     Ok(())
+}
+
+fn chainlink_credential_value(cli_value: Option<&str>, env_keys: &[&str]) -> Option<String> {
+    cli_value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            env_keys.iter().find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+        })
+}
+
+fn looks_like_chainlink_feed_id(feed_id: &str) -> bool {
+    let Some(hex) = feed_id.trim().strip_prefix("0x") else {
+        return false;
+    };
+    hex.len() >= 64 && hex.len() % 2 == 0 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
@@ -9763,6 +9817,17 @@ mod replay_validation_tests {
             "chainlink_btc_usd_data_stream"
         );
         assert_eq!(recorded_resolution_source_kind("", ""), "unknown");
+    }
+
+    #[test]
+    fn chainlink_feed_id_shape_requires_hex_stream_id() {
+        assert!(looks_like_chainlink_feed_id(
+            "0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782"
+        ));
+        assert!(!looks_like_chainlink_feed_id(
+            "11111111-2222-3333-4444-555555555555"
+        ));
+        assert!(!looks_like_chainlink_feed_id("0xnot-hex"));
     }
 
     #[test]
