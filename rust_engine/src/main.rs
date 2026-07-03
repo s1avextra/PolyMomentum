@@ -4574,6 +4574,43 @@ struct MarketWsRecordStats {
     bytes: u64,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct LatencyMeasurementHostMetadata {
+    label: Option<String>,
+    hostname: Option<String>,
+    uname: Option<String>,
+    os: &'static str,
+    arch: &'static str,
+    pid: u32,
+}
+
+fn latency_measurement_host_metadata() -> LatencyMeasurementHostMetadata {
+    LatencyMeasurementHostMetadata {
+        label: std::env::var("POLYMOMENTUM_LATENCY_HOST_LABEL")
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
+        hostname: command_stdout_first_line("hostname", &[]),
+        uname: command_stdout_first_line("uname", &["-a"]),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        pid: std::process::id(),
+    }
+}
+
+fn command_stdout_first_line(command: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(command)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|stdout| stdout.lines().next().map(str::trim).map(str::to_string))
+        .filter(|line| !line.is_empty())
+}
+
 async fn cmd_record_btc_books(
     settings: &config::Settings,
     start: Option<&str>,
@@ -4689,22 +4726,28 @@ async fn cmd_record_btc_books(
         let wait_for = remaining.min(Duration::from_secs(10));
         match timeout(wait_for, read.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
+                let ts_received_ms = chrono::Utc::now().timestamp_millis();
                 let text = text.to_string();
                 stats.frames += 1;
                 stats.bytes += text.len() as u64;
                 record_market_ws_text(&text, &mut stats, &mut seen_tokens);
+                let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
                 let row = serde_json::json!({
-                    "ts_received_ms": chrono::Utc::now().timestamp_millis(),
+                    "ts_received_ms": ts_received_ms,
+                    "ts_recorded_ms": ts_recorded_ms,
                     "raw": text,
                 });
                 serde_json::to_writer(&mut writer, &row).context("serialize ws frame")?;
                 writer.write_all(b"\n").context("write ws frame newline")?;
             }
             Ok(Some(Ok(Message::Binary(bytes)))) => {
+                let ts_received_ms = chrono::Utc::now().timestamp_millis();
                 stats.frames += 1;
                 stats.bytes += bytes.len() as u64;
+                let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
                 let row = serde_json::json!({
-                    "ts_received_ms": chrono::Utc::now().timestamp_millis(),
+                    "ts_received_ms": ts_received_ms,
+                    "ts_recorded_ms": ts_recorded_ms,
                     "raw_binary_len": bytes.len(),
                 });
                 serde_json::to_writer(&mut writer, &row).context("serialize binary ws frame")?;
@@ -4737,6 +4780,8 @@ async fn cmd_record_btc_books(
         "duration_seconds": duration_seconds.max(1),
         "gamma_market_cache": gamma_path.display().to_string(),
         "frames_jsonl": frames_path.display().to_string(),
+        "websocket_endpoint": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        "measurement_host": latency_measurement_host_metadata(),
         "stats": stats,
     });
     write_json_atomic(&summary_path, &summary, true)
@@ -4887,6 +4932,7 @@ fn cmd_forward_latency_audit(
     let output_path = output
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| input_dir.join("forward_latency_audit.json"));
+    let capture_summary = forward_latency_capture_summary(&input_dir);
     let expected_token_ids = forward_latency_expected_tokens(&input_dir)?;
     let token_outcomes = forward_latency_token_outcomes(&input_dir)?;
     let thresholds = ForwardLatencyAuditThresholds {
@@ -4943,6 +4989,7 @@ fn cmd_forward_latency_audit(
         &input_dir,
         &frames_path,
         &output_path,
+        capture_summary,
         acc,
         &expected_token_ids,
         &token_outcomes,
@@ -5010,6 +5057,12 @@ fn forward_latency_token_outcomes(
         }
     }
     Ok(out)
+}
+
+fn forward_latency_capture_summary(input_dir: &std::path::Path) -> Option<serde_json::Value> {
+    let summary_path = input_dir.join("summary.json");
+    let file = std::fs::File::open(summary_path).ok()?;
+    serde_json::from_reader(file).ok()
 }
 
 fn forward_latency_audit_ws_value(
@@ -5116,6 +5169,7 @@ fn forward_latency_audit_report(
     input_dir: &std::path::Path,
     frames_path: &std::path::Path,
     output_path: &std::path::Path,
+    capture_summary: Option<serde_json::Value>,
     acc: ForwardLatencyAuditAccumulator,
     expected_token_ids: &std::collections::BTreeSet<String>,
     token_outcomes: &std::collections::BTreeMap<String, serde_json::Value>,
@@ -5164,8 +5218,9 @@ fn forward_latency_audit_report(
         .map(|(_, stats)| stats.max_gap_ms)
         .max()
         .unwrap_or(0) as f64;
+    let clock_skew_negative_delays = acc.stats.negative_delay_samples > 0;
     let stream_latency_ready = acc.stats.delay_samples > 0
-        && acc.stats.negative_delay_samples == 0
+        && !clock_skew_negative_delays
         && p99_delay_ms
             .map(|p99| p99 <= thresholds.max_p99_delay_ms)
             .unwrap_or(false);
@@ -5175,10 +5230,15 @@ fn forward_latency_audit_report(
     let gap_ready =
         !gap_gate_token_ids.is_empty() && max_gate_token_gap_ms <= thresholds.max_token_gap_ms;
     let assumed_backtest_latency_ms = 50.0;
-    let backtest_latency_assumption_ready = p99_delay_ms
-        .map(|p99| p99 <= assumed_backtest_latency_ms)
-        .unwrap_or(false);
-    let recommended_retest_latency_ms = p99_delay_ms.map(|p99| p99.ceil().max(50.0) as u64);
+    let backtest_latency_assumption_ready = !clock_skew_negative_delays
+        && p99_delay_ms
+            .map(|p99| p99 <= assumed_backtest_latency_ms)
+            .unwrap_or(false);
+    let recommended_retest_latency_ms = if clock_skew_negative_delays {
+        None
+    } else {
+        p99_delay_ms.map(|p99| p99.ceil().max(50.0) as u64)
+    };
     let ready = stream_latency_ready
         && timestamp_ready
         && coverage_ready
@@ -5190,7 +5250,7 @@ fn forward_latency_audit_report(
         "TOKEN_COVERAGE_MISSING"
     } else if acc.stats.delay_samples == 0 {
         "NO_TIMESTAMPED_CLOB_EVENTS"
-    } else if acc.stats.negative_delay_samples > 0 {
+    } else if clock_skew_negative_delays {
         "CLOCK_SKEW_NEGATIVE_DELAYS"
     } else if !timestamp_ready {
         "MISSING_CLOB_TIMESTAMPS"
@@ -5210,6 +5270,7 @@ fn forward_latency_audit_report(
         "source": {
             "input_dir": input_dir.display().to_string(),
             "frames_jsonl": frames_path.display().to_string(),
+            "capture_summary": capture_summary,
         },
         "output": output_path.display().to_string(),
         "thresholds": {
@@ -5235,6 +5296,11 @@ fn forward_latency_audit_report(
             "timestamped_events": acc.stats.timestamped_events,
             "delay_samples": acc.stats.delay_samples,
             "negative_delay_samples": acc.stats.negative_delay_samples,
+            "negative_delay_rate": if acc.stats.delay_samples > 0 {
+                acc.stats.negative_delay_samples as f64 / acc.stats.delay_samples as f64
+            } else {
+                0.0
+            },
         },
         "delay_ms": {
             "min": min_delay_ms,
@@ -9522,6 +9588,7 @@ mod replay_validation_tests {
             std::path::Path::new("/tmp/in"),
             std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
             std::path::Path::new("/tmp/out.json"),
+            None,
             acc,
             &expected,
             &std::collections::BTreeMap::new(),
@@ -9571,6 +9638,7 @@ mod replay_validation_tests {
             std::path::Path::new("/tmp/in"),
             std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
             std::path::Path::new("/tmp/out.json"),
+            None,
             acc,
             &expected,
             &std::collections::BTreeMap::new(),
@@ -9591,6 +9659,60 @@ mod replay_validation_tests {
             Some("NO_TIMESTAMPED_CLOB_EVENTS")
         );
         assert_eq!(report["stats"]["missing_event_timestamp"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn forward_latency_audit_does_not_recommend_latency_when_clock_skew_negative() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        forward_latency_audit_ws_value(
+            &serde_json::json!({
+                "event_type": "price_change",
+                "market": "0xabc",
+                "timestamp": "1782908900100",
+                "price_changes": [
+                    {"asset_id": "up-token", "price": "0.52", "side": "BUY", "size": "10"}
+                ]
+            }),
+            Some(1_782_908_900_000),
+            &mut acc,
+        );
+        let expected = ["up-token".to_string()].into_iter().collect();
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            None,
+            acc,
+            &expected,
+            &std::collections::BTreeMap::new(),
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 2_000.0,
+                min_gap_gate_events: 1,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(
+            report["a_plus_latency_gate"]["stream_latency_ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["backtest_latency_assumption_ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["strategy_retest_required"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["recommended_retest_latency_ms"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["verdict"].as_str(),
+            Some("CLOCK_SKEW_NEGATIVE_DELAYS")
+        );
     }
 
     #[test]
@@ -9629,6 +9751,7 @@ mod replay_validation_tests {
             std::path::Path::new("/tmp/in"),
             std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
             std::path::Path::new("/tmp/out.json"),
+            None,
             acc,
             &expected,
             &std::collections::BTreeMap::new(),
