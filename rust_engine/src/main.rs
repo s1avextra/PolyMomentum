@@ -4605,10 +4605,13 @@ fn command_stdout_first_line(command: &str, args: &[&str]) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8(output.stdout)
-        .ok()
-        .and_then(|stdout| stdout.lines().next().map(str::trim).map(str::to_string))
-        .filter(|line| !line.is_empty())
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let line = stdout.lines().next()?.trim();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line.to_string())
+    }
 }
 
 async fn cmd_record_btc_books(
