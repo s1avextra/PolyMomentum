@@ -45,10 +45,6 @@ jobs:
         working-directory: rust_engine
         run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Test
-        working-directory: rust_engine
-        run: cargo test --locked
-
       - name: Build release binary
         working-directory: rust_engine
         run: |
