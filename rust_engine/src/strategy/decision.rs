@@ -185,6 +185,7 @@ impl DecisionRegime {
         tags
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn attach_orderbook_inputs(
         &mut self,
         best_bid: f64,

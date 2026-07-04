@@ -5168,6 +5168,7 @@ fn forward_latency_event_timestamp_ms(data: &serde_json::Value) -> Option<i64> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forward_latency_audit_report(
     input_dir: &std::path::Path,
     frames_path: &std::path::Path,
