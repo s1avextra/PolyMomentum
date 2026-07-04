@@ -60,12 +60,7 @@ pub fn binary_option_price_with_rate(
 mod tests {
     use super::*;
 
-    fn binary_option_price_with_rate_default(
-        spot: f64,
-        strike: f64,
-        days: f64,
-        vol: f64,
-    ) -> f64 {
+    fn binary_option_price_with_rate_default(spot: f64, strike: f64, days: f64, vol: f64) -> f64 {
         binary_option_price_with_rate(spot, strike, days, vol, 0.05)
     }
 

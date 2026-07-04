@@ -52,7 +52,8 @@ impl PriceState {
             return;
         }
         self.prices.insert(source.to_string(), price);
-        self.source_timestamps.insert(source.to_string(), Instant::now());
+        self.source_timestamps
+            .insert(source.to_string(), Instant::now());
         self.last_update = Instant::now();
 
         let now = Instant::now();
@@ -128,10 +129,7 @@ impl PriceState {
                 let distance = (*ts - target_s).abs();
                 (distance <= max_distance_s).then_some((distance, *price))
             })
-            .min_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(_, price)| price)
     }
 
@@ -195,6 +193,9 @@ mod tests {
         record_history(&mut history, PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0);
 
         assert_eq!(history.len(), 1);
-        assert_eq!(history.front().copied(), Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0)));
+        assert_eq!(
+            history.front().copied(),
+            Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0))
+        );
     }
 }

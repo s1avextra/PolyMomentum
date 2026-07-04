@@ -168,7 +168,9 @@ pub fn distill_parquet_to_jsonl(
         }
         Ok(BooleanArray::from(keep))
     });
-    builder = builder.with_row_filter(RowFilter::new(vec![Box::new(predicate) as Box<dyn ArrowPredicate>]));
+    builder = builder.with_row_filter(RowFilter::new(vec![
+        Box::new(predicate) as Box<dyn ArrowPredicate>
+    ]));
 
     let reader = builder.build().context("build parquet reader")?;
 
@@ -176,10 +178,7 @@ pub fn distill_parquet_to_jsonl(
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let tmp = out_path.with_extension(format!(
-        "jsonl.gz.tmp.{}",
-        std::process::id(),
-    ));
+    let tmp = out_path.with_extension(format!("jsonl.gz.tmp.{}", std::process::id(),));
     let f = File::create(&tmp).with_context(|| format!("create tmp {}", tmp.display()))?;
     let buf = BufWriter::new(f);
     let mut gz = GzEncoder::new(buf, Compression::fast());
@@ -191,7 +190,11 @@ pub fn distill_parquet_to_jsonl(
     }
     gz.try_finish().context("finish gz writer")?;
     let inner = gz.finish().context("flush gz buffer")?;
-    inner.into_inner().context("flush buf writer")?.sync_all().ok();
+    inner
+        .into_inner()
+        .context("flush buf writer")?
+        .sync_all()
+        .ok();
     std::fs::rename(&tmp, out_path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), out_path.display()))?;
 
@@ -339,8 +342,13 @@ fn emit_batch<W: Write>(
                     .to_string();
                 let p = decimal_to_string(price_col, i);
                 let sz = decimal_to_string(size_col, i);
-                let tx = tx_hash_col
-                    .and_then(|c| if c.is_null(i) { None } else { Some(c.value(i).to_string()) });
+                let tx = tx_hash_col.and_then(|c| {
+                    if c.is_null(i) {
+                        None
+                    } else {
+                        Some(c.value(i).to_string())
+                    }
+                });
                 stats.trade_events += 1;
                 Some(DistilledEvent::Trade {
                     ts,
@@ -388,12 +396,7 @@ fn decimal_to_string(arr: Option<&Decimal128Array>, i: usize) -> String {
     if scale <= 0 {
         format!("{}", int_part)
     } else {
-        format!(
-            "{}.{:0width$}",
-            int_part,
-            frac_part,
-            width = scale as usize,
-        )
+        format!("{}.{:0width$}", int_part, frac_part, width = scale as usize,)
     }
 }
 
@@ -406,7 +409,9 @@ fn parse_levels_strs(s: &str) -> Vec<[String; 2]> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let Some(arr) = v.as_array() else { return Vec::new() };
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
     let mut out = Vec::with_capacity(arr.len());
     for entry in arr {
         match entry {
@@ -418,8 +423,14 @@ fn parse_levels_strs(s: &str) -> Vec<[String; 2]> {
                 }
             }
             serde_json::Value::Object(obj) => {
-                let p = obj.get("price").map(json_value_to_string).unwrap_or_default();
-                let s = obj.get("size").map(json_value_to_string).unwrap_or_default();
+                let p = obj
+                    .get("price")
+                    .map(json_value_to_string)
+                    .unwrap_or_default();
+                let s = obj
+                    .get("size")
+                    .map(json_value_to_string)
+                    .unwrap_or_default();
                 if !p.is_empty() && !s.is_empty() {
                     out.push([p, s]);
                 }
@@ -464,14 +475,26 @@ pub fn read_distilled(path: &Path) -> Result<(Vec<L2Event>, HashSet<String>)> {
             }
         };
         match evt {
-            DistilledEvent::Book { ts, mkt, tok, bb, ba, bids, asks } => {
+            DistilledEvent::Book {
+                ts,
+                mkt,
+                tok,
+                bb,
+                ba,
+                bids,
+                asks,
+            } => {
                 cids.insert(mkt.clone());
                 let bids = bids
                     .into_iter()
                     .filter_map(|[p, s]| {
                         let p = p.parse::<f64>().ok()?;
                         let s = s.parse::<f64>().ok()?;
-                        if p > 0.0 { Some(L2Level { price: p, size: s }) } else { None }
+                        if p > 0.0 {
+                            Some(L2Level { price: p, size: s })
+                        } else {
+                            None
+                        }
                     })
                     .collect::<Vec<_>>();
                 let asks = asks
@@ -479,14 +502,26 @@ pub fn read_distilled(path: &Path) -> Result<(Vec<L2Event>, HashSet<String>)> {
                     .filter_map(|[p, s]| {
                         let p = p.parse::<f64>().ok()?;
                         let s = s.parse::<f64>().ok()?;
-                        if p > 0.0 { Some(L2Level { price: p, size: s }) } else { None }
+                        if p > 0.0 {
+                            Some(L2Level { price: p, size: s })
+                        } else {
+                            None
+                        }
                     })
                     .collect::<Vec<_>>();
                 let snap = BookSnapshot {
                     market_id: mkt.clone(),
                     token_id: tok,
-                    best_bid: if bb > 0.0 { bb } else { bids.first().map(|l| l.price).unwrap_or(0.0) },
-                    best_ask: if ba > 0.0 { ba } else { asks.first().map(|l| l.price).unwrap_or(0.0) },
+                    best_bid: if bb > 0.0 {
+                        bb
+                    } else {
+                        bids.first().map(|l| l.price).unwrap_or(0.0)
+                    },
+                    best_ask: if ba > 0.0 {
+                        ba
+                    } else {
+                        asks.first().map(|l| l.price).unwrap_or(0.0)
+                    },
                     timestamp_s: ts,
                     bids,
                     asks,
@@ -497,7 +532,16 @@ pub fn read_distilled(path: &Path) -> Result<(Vec<L2Event>, HashSet<String>)> {
                     body: L2EventBody::BookSnapshot(snap),
                 });
             }
-            DistilledEvent::Change { ts, mkt, tok, s, bb, ba, p, sz } => {
+            DistilledEvent::Change {
+                ts,
+                mkt,
+                tok,
+                s,
+                bb,
+                ba,
+                p,
+                sz,
+            } => {
                 cids.insert(mkt.clone());
                 let chg_price = p.parse::<f64>().unwrap_or(0.0);
                 let chg_size = sz.parse::<f64>().unwrap_or(0.0);
@@ -524,7 +568,11 @@ pub fn read_distilled(path: &Path) -> Result<(Vec<L2Event>, HashSet<String>)> {
             }
         }
     }
-    events.sort_by(|a, b| a.timestamp_s.partial_cmp(&b.timestamp_s).unwrap_or(std::cmp::Ordering::Equal));
+    events.sort_by(|a, b| {
+        a.timestamp_s
+            .partial_cmp(&b.timestamp_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok((events, cids))
 }
 
@@ -564,7 +612,9 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(cids.len(), 1);
         assert!(cids.contains("0xabc"));
-        let L2EventBody::BookSnapshot(s) = &loaded[0].body else { panic!() };
+        let L2EventBody::BookSnapshot(s) = &loaded[0].body else {
+            panic!()
+        };
         assert_eq!(s.bids.len(), 1);
         assert!((s.best_ask - 0.52).abs() < 1e-9);
     }
@@ -615,7 +665,9 @@ mod tests {
         write_test_jsonl_gz(&path, &events);
         let (loaded, _) = read_distilled(&path).unwrap();
         assert_eq!(loaded.len(), 1);
-        let L2EventBody::PriceChange(c) = &loaded[0].body else { panic!() };
+        let L2EventBody::PriceChange(c) = &loaded[0].body else {
+            panic!()
+        };
         assert_eq!(c.side, "BUY");
         assert!((c.change_price - 0.51).abs() < 1e-9);
         assert!((c.change_size - 150.0).abs() < 1e-9);
@@ -637,7 +689,8 @@ mod tests {
     fn decimal_string_preserves_scale() {
         // Build a tiny Decimal128Array with scale=4, value=5000 → "0.5000"
         use arrow_array::builder::Decimal128Builder;
-        let mut b = Decimal128Builder::new().with_data_type(arrow_schema::DataType::Decimal128(9, 4));
+        let mut b =
+            Decimal128Builder::new().with_data_type(arrow_schema::DataType::Decimal128(9, 4));
         b.append_value(5000);
         b.append_value(-12500);
         b.append_null();

@@ -143,8 +143,7 @@ mod tests {
         .expect("telegram client");
         assert!(Alerter::new_with_telegram(
             Some(
-                "https://api.telegram.org/bot123456789:old/sendMessage?chat_id=415683"
-                    .to_string(),
+                "https://api.telegram.org/bot123456789:old/sendMessage?chat_id=415683".to_string(),
             ),
             Some(telegram),
         )

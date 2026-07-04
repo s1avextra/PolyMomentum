@@ -238,10 +238,8 @@ impl MomentumDetector {
         let reversion_penalty = (1.0 - reversion_count as f64 * 0.05).max(0.0);
         let z_factor = (z_score / 3.0).min(1.0);
 
-        let mut confidence = 0.35 * time_factor
-            + 0.35 * z_factor
-            + 0.15 * consistency
-            + 0.15 * reversion_penalty;
+        let mut confidence =
+            0.35 * time_factor + 0.35 * z_factor + 0.15 * consistency + 0.15 * reversion_penalty;
         confidence = confidence.clamp(0.10, 0.95);
 
         if minutes_remaining < 1.0 && z_score > 0.5 {
