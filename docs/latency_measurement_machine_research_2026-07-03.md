@@ -104,6 +104,35 @@ Required statistics:
   classify the tail as venue/backend/Cloudflare propagation. If only one host
   sees it, classify it as route or host-local.
 
+## Current Dublin VPS result - 2026-07-04
+
+Measurement artifact:
+`deploy/promotions/evidence/strategy_registry/20260704_vps_dublin_latency_aggregate.json`.
+
+This aggregate combines one useful partial 8-window VPS capture and two clean
+10-minute 4-window VPS captures. It is the current policy source because it was
+measured on the production Dublin VPS. Desktop measurements remain diagnostics.
+
+Key stats:
+
+- Samples: `675,595` CLOB delay observations.
+- Raw delay: p50 `9 ms`, p90 `18 ms`, p95 `29 ms`, p99 `97 ms`, p99.5
+  `128 ms`.
+- Warm-10 delay: p50 `9 ms`, p90 `18 ms`, p95 `29 ms`, p99 `96 ms`, p99.5
+  `128 ms`.
+- Recorder overhead: p99 `1 ms`, p99.5 `1 ms`.
+- Negative-delay rate: `0`.
+
+Decision: use `128 ms` as the current fail-closed replay latency policy. Keep
+`150 ms` as a stress sensitivity, not the default policy, unless repeated VPS
+captures show a worse p99.5 tail.
+
+Follow-up: `record-btc-books` should reconnect and resubscribe after websocket
+close/reset so the next policy artifact can be a single uninterrupted 30-minute
+capture. Multi-window token-gap checks also need to ignore sparse future tokens
+or score only active/high-event tokens; otherwise they fail captures for tokens
+that were intentionally subscribed early.
+
 ## Commands
 
 Current local/debug form:

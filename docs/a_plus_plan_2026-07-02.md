@@ -25,13 +25,18 @@ Current blockers:
 - The strict May 28 to June 10 tail loop found no live candidate.
 - Clustered losses, CVaR, and loss-burst behavior are the strategy blockers.
 - The forward sample is only a smoke: 3 resolved 5-minute markets.
-- The July 1 366 ms CLOB delay artifact is superseded as policy: the July 3
-  remeasure initially found clock-skew negative delays. A later one-window
-  post-NTP check produced a clean positive-delay artifact with p99 `325 ms`.
-  After moving the recorder timestamp before local JSON parsing, a heavier
-  one-window sample produced p99 `408 ms` with recorder overhead p99 `1 ms`.
-  Treat `408 ms` as the current fail-closed retest latency until repeated clean
-  captures tighten or replace it.
+- The July 1 `366 ms`, July 3 `325 ms`, and desktop `408 ms` CLOB delay
+  artifacts are superseded as strategy policy. They remain diagnostics only
+  because the bot runs from the Dublin VPS, not the desktop.
+- The July 4 Dublin VPS segmented aggregate has `675,595` CLOB delay samples,
+  raw p99 `97 ms`, raw p99.5 `128 ms`, warm-10 p99 `96 ms`, warm-10 p99.5
+  `128 ms`, recorder overhead p99 `1 ms`, and negative-delay rate `0`.
+  Current fail-closed replay policy is `128 ms` until repeated VPS captures or
+  a worse capture replaces it. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260704_vps_dublin_latency_aggregate.json`.
+- The VPS recorder still needs reconnect/resubscribe handling before a single
+  uninterrupted 30-minute latency artifact can be required. Current evidence is
+  segmented because one 8-window capture reset after about 13 minutes.
 - Latency policy must now follow
   [latency_measurement_machine_research_2026-07-03.md](latency_measurement_machine_research_2026-07-03.md):
   desktop captures are diagnostic only; current production replay policy comes
@@ -96,16 +101,17 @@ Work:
 
 - Run `forward-latency-audit` on every forward capture.
 - Set the effective replay latency to observed p99/p99.5 plus a safety buffer.
-- Re-run historical and forward replay at the clean current policy, `408 ms`,
-  and replace that policy only with repeated clock-safe captures. Do not use the
-  old 366 ms smoke as policy.
+- Re-run historical and forward replay at the clean current policy, `128 ms`,
+  and replace that policy only with repeated clock-safe VPS captures. Do not use
+  desktop or old smoke captures as strategy policy.
 - Record latency verdicts next to replay artifacts.
 
 Success criteria:
 
 - Stream timestamp coverage is complete.
 - No negative-delay samples.
-- Token-gap checks pass.
+- Token-gap checks pass for active/high-event tokens; sparse future-window
+  tokens must not fail an otherwise clean latency capture.
 - Strategy-builder and harness reports use the measured latency policy.
 - No candidate is promoted from a lower-latency-only pass.
 
@@ -257,8 +263,8 @@ Run the next forward-data batch, not another abstract strategy sweep:
 2. Convert to distilled replay cache.
 3. Finalize after close with Gamma terminal outcomes.
 4. Attach proxy BTC tape for coverage checks.
-5. Audit latency with a clock-skew-safe method, then rerun replay at the
-   measured policy. Current clean retest policy: `408 ms`.
+5. Audit latency with a clock-skew-safe method from the Dublin VPS, then rerun
+   replay at the measured policy. Current clean retest policy: `128 ms`.
 6. If replay has trades, inspect loss classes and only then launch a targeted
    candidate sweep.
 
