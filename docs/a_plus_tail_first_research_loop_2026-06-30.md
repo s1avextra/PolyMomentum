@@ -221,3 +221,35 @@ shape is low-price, high-edge, primary-zone down entries:
 down-reversion guard avoided losses with `min_price=0.75` but became too sparse.
 The next A+ step should use learned causal policy search across chronological
 folds, or a new signal family, rather than widening low-price entries by hand.
+
+## Low-Exposure Policy Search Diagnostics - 2026-07-05
+
+Artifact:
+`deploy/promotions/evidence/strategy_registry/20260705_low_exposure_policy_search_diagnostics/`.
+
+Run shape:
+
+- Fold 1 baseline from the remap diagnostics.
+- Added chronological folds 2-3:
+  `2026-05-31T16:00:00Z` through `2026-06-01T07:00:00Z`.
+- Profile: `a_plus5m_tail_low_exposure`.
+- Latency: requested `128 ms`, with the July 5 VPS latency audit attached.
+  Effective latency stayed `128 ms`.
+
+Result:
+
+- Fold 2 top variant: `6` trades, `5` wins, `1` loss, `+1.00454` PnL.
+- Fold 3 top variant: `1` trade, `0` wins, `1` loss, `-5.13834` PnL.
+- Three-report causal-policy search produced a thin top hypothesis: require
+  `book_age=lte_100ms`, deny `book_imbalance=strong_positive`.
+- Static filtered view looked clean: `6` trades, `6` wins, `0` losses,
+  `+7.19137` PnL.
+- Direct replay rejected the hypothesis immediately on fold 1: `2` trades,
+  `1` win, `1` loss, `-4.18424` PnL. The replacement losing regime had
+  `book_imbalance=negative`.
+
+Interpretation: static causal filtering is not strong enough for promotion or
+even candidate credit. Candidate filters must be generated and then rerun
+through full rolling-history replay before they count. The low-exposure family
+remains rejected until a replay-integrated policy, or a different signal
+family, clears the fail-fast tail clusters.

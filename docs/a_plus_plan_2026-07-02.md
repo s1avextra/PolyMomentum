@@ -59,6 +59,13 @@ Current blockers:
   The stable bad shape is low-price/high-edge primary-zone down entries, so A+
   needs learned chronological causal-policy search or a new signal family, not
   manual micro-regime whack-a-mole.
+- The July 5 low-exposure causal-policy search did find a static hypothesis
+  (`require book_age=lte_100ms`, `deny book_imbalance=strong_positive`) with
+  `6/6` static wins and `+7.19137` PnL, but direct rolling-history replay
+  rejected it immediately on fold 1: `2` trades, `1` loss, `-4.18424` PnL, with
+  the loss moving to `book_imbalance=negative`. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260705_low_exposure_policy_search_diagnostics/`.
+  A+ needs replay-integrated policy generation, not static causal filtering.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
   close, subscription, or read failures. The July 5 run used a
   measurement-capable `/tmp` probe built from commit `a3aa73d`; production
