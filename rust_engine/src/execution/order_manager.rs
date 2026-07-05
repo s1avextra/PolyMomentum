@@ -353,7 +353,9 @@ mod tests {
         let id = intent.intent_id.clone();
         manager.create_intent(intent, 1.0).unwrap();
         manager.risk_accept(&id, 1.1).unwrap();
-        manager.submit(&id, Some("paper-1".to_string()), 1.2).unwrap();
+        manager
+            .submit(&id, Some("paper-1".to_string()), 1.2)
+            .unwrap();
         manager.ack(&id, Some("paper-1".to_string()), 1.3).unwrap();
         let order = manager.fill(&id, 10.0, 0.5, 0.01, 1.4).unwrap();
         assert_eq!(order.state, OrderState::Filled);

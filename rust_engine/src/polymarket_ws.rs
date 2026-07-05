@@ -25,8 +25,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, RwLock};
 use tokio::time::{timeout, Instant};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 
 const POLYMARKET_WS_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const PING_INTERVAL: Duration = Duration::from_secs(10);
@@ -112,9 +112,17 @@ fn parse_levels(raw: &Option<Vec<RawLevel>>, descending: bool) -> Vec<BookLevel>
         })
         .collect();
     if descending {
-        out.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.price
+                .partial_cmp(&a.price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     } else {
-        out.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            a.price
+                .partial_cmp(&b.price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
     out
 }
@@ -128,10 +136,18 @@ fn now_us() -> u64 {
 
 fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
     for ch in changes {
-        let Ok(price) = ch.price.parse::<f64>() else { continue };
-        let Ok(size) = ch.size.parse::<f64>() else { continue };
+        let Ok(price) = ch.price.parse::<f64>() else {
+            continue;
+        };
+        let Ok(size) = ch.size.parse::<f64>() else {
+            continue;
+        };
         let descending = matches!(ch.side.as_str(), "BUY");
-        let levels = if descending { &mut state.bids } else { &mut state.asks };
+        let levels = if descending {
+            &mut state.bids
+        } else {
+            &mut state.asks
+        };
         if let Some(idx) = levels.iter().position(|l| (l.price - price).abs() < 1e-9) {
             if size <= 0.0 {
                 levels.remove(idx);
@@ -141,9 +157,17 @@ fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
         } else if size > 0.0 {
             levels.push(BookLevel { price, size });
             if descending {
-                levels.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+                levels.sort_by(|a, b| {
+                    b.price
+                        .partial_cmp(&a.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             } else {
-                levels.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+                levels.sort_by(|a, b| {
+                    a.price
+                        .partial_cmp(&b.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
         }
     }
@@ -252,12 +276,16 @@ async fn handle_frame(book_state: &SharedBookState, m: Message) {
         return;
     }
     if trimmed.starts_with('[') {
-        let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) else { return };
+        let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) else {
+            return;
+        };
         for msg in arr {
             apply_message_value(book_state, msg).await;
         }
     } else {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(trimmed) else { return };
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return;
+        };
         apply_message_value(book_state, msg).await;
     }
 }
@@ -276,8 +304,12 @@ async fn apply_message_value(book_state: &SharedBookState, msg: serde_json::Valu
 async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_json::Value) {
     match t {
         "book" => {
-            let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else { return };
-            let Some(asset_id) = snap.asset_id else { return };
+            let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else {
+                return;
+            };
+            let Some(asset_id) = snap.asset_id else {
+                return;
+            };
             let bids = parse_levels(&snap.bids, true);
             let asks = parse_levels(&snap.asks, false);
             let best_bid = bids.first().map(|l| l.price).unwrap_or(0.0);
@@ -301,11 +333,10 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
             map.insert(asset_id, state);
         }
         "price_change" => {
-            let Ok(pc): Result<PriceChange, _> = serde_json::from_value(data) else { return };
-            let changes = pc
-                .price_changes
-                .or(pc.changes)
-                .unwrap_or_default();
+            let Ok(pc): Result<PriceChange, _> = serde_json::from_value(data) else {
+                return;
+            };
+            let changes = pc.price_changes.or(pc.changes).unwrap_or_default();
             if changes.is_empty() {
                 return;
             }
@@ -316,12 +347,10 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
                 };
                 let entry = map.entry(asset_id).or_default();
                 apply_price_change(entry, std::slice::from_ref(&ch));
-                if let Some(best_bid) = ch.best_bid.as_deref().and_then(|v| v.parse::<f64>().ok())
-                {
+                if let Some(best_bid) = ch.best_bid.as_deref().and_then(|v| v.parse::<f64>().ok()) {
                     entry.best_bid = best_bid;
                 }
-                if let Some(best_ask) = ch.best_ask.as_deref().and_then(|v| v.parse::<f64>().ok())
-                {
+                if let Some(best_ask) = ch.best_ask.as_deref().and_then(|v| v.parse::<f64>().ok()) {
                     entry.best_ask = best_ask;
                 }
                 entry.mid = if entry.best_bid > 0.0 && entry.best_ask > 0.0 {
@@ -374,8 +403,14 @@ mod tests {
     #[test]
     fn applies_book_snapshot() {
         let levels = Some(vec![
-            RawLevel { price: "0.51".into(), size: "100".into() },
-            RawLevel { price: "0.50".into(), size: "200".into() },
+            RawLevel {
+                price: "0.51".into(),
+                size: "100".into(),
+            },
+            RawLevel {
+                price: "0.50".into(),
+                size: "200".into(),
+            },
         ]);
         let bids = parse_levels(&levels, true);
         assert_eq!(bids.len(), 2);
@@ -386,8 +421,14 @@ mod tests {
     #[test]
     fn applies_price_change_inserts_and_removes() {
         let mut s = TokenBookState {
-            bids: vec![BookLevel { price: 0.50, size: 100.0 }],
-            asks: vec![BookLevel { price: 0.52, size: 50.0 }],
+            bids: vec![BookLevel {
+                price: 0.50,
+                size: 100.0,
+            }],
+            asks: vec![BookLevel {
+                price: 0.52,
+                size: 50.0,
+            }],
             ..TokenBookState::default()
         };
         let changes = vec![

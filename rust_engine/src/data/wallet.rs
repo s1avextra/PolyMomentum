@@ -90,7 +90,11 @@ impl WalletReader {
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("client");
-        Ok(Self { rpc_url: rpc_url.into(), http, address })
+        Ok(Self {
+            rpc_url: rpc_url.into(),
+            http,
+            address,
+        })
     }
 
     async fn balance_of(&self, token: &str) -> Result<u128> {
@@ -127,11 +131,7 @@ impl WalletReader {
     }
 
     pub async fn fetch_balances(&self) -> Result<WalletBalances> {
-        let pusd = self
-            .balance_of(PUSD)
-            .await
-            .context("fetch pUSD balance")? as f64
-            / 1e6;
+        let pusd = self.balance_of(PUSD).await.context("fetch pUSD balance")? as f64 / 1e6;
         let usdc_e = self
             .balance_of(USDC_E)
             .await
@@ -154,7 +154,10 @@ impl WalletReader {
             .allowance_of(USDC_E, COLLATERAL_ONRAMP)
             .await
             .context("fetch USDC.e Collateral Onramp allowance")?;
-        let pol = self.fetch_pol_balance().await.context("fetch POL balance")?;
+        let pol = self
+            .fetch_pol_balance()
+            .await
+            .context("fetch POL balance")?;
         Ok(WalletBalances {
             address: self.address.clone(),
             pusd,
@@ -213,7 +216,10 @@ mod tests {
         // Test vector from EIP-55: well-known test private key.
         let pk = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
         let addr = address_from_private_key(pk).unwrap();
-        assert_eq!(addr.to_lowercase(), "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
+        assert_eq!(
+            addr.to_lowercase(),
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        );
     }
 
     #[test]

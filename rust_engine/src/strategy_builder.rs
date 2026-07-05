@@ -3867,7 +3867,7 @@ fn prior_pnls_by_policy_tag_pattern(
                 let pattern = policy_label(&match_tags);
                 fold_patterns
                     .entry(pattern)
-                    .or_insert_with(TradePnlDiagnostics::default)
+                    .or_default()
                     .merge_from(regime_stats);
             }
         }

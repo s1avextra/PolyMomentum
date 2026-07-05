@@ -5304,6 +5304,7 @@ fn forward_latency_token_overlaps_capture(
     close_ms > capture_start_ms && open_ms < capture_end_ms
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forward_latency_audit_report(
     input_dir: &std::path::Path,
     frames_path: &std::path::Path,

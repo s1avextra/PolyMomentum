@@ -52,37 +52,36 @@ impl BTCHistory {
             .has_headers(true)
             .from_path(path)
             .with_context(|| format!("open csv {}", path.display()))?;
-        let headers: Vec<String> = reader
-            .headers()?
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers: Vec<String> = reader.headers()?.iter().map(|s| s.to_string()).collect();
         if headers.is_empty() {
             return Ok(0);
         }
 
         let lower: Vec<String> = headers.iter().map(|h| h.to_lowercase()).collect();
-        let (ts_idx, price_idx, is_kline) = if lower.contains(&"timestamp".to_string())
-            && lower.contains(&"close".to_string())
-        {
-            (
-                lower.iter().position(|h| h == "timestamp").unwrap(),
-                lower.iter().position(|h| h == "close").unwrap(),
-                true,
-            )
-        } else if lower.contains(&"timestamp_ms".to_string())
-            && lower.contains(&"price".to_string())
-        {
-            (
-                lower.iter().position(|h| h == "timestamp_ms").unwrap(),
-                lower.iter().position(|h| h == "price").unwrap(),
-                false,
-            )
-        } else if lower.contains(&"timestamp".to_string()) && lower.len() >= 6 {
-            (lower.iter().position(|h| h == "timestamp").unwrap(), 4, true)
-        } else {
-            anyhow::bail!("unknown CSV schema in {}: {:?}", path.display(), headers);
-        };
+        let (ts_idx, price_idx, is_kline) =
+            if lower.contains(&"timestamp".to_string()) && lower.contains(&"close".to_string()) {
+                (
+                    lower.iter().position(|h| h == "timestamp").unwrap(),
+                    lower.iter().position(|h| h == "close").unwrap(),
+                    true,
+                )
+            } else if lower.contains(&"timestamp_ms".to_string())
+                && lower.contains(&"price".to_string())
+            {
+                (
+                    lower.iter().position(|h| h == "timestamp_ms").unwrap(),
+                    lower.iter().position(|h| h == "price").unwrap(),
+                    false,
+                )
+            } else if lower.contains(&"timestamp".to_string()) && lower.len() >= 6 {
+                (
+                    lower.iter().position(|h| h == "timestamp").unwrap(),
+                    4,
+                    true,
+                )
+            } else {
+                anyhow::bail!("unknown CSV schema in {}: {:?}", path.display(), headers);
+            };
 
         let mut raw: Vec<(i64, f64)> = Vec::new();
         for rec in reader.records() {
@@ -147,9 +146,7 @@ impl BTCHistory {
         symbol: &str,
         interval: &str,
     ) -> Result<usize> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
         let mut cursor = start_ms;
         let mut added = 0usize;
         while cursor < end_ms {
@@ -258,12 +255,8 @@ impl BTCHistory {
     /// the window has no ticks.
     #[cfg(test)]
     pub fn range_at(&self, start_ms: i64, end_ms: i64) -> (f64, f64, f64, f64) {
-        let lo = self
-            .timestamps_ms
-            .partition_point(|&t| t < start_ms);
-        let hi = self
-            .timestamps_ms
-            .partition_point(|&t| t <= end_ms);
+        let lo = self.timestamps_ms.partition_point(|&t| t < start_ms);
+        let hi = self.timestamps_ms.partition_point(|&t| t <= end_ms);
         if lo >= hi {
             return (0.0, 0.0, 0.0, 0.0);
         }
