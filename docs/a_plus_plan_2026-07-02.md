@@ -42,6 +42,14 @@ Current blockers:
   `deploy/promotions/evidence/strategy_registry/20260705_vps_dublin_reconnect_forward_latency_audit.json`.
   It is accepted latency evidence, but it is only one clean uninterrupted run,
   so it does not lower the fail-closed `128 ms` promotion policy yet.
+- The July 5 `128 ms` first-tail-cluster retest of
+  `a_plus5m_down_reversion_guard_confidence` avoided losses but failed
+  promotion by becoming too sparse: `6` trades across five 8-hour folds, `0`
+  losses, `+7.13485` PnL, and primary-zone trade share `0.8333` above the
+  `0.7000` maximum. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260705_latency128_tail_cluster1/`.
+  This is not a live candidate; the next challenger must widen participation
+  under low exposure rather than flattening the bad cluster.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
   close, subscription, or read failures. The July 5 run used a
   measurement-capable `/tmp` probe built from commit `a3aa73d`; production

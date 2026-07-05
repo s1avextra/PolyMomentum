@@ -157,3 +157,36 @@ Stay backtest-first. Do not use paper mode for this.
    gate.
 5. Only if a candidate passes those fail-fast clusters, rerun the full gate and
    then the freshest fully resolved PMXT windows.
+
+## Measured-Latency Cluster Retest - 2026-07-05
+
+Artifact:
+`deploy/promotions/evidence/strategy_registry/20260705_latency128_tail_cluster1/`.
+
+Run shape:
+
+- Window: `2026-05-31T08:00:00Z` through `2026-06-01T23:00:00Z`, the first
+  known loss cluster.
+- Folds: five full 8-hour folds.
+- Profile: `a_plus5m_down_reversion_guard_confidence`.
+- Causal filter: `direction=down`.
+- Latency: requested `128 ms`, with the July 5 VPS latency audit attached.
+  Effective latency stayed `128 ms` because the audit p99 recommendation was
+  `62 ms`.
+- Storage: `--atomic-parquet --delete-after-process`; per-fold caches were
+  deleted after report writing.
+
+Result:
+
+- Promotion status: `promotion_failed`.
+- Aggregate best audited variant: `6` trades, `6` wins, `0` losses, `+7.13485`
+  PnL, Wilson lower `0.60966`.
+- Fold trades: `3`, `2`, `0`, `1`, `0`.
+- Rejections: trades below the `50` minimum, and primary-zone trade share
+  `0.8333` above the `0.7000` maximum.
+
+Interpretation: this profile avoids the cluster by becoming too sparse and too
+zone-concentrated. That is safer than the previous clustered-loss behavior, but
+it is not a tradable candidate and should not be promoted. The next challenger
+should widen participation under low exposure rather than simply flattening the
+known bad windows.
