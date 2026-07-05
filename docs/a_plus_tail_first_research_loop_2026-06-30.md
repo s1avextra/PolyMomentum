@@ -190,3 +190,34 @@ zone-concentrated. That is safer than the previous clustered-loss behavior, but
 it is not a tradable candidate and should not be promoted. The next challenger
 should widen participation under low exposure rather than simply flattening the
 known bad windows.
+
+## Low-Exposure Remap Diagnostics - 2026-07-05
+
+Artifact:
+`deploy/promotions/evidence/strategy_registry/20260705_low_exposure_remap_diagnostics/`.
+
+Run shape:
+
+- Window: the first 8-hour fold of the first known loss cluster,
+  `2026-05-31T08:00:00Z` through `2026-05-31T15:00:00Z`.
+- Profile: `a_plus5m_tail_low_exposure`.
+- Latency: requested `128 ms`, with the July 5 VPS latency audit attached.
+  Effective latency stayed `128 ms`.
+- Storage: `--atomic-parquet --delete-after-process`; only compact reports and
+  manifests were archived.
+
+Result:
+
+- Baseline fold: `2` trades, `1` win, `1` loss, `-4.06889` PnL, `100%` fill
+  rate.
+- Exact losing-regime deny: still `2` trades, `1` win, `1` loss, `-4.43706`
+  PnL; the loss moved to adjacent `book_min_depth=100_250`.
+- `book_pressure=strong_positive` deny: still `2` trades, `1` win, `1` loss,
+  `-4.18424` PnL; the loss moved to a `book_pressure=negative` regime.
+
+Interpretation: manual micro-regime remapping is not enough. The stable toxic
+shape is low-price, high-edge, primary-zone down entries:
+`price=0.50_0.75` with `edge=gte_0.15`. That explains why the stricter
+down-reversion guard avoided losses with `min_price=0.75` but became too sparse.
+The next A+ step should use learned causal policy search across chronological
+folds, or a new signal family, rather than widening low-price entries by hand.

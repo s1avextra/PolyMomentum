@@ -50,6 +50,15 @@ Current blockers:
   `deploy/promotions/evidence/strategy_registry/20260705_latency128_tail_cluster1/`.
   This is not a live candidate; the next challenger must widen participation
   under low exposure rather than flattening the bad cluster.
+- The July 5 low-exposure remap diagnostics rejected that widening path on the
+  first 8-hour tail-cluster fold. Baseline `a_plus5m_tail_low_exposure` produced
+  `2` trades, `1` loss, and `-4.06889` PnL; denying the exact losing regime
+  worsened to `-4.43706`; denying `book_pressure=strong_positive` still failed
+  at `-4.18424`. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260705_low_exposure_remap_diagnostics/`.
+  The stable bad shape is low-price/high-edge primary-zone down entries, so A+
+  needs learned chronological causal-policy search or a new signal family, not
+  manual micro-regime whack-a-mole.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
   close, subscription, or read failures. The July 5 run used a
   measurement-capable `/tmp` probe built from commit `a3aa73d`; production

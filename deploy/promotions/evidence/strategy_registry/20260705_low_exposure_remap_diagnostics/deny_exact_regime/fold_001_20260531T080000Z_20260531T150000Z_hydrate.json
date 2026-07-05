@@ -1,0 +1,8 @@
+{
+  "end": "2026-05-31T15:00:00+00:00",
+  "gamma_cache_path": "/private/tmp/polymomentum_latency128_low_exposure_deny_bad_regime_fold1_20260705/cache/fold_001_20260531T080000Z_20260531T150000Z/gamma_market_cache.json",
+  "markets": 96,
+  "mode": "metadata_only",
+  "start": "2026-05-31T08:00:00+00:00",
+  "window_minutes": 5.0
+}
