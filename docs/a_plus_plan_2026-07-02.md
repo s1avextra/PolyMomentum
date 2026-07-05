@@ -34,9 +34,11 @@ Current blockers:
   Current fail-closed replay policy is `128 ms` until repeated VPS captures or
   a worse capture replaces it. Evidence:
   `deploy/promotions/evidence/strategy_registry/20260704_vps_dublin_latency_aggregate.json`.
-- The VPS recorder still needs reconnect/resubscribe handling before a single
-  uninterrupted 30-minute latency artifact can be required. Current evidence is
-  segmented because one 8-window capture reset after about 13 minutes.
+- `record-btc-books` now reconnects/resubscribes after websocket connect,
+  close, subscription, or read failures. The next policy artifact should be a
+  single uninterrupted 30-minute VPS capture from a measurement-capable build.
+  Current `128 ms` evidence remains segmented because the prior 8-window capture
+  reset after about 13 minutes.
 - Latency policy must now follow
   [latency_measurement_machine_research_2026-07-03.md](latency_measurement_machine_research_2026-07-03.md):
   desktop captures are diagnostic only; current production replay policy comes
@@ -111,7 +113,8 @@ Success criteria:
 - Stream timestamp coverage is complete.
 - No negative-delay samples.
 - Token-gap checks pass for active/high-event tokens; sparse future-window
-  tokens must not fail an otherwise clean latency capture.
+  tokens are skipped by the active-window gate rather than failing an otherwise
+  clean latency capture.
 - Strategy-builder and harness reports use the measured latency policy.
 - No candidate is promoted from a lower-latency-only pass.
 

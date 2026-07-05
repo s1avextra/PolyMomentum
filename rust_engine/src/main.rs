@@ -4566,6 +4566,15 @@ async fn cmd_scan(s: &config::Settings, max_hours: f64, min_liquidity: f64) {
 
 #[derive(Debug, Default, serde::Serialize)]
 struct MarketWsRecordStats {
+    connect_attempts: u64,
+    connected_sessions: u64,
+    subscriptions_sent: u64,
+    reconnects: u64,
+    websocket_connect_errors: u64,
+    websocket_subscription_errors: u64,
+    websocket_read_errors: u64,
+    websocket_closes: u64,
+    idle_timeouts: u64,
     frames: u64,
     json_messages: u64,
     book_messages: u64,
@@ -4699,25 +4708,17 @@ async fn cmd_record_btc_books(
             .with_context(|| format!("open {}", frames_path.display()))?,
     );
 
+    let endpoint = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     let token_vec: Vec<String> = token_ids.iter().cloned().collect();
-    let (ws, _) =
-        tokio_tungstenite::connect_async("wss://ws-subscriptions-clob.polymarket.com/ws/market")
-            .await
-            .context("connect Polymarket market websocket")?;
-    let (mut write, mut read) = ws.split();
     let sub = serde_json::json!({
         "type": "market",
         "assets_ids": token_vec,
     });
-    write
-        .send(Message::Text(sub.to_string().into()))
-        .await
-        .context("send websocket subscription")?;
-
     let capture_for = Duration::from_secs(duration_seconds.max(1));
     let started = Instant::now();
     let mut stats = MarketWsRecordStats::default();
     let mut seen_tokens = BTreeSet::new();
+    let mut reconnect_backoff = Duration::from_millis(250);
 
     while started.elapsed() < capture_for {
         let remaining = capture_for
@@ -4726,45 +4727,114 @@ async fn cmd_record_btc_books(
         if remaining.is_zero() {
             break;
         }
-        let wait_for = remaining.min(Duration::from_secs(10));
-        match timeout(wait_for, read.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                let ts_received_ms = chrono::Utc::now().timestamp_millis();
-                let text = text.to_string();
-                stats.frames += 1;
-                stats.bytes += text.len() as u64;
-                record_market_ws_text(&text, &mut stats, &mut seen_tokens);
-                let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
-                let row = serde_json::json!({
-                    "ts_received_ms": ts_received_ms,
-                    "ts_recorded_ms": ts_recorded_ms,
-                    "raw": text,
-                });
-                serde_json::to_writer(&mut writer, &row).context("serialize ws frame")?;
-                writer.write_all(b"\n").context("write ws frame newline")?;
+
+        stats.connect_attempts += 1;
+        let connect_wait = remaining.min(Duration::from_secs(10));
+        let (ws, _) = match timeout(connect_wait, tokio_tungstenite::connect_async(endpoint)).await
+        {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                stats.websocket_connect_errors += 1;
+                eprintln!("record-btc-books websocket connect failed: {e}");
+                let sleep_for = reconnect_backoff.min(remaining);
+                tokio::time::sleep(sleep_for).await;
+                reconnect_backoff = (reconnect_backoff * 2).min(Duration::from_secs(5));
+                continue;
             }
-            Ok(Some(Ok(Message::Binary(bytes)))) => {
-                let ts_received_ms = chrono::Utc::now().timestamp_millis();
-                stats.frames += 1;
-                stats.bytes += bytes.len() as u64;
-                let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
-                let row = serde_json::json!({
-                    "ts_received_ms": ts_received_ms,
-                    "ts_recorded_ms": ts_recorded_ms,
-                    "raw_binary_len": bytes.len(),
-                });
-                serde_json::to_writer(&mut writer, &row).context("serialize binary ws frame")?;
-                writer
-                    .write_all(b"\n")
-                    .context("write binary ws frame newline")?;
+            Err(_) => {
+                stats.websocket_connect_errors += 1;
+                eprintln!("record-btc-books websocket connect timed out");
+                let sleep_for = reconnect_backoff.min(remaining);
+                tokio::time::sleep(sleep_for).await;
+                reconnect_backoff = (reconnect_backoff * 2).min(Duration::from_secs(5));
+                continue;
             }
-            Ok(Some(Ok(Message::Ping(payload)))) => {
-                let _ = write.send(Message::Pong(payload)).await;
+        };
+        stats.connected_sessions += 1;
+        if stats.connected_sessions > 1 {
+            stats.reconnects += 1;
+        }
+        let (mut write, mut read) = ws.split();
+        if let Err(e) = write.send(Message::Text(sub.to_string().into())).await {
+            stats.websocket_subscription_errors += 1;
+            eprintln!("record-btc-books websocket subscription failed: {e}");
+            let sleep_for = reconnect_backoff.min(remaining);
+            tokio::time::sleep(sleep_for).await;
+            reconnect_backoff = (reconnect_backoff * 2).min(Duration::from_secs(5));
+            continue;
+        }
+        stats.subscriptions_sent += 1;
+
+        loop {
+            let remaining = capture_for
+                .checked_sub(started.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
+            if remaining.is_zero() {
+                break;
             }
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
-            Ok(Some(Ok(_))) => {}
-            Ok(Some(Err(e))) => return Err(anyhow::anyhow!("websocket read failed: {e}")),
-            Err(_) => {}
+            let wait_for = remaining.min(Duration::from_secs(10));
+            match timeout(wait_for, read.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    reconnect_backoff = Duration::from_millis(250);
+                    let ts_received_ms = chrono::Utc::now().timestamp_millis();
+                    let text = text.to_string();
+                    stats.frames += 1;
+                    stats.bytes += text.len() as u64;
+                    record_market_ws_text(&text, &mut stats, &mut seen_tokens);
+                    let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
+                    let row = serde_json::json!({
+                        "ts_received_ms": ts_received_ms,
+                        "ts_recorded_ms": ts_recorded_ms,
+                        "raw": text,
+                    });
+                    serde_json::to_writer(&mut writer, &row).context("serialize ws frame")?;
+                    writer.write_all(b"\n").context("write ws frame newline")?;
+                }
+                Ok(Some(Ok(Message::Binary(bytes)))) => {
+                    reconnect_backoff = Duration::from_millis(250);
+                    let ts_received_ms = chrono::Utc::now().timestamp_millis();
+                    stats.frames += 1;
+                    stats.bytes += bytes.len() as u64;
+                    let ts_recorded_ms = chrono::Utc::now().timestamp_millis();
+                    let row = serde_json::json!({
+                        "ts_received_ms": ts_received_ms,
+                        "ts_recorded_ms": ts_recorded_ms,
+                        "raw_binary_len": bytes.len(),
+                    });
+                    serde_json::to_writer(&mut writer, &row)
+                        .context("serialize binary ws frame")?;
+                    writer
+                        .write_all(b"\n")
+                        .context("write binary ws frame newline")?;
+                }
+                Ok(Some(Ok(Message::Ping(payload)))) => {
+                    let _ = write.send(Message::Pong(payload)).await;
+                }
+                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                    stats.websocket_closes += 1;
+                    break;
+                }
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(e))) => {
+                    stats.websocket_read_errors += 1;
+                    eprintln!("record-btc-books websocket read failed; reconnecting: {e}");
+                    break;
+                }
+                Err(_) => {
+                    if started.elapsed() < capture_for {
+                        stats.idle_timeouts += 1;
+                    }
+                }
+            }
+        }
+
+        let remaining = capture_for
+            .checked_sub(started.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+        if !remaining.is_zero() {
+            let sleep_for = reconnect_backoff.min(remaining);
+            tokio::time::sleep(sleep_for).await;
+            reconnect_backoff = (reconnect_backoff * 2).min(Duration::from_secs(5));
         }
     }
     writer.flush().context("flush market ws frames")?;
@@ -4783,7 +4853,7 @@ async fn cmd_record_btc_books(
         "duration_seconds": duration_seconds.max(1),
         "gamma_market_cache": gamma_path.display().to_string(),
         "frames_jsonl": frames_path.display().to_string(),
-        "websocket_endpoint": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        "websocket_endpoint": endpoint,
         "measurement_host": latency_measurement_host_metadata(),
         "stats": stats,
     });
@@ -4916,6 +4986,9 @@ struct ForwardLatencyAuditAccumulator {
     delay_ms: Vec<f64>,
     delay_sum_ms: f64,
     token_stats: std::collections::BTreeMap<String, ForwardLatencyTokenStats>,
+    first_frame_received_ms: Option<i64>,
+    last_frame_received_ms: Option<i64>,
+    max_stream_receive_gap_ms: i64,
 }
 
 fn cmd_forward_latency_audit(
@@ -4977,6 +5050,8 @@ fn cmd_forward_latency_audit(
             continue;
         };
         acc.stats.raw_frames += 1;
+        let row_ts_ms = row.get("ts_received_ms").and_then(recorded_json_i64);
+        forward_latency_observe_frame_received(&mut acc, row_ts_ms);
         let raw_value: Value = match serde_json::from_str(raw) {
             Ok(value) => value,
             Err(_) => {
@@ -4984,7 +5059,6 @@ fn cmd_forward_latency_audit(
                 continue;
             }
         };
-        let row_ts_ms = row.get("ts_received_ms").and_then(recorded_json_i64);
         forward_latency_audit_ws_value(&raw_value, row_ts_ms, &mut acc);
     }
 
@@ -5054,6 +5128,7 @@ fn forward_latency_token_outcomes(
                 serde_json::json!({
                     "condition_id": condition_id,
                     "slug": market.slug,
+                    "end_date": market.end_date,
                     "outcome": outcome.name,
                 }),
             );
@@ -5066,6 +5141,22 @@ fn forward_latency_capture_summary(input_dir: &std::path::Path) -> Option<serde_
     let summary_path = input_dir.join("summary.json");
     let file = std::fs::File::open(summary_path).ok()?;
     serde_json::from_reader(file).ok()
+}
+
+fn forward_latency_observe_frame_received(
+    acc: &mut ForwardLatencyAuditAccumulator,
+    row_ts_ms: Option<i64>,
+) {
+    let Some(ts) = row_ts_ms else {
+        return;
+    };
+    if acc.first_frame_received_ms.is_none() {
+        acc.first_frame_received_ms = Some(ts);
+    }
+    if let Some(prev) = acc.last_frame_received_ms {
+        acc.max_stream_receive_gap_ms = acc.max_stream_receive_gap_ms.max(ts.saturating_sub(prev));
+    }
+    acc.last_frame_received_ms = Some(ts);
 }
 
 fn forward_latency_audit_ws_value(
@@ -5168,6 +5259,51 @@ fn forward_latency_event_timestamp_ms(data: &serde_json::Value) -> Option<i64> {
     })
 }
 
+fn forward_latency_active_expected_tokens(
+    expected_token_ids: &std::collections::BTreeSet<String>,
+    token_outcomes: &std::collections::BTreeMap<String, serde_json::Value>,
+    first_frame_received_ms: Option<i64>,
+    last_frame_received_ms: Option<i64>,
+) -> std::collections::BTreeSet<String> {
+    let (Some(start_ms), Some(end_ms)) = (first_frame_received_ms, last_frame_received_ms) else {
+        return expected_token_ids.clone();
+    };
+    let capture_start_ms = start_ms.min(end_ms);
+    let capture_end_ms = start_ms.max(end_ms);
+    expected_token_ids
+        .iter()
+        .filter(|token| {
+            forward_latency_token_overlaps_capture(
+                token,
+                token_outcomes,
+                capture_start_ms,
+                capture_end_ms,
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn forward_latency_token_overlaps_capture(
+    token: &str,
+    token_outcomes: &std::collections::BTreeMap<String, serde_json::Value>,
+    capture_start_ms: i64,
+    capture_end_ms: i64,
+) -> bool {
+    let Some(outcome) = token_outcomes.get(token) else {
+        return true;
+    };
+    let Some(slug) = outcome.get("slug").and_then(|v| v.as_str()) else {
+        return true;
+    };
+    let Some((open_s, close_s, _)) = recorded_btc_slug_window(slug) else {
+        return true;
+    };
+    let open_ms = open_s.saturating_mul(1000);
+    let close_ms = close_s.saturating_mul(1000);
+    close_ms > capture_start_ms && open_ms < capture_end_ms
+}
+
 fn forward_latency_audit_report(
     input_dir: &std::path::Path,
     frames_path: &std::path::Path,
@@ -5202,6 +5338,17 @@ fn forward_latency_audit_report(
         .filter(|token| !acc.token_stats.contains_key(*token))
         .cloned()
         .collect::<Vec<_>>();
+    let active_expected_token_ids = forward_latency_active_expected_tokens(
+        expected_token_ids,
+        token_outcomes,
+        acc.first_frame_received_ms,
+        acc.last_frame_received_ms,
+    );
+    let missing_active_token_ids = active_expected_token_ids
+        .iter()
+        .filter(|token| !acc.token_stats.contains_key(*token))
+        .cloned()
+        .collect::<Vec<_>>();
     let max_observed_token_gap_ms = acc
         .token_stats
         .values()
@@ -5211,16 +5358,36 @@ fn forward_latency_audit_report(
     let gap_gate_token_ids = acc
         .token_stats
         .iter()
-        .filter(|(_, stats)| stats.events >= thresholds.min_gap_gate_events)
+        .filter(|(token, stats)| {
+            active_expected_token_ids.contains(*token)
+                && stats.events >= thresholds.min_gap_gate_events
+        })
         .map(|(token, _)| token.clone())
+        .collect::<Vec<_>>();
+    let gap_skipped_token_ids = expected_token_ids
+        .iter()
+        .filter(|token| !gap_gate_token_ids.contains(token))
+        .cloned()
         .collect::<Vec<_>>();
     let max_gate_token_gap_ms = acc
         .token_stats
         .iter()
-        .filter(|(_, stats)| stats.events >= thresholds.min_gap_gate_events)
+        .filter(|(token, stats)| {
+            active_expected_token_ids.contains(*token)
+                && stats.events >= thresholds.min_gap_gate_events
+        })
         .map(|(_, stats)| stats.max_gap_ms)
         .max()
         .unwrap_or(0) as f64;
+    let gap_threshold_exceeded_token_ids = acc
+        .token_stats
+        .iter()
+        .filter(|(token, stats)| {
+            gap_gate_token_ids.contains(token)
+                && stats.max_gap_ms as f64 > thresholds.max_token_gap_ms
+        })
+        .map(|(token, _)| token.clone())
+        .collect::<Vec<_>>();
     let clock_skew_negative_delays = acc.stats.negative_delay_samples > 0;
     let stream_latency_ready = acc.stats.delay_samples > 0
         && !clock_skew_negative_delays
@@ -5229,9 +5396,12 @@ fn forward_latency_audit_report(
             .unwrap_or(false);
     let timestamp_ready =
         clob_events > 0 && missing_timestamp_rate <= thresholds.max_missing_timestamp_rate;
-    let coverage_ready = expected_token_ids.is_empty() || missing_token_ids.is_empty();
-    let gap_ready =
-        !gap_gate_token_ids.is_empty() && max_gate_token_gap_ms <= thresholds.max_token_gap_ms;
+    let coverage_ready = if active_expected_token_ids.is_empty() {
+        expected_token_ids.is_empty() || missing_token_ids.is_empty()
+    } else {
+        missing_active_token_ids.is_empty()
+    };
+    let gap_ready = !gap_gate_token_ids.is_empty() && missing_active_token_ids.is_empty();
     let assumed_backtest_latency_ms = 50.0;
     let backtest_latency_assumption_ready = !clock_skew_negative_delays
         && p99_delay_ms
@@ -5304,6 +5474,9 @@ fn forward_latency_audit_report(
             } else {
                 0.0
             },
+            "first_frame_received_ms": acc.first_frame_received_ms,
+            "last_frame_received_ms": acc.last_frame_received_ms,
+            "max_stream_receive_gap_ms": acc.max_stream_receive_gap_ms,
         },
         "delay_ms": {
             "min": min_delay_ms,
@@ -5315,15 +5488,21 @@ fn forward_latency_audit_report(
         },
         "token_coverage": {
             "expected_token_ids": expected_token_ids.iter().cloned().collect::<Vec<_>>(),
+            "active_expected_token_ids": active_expected_token_ids.iter().cloned().collect::<Vec<_>>(),
             "observed_token_ids": observed_token_ids,
             "missing_token_ids": missing_token_ids,
+            "missing_active_token_ids": missing_active_token_ids,
             "expected_count": expected_token_ids.len(),
+            "active_expected_count": active_expected_token_ids.len(),
             "observed_count": acc.token_stats.len(),
             "token_outcomes": token_outcomes,
             "per_token": acc.token_stats,
             "max_observed_gap_ms": max_observed_token_gap_ms,
             "gap_gate_token_ids": gap_gate_token_ids,
+            "gap_skipped_token_ids": gap_skipped_token_ids,
             "max_gap_gate_ms": max_gate_token_gap_ms,
+            "gap_threshold_exceeded_token_ids": gap_threshold_exceeded_token_ids,
+            "gap_gate_mode": "active_window_min_events",
         },
         "a_plus_latency_gate": {
             "ready": ready,
@@ -9773,6 +9952,84 @@ mod replay_validation_tests {
         assert_eq!(
             report["token_coverage"]["max_gap_gate_ms"].as_f64(),
             Some(100.0)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["token_gap_ready"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn forward_latency_gap_gate_uses_active_slug_windows() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        for row_ts in [1_783_164_000_000_i64, 1_783_164_000_100, 1_783_164_000_200] {
+            forward_latency_observe_frame_received(&mut acc, Some(row_ts));
+            forward_latency_audit_ws_value(
+                &serde_json::json!({
+                    "event_type": "price_change",
+                    "market": "0xactive",
+                    "asset_id": "active-token",
+                    "timestamp": (row_ts - 20).to_string(),
+                    "price_changes": []
+                }),
+                Some(row_ts),
+                &mut acc,
+            );
+        }
+        for row_ts in [1_783_164_000_000_i64, 1_783_164_090_000, 1_783_164_180_000] {
+            forward_latency_observe_frame_received(&mut acc, Some(row_ts));
+            forward_latency_audit_ws_value(
+                &serde_json::json!({
+                    "event_type": "price_change",
+                    "market": "0xfuture",
+                    "asset_id": "future-token",
+                    "timestamp": (row_ts - 20).to_string(),
+                    "price_changes": []
+                }),
+                Some(row_ts),
+                &mut acc,
+            );
+        }
+        let expected = ["active-token".to_string(), "future-token".to_string()]
+            .into_iter()
+            .collect();
+        let token_outcomes = std::collections::BTreeMap::from([
+            (
+                "active-token".to_string(),
+                serde_json::json!({"slug": "btc-updown-5m-1783164000"}),
+            ),
+            (
+                "future-token".to_string(),
+                serde_json::json!({"slug": "btc-updown-5m-1783164600"}),
+            ),
+        ]);
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            None,
+            acc,
+            &expected,
+            &token_outcomes,
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 1_000.0,
+                min_gap_gate_events: 3,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(
+            report["token_coverage"]["active_expected_token_ids"],
+            serde_json::json!(["active-token"])
+        );
+        assert_eq!(
+            report["token_coverage"]["gap_gate_token_ids"],
+            serde_json::json!(["active-token"])
+        );
+        assert_eq!(
+            report["token_coverage"]["gap_skipped_token_ids"],
+            serde_json::json!(["future-token"])
         );
         assert_eq!(
             report["a_plus_latency_gate"]["token_gap_ready"].as_bool(),

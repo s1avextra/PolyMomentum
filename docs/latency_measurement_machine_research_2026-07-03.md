@@ -127,11 +127,12 @@ Decision: use `128 ms` as the current fail-closed replay latency policy. Keep
 `150 ms` as a stress sensitivity, not the default policy, unless repeated VPS
 captures show a worse p99.5 tail.
 
-Follow-up: `record-btc-books` should reconnect and resubscribe after websocket
-close/reset so the next policy artifact can be a single uninterrupted 30-minute
-capture. Multi-window token-gap checks also need to ignore sparse future tokens
-or score only active/high-event tokens; otherwise they fail captures for tokens
-that were intentionally subscribed early.
+Follow-up status: `record-btc-books` now reconnects and resubscribes after
+websocket connect, close, subscription, or read failures. `forward-latency-audit`
+now gates token coverage by active BTC slug windows and minimum observed events,
+so sparse future-window tokens are reported but do not fail an otherwise clean
+capture. The next policy artifact should come from the updated binary on the
+Dublin VPS and should be a single uninterrupted 30-minute capture.
 
 ## Commands
 
