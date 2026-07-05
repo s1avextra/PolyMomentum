@@ -34,11 +34,18 @@ Current blockers:
   Current fail-closed replay policy is `128 ms` until repeated VPS captures or
   a worse capture replaces it. Evidence:
   `deploy/promotions/evidence/strategy_registry/20260704_vps_dublin_latency_aggregate.json`.
+- The July 5 Dublin VPS uninterrupted capture has `712,139` CLOB delay samples,
+  p99 `62 ms`, p99.5 `84 ms`, recorder overhead p99.5 `1 ms`, max
+  whole-stream receive gap `1,843 ms`, zero missing event timestamps, zero
+  negative-delay samples, and zero websocket reconnects/errors across `1800 s`.
+  Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260705_vps_dublin_reconnect_forward_latency_audit.json`.
+  It is accepted latency evidence, but it is only one clean uninterrupted run,
+  so it does not lower the fail-closed `128 ms` promotion policy yet.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
-  close, subscription, or read failures. The next policy artifact should be a
-  single uninterrupted 30-minute VPS capture from a measurement-capable build.
-  Current `128 ms` evidence remains segmented because the prior 8-window capture
-  reset after about 13 minutes.
+  close, subscription, or read failures. The July 5 run used a
+  measurement-capable `/tmp` probe built from commit `a3aa73d`; production
+  binary replacement remains a separate deployment decision.
 - Latency policy must now follow
   [latency_measurement_machine_research_2026-07-03.md](latency_measurement_machine_research_2026-07-03.md):
   desktop captures are diagnostic only; current production replay policy comes
@@ -106,6 +113,9 @@ Work:
 - Re-run historical and forward replay at the clean current policy, `128 ms`,
   and replace that policy only with repeated clock-safe VPS captures. Do not use
   desktop or old smoke captures as strategy policy.
+- Use the July 5 uninterrupted VPS artifact as the current latency retest
+  witness: p99 `62 ms`, p99.5 `84 ms`, but promotion still gates at `128 ms`
+  until at least two more comparable VPS captures confirm the lower tail.
 - Record latency verdicts next to replay artifacts.
 
 Success criteria:

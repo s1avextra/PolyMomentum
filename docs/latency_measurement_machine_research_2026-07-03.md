@@ -134,6 +134,45 @@ so sparse future-window tokens are reported but do not fail an otherwise clean
 capture. The next policy artifact should come from the updated binary on the
 Dublin VPS and should be a single uninterrupted 30-minute capture.
 
+## Current Dublin VPS uninterrupted result - 2026-07-05
+
+Measurement artifacts:
+
+- `deploy/promotions/evidence/strategy_registry/20260705_vps_dublin_reconnect_summary.json`
+- `deploy/promotions/evidence/strategy_registry/20260705_vps_dublin_reconnect_forward_latency_audit.json`
+
+This capture used the measurement-capable Linux probe from commit
+`a3aa73d59b3b4c0481bcaf2ec7e3c494b668d8ed`, copied to `/tmp` on the VPS. The
+production `/opt/polymomentum/polymomentum-engine` binary was not replaced.
+Raw frames remain on the VPS at
+`/opt/polymomentum/logs/latency/vps_dublin_reconnect_20260705T065433Z/`.
+
+Key stats:
+
+- Duration: uninterrupted `1800 s`.
+- Recorder transport: `727,193` frames, one websocket session, one subscription,
+  zero reconnects, zero idle timeouts, zero websocket errors/closes.
+- Coverage: all `16` expected token IDs observed; `14` active-window tokens gated;
+  two future-window tokens skipped by the active-window gate.
+- CLOB delay samples: `712,139`; p50 `8 ms`, p90 `16 ms`, p95 `23 ms`, p99
+  `62 ms`, p99.5 `84 ms`, max `110,407 ms`.
+- Delay tails above thresholds: `520` samples above `150 ms`, `181` above
+  `200 ms`, `25` above `500 ms`, `14` above `750 ms`.
+- Timestamp health: zero missing event timestamps, zero negative-delay samples.
+- Stream continuity: max whole-stream receive gap `1,843 ms`, inside the
+  `2,000 ms` capture-health gate.
+- Recorder overhead: p99 `1 ms`, p99.5 `1 ms`, max `33 ms`, zero negative
+  overhead samples.
+
+Decision: this is the first clean uninterrupted 30-minute Dublin VPS capture and
+it confirms the path is materially better than desktop measurements. It still
+does **not** lower the current fail-closed replay policy from `128 ms`, because
+the policy rule requires at least three fresh accepted captures before reducing
+the production latency assumption. Treat this artifact as accepted evidence for
+retesting strategies, with `62 ms` as the p99 retest recommendation and `84 ms`
+as the p99.5 stress point, while keeping `128 ms` as the promotion gate until
+repeated VPS captures confirm the lower tail.
+
 ## Commands
 
 Current local/debug form:
