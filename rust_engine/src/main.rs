@@ -184,7 +184,8 @@ enum Command {
         /// Maximum acceptable p99 CLOB message delay for promotion evidence.
         #[arg(long, default_value_t = 500.0)]
         max_p99_delay_ms: f64,
-        /// Maximum acceptable observed gap between updates for any subscribed token.
+        /// Maximum acceptable whole-stream receive gap for capture-health gating.
+        /// Per-token gaps are diagnostic because Polymarket book updates are event-driven.
         #[arg(long, default_value_t = 2_000.0)]
         max_token_gap_ms: f64,
         /// Minimum observed events before a token participates in the update-gap gate.
@@ -4947,6 +4948,8 @@ struct ForwardLatencyAuditStats {
     timestamped_events: u64,
     delay_samples: u64,
     negative_delay_samples: u64,
+    record_overhead_samples: u64,
+    negative_record_overhead_samples: u64,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -4985,6 +4988,8 @@ struct ForwardLatencyAuditAccumulator {
     stats: ForwardLatencyAuditStats,
     delay_ms: Vec<f64>,
     delay_sum_ms: f64,
+    record_overhead_ms: Vec<f64>,
+    record_overhead_sum_ms: f64,
     token_stats: std::collections::BTreeMap<String, ForwardLatencyTokenStats>,
     first_frame_received_ms: Option<i64>,
     last_frame_received_ms: Option<i64>,
@@ -5051,7 +5056,9 @@ fn cmd_forward_latency_audit(
         };
         acc.stats.raw_frames += 1;
         let row_ts_ms = row.get("ts_received_ms").and_then(recorded_json_i64);
+        let row_recorded_ms = row.get("ts_recorded_ms").and_then(recorded_json_i64);
         forward_latency_observe_frame_received(&mut acc, row_ts_ms);
+        forward_latency_observe_record_overhead(&mut acc, row_ts_ms, row_recorded_ms);
         let raw_value: Value = match serde_json::from_str(raw) {
             Ok(value) => value,
             Err(_) => {
@@ -5157,6 +5164,23 @@ fn forward_latency_observe_frame_received(
         acc.max_stream_receive_gap_ms = acc.max_stream_receive_gap_ms.max(ts.saturating_sub(prev));
     }
     acc.last_frame_received_ms = Some(ts);
+}
+
+fn forward_latency_observe_record_overhead(
+    acc: &mut ForwardLatencyAuditAccumulator,
+    received_ms: Option<i64>,
+    recorded_ms: Option<i64>,
+) {
+    let (Some(received), Some(recorded)) = (received_ms, recorded_ms) else {
+        return;
+    };
+    let overhead_ms = recorded as f64 - received as f64;
+    acc.stats.record_overhead_samples += 1;
+    if overhead_ms < 0.0 {
+        acc.stats.negative_record_overhead_samples += 1;
+    }
+    acc.record_overhead_sum_ms += overhead_ms;
+    acc.record_overhead_ms.push(overhead_ms);
 }
 
 fn forward_latency_audit_ws_value(
@@ -5318,8 +5342,11 @@ fn forward_latency_audit_report(
     let mut delays = acc.delay_ms.clone();
     delays.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let p50_delay_ms = forward_latency_percentile(&delays, 0.50);
+    let p90_delay_ms = forward_latency_percentile(&delays, 0.90);
     let p95_delay_ms = forward_latency_percentile(&delays, 0.95);
     let p99_delay_ms = forward_latency_percentile(&delays, 0.99);
+    let p99_5_delay_ms = forward_latency_percentile(&delays, 0.995);
+    let delay_counts_above_ms = forward_latency_counts_above_ms(&delays);
     let min_delay_ms = delays.first().copied();
     let max_delay_ms = delays.last().copied();
     let avg_delay_ms = if acc.stats.delay_samples > 0 {
@@ -5327,6 +5354,13 @@ fn forward_latency_audit_report(
     } else {
         None
     };
+    let mut record_overheads = acc.record_overhead_ms.clone();
+    record_overheads.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let record_overhead_ms = forward_latency_distribution_report(
+        &record_overheads,
+        acc.record_overhead_sum_ms,
+        acc.stats.record_overhead_samples,
+    );
     let clob_events = acc.stats.book_events + acc.stats.change_events;
     let missing_timestamp_rate = if clob_events > 0 {
         acc.stats.missing_event_timestamp as f64 / clob_events as f64
@@ -5380,7 +5414,7 @@ fn forward_latency_audit_report(
         .map(|(_, stats)| stats.max_gap_ms)
         .max()
         .unwrap_or(0) as f64;
-    let gap_threshold_exceeded_token_ids = acc
+    let per_token_gap_threshold_exceeded_token_ids = acc
         .token_stats
         .iter()
         .filter(|(token, stats)| {
@@ -5402,7 +5436,9 @@ fn forward_latency_audit_report(
     } else {
         missing_active_token_ids.is_empty()
     };
-    let gap_ready = !gap_gate_token_ids.is_empty() && missing_active_token_ids.is_empty();
+    let stream_gap_ready = acc.max_stream_receive_gap_ms as f64 <= thresholds.max_token_gap_ms;
+    let gap_ready =
+        !gap_gate_token_ids.is_empty() && missing_active_token_ids.is_empty() && stream_gap_ready;
     let assumed_backtest_latency_ms = 50.0;
     let backtest_latency_assumption_ready = !clock_skew_negative_delays
         && p99_delay_ms
@@ -5430,8 +5466,10 @@ fn forward_latency_audit_report(
         "MISSING_CLOB_TIMESTAMPS"
     } else if !stream_latency_ready {
         "CLOB_P99_DELAY_TOO_HIGH"
-    } else if !gap_ready {
-        "TOKEN_UPDATE_GAP_TOO_HIGH"
+    } else if !stream_gap_ready {
+        "STREAM_RECEIVE_GAP_TOO_HIGH"
+    } else if gap_gate_token_ids.is_empty() {
+        "ACTIVE_TOKEN_GAP_SAMPLES_TOO_SPARSE"
     } else if !backtest_latency_assumption_ready {
         "MEASURED_LATENCY_RETEST_REQUIRED"
     } else {
@@ -5475,6 +5513,14 @@ fn forward_latency_audit_report(
             } else {
                 0.0
             },
+            "record_overhead_samples": acc.stats.record_overhead_samples,
+            "negative_record_overhead_samples": acc.stats.negative_record_overhead_samples,
+            "negative_record_overhead_rate": if acc.stats.record_overhead_samples > 0 {
+                acc.stats.negative_record_overhead_samples as f64
+                    / acc.stats.record_overhead_samples as f64
+            } else {
+                0.0
+            },
             "first_frame_received_ms": acc.first_frame_received_ms,
             "last_frame_received_ms": acc.last_frame_received_ms,
             "max_stream_receive_gap_ms": acc.max_stream_receive_gap_ms,
@@ -5483,10 +5529,14 @@ fn forward_latency_audit_report(
             "min": min_delay_ms,
             "avg": avg_delay_ms,
             "p50": p50_delay_ms,
+            "p90": p90_delay_ms,
             "p95": p95_delay_ms,
             "p99": p99_delay_ms,
+            "p99_5": p99_5_delay_ms,
             "max": max_delay_ms,
         },
+        "delay_counts_above_ms": delay_counts_above_ms,
+        "record_overhead_ms": record_overhead_ms,
         "token_coverage": {
             "expected_token_ids": expected_token_ids.iter().cloned().collect::<Vec<_>>(),
             "active_expected_token_ids": active_expected_token_ids.iter().cloned().collect::<Vec<_>>(),
@@ -5502,8 +5552,9 @@ fn forward_latency_audit_report(
             "gap_gate_token_ids": gap_gate_token_ids,
             "gap_skipped_token_ids": gap_skipped_token_ids,
             "max_gap_gate_ms": max_gate_token_gap_ms,
-            "gap_threshold_exceeded_token_ids": gap_threshold_exceeded_token_ids,
-            "gap_gate_mode": "active_window_min_events",
+            "stream_gap_ready": stream_gap_ready,
+            "per_token_gap_threshold_exceeded_token_ids": per_token_gap_threshold_exceeded_token_ids,
+            "gap_gate_mode": "active_window_stream_continuity_min_events",
         },
         "a_plus_latency_gate": {
             "ready": ready,
@@ -5527,6 +5578,44 @@ fn forward_latency_percentile(sorted: &[f64], quantile: f64) -> Option<f64> {
     let rank = (sorted.len() as f64 * q).ceil() as usize;
     let idx = rank.saturating_sub(1).min(sorted.len() - 1);
     Some(sorted[idx])
+}
+
+fn forward_latency_distribution_report(
+    sorted: &[f64],
+    sum_ms: f64,
+    samples: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "samples": samples,
+        "min": sorted.first().copied(),
+        "avg": if samples > 0 { Some(sum_ms / samples as f64) } else { None },
+        "p50": forward_latency_percentile(sorted, 0.50),
+        "p90": forward_latency_percentile(sorted, 0.90),
+        "p95": forward_latency_percentile(sorted, 0.95),
+        "p99": forward_latency_percentile(sorted, 0.99),
+        "p99_5": forward_latency_percentile(sorted, 0.995),
+        "max": sorted.last().copied(),
+    })
+}
+
+fn forward_latency_counts_above_ms(sorted: &[f64]) -> serde_json::Value {
+    let thresholds = [75_u64, 100, 150, 200, 250, 300, 400, 500, 750];
+    let mut counts = serde_json::Map::new();
+    let samples = sorted.len() as f64;
+    for threshold in thresholds {
+        let count = sorted
+            .iter()
+            .filter(|value| **value > threshold as f64)
+            .count() as u64;
+        counts.insert(
+            threshold.to_string(),
+            serde_json::json!({
+                "count": count,
+                "rate": if samples > 0.0 { count as f64 / samples } else { 0.0 },
+            }),
+        );
+    }
+    serde_json::Value::Object(counts)
 }
 
 async fn cmd_chainlink_data_streams_probe(
@@ -9764,6 +9853,9 @@ mod replay_validation_tests {
             Some(1_782_908_901_400),
             &mut acc,
         );
+        acc.stats.record_overhead_samples = 2;
+        acc.record_overhead_sum_ms = 2.0;
+        acc.record_overhead_ms = vec![1.0, 1.0];
         let expected = ["down-token".to_string(), "up-token".to_string()]
             .into_iter()
             .collect();
@@ -9784,6 +9876,16 @@ mod replay_validation_tests {
         );
 
         assert_eq!(report["delay_ms"]["p99"].as_f64(), Some(240.0));
+        assert_eq!(report["delay_ms"]["p99_5"].as_f64(), Some(240.0));
+        assert_eq!(
+            report["delay_counts_above_ms"]["150"]["count"].as_u64(),
+            Some(2)
+        );
+        assert_eq!(
+            report["delay_counts_above_ms"]["200"]["count"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(report["record_overhead_ms"]["p99"].as_f64(), Some(1.0));
         assert_eq!(
             report["a_plus_latency_gate"]["stream_latency_ready"].as_bool(),
             Some(true)
@@ -9977,7 +10079,16 @@ mod replay_validation_tests {
                 &mut acc,
             );
         }
-        for row_ts in [1_783_164_000_000_i64, 1_783_164_090_000, 1_783_164_180_000] {
+        for row_ts in [1_783_164_000_300_i64, 1_783_164_090_000, 1_783_164_180_000] {
+            if row_ts == 1_783_164_090_000 {
+                for keepalive_ts in (1_783_164_001_000_i64..row_ts).step_by(1_000) {
+                    forward_latency_observe_frame_received(&mut acc, Some(keepalive_ts));
+                }
+            } else if row_ts == 1_783_164_180_000 {
+                for keepalive_ts in (1_783_164_091_000_i64..row_ts).step_by(1_000) {
+                    forward_latency_observe_frame_received(&mut acc, Some(keepalive_ts));
+                }
+            }
             forward_latency_observe_frame_received(&mut acc, Some(row_ts));
             forward_latency_audit_ws_value(
                 &serde_json::json!({
@@ -10039,10 +10150,63 @@ mod replay_validation_tests {
     }
 
     #[test]
+    fn forward_latency_gap_gate_fails_on_stream_receive_gap() {
+        let mut acc = ForwardLatencyAuditAccumulator::default();
+        for row_ts in [1_783_164_000_000_i64, 1_783_164_005_000, 1_783_164_005_100] {
+            forward_latency_observe_frame_received(&mut acc, Some(row_ts));
+            forward_latency_audit_ws_value(
+                &serde_json::json!({
+                    "event_type": "price_change",
+                    "market": "0xactive",
+                    "asset_id": "active-token",
+                    "timestamp": (row_ts - 20).to_string(),
+                    "price_changes": []
+                }),
+                Some(row_ts),
+                &mut acc,
+            );
+        }
+        let expected = ["active-token".to_string()].into_iter().collect();
+        let token_outcomes = std::collections::BTreeMap::from([(
+            "active-token".to_string(),
+            serde_json::json!({"slug": "btc-updown-5m-1783164000"}),
+        )]);
+        let report = forward_latency_audit_report(
+            std::path::Path::new("/tmp/in"),
+            std::path::Path::new("/tmp/in/market_ws_frames.jsonl"),
+            std::path::Path::new("/tmp/out.json"),
+            None,
+            acc,
+            &expected,
+            &token_outcomes,
+            ForwardLatencyAuditThresholds {
+                max_p99_delay_ms: 500.0,
+                max_token_gap_ms: 1_000.0,
+                min_gap_gate_events: 3,
+                max_missing_timestamp_rate: 0.0,
+            },
+        );
+
+        assert_eq!(
+            report["token_coverage"]["stream_gap_ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["token_gap_ready"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            report["a_plus_latency_gate"]["verdict"].as_str(),
+            Some("STREAM_RECEIVE_GAP_TOO_HIGH")
+        );
+    }
+
+    #[test]
     fn forward_latency_percentile_uses_nearest_rank() {
         let values = [10.0, 20.0, 30.0, 40.0];
         assert_eq!(forward_latency_percentile(&values, 0.50), Some(20.0));
         assert_eq!(forward_latency_percentile(&values, 0.95), Some(40.0));
+        assert_eq!(forward_latency_percentile(&values, 0.995), Some(40.0));
         assert_eq!(forward_latency_percentile(&[], 0.50), None);
     }
 
