@@ -1250,6 +1250,117 @@ enum StrategyBuilderCommand {
         #[arg(long, default_value_t = 25)]
         top: usize,
     },
+    /// Convert causal-policy-search candidates into rolling-history replay verification manifests.
+    CausalPolicyReplayPlan {
+        /// Causal-policy-search JSON artifact.
+        #[arg(long)]
+        search: String,
+        /// Inclusive UTC start hour (RFC3339) for replay verification.
+        #[arg(long)]
+        start: String,
+        /// Inclusive UTC end hour (RFC3339) for replay verification.
+        #[arg(long)]
+        end: String,
+        /// Output directory for per-candidate rolling-history manifests.
+        #[arg(long)]
+        out_dir: String,
+        /// Optional summary JSON output. Defaults to <out-dir>/causal_policy_replay_plan.json.
+        #[arg(long)]
+        output: Option<String>,
+        /// Inspect the top N search candidates before filtering.
+        #[arg(long, default_value_t = 1)]
+        top: usize,
+        /// Also generate replay manifests for failed static/search candidates.
+        #[arg(long, default_value_t = false)]
+        include_failed: bool,
+        /// Root for per-candidate temporary PMXT caches. Defaults inside each candidate out-dir.
+        #[arg(long)]
+        cache_root: Option<String>,
+        /// BTC tick/kline CSV used as the virtual exchange price feed.
+        #[arg(long)]
+        btc_csv: Option<String>,
+        /// Replay/backtest bankroll used for sizing.
+        #[arg(long, default_value_t = 100.0)]
+        bankroll: f64,
+        /// Simulated insert latency in milliseconds.
+        #[arg(long, default_value_t = 50)]
+        latency_ms: u64,
+        /// Forward latency audit JSON; overrides --latency-ms upward to the measured p99 recommendation.
+        #[arg(long)]
+        latency_audit_json: Option<String>,
+        /// Variant-fan-out thread count for harness-sweep.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+        /// Candle frame length to isolate.
+        #[arg(long, default_value_t = 5.0)]
+        window_minutes: f64,
+        /// Fold length in inclusive UTC hours.
+        #[arg(long, default_value_t = 8)]
+        fold_hours: i64,
+        /// Limit number of folds for bounded smoke runs.
+        #[arg(long)]
+        max_folds: Option<usize>,
+        /// Rolling lab profile, e.g. a_plus5m_tail_low_exposure.
+        #[arg(long, default_value = "a_plus5m")]
+        profile: String,
+        /// Restrict sweeps to one timing zone: all, early, primary, late, terminal.
+        #[arg(long, default_value = "early")]
+        zone_mode: String,
+        /// Execute generated rolling-history runs. Without this flag, writes dry-run manifests.
+        #[arg(long, default_value_t = false)]
+        execute: bool,
+        /// Delete each per-fold cache after its compact report is written.
+        #[arg(long, default_value_t = false)]
+        delete_after_process: bool,
+        /// Within each fold, keep at most one downloaded raw PMXT parquet at a time.
+        #[arg(long, default_value_t = false)]
+        atomic_parquet: bool,
+        /// Probe PMXT archive-hour availability before generating folds.
+        #[arg(long, default_value_t = false)]
+        preflight_pmxt_hours: bool,
+        /// With PMXT preflight, stop at the first missing hour instead of failing.
+        #[arg(long, default_value_t = false)]
+        stop_at_first_missing_hour: bool,
+        /// Drop a final fold that is shorter than --fold-hours.
+        #[arg(long, default_value_t = false)]
+        require_full_folds: bool,
+        /// Minimum trades required in every fold during robust promotion.
+        #[arg(long, default_value_t = 20)]
+        min_fold_trades: usize,
+        /// Minimum target PMXT events required in each fold before treating it as strategy evidence. 0 disables.
+        #[arg(long, default_value_t = 1)]
+        min_fold_target_events: u64,
+        /// Minimum top-variant trades required in each fold before treating it as strategy evidence.
+        #[arg(long)]
+        min_fold_top_trades: Option<usize>,
+        /// Minimum aggregate trades required by robust-promote.
+        #[arg(long)]
+        min_promotion_trades: Option<usize>,
+        /// Minimum trades per report required by robust-promote.
+        #[arg(long)]
+        min_promotion_daily_trades: Option<usize>,
+        /// Minimum profitable reports required by robust-promote.
+        #[arg(long)]
+        min_promotion_profitable_reports: Option<usize>,
+        /// Minimum aggregate losses required by robust-promote.
+        #[arg(long)]
+        min_promotion_losses: Option<usize>,
+        /// Abort before the next fold if cache-root size exceeds this budget. 0 disables.
+        #[arg(long, default_value_t = 0.0)]
+        max_cache_gb: f64,
+        /// Minimum active neighbor-window observations passed to robust-promote.
+        #[arg(long)]
+        min_neighbor_observations: Option<usize>,
+        /// Minimum neighbor positive rate passed to robust-promote.
+        #[arg(long, default_value_t = 0.60)]
+        min_neighbor_positive_rate: f64,
+        /// Maximum PBO passed to robust-promote.
+        #[arg(long, default_value_t = 0.50)]
+        max_pbo: f64,
+        /// Minimum median OOS percentile passed to robust-promote.
+        #[arg(long, default_value_t = 0.80)]
+        min_median_oos_percentile: f64,
+    },
     /// Mark a strategy version as candidate, questionable, dead_end, promoted, or rejected.
     RegistryMark {
         /// Strategy registry JSON path.
@@ -2360,6 +2471,94 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             }
             println!("{json}");
         }
+        StrategyBuilderCommand::CausalPolicyReplayPlan {
+            search,
+            start,
+            end,
+            out_dir,
+            output,
+            top,
+            include_failed,
+            cache_root,
+            btc_csv,
+            bankroll,
+            latency_ms,
+            latency_audit_json,
+            threads,
+            window_minutes,
+            fold_hours,
+            max_folds,
+            profile,
+            zone_mode,
+            execute,
+            delete_after_process,
+            atomic_parquet,
+            preflight_pmxt_hours,
+            stop_at_first_missing_hour,
+            require_full_folds,
+            min_fold_trades,
+            min_fold_target_events,
+            min_fold_top_trades,
+            min_promotion_trades,
+            min_promotion_daily_trades,
+            min_promotion_profitable_reports,
+            min_promotion_losses,
+            max_cache_gb,
+            min_neighbor_observations,
+            min_neighbor_positive_rate,
+            max_pbo,
+            min_median_oos_percentile,
+        } => {
+            let input = CausalPolicyReplayPlanInput {
+                search_path: std::path::PathBuf::from(search),
+                start,
+                end,
+                out_dir: std::path::PathBuf::from(out_dir),
+                output: output.map(std::path::PathBuf::from),
+                top,
+                include_failed,
+                cache_root: cache_root.map(std::path::PathBuf::from),
+                btc_csv,
+                bankroll,
+                latency_ms,
+                latency_audit_json: latency_audit_json.map(std::path::PathBuf::from),
+                threads,
+                window_minutes,
+                fold_hours,
+                max_folds,
+                profile,
+                zone_mode,
+                execute,
+                delete_after_process,
+                atomic_parquet,
+                preflight_pmxt_hours,
+                stop_at_first_missing_hour,
+                require_full_folds,
+                min_fold_trades,
+                min_fold_target_events,
+                min_fold_top_trades,
+                min_promotion_trades,
+                min_promotion_daily_trades,
+                min_promotion_profitable_reports,
+                min_promotion_losses,
+                max_cache_gb,
+                min_neighbor_observations,
+                min_neighbor_positive_rate,
+                max_pbo,
+                min_median_oos_percentile,
+            };
+            match run_causal_policy_replay_plan(input).await {
+                Ok(summary) => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&summary)
+                        .expect("serialize causal policy replay plan")
+                ),
+                Err(e) => {
+                    eprintln!("strategy-builder causal-policy-replay-plan failed: {e:#}");
+                    std::process::exit(2);
+                }
+            }
+        }
         StrategyBuilderCommand::RegistryMark {
             registry,
             strategy_id,
@@ -2833,6 +3032,46 @@ struct RollingHistoryInput {
     atomic_parquet: bool,
 }
 
+#[derive(Debug, Clone)]
+struct CausalPolicyReplayPlanInput {
+    search_path: std::path::PathBuf,
+    start: String,
+    end: String,
+    out_dir: std::path::PathBuf,
+    output: Option<std::path::PathBuf>,
+    top: usize,
+    include_failed: bool,
+    cache_root: Option<std::path::PathBuf>,
+    btc_csv: Option<String>,
+    bankroll: f64,
+    latency_ms: u64,
+    latency_audit_json: Option<std::path::PathBuf>,
+    threads: usize,
+    window_minutes: f64,
+    fold_hours: i64,
+    max_folds: Option<usize>,
+    profile: String,
+    zone_mode: String,
+    execute: bool,
+    delete_after_process: bool,
+    preflight_pmxt_hours: bool,
+    stop_at_first_missing_hour: bool,
+    require_full_folds: bool,
+    min_fold_trades: usize,
+    min_fold_target_events: u64,
+    min_fold_top_trades: Option<usize>,
+    min_promotion_trades: Option<usize>,
+    min_promotion_daily_trades: Option<usize>,
+    min_promotion_profitable_reports: Option<usize>,
+    min_promotion_losses: Option<usize>,
+    max_cache_gb: f64,
+    min_neighbor_observations: Option<usize>,
+    min_neighbor_positive_rate: f64,
+    max_pbo: f64,
+    min_median_oos_percentile: f64,
+    atomic_parquet: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct RollingHistoryProfile {
     name: String,
@@ -2954,6 +3193,168 @@ fn rolling_history_latency_policy(
                 .unwrap_or(serde_json::Value::Null),
         }),
     ))
+}
+
+async fn run_causal_policy_replay_plan(
+    input: CausalPolicyReplayPlanInput,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{bail, Context};
+
+    if input.top == 0 {
+        bail!("--top must be > 0");
+    }
+    let raw = std::fs::read_to_string(&input.search_path)
+        .with_context(|| format!("read {}", input.search_path.display()))?;
+    let search: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {}", input.search_path.display()))?;
+    let candidates = search
+        .get("candidates")
+        .and_then(|value| value.as_array())
+        .context("causal-policy-search artifact has no candidates array")?;
+
+    let mut selected = Vec::new();
+    for candidate in candidates.iter().take(input.top) {
+        let rank = candidate
+            .get("rank")
+            .and_then(|value| value.as_u64())
+            .context("candidate missing numeric rank")?;
+        let passed = candidate
+            .get("passed")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if !input.include_failed && !passed {
+            continue;
+        }
+
+        let require_causal_tag =
+            causal_policy_arg_array(candidate, &["final_policy", "harness_require_args"])?;
+        let deny_causal_tag =
+            causal_policy_arg_array(candidate, &["final_policy", "harness_deny_args"])?;
+        if require_causal_tag.is_empty() && deny_causal_tag.is_empty() {
+            bail!("candidate rank {rank} has no runtime-supported harness policy args");
+        }
+
+        let candidate_id = format!("candidate_rank_{rank:03}");
+        let candidate_out_dir = input.out_dir.join(&candidate_id);
+        let candidate_cache_root = input
+            .cache_root
+            .as_ref()
+            .map(|root| root.join(&candidate_id));
+        let rolling = run_rolling_history(RollingHistoryInput {
+            start: input.start.clone(),
+            end: input.end.clone(),
+            out_dir: candidate_out_dir.clone(),
+            cache_root: candidate_cache_root,
+            btc_csv: input.btc_csv.clone(),
+            bankroll: input.bankroll,
+            latency_ms: input.latency_ms,
+            latency_audit_json: input.latency_audit_json.clone(),
+            threads: input.threads,
+            window_minutes: input.window_minutes,
+            fold_hours: input.fold_hours,
+            max_folds: input.max_folds,
+            profile: input.profile.clone(),
+            require_causal_tag: require_causal_tag.clone(),
+            deny_causal_tag: deny_causal_tag.clone(),
+            zone_mode: input.zone_mode.clone(),
+            promotion_output: None,
+            execute: input.execute,
+            delete_after_process: input.delete_after_process,
+            atomic_parquet: input.atomic_parquet,
+            preflight_pmxt_hours: input.preflight_pmxt_hours,
+            stop_at_first_missing_hour: input.stop_at_first_missing_hour,
+            require_full_folds: input.require_full_folds,
+            min_fold_trades: input.min_fold_trades,
+            min_fold_target_events: input.min_fold_target_events,
+            min_fold_top_trades: input.min_fold_top_trades,
+            min_promotion_trades: input.min_promotion_trades,
+            min_promotion_daily_trades: input.min_promotion_daily_trades,
+            min_promotion_profitable_reports: input.min_promotion_profitable_reports,
+            min_promotion_losses: input.min_promotion_losses,
+            max_cache_gb: input.max_cache_gb,
+            min_neighbor_observations: input.min_neighbor_observations,
+            min_neighbor_positive_rate: input.min_neighbor_positive_rate,
+            max_pbo: input.max_pbo,
+            min_median_oos_percentile: input.min_median_oos_percentile,
+        })
+        .await
+        .with_context(|| format!("build replay plan for candidate rank {rank}"))?;
+
+        selected.push(serde_json::json!({
+            "rank": rank,
+            "passed_static_search": passed,
+            "base_require": candidate.get("base_require").cloned().unwrap_or(serde_json::Value::Null),
+            "harness_require_args": require_causal_tag,
+            "harness_deny_args": deny_causal_tag,
+            "search_fold_forward": candidate.get("fold_forward").cloned().unwrap_or(serde_json::Value::Null),
+            "search_notes": candidate.get("notes").cloned().unwrap_or(serde_json::Value::Null),
+            "replay_out_dir": candidate_out_dir.display().to_string(),
+            "replay_manifest": candidate_out_dir.join("rolling_history_manifest.json").display().to_string(),
+            "rolling_history": rolling,
+        }));
+    }
+
+    let output_path = input
+        .output
+        .clone()
+        .unwrap_or_else(|| input.out_dir.join("causal_policy_replay_plan.json"));
+    let summary = serde_json::json!({
+        "schema_version": 1,
+        "mode": if input.execute { "executed" } else { "dry_run" },
+        "source_search": input.search_path.display().to_string(),
+        "search_ok": search.get("ok").cloned().unwrap_or(serde_json::Value::Null),
+        "search_report_count": search.get("report_count").cloned().unwrap_or(serde_json::Value::Null),
+        "candidate_filter": {
+            "top": input.top,
+            "include_failed": input.include_failed,
+        },
+        "selected_count": selected.len(),
+        "replay_window": {
+            "start": input.start,
+            "end": input.end,
+            "fold_hours": input.fold_hours,
+            "window_minutes": input.window_minutes,
+        },
+        "profile": input.profile,
+        "zone_mode": input.zone_mode,
+        "latency_ms": input.latency_ms,
+        "latency_audit_json": input.latency_audit_json.map(|path| path.display().to_string()),
+        "methodology": [
+            "Read causal-policy-search candidates and use only runtime-supported harness require/deny args.",
+            "Generate one rolling-history replay manifest per selected candidate.",
+            "Static search stats are carried as context only; replay manifests are the required next evidence before promotion credit."
+        ],
+        "output": output_path.display().to_string(),
+        "candidates": selected,
+    });
+    write_json_atomic(&output_path, &summary, true)
+        .with_context(|| format!("write {}", output_path.display()))?;
+    Ok(summary)
+}
+
+fn causal_policy_arg_array(
+    candidate: &serde_json::Value,
+    path: &[&str],
+) -> anyhow::Result<Vec<String>> {
+    use anyhow::{bail, Context};
+
+    let mut value = candidate;
+    for key in path {
+        value = value
+            .get(*key)
+            .with_context(|| format!("candidate missing {}", path.join(".")))?;
+    }
+    let array = value
+        .as_array()
+        .with_context(|| format!("{} must be an array", path.join(".")))?;
+    let mut out = Vec::with_capacity(array.len());
+    for item in array {
+        let Some(s) = item.as_str() else {
+            bail!("{} contains a non-string value", path.join("."));
+        };
+        out.push(s.to_string());
+    }
+    Ok(out)
 }
 
 async fn run_rolling_history(input: RollingHistoryInput) -> anyhow::Result<serde_json::Value> {
@@ -10574,6 +10975,108 @@ mod replay_validation_tests {
 
         assert_eq!(required, 22.0);
         assert!(!live_wallet_covers_budget(&balances, required));
+    }
+
+    #[tokio::test]
+    async fn causal_policy_replay_plan_generates_rolling_manifest_from_runtime_tags() {
+        let tmp = tempfile::tempdir().unwrap();
+        let search_path = tmp.path().join("policy_search.json");
+        let out_dir = tmp.path().join("replay_plan");
+        let output = tmp.path().join("summary.json");
+        let search = serde_json::json!({
+            "ok": true,
+            "report_count": 3,
+            "candidates": [
+                {
+                    "rank": 1,
+                    "passed": true,
+                    "base_require": {"book_age": "lte_100ms"},
+                    "final_policy": {
+                        "harness_require_args": ["book_age=lte_100ms"],
+                        "harness_deny_args": ["book_imbalance=strong_positive"]
+                    },
+                    "fold_forward": {
+                        "eligible_reports": 1,
+                        "stats": {"total_pnl": 6.0}
+                    },
+                    "notes": ["static stats need replay"]
+                }
+            ]
+        });
+        write_json_atomic(&search_path, &search, true).unwrap();
+
+        let summary = run_causal_policy_replay_plan(CausalPolicyReplayPlanInput {
+            search_path,
+            start: "2026-05-31T08:00:00Z".to_string(),
+            end: "2026-05-31T15:00:00Z".to_string(),
+            out_dir: out_dir.clone(),
+            output: Some(output.clone()),
+            top: 1,
+            include_failed: false,
+            cache_root: None,
+            btc_csv: Some("/tmp/btc.csv".to_string()),
+            bankroll: 100.0,
+            latency_ms: 128,
+            latency_audit_json: None,
+            threads: 1,
+            window_minutes: 5.0,
+            fold_hours: 8,
+            max_folds: None,
+            profile: "a_plus5m_tail_low_exposure".to_string(),
+            zone_mode: "all".to_string(),
+            execute: false,
+            delete_after_process: true,
+            atomic_parquet: true,
+            preflight_pmxt_hours: false,
+            stop_at_first_missing_hour: false,
+            require_full_folds: true,
+            min_fold_trades: 1,
+            min_fold_target_events: 1,
+            min_fold_top_trades: Some(1),
+            min_promotion_trades: Some(1),
+            min_promotion_daily_trades: Some(1),
+            min_promotion_profitable_reports: Some(1),
+            min_promotion_losses: Some(0),
+            max_cache_gb: 0.0,
+            min_neighbor_observations: None,
+            min_neighbor_positive_rate: 0.60,
+            max_pbo: 0.50,
+            min_median_oos_percentile: 0.80,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(summary["mode"], "dry_run");
+        assert_eq!(summary["selected_count"], 1);
+        assert!(output.exists());
+        let candidate = &summary["candidates"][0];
+        assert_eq!(candidate["rank"], 1);
+        assert_eq!(
+            candidate["harness_require_args"].as_array().unwrap()[0],
+            "book_age=lte_100ms"
+        );
+        assert_eq!(
+            candidate["harness_deny_args"].as_array().unwrap()[0],
+            "book_imbalance=strong_positive"
+        );
+        assert!(out_dir
+            .join("candidate_rank_001")
+            .join("rolling_history_manifest.json")
+            .exists());
+        let sweep_args = candidate["rolling_history"]["folds"][0]["sweep_args"]
+            .as_array()
+            .unwrap();
+        assert!(sweep_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--require-causal-tag")
+                && pair[1].as_str() == Some("book_age=lte_100ms")));
+        assert!(sweep_args
+            .windows(2)
+            .any(|pair| pair[0].as_str() == Some("--deny-causal-tag")
+                && pair[1].as_str() == Some("book_imbalance=strong_positive")));
+        assert!(sweep_args
+            .iter()
+            .any(|arg| arg.as_str() == Some("--atomic-parquet")));
     }
 
     #[tokio::test]

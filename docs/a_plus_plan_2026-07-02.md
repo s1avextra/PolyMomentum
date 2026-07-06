@@ -75,6 +75,15 @@ Current blockers:
   reports but failed with `6` trades, `4` wins, `2` losses, `-4.60148` PnL, and
   worst report/CVaR `-5.13834`. Evidence:
   `deploy/promotions/evidence/strategy_registry/20260706_policy_search_min_eligible_gate/`.
+- The July 6 replay-integrated policy bridge adds
+  `strategy-builder causal-policy-replay-plan`, which reads a
+  `causal-policy-search` artifact and writes exact `rolling-history` replay
+  manifests from the candidate's runtime-supported `harness_require_args` and
+  `harness_deny_args`. The old July 5 static pass now produces a three-fold
+  replay plan for `require book_age=lte_100ms` and
+  `deny book_imbalance=strong_positive`; the stricter min-eligible artifact
+  selects zero candidates by default. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260706_replay_integrated_policy_bridge/`.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
   close, subscription, or read failures. The July 5 run used a
   measurement-capable `/tmp` probe built from commit `a3aa73d`; production
@@ -179,6 +188,9 @@ Work:
 - Keep maker/taker paths separate until fill evidence supports merging them.
 - Require all selector families to share the same CVaR and loss-burst contract:
   causal-policy, multi-guard, adaptive-direction, and adaptive-mode.
+- For causal-policy outputs, run `strategy-builder causal-policy-replay-plan`
+  before granting any candidate credit; static search stats are hypothesis
+  context only.
 - Inspect the exact losing folds before tightening or relaxing any global gate.
 
 Success criteria:

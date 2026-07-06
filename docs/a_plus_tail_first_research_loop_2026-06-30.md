@@ -283,3 +283,35 @@ credit before spending engineering effort on a new signal family. The available
 causal/orderbook buckets already expose the replacement-loss shape; the missing
 piece is a selector that refuses thin static credit and then survives full
 harness replay.
+
+## Replay-Integrated Policy Bridge - 2026-07-06
+
+Artifact:
+`deploy/promotions/evidence/strategy_registry/20260706_replay_integrated_policy_bridge/`.
+
+Implementation:
+
+- Added `strategy-builder causal-policy-replay-plan`.
+- The command reads a causal-policy-search artifact, extracts
+  `harness_require_args` and `harness_deny_args`, and emits per-candidate
+  `rolling-history` manifests.
+- By default it selects only candidates that passed search. `--include-failed`
+  is diagnostic-only.
+- Dry-run mode is the default; `--execute` is required before any heavy replay
+  runs.
+
+Evidence:
+
+- The old July 5 static pass now emits an exact three-fold rolling-history plan
+  for `require book_age=lte_100ms` and
+  `deny book_imbalance=strong_positive`.
+- The stricter July 6 min-eligible artifact emits `selected_count=0` by default,
+  because no candidate passed the causal-policy gates.
+- A diagnostic `--include-failed` plan exists for the top failed
+  broader-coverage candidate, but it remains research-only: static fold-forward
+  PnL was `-4.60148` with worst report `-5.13834`.
+
+Interpretation: the project now has the missing mechanical bridge from policy
+search to full replay verification. The next A+ candidate must pass causal
+policy search, pass this replay-plan bridge, and then survive executed
+rolling-history replay before promotion can be discussed.
