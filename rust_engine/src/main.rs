@@ -1171,6 +1171,9 @@ enum StrategyBuilderCommand {
         /// Minimum number of profitable OOS reports.
         #[arg(long, default_value_t = 1)]
         min_oos_profitable_reports: usize,
+        /// Minimum OOS reports with selected trades required to pass; 0 disables.
+        #[arg(long, default_value_t = 0)]
+        min_oos_eligible_reports: usize,
         /// Minimum worst OOS report PnL.
         #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         min_worst_oos_pnl: f64,
@@ -2256,6 +2259,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             min_oos_wilson_win_rate_lower,
             min_oos_total_pnl,
             min_oos_profitable_reports,
+            min_oos_eligible_reports,
             min_worst_oos_pnl,
             max_require_terms,
             max_deny_rules,
@@ -2291,6 +2295,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     min_oos_wilson_win_rate_lower,
                     min_oos_total_pnl,
                     min_oos_profitable_reports,
+                    min_oos_eligible_reports,
                     min_worst_oos_pnl,
                     max_require_terms,
                     max_deny_rules,

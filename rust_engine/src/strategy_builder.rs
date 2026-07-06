@@ -181,6 +181,7 @@ pub struct StrategyBuilderCausalPolicySearchInput {
     pub min_oos_wilson_win_rate_lower: f64,
     pub min_oos_total_pnl: f64,
     pub min_oos_profitable_reports: usize,
+    pub min_oos_eligible_reports: usize,
     pub min_worst_oos_pnl: f64,
     pub max_require_terms: usize,
     pub max_deny_rules: usize,
@@ -420,6 +421,7 @@ pub struct CausalPolicySearchGates {
     pub min_oos_wilson_win_rate_lower: f64,
     pub min_oos_total_pnl: f64,
     pub min_oos_profitable_reports: usize,
+    pub min_oos_eligible_reports: usize,
     pub min_worst_oos_pnl: f64,
     pub max_require_terms: usize,
     pub max_deny_rules: usize,
@@ -2605,6 +2607,10 @@ fn causal_policy_search_from_folds(
     candidates.sort_by(|a, b| {
         let a_trade_gate = a.fold_forward.stats.trades >= input.min_oos_trades;
         let b_trade_gate = b.fold_forward.stats.trades >= input.min_oos_trades;
+        let a_eligible_gate = input.min_oos_eligible_reports == 0
+            || a.fold_forward.eligible_reports >= input.min_oos_eligible_reports;
+        let b_eligible_gate = input.min_oos_eligible_reports == 0
+            || b.fold_forward.eligible_reports >= input.min_oos_eligible_reports;
         let a_profitable_gate =
             a.fold_forward.profitable_reports >= input.min_oos_profitable_reports;
         let b_profitable_gate =
@@ -2634,6 +2640,7 @@ fn causal_policy_search_from_folds(
         let gate_order = b
             .passed
             .cmp(&a.passed)
+            .then_with(|| b_eligible_gate.cmp(&a_eligible_gate))
             .then_with(|| b_trade_gate.cmp(&a_trade_gate))
             .then_with(|| b_profitable_gate.cmp(&a_profitable_gate))
             .then_with(|| b_pnl_gate.cmp(&a_pnl_gate))
@@ -2761,6 +2768,8 @@ fn causal_policy_search_from_folds(
                 .to_string(),
             "Optional meta-label generalization backs off from sparse exact regimes to broader causal tag combinations, still using only prior fold outcomes."
                 .to_string(),
+            "Optional eligible-report coverage gate prevents thin policies from passing on one active OOS report plus abstentions."
+                .to_string(),
             "Treat passing results as hypotheses; rerun the selected require/deny policy in full harness/live-replay before promotion."
                 .to_string(),
         ],
@@ -2771,6 +2780,7 @@ fn causal_policy_search_from_folds(
             min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
             min_oos_total_pnl: input.min_oos_total_pnl,
             min_oos_profitable_reports: input.min_oos_profitable_reports,
+            min_oos_eligible_reports: input.min_oos_eligible_reports,
             min_worst_oos_pnl: input.min_worst_oos_pnl,
             max_require_terms: input.max_require_terms,
             max_deny_rules: input.max_deny_rules,
@@ -3457,6 +3467,8 @@ fn evaluate_causal_policy_candidate(
         && fold_forward.stats.wilson_win_rate_lower >= input.min_oos_wilson_win_rate_lower
         && fold_forward.stats.total_pnl >= input.min_oos_total_pnl
         && fold_forward.profitable_reports >= input.min_oos_profitable_reports
+        && (input.min_oos_eligible_reports == 0
+            || fold_forward.eligible_reports >= input.min_oos_eligible_reports)
         && fold_forward.worst_report_pnl >= input.min_worst_oos_pnl
         && fold_forward.tail.cvar_pnl >= input.min_oos_cvar_pnl
         && (input.max_loss_burst_reports == 0
@@ -3492,6 +3504,11 @@ fn evaluate_causal_policy_candidate(
     }
     if !passed {
         notes.push("candidate did not pass configured OOS gates".to_string());
+    }
+    if input.min_oos_eligible_reports > 0
+        && fold_forward.eligible_reports < input.min_oos_eligible_reports
+    {
+        notes.push("candidate did not meet minimum eligible OOS report coverage".to_string());
     }
 
     CausalPolicyCandidateReport {
@@ -6790,6 +6807,53 @@ mod tests {
     }
 
     #[test]
+    fn causal_policy_min_eligible_reports_blocks_thin_oos_credit() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=lt_0.50|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(5, 0, 5.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+        ];
+
+        let mut input = causal_policy_input(200);
+        input.max_require_terms = 2;
+        input.max_deny_rules = 0;
+        input.min_oos_eligible_reports = 2;
+        let search = causal_policy_search_from_folds(&folds, &input);
+        let candidate = search
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.base_require.get("direction").map(String::as_str) == Some("down")
+                    && candidate.base_require.get("zone").map(String::as_str) == Some("primary")
+            })
+            .expect("primary/down policy");
+
+        assert_eq!(search.gates.min_oos_eligible_reports, 2);
+        assert!(!search.ok);
+        assert!(!candidate.passed);
+        assert_eq!(candidate.fold_forward.eligible_reports, 1);
+        assert_eq!(candidate.fold_forward.stats.trades, 5);
+        assert_eq!(candidate.fold_forward.stats.total_pnl, 5.0);
+        assert!(candidate
+            .notes
+            .iter()
+            .any(|note| note.contains("minimum eligible OOS report coverage")));
+    }
+
+    #[test]
     fn causal_policy_search_can_select_orderbook_bucket() {
         let tight_book =
             "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4|book_spread=lte_0.01|book_min_depth=100_250|book_pressure=positive|book_imbalance=neutral|bookwalk_slippage=zero|book_age=lte_100ms";
@@ -7889,6 +7953,7 @@ mod tests {
             min_oos_wilson_win_rate_lower: 0.50,
             min_oos_total_pnl: 0.0,
             min_oos_profitable_reports: 1,
+            min_oos_eligible_reports: 0,
             min_worst_oos_pnl: 0.0,
             max_require_terms: 3,
             max_deny_rules: 1,

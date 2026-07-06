@@ -253,3 +253,33 @@ even candidate credit. Candidate filters must be generated and then rerun
 through full rolling-history replay before they count. The low-exposure family
 remains rejected until a replay-integrated policy, or a different signal
 family, clears the fail-fast tail clusters.
+
+## Eligible-Report Policy Credit Gate - 2026-07-06
+
+Artifact:
+`deploy/promotions/evidence/strategy_registry/20260706_policy_search_min_eligible_gate/`.
+
+Implementation:
+
+- Added `--min-oos-eligible-reports` to
+  `strategy-builder causal-policy-search`.
+- Default `0` preserves existing research behavior.
+- A+ causal-policy runs can now require selected trades in multiple
+  chronological OOS reports before a candidate is allowed to pass.
+
+Result:
+
+- Reran the same three low-exposure reports with
+  `--min-oos-eligible-reports 2`.
+- Previous July 5 top hypothesis had `ok=true` but only `1` eligible OOS report
+  and `2` abstentions.
+- New result is `ok=false` across `9046` candidates.
+- The best broader-coverage ranked policy had `2` eligible reports, but failed
+  on realized tail/PnL: `6` trades, `4` wins, `2` losses, `-4.60148` PnL, worst
+  report `-5.13834`, CVaR `-5.13834`.
+
+Interpretation: current A+ work should continue down replay-integrated policy
+credit before spending engineering effort on a new signal family. The available
+causal/orderbook buckets already expose the replacement-loss shape; the missing
+piece is a selector that refuses thin static credit and then survives full
+harness replay.

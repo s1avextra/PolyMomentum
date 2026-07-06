@@ -66,6 +66,15 @@ Current blockers:
   the loss moving to `book_imbalance=negative`. Evidence:
   `deploy/promotions/evidence/strategy_registry/20260705_low_exposure_policy_search_diagnostics/`.
   A+ needs replay-integrated policy generation, not static causal filtering.
+- The July 6 causal-policy eligible-report gate implements the first
+  replay-credit guard: `--min-oos-eligible-reports` is opt-in and defaults to
+  disabled, but A+ policy-search runs can now reject one-active-report
+  hypotheses before promotion credit. Rerunning the same three low-exposure
+  reports with `--min-oos-eligible-reports 2` changed the old `ok=true` thin
+  result into `ok=false`; the best broader-coverage candidate had `2` eligible
+  reports but failed with `6` trades, `4` wins, `2` losses, `-4.60148` PnL, and
+  worst report/CVaR `-5.13834`. Evidence:
+  `deploy/promotions/evidence/strategy_registry/20260706_policy_search_min_eligible_gate/`.
 - `record-btc-books` now reconnects/resubscribes after websocket connect,
   close, subscription, or read failures. The July 5 run used a
   measurement-capable `/tmp` probe built from commit `a3aa73d`; production
