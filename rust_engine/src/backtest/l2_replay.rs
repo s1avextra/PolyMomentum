@@ -6,10 +6,10 @@
 //! current event's update is applied, to prevent lookahead from
 //! same-instant book changes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::backtest::fill_model::{
-    FillReason, FillResult, Maker, OneTickTaker, OrderType, Perfect, Side,
+    BookWalkTaker, FillReason, FillResult, Maker, OneTickTaker, OrderType, Perfect, Side,
 };
 use crate::backtest::pmxt::{L2Event, L2EventBody};
 use crate::execution::fees::polymarket_fee;
@@ -92,12 +92,18 @@ impl TokenBook {
             book.insert(key(chg.change_price), chg.change_size);
         }
 
-        if let Some(top) = self.bids.keys().next_back() {
-            self.best_bid = *top as f64 / 1e9;
-        }
-        if let Some(top) = self.asks.keys().next() {
-            self.best_ask = *top as f64 / 1e9;
-        }
+        self.best_bid = self
+            .bids
+            .keys()
+            .next_back()
+            .map(|top| *top as f64 / 1e9)
+            .unwrap_or(0.0);
+        self.best_ask = self
+            .asks
+            .keys()
+            .next()
+            .map(|top| *top as f64 / 1e9)
+            .unwrap_or(0.0);
         if chg.best_bid > 0.0 {
             self.best_bid = chg.best_bid;
         }
@@ -174,15 +180,17 @@ pub trait Strategy {
         timestamp_s: f64,
         token_id: &str,
         book: &TokenBook,
-        history: &BTreeMap<String, Vec<(f64, f64)>>,
+        history: &L2MidHistory,
     ) -> Vec<BacktestOrder>;
 }
+
+pub type L2MidHistory = BTreeMap<String, VecDeque<(f64, f64)>>;
 
 /// Pluggable fill model. Each variant of this enum is called from the
 /// backtest engine when an order's latency window has elapsed.
 pub enum FillModel {
-    /// Touch + 1 tick adverse. Default taker behavior.
-    OneTickTaker(OneTickTaker),
+    /// Executable taker behavior using only visible L2 depth.
+    BookWalkTaker(BookWalkTaker),
     /// Probabilistic post-only-style maker. Limit orders must rest, crossing
     /// limits reject, and unfilled maker quotes do not auto-fallback to taker.
     /// Maker fills use `maker_fee_rate`; explicit market orders still use
@@ -203,14 +211,24 @@ impl FillModel {
         limit_price: Option<f64>,
     ) -> FillResult {
         match self {
-            FillModel::OneTickTaker(m) => m.fill(
-                side,
-                size,
-                book.best_bid,
-                book.best_ask,
-                order_type,
-                limit_price,
-            ),
+            FillModel::BookWalkTaker(m) => match order_type {
+                OrderType::Market => {
+                    let bids = book.bid_levels();
+                    let asks = book.ask_levels();
+                    m.fill(side, size, &bids, &asks, limit_price)
+                }
+                OrderType::Limit => OneTickTaker {
+                    tick_size: m.tick_size,
+                }
+                .fill(
+                    side,
+                    size,
+                    book.best_bid,
+                    book.best_ask,
+                    order_type,
+                    limit_price,
+                ),
+            },
             FillModel::Maker(m) => m.fill_with_key(
                 side,
                 size,
@@ -231,7 +249,7 @@ pub struct L2BacktestEngine {
     history_window_seconds: f64,
 
     books: BTreeMap<String, TokenBook>,
-    history: BTreeMap<String, Vec<(f64, f64)>>,
+    history: L2MidHistory,
     pending_orders: Vec<BacktestOrder>,
     pub fills: Vec<BacktestFill>,
     pub event_count: u64,
@@ -303,10 +321,16 @@ impl L2BacktestEngine {
 
     fn record_history(&mut self, token_id: &str, ts: f64, mid: f64) {
         let entry = self.history.entry(token_id.to_string()).or_default();
-        entry.push((ts, mid));
+        if entry.back().is_some_and(|(last_ts, _)| ts - *last_ts < 0.1) {
+            return;
+        }
+        entry.push_back((ts, mid));
         let cutoff = ts - self.history_window_seconds;
-        while !entry.is_empty() && entry[0].0 < cutoff {
-            entry.remove(0);
+        while entry
+            .front()
+            .is_some_and(|(point_ts, _)| *point_ts < cutoff)
+        {
+            entry.pop_front();
         }
     }
 
@@ -496,7 +520,7 @@ pub struct Summary {
 mod tests {
     use super::*;
     use crate::backtest::fill_model::{Maker, DEFAULT_TICK};
-    use crate::backtest::pmxt::{BookSnapshot, L2Level};
+    use crate::backtest::pmxt::{BookSnapshot, L2Level, PriceChange};
     use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 
     struct NoopStrategy;
@@ -506,7 +530,7 @@ mod tests {
             _ts: f64,
             _tok: &str,
             _book: &TokenBook,
-            _history: &BTreeMap<String, Vec<(f64, f64)>>,
+            _history: &L2MidHistory,
         ) -> Vec<BacktestOrder> {
             Vec::new()
         }
@@ -537,7 +561,7 @@ mod tests {
     #[test]
     fn empty_replay_produces_no_fills() {
         let mut e = L2BacktestEngine::new(
-            FillModel::OneTickTaker(OneTickTaker::default()),
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
             StaticLatencyConfig::default(),
         );
         let mut s = NoopStrategy;
@@ -552,7 +576,7 @@ mod tests {
     #[test]
     fn book_snapshot_updates_top_of_book() {
         let mut e = L2BacktestEngine::new(
-            FillModel::OneTickTaker(OneTickTaker::default()),
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
             StaticLatencyConfig::default(),
         );
         let mut s = NoopStrategy;
@@ -566,6 +590,28 @@ mod tests {
         assert!((book.best_ask - 0.52).abs() < 1e-9);
     }
 
+    #[test]
+    fn removing_last_level_clears_replay_touch() {
+        let mut book = TokenBook::default();
+        if let L2EventBody::BookSnapshot(snapshot) = snap_event("t", 1.0, 0.50, 0.52).body {
+            book.apply_snapshot(&snapshot);
+        }
+        book.apply_change(&PriceChange {
+            market_id: "m".to_string(),
+            token_id: "t".to_string(),
+            side: "sell".to_string(),
+            change_side: "sell".to_string(),
+            change_price: 0.52,
+            change_size: 0.0,
+            best_bid: 0.0,
+            best_ask: 0.0,
+            timestamp_s: 1.1,
+        });
+
+        assert_eq!(book.best_ask, 0.0);
+        assert!(book.asks.is_empty());
+    }
+
     struct OneShotBuy {
         fired: bool,
     }
@@ -575,7 +621,7 @@ mod tests {
             ts: f64,
             tok: &str,
             book: &TokenBook,
-            _h: &BTreeMap<String, Vec<(f64, f64)>>,
+            _h: &L2MidHistory,
         ) -> Vec<BacktestOrder> {
             if self.fired || book.best_ask <= 0.0 {
                 return Vec::new();
@@ -599,7 +645,7 @@ mod tests {
     #[test]
     fn order_fires_after_latency_window() {
         let mut e = L2BacktestEngine::new(
-            FillModel::OneTickTaker(OneTickTaker::default()),
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
             StaticLatencyConfig { insert_ms: 50 },
         );
         let mut s = OneShotBuy { fired: false };
@@ -612,8 +658,24 @@ mod tests {
         assert_eq!(e.fills.len(), 1);
         let f = &e.fills[0];
         assert!(f.success);
-        assert!((f.fill_price - 0.53).abs() < 1e-9); // best_ask 0.52 + 1 tick = 0.53
+        assert!((f.fill_price - 0.52).abs() < 1e-9); // ten shares fit at the visible ask
         assert!((f.fill_timestamp_s - 1.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn l2_history_uses_live_ten_hertz_cadence() {
+        let mut engine = L2BacktestEngine::new(
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
+            StaticLatencyConfig { insert_ms: 50 },
+        );
+        engine.record_history("t", 1.0, 0.50);
+        engine.record_history("t", 1.05, 0.60);
+        engine.record_history("t", 1.10, 0.70);
+
+        let history = engine.history.get("t").unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.front(), Some(&(1.0, 0.50)));
+        assert_eq!(history.back(), Some(&(1.10, 0.70)));
     }
 
     struct FillHookStrategy {
@@ -631,7 +693,7 @@ mod tests {
             ts: f64,
             tok: &str,
             book: &TokenBook,
-            h: &BTreeMap<String, Vec<(f64, f64)>>,
+            h: &L2MidHistory,
         ) -> Vec<BacktestOrder> {
             self.inner.on_event(ts, tok, book, h)
         }
@@ -640,7 +702,7 @@ mod tests {
     #[test]
     fn strategy_receives_fill_callbacks_after_latency_flush() {
         let mut e = L2BacktestEngine::new(
-            FillModel::OneTickTaker(OneTickTaker::default()),
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
             StaticLatencyConfig { insert_ms: 50 },
         );
         let mut s = FillHookStrategy {
@@ -668,7 +730,7 @@ mod tests {
             ts: f64,
             tok: &str,
             book: &TokenBook,
-            _h: &BTreeMap<String, Vec<(f64, f64)>>,
+            _h: &L2MidHistory,
         ) -> Vec<BacktestOrder> {
             if self.fired || book.best_ask <= 0.0 {
                 return Vec::new();

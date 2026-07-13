@@ -21,10 +21,11 @@ use rayon::prelude::*;
 
 use crate::backtest::btc_history::BTCHistory;
 use crate::backtest::fill_model::{
-    resting_limit_price, Maker, OneTickTaker, Perfect, Side, DEFAULT_TICK,
+    resting_limit_price, BookWalkTaker, Maker, Perfect, Side, DEFAULT_TICK,
 };
 use crate::backtest::l2_replay::{
-    BacktestOrder, FillModel, L2BacktestEngine, StaticLatencyConfig, Strategy, TokenBook,
+    BacktestOrder, FillModel, L2BacktestEngine, L2MidHistory, StaticLatencyConfig, Strategy,
+    TokenBook,
 };
 use crate::backtest::pmxt::{L2Event, PMXTv2Loader};
 use crate::backtest::resolver::{
@@ -32,10 +33,13 @@ use crate::backtest::resolver::{
 };
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
-use crate::execution::sizing::shares_from_budget;
+use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
 use crate::live::breaker::{BreakerConfig, BreakerState};
-use crate::strategy::decision::{decide_candle_trade, CandleDecision, DecisionResult};
-use crate::strategy::microstructure::{BookLevelView, BookMicrostructure};
+use crate::strategy::decision::{decide_candle_trade_with_fee, CandleDecision, DecisionResult};
+use crate::strategy::microstructure::{
+    bookwalk_buy_slippage as bookwalk_buy_slippage_from_levels, recent_mid_runup, BookLevelView,
+    BookMicrostructure,
+};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
 
@@ -285,12 +289,11 @@ impl CandleBacktestStrategy {
         }
     }
 
-    fn fresh_ask(&self, token_id: &str, now_ts: f64, fallback: f64) -> f64 {
+    fn fresh_ask(&self, token_id: &str, now_ts: f64) -> Option<f64> {
         self.books
             .get(token_id)
             .filter(|b| now_ts - b.last_update_ts_s <= 30.0)
             .and_then(|b| (b.best_ask > 0.0).then_some(b.best_ask))
-            .unwrap_or(fallback)
     }
 
     fn microstructure_for_token(&self, token_id: &str, now_ts: f64) -> BookMicrostructure {
@@ -311,6 +314,20 @@ impl CandleBacktestStrategy {
     fn bookwalk_buy_slippage_for_token(&self, token_id: &str, size: f64) -> Option<f64> {
         let book = self.books.get(token_id)?;
         bookwalk_buy_slippage(book, size)
+    }
+
+    fn buy_book_quote_for_token(
+        &self,
+        token_id: &str,
+        now_ts: f64,
+        budget_usd: f64,
+    ) -> Option<BuyBookQuote> {
+        let asks = self
+            .books
+            .get(token_id)
+            .filter(|book| now_ts - book.last_update_ts_s <= 30.0)?
+            .ask_levels();
+        buy_book_quote_from_budget(budget_usd, &asks, self.min_order_size_shares, DEFAULT_TICK)
     }
 
     fn open_exposure(&self) -> f64 {
@@ -460,7 +477,7 @@ impl CandleBacktestStrategy {
 
 impl Strategy for CandleBacktestStrategy {
     fn needs_l2_history(&self) -> bool {
-        false
+        self.variant.microstructure.is_path_active()
     }
 
     fn on_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
@@ -485,9 +502,14 @@ impl Strategy for CandleBacktestStrategy {
         timestamp_s: f64,
         token_id: &str,
         book: &TokenBook,
-        _history: &BTreeMap<String, Vec<(f64, f64)>>,
+        history: &L2MidHistory,
     ) -> Vec<BacktestOrder> {
         self.events_seen += 1;
+        let btc = self.btc_history.price_at_seconds(timestamp_s);
+        if btc > 0.0 && timestamp_s - self.last_tick_ts_s >= 1.0 {
+            self.momentum.add_tick(btc, Some(timestamp_s));
+            self.last_tick_ts_s = timestamp_s;
+        }
         self.books.insert(token_id.to_string(), book.clone());
         self.settle_due_positions(timestamp_s);
         self.maybe_rearm_adaptive_health(timestamp_s);
@@ -528,16 +550,9 @@ impl Strategy for CandleBacktestStrategy {
         self.last_eval_bucket_by_token
             .insert(token_id.to_string(), eval_bucket);
 
-        // Maintain BTC tick history for the momentum detector. Throttle to
-        // 1 Hz — the live runtime adds one tick per cycle (~2 Hz) too.
-        let btc = self.btc_history.price_at_seconds(timestamp_s);
         if btc <= 0.0 {
             self.skipped_no_btc += 1;
             return Vec::new();
-        }
-        if timestamp_s - self.last_tick_ts_s >= 1.0 {
-            self.momentum.add_tick(btc, Some(timestamp_s));
-            self.last_tick_ts_s = timestamp_s;
         }
 
         if self.momentum.get_open_price(cid).is_none() {
@@ -563,8 +578,17 @@ impl Strategy for CandleBacktestStrategy {
             }
         };
 
-        let up_price = self.fresh_ask(&contract.up_token_id, timestamp_s, contract.up_price);
-        let down_price = self.fresh_ask(&contract.down_token_id, timestamp_s, contract.down_price);
+        let (Some(up_price), Some(down_price)) = (
+            self.fresh_ask(&contract.up_token_id, timestamp_s),
+            self.fresh_ask(&contract.down_token_id, timestamp_s),
+        ) else {
+            self.skipped_decision += 1;
+            *self
+                .skip_reasons
+                .entry("fresh_outcome_book_unavailable".to_string())
+                .or_insert(0) += 1;
+            return Vec::new();
+        };
 
         let implied_vol = self
             .btc_history
@@ -577,7 +601,22 @@ impl Strategy for CandleBacktestStrategy {
             self.breaker_state.losses,
             breaker_metrics.realized_drawdown_pct,
         );
-        let res = decide_candle_trade(
+        let prefer_maker = self.variant.effective_prefer_maker(
+            self.breaker_state.losses,
+            breaker_metrics.realized_drawdown_pct,
+        );
+        let fee_rate = contract
+            .market
+            .effective_taker_fee_rate(self.variant.default_fee_rate);
+        let maker_fee_rate = contract
+            .market
+            .effective_maker_fee_rate(self.variant.maker_fee_rate);
+        let entry_fee_rate = if prefer_maker {
+            maker_fee_rate
+        } else {
+            fee_rate
+        };
+        let res = decide_candle_trade_with_fee(
             &signal,
             minutes_elapsed,
             minutes_remaining,
@@ -587,6 +626,7 @@ impl Strategy for CandleBacktestStrategy {
             btc,
             signal.open_price,
             implied_vol,
+            entry_fee_rate,
             self.variant.min_confidence,
             self.variant.min_edge,
             self.variant.skip_dead_zone,
@@ -602,6 +642,7 @@ impl Strategy for CandleBacktestStrategy {
                 return Vec::new();
             }
         };
+        decision.regime.attach_time_inputs(timestamp_s);
         let traded_token = if decision.direction == "up" {
             contract.up_token_id.as_str()
         } else {
@@ -617,6 +658,14 @@ impl Strategy for CandleBacktestStrategy {
             micro.pressure,
             micro.imbalance,
         );
+        let recent_runup = history.get(traded_token).and_then(|points| {
+            recent_mid_runup(
+                points,
+                timestamp_s,
+                self.variant.microstructure.recent_mid_lookback_seconds,
+            )
+        });
+        decision.regime.attach_orderbook_path_inputs(recent_runup);
         let (mut position, exposure_available) = self.position_budget_before_stress(used_exposure);
         if let Some(stress_headroom) = self.breaker_state.stressed_drawdown_exposure_headroom(
             used_exposure,
@@ -626,37 +675,64 @@ impl Strategy for CandleBacktestStrategy {
             position = position.min(stress_headroom);
         }
         let market_price = decision.market_price;
-        let prefer_maker = self.variant.effective_prefer_maker(
-            self.breaker_state.losses,
-            breaker_metrics.realized_drawdown_pct,
-        );
         let pending_limit_price = if prefer_maker {
             resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
         } else {
             None
         };
+        let taker_quote = (!prefer_maker && position >= 1.0)
+            .then(|| self.buy_book_quote_for_token(traded_token, timestamp_s, position))
+            .flatten();
+        if let Some(quote) = taker_quote {
+            if let Err(skip) = decision.reprice_for_taker_execution(
+                quote.vwap,
+                quote.worst_price,
+                fee_rate,
+                self.variant.min_edge,
+                &effective_zone_config,
+            ) {
+                self.skipped_decision += 1;
+                let key = format!("{}_{}", skip.reason, decision.zone);
+                *self.skip_reasons.entry(key).or_insert(0) += 1;
+                return Vec::new();
+            }
+        }
         let estimated_sizing_price = if prefer_maker {
             pending_limit_price
-        } else if market_price > 0.0 {
-            Some(market_price)
         } else {
             None
         };
-        let estimated_size = if position >= 1.0 {
+        let estimated_size = taker_quote.map(|quote| quote.shares).or_else(|| {
+            if position < 1.0 {
+                return None;
+            }
             estimated_sizing_price
                 .filter(|price| *price > 0.0)
                 .and_then(|price| shares_from_budget(position, price, self.min_order_size_shares))
-        } else {
-            None
-        };
+        });
         decision.regime.attach_orderbook_quality_inputs(
-            estimated_size
-                .and_then(|size| self.bookwalk_buy_slippage_for_token(traded_token, size)),
+            taker_quote
+                .map(|quote| quote.slippage_per_share)
+                .or_else(|| {
+                    estimated_size
+                        .and_then(|size| self.bookwalk_buy_slippage_for_token(traded_token, size))
+                }),
             self.book_age_ms_for_token(traded_token, timestamp_s),
         );
         if let Some(reason) = self.variant.selectivity.reject_reason(&decision.regime) {
             self.skipped_decision += 1;
             let key = format!("{}_{}", reason, decision.zone);
+            *self.skip_reasons.entry(key).or_insert(0) += 1;
+            return Vec::new();
+        }
+
+        if let Err(skip) = self
+            .variant
+            .microstructure
+            .check_recent_mid_path(recent_runup)
+        {
+            self.skipped_decision += 1;
+            let key = format!("{}_{}", skip.reason, decision.zone);
             *self.skip_reasons.entry(key).or_insert(0) += 1;
             return Vec::new();
         }
@@ -683,27 +759,32 @@ impl Strategy for CandleBacktestStrategy {
         if market_price <= 0.0 {
             return Vec::new();
         }
-        let (order_type, limit_price, sizing_price) = if prefer_maker {
+        let (order_type, limit_price, sizing_price, size) = if prefer_maker {
             let Some(lp) = pending_limit_price else {
                 self.skipped_decision += 1;
                 let key = format!("maker_invalid_book_{}", decision.zone);
                 *self.skip_reasons.entry(key).or_insert(0) += 1;
                 return Vec::new();
             };
-            ("limit", Some(lp), lp)
+            let Some(size) = shares_from_budget(position, lp, self.min_order_size_shares) else {
+                self.skipped_decision += 1;
+                let key = format!("min_order_size_{}", decision.zone);
+                *self.skip_reasons.entry(key).or_insert(0) += 1;
+                return Vec::new();
+            };
+            ("limit", Some(lp), lp, size)
         } else {
-            ("market", None, market_price)
+            let Some(quote) = taker_quote else {
+                self.skipped_decision += 1;
+                let key = format!("taker_visible_depth_unavailable_{}", decision.zone);
+                *self.skip_reasons.entry(key).or_insert(0) += 1;
+                return Vec::new();
+            };
+            ("market", Some(quote.worst_price), quote.vwap, quote.shares)
         };
         if sizing_price <= 0.0 {
             return Vec::new();
         }
-        let Some(size) = shares_from_budget(position, sizing_price, self.min_order_size_shares)
-        else {
-            self.skipped_decision += 1;
-            let key = format!("min_order_size_{}", decision.zone);
-            *self.skip_reasons.entry(key).or_insert(0) += 1;
-            return Vec::new();
-        };
         self.traded.insert(cid.to_string());
         self.decisions.push(decision.clone());
 
@@ -736,18 +817,11 @@ impl Strategy for CandleBacktestStrategy {
                 open_btc: signal.open_price,
                 close_ts_s: runtime.close_ts_s,
                 official_direction: runtime.official_direction.clone(),
-                entry_price: sizing_price,
+                entry_price: limit_price.unwrap_or(sizing_price),
                 size,
                 fee: 0.0,
             },
         );
-        let fee_rate = contract
-            .market
-            .effective_taker_fee_rate(self.variant.default_fee_rate);
-        let maker_fee_rate = contract
-            .market
-            .effective_maker_fee_rate(self.variant.maker_fee_rate);
-
         vec![BacktestOrder {
             intent_id: intent.intent_id,
             timestamp_s,
@@ -778,39 +852,12 @@ fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
 }
 
 fn bookwalk_buy_slippage(book: &TokenBook, size: f64) -> Option<f64> {
-    if size <= 0.0 {
-        return None;
-    }
-    let asks = book.ask_levels();
-    if asks.is_empty() {
-        return None;
-    }
-    let touch = asks[0].0;
-    if touch <= 0.0 {
-        return None;
-    }
-
-    let mut remaining = size;
-    let mut total_cost = 0.0;
-    for (price, available) in &asks {
-        if remaining <= 0.0 {
-            break;
-        }
-        if *price <= 0.0 || *available <= 0.0 {
-            continue;
-        }
-        let take = remaining.min(*available);
-        total_cost += take * *price;
-        remaining -= take;
-    }
-    if remaining > 0.0 {
-        let last = asks.last().map(|(price, _)| *price)?;
-        let synthetic = (last + DEFAULT_TICK).clamp(DEFAULT_TICK, 1.0 - DEFAULT_TICK);
-        total_cost += remaining * synthetic;
-    }
-
-    let vwap = total_cost / size;
-    Some((vwap - touch).max(0.0))
+    let asks = book
+        .ask_levels()
+        .into_iter()
+        .map(|(price, size)| BookLevelView { price, size })
+        .collect::<Vec<_>>();
+    bookwalk_buy_slippage_from_levels(&asks, size, DEFAULT_TICK)
 }
 
 fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
@@ -1469,8 +1516,7 @@ fn load_existing_checkpoints(
 }
 
 /// Build the engine's fill model from a strategy variant. `prefer_maker` →
-/// post-only-style probabilistic Maker; otherwise OneTickTaker.
-/// Perfect / BookWalk are reserved for future variants.
+/// post-only-style probabilistic Maker; otherwise visible-depth BookWalkTaker.
 pub(crate) fn build_fill_model(v: &StrategyVariant) -> FillModel {
     if v.prefer_maker {
         FillModel::Maker(Box::new(Maker::new(
@@ -1481,7 +1527,7 @@ pub(crate) fn build_fill_model(v: &StrategyVariant) -> FillModel {
     } else if v.use_perfect_fill {
         FillModel::Perfect(Perfect)
     } else {
-        FillModel::OneTickTaker(OneTickTaker::default())
+        FillModel::BookWalkTaker(BookWalkTaker::default())
     }
 }
 
@@ -1592,6 +1638,24 @@ mod tests {
         let slippage = bookwalk_buy_slippage(&book, 130.0).unwrap();
         let expected_vwap = (0.50 * 100.0 + 0.60 * 30.0) / 130.0;
         assert!((slippage - (expected_vwap - 0.50)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn historical_gamma_price_is_not_an_l2_fallback() {
+        let (cfg, variants) = synthetic_cfg();
+        let strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            cfg.btc_history,
+            BacktestBreakerReport::default(),
+            BreakerConfig::default(),
+            None,
+        );
+
+        assert_eq!(strategy.fresh_ask("1", 1_745_654_400.0), None);
     }
 
     /// Build a tiny synthetic universe + history for the parallel-vs-serial
@@ -1711,6 +1775,32 @@ mod tests {
         assert!(active.contains("0xabc"));
         let inactive = cfg.universe.condition_id_set_for_hour(inactive_hour);
         assert!(!inactive.contains("0xabc"));
+    }
+
+    #[test]
+    fn traded_markets_do_not_stop_global_btc_sampling() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            cfg.btc_history,
+            BacktestBreakerReport::default(),
+            BreakerConfig::default(),
+            None,
+        );
+        strategy.traded.insert("0xabc".to_string());
+        let history = L2MidHistory::default();
+        let book = TokenBook::default();
+        let base_s = 1_745_654_400.0;
+
+        for second in 0..30 {
+            strategy.on_event(base_s + f64::from(second), "1", &book, &history);
+        }
+
+        assert!(strategy.momentum.rolling_realized_vol(30.0).is_some());
     }
 
     #[test]

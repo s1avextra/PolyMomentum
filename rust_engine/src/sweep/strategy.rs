@@ -244,6 +244,7 @@ pub fn paper_a_plus_floor() -> Strategy {
             max_spread: 0.02,
             min_book_depth: 20.0,
             min_book_pressure: 0.0,
+            ..MicrostructureConfig::default()
         },
     }
 }
@@ -370,6 +371,7 @@ pub fn grid_strategies(grid: &GridConfig) -> Vec<Strategy> {
                                                                 max_spread: micro_spread,
                                                                 min_book_depth: micro_depth,
                                                                 min_book_pressure: micro_pressure,
+                                                                ..MicrostructureConfig::default()
                                                             },
                                                         });
                                                             }

@@ -16,9 +16,8 @@ static AM_PM_RANGE: Lazy<Regex> = Lazy::new(|| {
         .expect("range regex")
 });
 
-static HOUR_TOKEN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(\d{1,2})\s*(am|pm)\b").expect("hour regex")
-});
+static HOUR_TOKEN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(\d{1,2})\s*(am|pm)\b").expect("hour regex"));
 
 pub fn estimate_window_minutes(description: &str) -> f64 {
     let s = description.to_lowercase();
@@ -27,7 +26,11 @@ pub fn estimate_window_minutes(description: &str) -> f64 {
         let t2 = caps.get(2).map(|m| m.as_str().trim()).unwrap_or("");
         if let (Some(n1), Some(n2)) = (parse_clock(t1), parse_clock(t2)) {
             let diff_min = ((n2 - n1).num_minutes()) as f64;
-            let diff_min = if diff_min < 0.0 { diff_min + 1440.0 } else { diff_min };
+            let diff_min = if diff_min < 0.0 {
+                diff_min + 1440.0
+            } else {
+                diff_min
+            };
             if diff_min > 0.0 {
                 return diff_min;
             }

@@ -12,12 +12,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::resolver::TradePnlDiagnostics;
-use crate::backtest::strategies::StrategyVariant;
+use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
 use crate::monitoring::{causality, diagnostics};
 use crate::strategy::spec::stable_json_hash;
 
@@ -210,6 +212,92 @@ pub struct StrategyBuilderCausalPolicySearchInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct StrategyBuilderEvolveSearchInput {
+    pub report_paths: Vec<String>,
+    pub historical_search_paths: Vec<String>,
+    pub out_dir: PathBuf,
+    pub seed: u64,
+    pub population: usize,
+    pub generations: usize,
+    pub elite_count: usize,
+    pub min_train_reports: usize,
+    pub min_train_trades: u64,
+    pub min_oos_trades: u64,
+    pub min_oos_wilson_win_rate_lower: f64,
+    pub min_oos_total_pnl: f64,
+    pub min_oos_profitable_reports: usize,
+    pub min_oos_eligible_reports: usize,
+    pub min_worst_oos_pnl: f64,
+    pub max_require_terms: usize,
+    pub max_deny_rules: usize,
+    pub max_deny_terms: usize,
+    pub min_deny_trades: u64,
+    pub min_deny_loss_pnl: f64,
+    pub min_deny_loss_reports: usize,
+    pub tail_alpha: f64,
+    pub min_oos_cvar_pnl: f64,
+    pub loss_burst_lookback: usize,
+    pub max_loss_burst_reports: usize,
+    pub min_oos_payoff_ratio: f64,
+    pub max_oos_worst_loss_to_avg_win: f64,
+    pub prior_loss_cluster_lookback: usize,
+    pub max_prior_loss_burst_reports: usize,
+    pub min_prior_payoff_ratio: f64,
+    pub max_prior_worst_loss_to_avg_win: f64,
+    pub meta_label_min_support: usize,
+    pub meta_label_alpha: f64,
+    pub meta_label_min_quantile_pnl: f64,
+    pub meta_label_max_loss_rate: f64,
+    pub meta_label_require_supported: bool,
+    pub meta_label_max_generalization_terms: usize,
+    pub top: usize,
+    pub replay_start: Option<String>,
+    pub replay_end: Option<String>,
+    pub replay_profile: String,
+    pub replay_zone_mode: String,
+    pub latency_ms: u64,
+    pub latency_audit_json: Option<String>,
+    pub btc_csv: Option<String>,
+    pub fold_hours: i64,
+    pub threads: usize,
+    pub window_minutes: f64,
+    pub atomic_parquet: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderMaterializePolicyVariantInput {
+    pub search_path: PathBuf,
+    pub source_report_paths: Vec<String>,
+    pub rank: usize,
+    pub output_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderMaterializeSweepVariantInput {
+    pub report_path: PathBuf,
+    pub rank: usize,
+    pub output_path: PathBuf,
+    pub require_causal_tag: Vec<String>,
+    pub deny_causal_tag: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyBuilderFeatureFilterSearchInput {
+    pub feature_paths: Vec<String>,
+    pub base_variant_path: PathBuf,
+    pub out_dir: PathBuf,
+    pub top: usize,
+    pub max_require_terms: usize,
+    pub max_deny_terms: usize,
+    pub min_atom_trades: u64,
+    pub max_atoms: usize,
+    pub min_total_trades: u64,
+    pub min_eligible_reports: usize,
+    pub min_total_pnl: f64,
+    pub min_worst_report_pnl: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct StrategyRegistryMarkInput {
     pub registry_path: PathBuf,
     pub strategy_id: String,
@@ -288,6 +376,314 @@ pub struct StrategyBuilderCausalPolicySearch {
     pub methodology: Vec<String>,
     pub gates: CausalPolicySearchGates,
     pub candidates: Vec<CausalPolicyCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderEvolveSearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub report_count: usize,
+    pub candidate_count: usize,
+    pub run: EvolutionRunManifest,
+    pub methodology: Vec<String>,
+    pub gates: CausalPolicySearchGates,
+    pub generations: Vec<EvolutionGeneration>,
+    pub candidates: Vec<EvolutionCandidate>,
+    pub notes: Vec<String>,
+    #[serde(skip_serializing)]
+    pub trial_ledger: Vec<EvolutionTrialLedgerRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderMaterializedPolicyVariant {
+    pub schema_version: u32,
+    pub rank: usize,
+    pub search_path: String,
+    pub source_report_path: String,
+    pub source_variant: String,
+    pub output_path: String,
+    pub variant_hash: String,
+    pub require_tags: BTreeMap<String, String>,
+    pub deny_tag_values: BTreeMap<String, BTreeSet<String>>,
+    pub selectivity: SelectivityFilter,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderMaterializedSweepVariant {
+    pub schema_version: u32,
+    pub rank: usize,
+    pub report_path: String,
+    pub source_variant: String,
+    pub output_path: String,
+    pub variant_hash: String,
+    pub require_tags: BTreeMap<String, String>,
+    pub deny_tag_values: BTreeMap<String, BTreeSet<String>>,
+    pub selectivity: SelectivityFilter,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyBuilderFeatureFilterSearch {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub feature_report_count: usize,
+    pub candidate_count: usize,
+    pub base_variant_path: String,
+    pub out_dir: String,
+    pub gates: FeatureFilterSearchGates,
+    pub candidates: Vec<FeatureFilterCandidate>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FeatureFilterSearchGates {
+    pub top: usize,
+    pub max_require_terms: usize,
+    pub max_deny_terms: usize,
+    pub min_atom_trades: u64,
+    pub max_atoms: usize,
+    pub min_total_trades: u64,
+    pub min_eligible_reports: usize,
+    pub min_total_pnl: f64,
+    pub min_worst_report_pnl: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FeatureFilterCandidate {
+    pub rank: usize,
+    pub passed: bool,
+    pub candidate_id: String,
+    pub variant_path: String,
+    pub variant_hash: String,
+    pub require_tags: BTreeMap<String, String>,
+    pub deny_tag_values: BTreeMap<String, BTreeSet<String>>,
+    pub selectivity: SelectivityFilter,
+    pub fitness: FeatureFilterFitness,
+    pub fold_reports: Vec<FeatureFilterFoldReport>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FeatureFilterFitness {
+    pub passed: bool,
+    pub failure_reasons: Vec<String>,
+    pub eligible_reports: usize,
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub total_pnl: f64,
+    pub worst_report_pnl: f64,
+    pub cvar_pnl: f64,
+    pub profit_factor: f64,
+    pub payoff_ratio: f64,
+    pub wilson_win_rate_lower: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FeatureFilterFoldReport {
+    pub feature_path: String,
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub total_pnl: f64,
+}
+
+#[derive(Debug, Clone)]
+struct FeatureFilterDraft {
+    require_tags: BTreeMap<String, String>,
+    deny_tag_values: BTreeMap<String, BTreeSet<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct FeatureFilterFold {
+    path: String,
+    rows: Vec<FeatureFilterRow>,
+}
+
+#[derive(Debug, Clone)]
+struct FeatureFilterRow {
+    pnl: f64,
+    won: bool,
+    causal_tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct FeatureFilterAtom {
+    dimension: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FeatureFilterAtomStats {
+    trades: u64,
+    losses: u64,
+    pnl: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeatureFilterReportJson {
+    rows: Vec<FeatureFilterRowJson>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeatureFilterRowJson {
+    pnl: Option<f64>,
+    pnl_after_fee: Option<f64>,
+    won: Option<bool>,
+    causal_tags: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionRunConfig {
+    pub seed: u64,
+    pub population: usize,
+    pub generations: usize,
+    pub elite_count: usize,
+    pub top: usize,
+    pub report_paths: Vec<String>,
+    pub historical_search_paths: Vec<String>,
+    pub out_dir: String,
+    pub replay: EvolutionReplayConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionReplayConfig {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub profile: String,
+    pub zone_mode: String,
+    pub latency_ms: u64,
+    pub latency_audit_json: Option<String>,
+    pub btc_csv: Option<String>,
+    pub fold_hours: i64,
+    pub threads: usize,
+    pub window_minutes: f64,
+    pub atomic_parquet: bool,
+    pub execute: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionRunManifest {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub generated_at: String,
+    pub config: EvolutionRunConfig,
+    pub artifact_paths: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EvolutionGenome {
+    pub schema_version: u32,
+    pub variant: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub require_tags: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deny_tags: BTreeMap<String, String>,
+    #[serde(default)]
+    pub knobs: EvolutionStrategyKnobs,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EvolutionStrategyKnobs {
+    pub min_confidence: Option<f64>,
+    pub min_edge: Option<f64>,
+    pub early_min_z: Option<f64>,
+    pub primary_min_z: Option<f64>,
+    pub late_min_z: Option<f64>,
+    pub terminal_min_z: Option<f64>,
+    pub min_price: Option<f64>,
+    pub max_price: Option<f64>,
+    pub min_ev_buffer: Option<f64>,
+    pub settlement_guard_minutes: Option<f64>,
+    pub settlement_min_abs_move_usd: Option<f64>,
+    pub min_reversion_count: Option<u64>,
+    pub max_reversion_count: Option<u64>,
+    pub prefer_maker: Option<bool>,
+    pub max_spread: Option<f64>,
+    pub min_book_depth: Option<f64>,
+    pub min_book_pressure: Option<f64>,
+    pub recent_mid_lookback_seconds: Option<f64>,
+    pub max_recent_mid_runup: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionCandidate {
+    pub rank: usize,
+    pub passed: bool,
+    pub generation: usize,
+    pub pareto_front: usize,
+    pub candidate_id: String,
+    pub genome_hash: String,
+    pub parent_hashes: Vec<String>,
+    pub genome: EvolutionGenome,
+    pub fitness: EvolutionFitness,
+    pub final_policy: CausalPolicyReport,
+    pub aggregate_static_final_policy: SelectivityStatsReport,
+    pub fold_forward: CausalPolicyFoldForwardReport,
+    pub variant_path: Option<String>,
+    pub replay_manifest_path: Option<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionFitness {
+    pub passed: bool,
+    pub replayable_policy: bool,
+    pub static_fitness_exact: bool,
+    pub gate_failures: usize,
+    pub failure_reasons: Vec<String>,
+    pub eligible_reports: usize,
+    pub profitable_reports: usize,
+    pub losing_reports: usize,
+    pub abstained_reports: usize,
+    pub trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub wilson_win_rate_lower: f64,
+    pub total_pnl: f64,
+    pub worst_report_pnl: f64,
+    pub cvar_pnl: f64,
+    pub max_loss_burst_reports: usize,
+    pub worst_loss_to_avg_win: f64,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub median_expectancy: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionGeneration {
+    pub generation: usize,
+    pub population_count: usize,
+    pub evaluated_count: usize,
+    pub pareto_front_count: usize,
+    pub best_candidate_ids: Vec<String>,
+    pub survivor_hashes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvolutionTrialLedgerRow {
+    pub generation: usize,
+    pub candidate_id: String,
+    pub genome_hash: String,
+    pub parent_hashes: Vec<String>,
+    pub passed: bool,
+    pub replayable_policy: bool,
+    pub static_fitness_exact: bool,
+    pub gate_failures: usize,
+    pub pareto_front: usize,
+    pub failure_reasons: Vec<String>,
+    pub eligible_reports: usize,
+    pub abstained_reports: usize,
+    pub trades: u64,
+    pub total_pnl: f64,
+    pub worst_report_pnl: f64,
+    pub cvar_pnl: f64,
+    pub max_loss_burst_reports: usize,
+    pub payoff_ratio: f64,
+    pub profit_factor: f64,
+    pub wilson_win_rate_lower: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -745,6 +1141,12 @@ struct SelectivityFold {
 }
 
 #[derive(Debug, Clone)]
+struct SelectivityReportSet {
+    folds: Vec<SelectivityFold>,
+    variants: BTreeMap<String, StrategyVariant>,
+}
+
+#[derive(Debug, Clone)]
 struct SelectivityVariantFold {
     name: String,
     buckets: BTreeMap<String, TradePnlDiagnostics>,
@@ -762,6 +1164,12 @@ struct SelectivityCandidateKey {
 struct TaggedRegimeStats {
     tags: BTreeMap<String, String>,
     stats: TradePnlDiagnostics,
+}
+
+#[derive(Debug, Clone)]
+struct EvolutionPopulationMember {
+    genome: EvolutionGenome,
+    parent_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2183,6 +2591,997 @@ pub fn causal_policy_search(
     Ok(causal_policy_search_from_folds(&folds, &input))
 }
 
+pub fn evolve_search(
+    input: StrategyBuilderEvolveSearchInput,
+) -> Result<StrategyBuilderEvolveSearch> {
+    validate_evolve_search_input(&input)?;
+    let report_set = load_selectivity_report_set(&input.report_paths, "evolve-search")?;
+    let causal_input = causal_input_from_evolution(&input);
+    let mut search = evolve_search_from_report_set(&report_set, &input, &causal_input)?;
+    write_evolution_artifacts(&mut search, &report_set, &input)?;
+    Ok(search)
+}
+
+pub fn materialize_policy_variant(
+    input: StrategyBuilderMaterializePolicyVariantInput,
+) -> Result<StrategyBuilderMaterializedPolicyVariant> {
+    if input.rank == 0 {
+        bail!("--rank must be > 0");
+    }
+    if input.source_report_paths.is_empty() {
+        bail!("at least one --source-report is required");
+    }
+    let payload = std::fs::read_to_string(&input.search_path)
+        .with_context(|| format!("read search artifact {}", input.search_path.display()))?;
+    let search: serde_json::Value = serde_json::from_str(&payload)
+        .with_context(|| format!("parse search artifact {}", input.search_path.display()))?;
+    let candidate = materialize_candidate_by_rank(&search, input.rank)?;
+    let source_variant = candidate
+        .pointer("/genome/variant")
+        .and_then(|value| value.as_str())
+        .or_else(|| candidate.get("variant").and_then(|value| value.as_str()))
+        .with_context(|| {
+            format!(
+                "candidate rank {} does not include a variant name",
+                input.rank
+            )
+        })?
+        .to_string();
+    let (mut variant, source_report_path) =
+        strategy_variant_from_reports(&input.source_report_paths, &source_variant)?;
+
+    let require_tags = tags_from_json_object(candidate.pointer("/final_policy/require_tags"))
+        .into_iter()
+        .chain(tags_from_arg_array(
+            candidate.pointer("/final_policy/harness_require_args"),
+        ))
+        .collect::<BTreeMap<_, _>>();
+    let deny_tag_values = deny_tag_values_from_candidate(candidate)?;
+    validate_causal_tag_map(&require_tags)?;
+    validate_causal_tag_values(&deny_tag_values)?;
+    for (dimension, value) in &require_tags {
+        if deny_tag_values
+            .get(dimension)
+            .is_some_and(|denied| denied.contains(value))
+        {
+            bail!(
+                "candidate rank {} both requires and denies {dimension}={value}",
+                input.rank
+            );
+        }
+    }
+
+    let mut notes = Vec::new();
+    if require_tags.is_empty() && deny_tag_values.is_empty() {
+        notes.push(
+            "candidate did not include final policy tags; preserving source selectivity"
+                .to_string(),
+        );
+    } else {
+        variant.selectivity =
+            merge_runtime_selectivity(&variant.selectivity, &require_tags, &deny_tag_values)?;
+        notes.push(
+            "variant selectivity merges the source variant filter with the candidate final policy for exact replay"
+                .to_string(),
+        );
+    }
+    variant.name = format!(
+        "{}_policy_rank{:03}",
+        safe_path_component(&source_variant),
+        input.rank
+    );
+    let variant_hash = stable_json_hash(&variant);
+    write_json_artifact_atomic(&input.output_path, &variant)
+        .with_context(|| format!("write materialized variant {}", input.output_path.display()))?;
+
+    Ok(StrategyBuilderMaterializedPolicyVariant {
+        schema_version: 1,
+        rank: input.rank,
+        search_path: input.search_path.display().to_string(),
+        source_report_path,
+        source_variant,
+        output_path: input.output_path.display().to_string(),
+        variant_hash,
+        require_tags,
+        deny_tag_values,
+        selectivity: variant.selectivity,
+        notes,
+    })
+}
+
+pub fn materialize_sweep_variant(
+    input: StrategyBuilderMaterializeSweepVariantInput,
+) -> Result<StrategyBuilderMaterializedSweepVariant> {
+    if input.rank == 0 {
+        bail!("--rank must be > 0");
+    }
+    let report_path = input.report_path.display().to_string();
+    let report = experiment::read_report(&report_path)
+        .with_context(|| format!("load harness-sweep report {report_path}"))?;
+    let variant_report = report
+        .variants
+        .get(input.rank - 1)
+        .with_context(|| format!("report {report_path} does not contain rank {}", input.rank))?;
+    let source_variant = variant_report_name(variant_report);
+    let mut variant =
+        serde_json::from_value::<StrategyVariant>(variant_report.strategy_params.clone())
+            .with_context(|| {
+                format!(
+                    "report {report_path} rank {} strategy_params do not parse as StrategyVariant",
+                    input.rank
+                )
+            })?;
+    variant.name = source_variant.clone();
+
+    let require_tags = tags_from_cli_args(&input.require_causal_tag)?;
+    let deny_tag_values = tag_values_from_cli_args(&input.deny_causal_tag)?;
+    validate_causal_tag_map(&require_tags)?;
+    validate_causal_tag_values(&deny_tag_values)?;
+    for (dimension, value) in &require_tags {
+        if deny_tag_values
+            .get(dimension)
+            .is_some_and(|denied| denied.contains(value))
+        {
+            bail!(
+                "rank {} both requires and denies {dimension}={value}",
+                input.rank
+            );
+        }
+    }
+
+    let mut notes = Vec::new();
+    if require_tags.is_empty() && deny_tag_values.is_empty() {
+        notes.push("preserved source sweep selectivity without extra causal tags".to_string());
+    } else {
+        variant.selectivity =
+            merge_runtime_selectivity(&variant.selectivity, &require_tags, &deny_tag_values)?;
+        notes.push(
+            "variant selectivity merges the source sweep row with explicit causal tags for exact replay"
+                .to_string(),
+        );
+    }
+    variant.name = format!(
+        "{}_sweep_rank{:03}",
+        safe_path_component(&source_variant),
+        input.rank
+    );
+    let variant_hash = stable_json_hash(&variant);
+    write_json_artifact_atomic(&input.output_path, &variant)
+        .with_context(|| format!("write materialized variant {}", input.output_path.display()))?;
+
+    Ok(StrategyBuilderMaterializedSweepVariant {
+        schema_version: 1,
+        rank: input.rank,
+        report_path,
+        source_variant,
+        output_path: input.output_path.display().to_string(),
+        variant_hash,
+        require_tags,
+        deny_tag_values,
+        selectivity: variant.selectivity,
+        notes,
+    })
+}
+
+pub fn feature_filter_search(
+    input: StrategyBuilderFeatureFilterSearchInput,
+) -> Result<StrategyBuilderFeatureFilterSearch> {
+    validate_feature_filter_search_input(&input)?;
+    let base_payload = std::fs::read_to_string(&input.base_variant_path)
+        .with_context(|| format!("read base variant {}", input.base_variant_path.display()))?;
+    let base_variant: StrategyVariant = serde_json::from_str(&base_payload)
+        .with_context(|| format!("parse base variant {}", input.base_variant_path.display()))?;
+    let folds = load_feature_filter_folds(&input.feature_paths)?;
+    let atoms = feature_filter_atoms(&folds, input.min_atom_trades, input.max_atoms);
+    let drafts = feature_filter_drafts(&folds, &atoms, &base_variant.selectivity, &input)?;
+
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for draft in drafts {
+        let key = feature_filter_draft_key(&draft);
+        if !seen.insert(key) {
+            continue;
+        }
+        let Ok(selectivity) = merge_runtime_selectivity(
+            &base_variant.selectivity,
+            &draft.require_tags,
+            &draft.deny_tag_values,
+        ) else {
+            continue;
+        };
+        let (fitness, fold_reports) = evaluate_feature_filter_draft(&folds, &draft, &input);
+        let filter_hash = stable_json_hash(&serde_json::json!({
+            "require_tags": draft.require_tags,
+            "deny_tag_values": draft.deny_tag_values,
+        }));
+        candidates.push(FeatureFilterCandidate {
+            rank: 0,
+            passed: fitness.passed,
+            candidate_id: format!("feature_{}", &filter_hash[..16]),
+            variant_path: String::new(),
+            variant_hash: String::new(),
+            require_tags: draft.require_tags,
+            deny_tag_values: draft.deny_tag_values,
+            selectivity,
+            fitness,
+            fold_reports,
+            notes: vec![
+                "feature-filter-search is static replay-row research only; exact L2 replay is required before promotion credit".to_string(),
+                "candidate filters are merged into the serialized base StrategyVariant for replay".to_string(),
+            ],
+        });
+    }
+    candidates.sort_by(compare_feature_filter_candidates);
+    let candidate_count = candidates.len();
+    let keep = input.top.min(candidates.len());
+    candidates.truncate(keep);
+
+    std::fs::create_dir_all(&input.out_dir)
+        .with_context(|| format!("create {}", input.out_dir.display()))?;
+    let candidates_dir = input.out_dir.join("candidates");
+    std::fs::create_dir_all(&candidates_dir)
+        .with_context(|| format!("create {}", candidates_dir.display()))?;
+    for (idx, candidate) in candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+        let mut variant = base_variant.clone();
+        variant.selectivity = candidate.selectivity.clone();
+        variant.name = format!(
+            "{}_feature_rank{:03}",
+            safe_path_component(&base_variant.name),
+            idx + 1
+        );
+        let variant_hash = stable_json_hash(&variant);
+        let rank_dir = candidates_dir.join(format!(
+            "candidate_rank_{:03}_{}",
+            idx + 1,
+            &variant_hash[..8]
+        ));
+        std::fs::create_dir_all(&rank_dir)
+            .with_context(|| format!("create {}", rank_dir.display()))?;
+        let variant_path = rank_dir.join("variant.json");
+        write_json_artifact_atomic(&variant_path, &variant)
+            .with_context(|| format!("write {}", variant_path.display()))?;
+        candidate.variant_path = variant_path.display().to_string();
+        candidate.variant_hash = variant_hash;
+        let filter_path = rank_dir.join("filter.json");
+        write_json_artifact_atomic(&filter_path, candidate)
+            .with_context(|| format!("write {}", filter_path.display()))?;
+    }
+
+    let ok = candidates.iter().any(|candidate| candidate.passed);
+    let summary = StrategyBuilderFeatureFilterSearch {
+        schema_version: 1,
+        ok,
+        feature_report_count: folds.len(),
+        candidate_count,
+        base_variant_path: input.base_variant_path.display().to_string(),
+        out_dir: input.out_dir.display().to_string(),
+        gates: FeatureFilterSearchGates {
+            top: input.top,
+            max_require_terms: input.max_require_terms,
+            max_deny_terms: input.max_deny_terms,
+            min_atom_trades: input.min_atom_trades,
+            max_atoms: input.max_atoms,
+            min_total_trades: input.min_total_trades,
+            min_eligible_reports: input.min_eligible_reports,
+            min_total_pnl: input.min_total_pnl,
+            min_worst_report_pnl: input.min_worst_report_pnl,
+        },
+        candidates,
+        notes: vec![
+            "Reads harness-sweep trade feature JSON and proposes runtime-safe causal require/deny filters.".to_string(),
+            "Static feature fitness is hypothesis context only; continuous exact replay can change trade paths.".to_string(),
+            "No live parameters, registry state, or promotion artifacts are mutated.".to_string(),
+        ],
+    };
+    let summary_path = input.out_dir.join("feature_filter_summary.json");
+    write_json_artifact_atomic(&summary_path, &summary)
+        .with_context(|| format!("write {}", summary_path.display()))?;
+    Ok(summary)
+}
+
+fn validate_evolve_search_input(input: &StrategyBuilderEvolveSearchInput) -> Result<()> {
+    if input.report_paths.len() < 2 {
+        bail!("evolve-search needs at least two chronological reports");
+    }
+    if input.report_paths.len() <= input.min_train_reports {
+        bail!(
+            "report count ({}) must be greater than --min-train-reports ({})",
+            input.report_paths.len(),
+            input.min_train_reports
+        );
+    }
+    if input.population == 0 {
+        bail!("--population must be > 0");
+    }
+    if input.generations == 0 {
+        bail!("--generations must be > 0");
+    }
+    if input.elite_count == 0 {
+        bail!("--elite-count must be > 0");
+    }
+    if input.max_require_terms == 0 {
+        bail!("--max-require-terms must be > 0");
+    }
+    if input.max_deny_terms > 1 {
+        bail!("evolve-search only emits runtime-supported single-tag deny rules; keep --max-deny-terms <= 1");
+    }
+    if !(0.0..=1.0).contains(&input.tail_alpha) || input.tail_alpha <= 0.0 {
+        bail!("--tail-alpha must be in (0, 1]");
+    }
+    if input.fold_hours <= 0 {
+        bail!("--fold-hours must be > 0");
+    }
+    if input.window_minutes <= 0.0 {
+        bail!("--window-minutes must be > 0");
+    }
+    if input.replay_start.is_some() != input.replay_end.is_some() {
+        bail!("--replay-start and --replay-end must be provided together");
+    }
+    Ok(())
+}
+
+fn load_selectivity_report_set(
+    report_paths: &[String],
+    context: &str,
+) -> Result<SelectivityReportSet> {
+    let mut folds = Vec::new();
+    let mut variants_by_name = BTreeMap::new();
+    for report_path in report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load {context} report {report_path}"))?;
+        experiment::validate_current_replay_semantics(&report)
+            .with_context(|| format!("validate {context} report {report_path}"))?;
+        let variants = report
+            .variants
+            .iter()
+            .map(|variant| {
+                let name = variant_report_name(variant);
+                if !variants_by_name.contains_key(&name) {
+                    if let Ok(mut executable) =
+                        serde_json::from_value::<StrategyVariant>(variant.strategy_params.clone())
+                    {
+                        executable.name = name.clone();
+                        variants_by_name.insert(name.clone(), executable);
+                    }
+                }
+                let regimes = variant.diagnostics.by_regime.clone();
+                SelectivityVariantFold {
+                    name,
+                    buckets: selectivity_buckets_for_variant(variant),
+                    tagged_regimes: tagged_regimes_from_map(&regimes),
+                    regimes,
+                }
+            })
+            .collect();
+        folds.push(SelectivityFold { variants });
+    }
+    Ok(SelectivityReportSet {
+        folds,
+        variants: variants_by_name,
+    })
+}
+
+fn materialize_candidate_by_rank(
+    search: &serde_json::Value,
+    rank: usize,
+) -> Result<&serde_json::Value> {
+    let candidates = search
+        .get("candidates")
+        .and_then(|value| value.as_array())
+        .context("search artifact does not include a candidates array")?;
+    candidates
+        .iter()
+        .find(|candidate| {
+            candidate
+                .get("rank")
+                .and_then(|value| value.as_u64())
+                .is_some_and(|candidate_rank| candidate_rank == rank as u64)
+        })
+        .or_else(|| candidates.get(rank - 1))
+        .with_context(|| format!("candidate rank {rank} was not found"))
+}
+
+fn strategy_variant_from_reports(
+    report_paths: &[String],
+    variant_name: &str,
+) -> Result<(StrategyVariant, String)> {
+    for report_path in report_paths {
+        let report = experiment::read_report(report_path)
+            .with_context(|| format!("load source report {report_path}"))?;
+        for variant in &report.variants {
+            let name = variant_report_name(variant);
+            if name != variant_name {
+                continue;
+            }
+            let mut executable = serde_json::from_value::<StrategyVariant>(
+                variant.strategy_params.clone(),
+            )
+            .with_context(|| {
+                format!(
+                    "source report {report_path} variant {variant_name} strategy_params do not parse as StrategyVariant"
+                )
+            })?;
+            executable.name = name;
+            return Ok((executable, report_path.clone()));
+        }
+    }
+    bail!("variant {variant_name} was not found in any --source-report")
+}
+
+fn deny_tag_values_from_candidate(
+    candidate: &serde_json::Value,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut deny_values: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (dimension, value) in
+        tags_from_arg_array(candidate.pointer("/final_policy/harness_deny_args"))
+    {
+        deny_values.entry(dimension).or_default().insert(value);
+    }
+    if let Some(rules) = candidate
+        .pointer("/final_policy/deny_rules")
+        .and_then(|value| value.as_array())
+    {
+        for rule in rules {
+            let match_tags = tags_from_json_object(rule.get("match_tags"));
+            if match_tags.len() > 1 {
+                bail!(
+                    "candidate contains unsupported multi-term runtime deny rule: {}",
+                    serde_json::to_string(&match_tags).unwrap_or_else(|_| "<invalid>".to_string())
+                );
+            }
+            for (dimension, value) in match_tags {
+                deny_values.entry(dimension).or_default().insert(value);
+            }
+        }
+    }
+    Ok(deny_values)
+}
+
+fn merge_runtime_selectivity(
+    source: &SelectivityFilter,
+    require_tags: &BTreeMap<String, String>,
+    deny_tag_values: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<SelectivityFilter> {
+    let mut merged = source.clone();
+    for (dimension, value) in require_tags {
+        insert_runtime_require_tag(&mut merged, dimension, value)?;
+    }
+    for (dimension, values) in deny_tag_values {
+        for value in values {
+            insert_runtime_deny_tag(&mut merged, dimension, value)?;
+        }
+    }
+    Ok(merged)
+}
+
+fn insert_runtime_require_tag(
+    filter: &mut SelectivityFilter,
+    dimension: &str,
+    value: &str,
+) -> Result<()> {
+    validate_causal_tag(dimension, value)?;
+    if filter
+        .deny_tags
+        .get(dimension)
+        .is_some_and(|denied| denied == value)
+        || filter
+            .deny_tag_values
+            .get(dimension)
+            .is_some_and(|denied| denied.contains(value))
+    {
+        bail!("runtime selectivity cannot both require and deny {dimension}={value}");
+    }
+    if let Some(existing) = filter.require_tags.get(dimension) {
+        if existing == value {
+            return Ok(());
+        }
+        bail!("conflicting runtime require tags for {dimension}: {existing} vs {value}");
+    }
+    if let Some(allowed) = filter.require_tag_values.get(dimension) {
+        if !allowed.contains(value) {
+            bail!("runtime require {dimension}={value} conflicts with existing allowed set");
+        }
+        filter.require_tag_values.remove(dimension);
+    }
+    filter
+        .require_tags
+        .insert(dimension.to_string(), value.to_string());
+    Ok(())
+}
+
+fn insert_runtime_deny_tag(
+    filter: &mut SelectivityFilter,
+    dimension: &str,
+    value: &str,
+) -> Result<()> {
+    validate_causal_tag(dimension, value)?;
+    if filter
+        .require_tags
+        .get(dimension)
+        .is_some_and(|required| required == value)
+    {
+        bail!("runtime selectivity cannot both require and deny {dimension}={value}");
+    }
+    if filter
+        .require_tag_values
+        .get(dimension)
+        .is_some_and(|allowed| allowed.len() == 1 && allowed.contains(value))
+    {
+        bail!("runtime deny {dimension}={value} removes the only allowed require-tag value");
+    }
+    if filter
+        .deny_tags
+        .get(dimension)
+        .is_some_and(|denied| denied == value)
+    {
+        return Ok(());
+    }
+    filter
+        .deny_tag_values
+        .entry(dimension.to_string())
+        .or_default()
+        .insert(value.to_string());
+    Ok(())
+}
+
+fn validate_causal_tag_map(tags: &BTreeMap<String, String>) -> Result<()> {
+    for (dimension, value) in tags {
+        validate_causal_tag(dimension, value)?;
+    }
+    Ok(())
+}
+
+fn validate_causal_tag_values(tags: &BTreeMap<String, BTreeSet<String>>) -> Result<()> {
+    for (dimension, values) in tags {
+        for value in values {
+            validate_causal_tag(dimension, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_causal_tag(dimension: &str, value: &str) -> Result<()> {
+    if !CAUSAL_POLICY_DIMENSIONS.contains(&dimension) {
+        bail!("unsupported causal tag dimension {dimension}");
+    }
+    if value.trim().is_empty() {
+        bail!("empty causal tag value for {dimension}");
+    }
+    Ok(())
+}
+
+fn validate_feature_filter_search_input(
+    input: &StrategyBuilderFeatureFilterSearchInput,
+) -> Result<()> {
+    if input.feature_paths.is_empty() {
+        bail!("feature-filter-search needs at least one --feature report");
+    }
+    if input.top == 0 {
+        bail!("--top must be > 0");
+    }
+    if input.max_require_terms > CAUSAL_POLICY_DIMENSIONS.len() {
+        bail!("--max-require-terms is larger than the causal tag space");
+    }
+    if input.max_atoms == 0 {
+        bail!("--max-atoms must be > 0");
+    }
+    Ok(())
+}
+
+fn load_feature_filter_folds(paths: &[String]) -> Result<Vec<FeatureFilterFold>> {
+    let mut folds = Vec::new();
+    let mut total_rows = 0usize;
+    for path in paths {
+        let payload =
+            std::fs::read_to_string(path).with_context(|| format!("read feature report {path}"))?;
+        let report: FeatureFilterReportJson = serde_json::from_str(&payload)
+            .with_context(|| format!("parse feature report {path}"))?;
+        let mut rows = Vec::new();
+        for row in report.rows {
+            let pnl = row
+                .pnl_after_fee
+                .or(row.pnl)
+                .with_context(|| format!("feature report {path} row missing pnl"))?;
+            if !pnl.is_finite() {
+                bail!("feature report {path} row has non-finite pnl");
+            }
+            let mut causal_tags = BTreeMap::new();
+            for (dimension, value) in row.causal_tags.unwrap_or_default() {
+                if CAUSAL_POLICY_DIMENSIONS.contains(&dimension.as_str()) {
+                    validate_causal_tag(&dimension, &value)?;
+                    causal_tags.insert(dimension, value);
+                }
+            }
+            rows.push(FeatureFilterRow {
+                pnl,
+                won: row.won.unwrap_or(pnl > 0.0),
+                causal_tags,
+            });
+        }
+        total_rows += rows.len();
+        folds.push(FeatureFilterFold {
+            path: path.clone(),
+            rows,
+        });
+    }
+    if total_rows == 0 {
+        bail!("feature-filter-search reports contain no trade rows");
+    }
+    Ok(folds)
+}
+
+fn feature_filter_atoms(
+    folds: &[FeatureFilterFold],
+    min_atom_trades: u64,
+    max_atoms: usize,
+) -> Vec<FeatureFilterAtom> {
+    let mut stats: BTreeMap<FeatureFilterAtom, FeatureFilterAtomStats> = BTreeMap::new();
+    for fold in folds {
+        for row in &fold.rows {
+            for (dimension, value) in &row.causal_tags {
+                let entry = stats
+                    .entry(FeatureFilterAtom {
+                        dimension: dimension.clone(),
+                        value: value.clone(),
+                    })
+                    .or_default();
+                entry.trades += 1;
+                if !row.won {
+                    entry.losses += 1;
+                }
+                entry.pnl += row.pnl;
+            }
+        }
+    }
+    let mut atoms = stats
+        .into_iter()
+        .filter(|(_, stats)| stats.trades >= min_atom_trades)
+        .collect::<Vec<_>>();
+    atoms.sort_by(|(left_atom, left_stats), (right_atom, right_stats)| {
+        right_stats
+            .trades
+            .cmp(&left_stats.trades)
+            .then_with(|| right_stats.losses.cmp(&left_stats.losses))
+            .then_with(|| f64_desc(left_stats.pnl.abs(), right_stats.pnl.abs()))
+            .then_with(|| left_atom.cmp(right_atom))
+    });
+    atoms
+        .into_iter()
+        .take(max_atoms)
+        .map(|(atom, _)| atom)
+        .collect()
+}
+
+fn feature_filter_drafts(
+    folds: &[FeatureFilterFold],
+    atoms: &[FeatureFilterAtom],
+    base_selectivity: &SelectivityFilter,
+    input: &StrategyBuilderFeatureFilterSearchInput,
+) -> Result<Vec<FeatureFilterDraft>> {
+    let mut require_seeds = Vec::new();
+    let mut seen_require = BTreeSet::new();
+    let empty = FeatureFilterDraft {
+        require_tags: BTreeMap::new(),
+        deny_tag_values: BTreeMap::new(),
+    };
+    seen_require.insert(feature_filter_draft_key(&empty));
+    require_seeds.push(empty);
+
+    for atom in atoms {
+        let current = require_seeds.clone();
+        for seed in current {
+            if seed.require_tags.len() >= input.max_require_terms {
+                continue;
+            }
+            if seed.require_tags.contains_key(&atom.dimension) {
+                continue;
+            }
+            let mut trial = seed.clone();
+            trial
+                .require_tags
+                .insert(atom.dimension.clone(), atom.value.clone());
+            if merge_runtime_selectivity(
+                base_selectivity,
+                &trial.require_tags,
+                &trial.deny_tag_values,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            let key = feature_filter_draft_key(&trial);
+            if seen_require.insert(key) {
+                require_seeds.push(trial);
+            }
+        }
+    }
+
+    let mut drafts = Vec::new();
+    for seed in require_seeds {
+        let mut current = seed.clone();
+        drafts.push(current.clone());
+        for _ in 0..input.max_deny_terms {
+            let (current_fitness, _) = evaluate_feature_filter_draft(folds, &current, input);
+            let mut best: Option<(FeatureFilterDraft, FeatureFilterFitness)> = None;
+            for atom in atoms {
+                if feature_filter_draft_denies(&current, &atom.dimension, &atom.value)
+                    || current
+                        .require_tags
+                        .get(&atom.dimension)
+                        .is_some_and(|required| required == &atom.value)
+                {
+                    continue;
+                }
+                let mut trial = current.clone();
+                trial
+                    .deny_tag_values
+                    .entry(atom.dimension.clone())
+                    .or_default()
+                    .insert(atom.value.clone());
+                if merge_runtime_selectivity(
+                    base_selectivity,
+                    &trial.require_tags,
+                    &trial.deny_tag_values,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                let (fitness, _) = evaluate_feature_filter_draft(folds, &trial, input);
+                if best.as_ref().is_none_or(|(_, best_fitness)| {
+                    compare_feature_filter_fitness(&fitness, best_fitness) == Ordering::Less
+                }) {
+                    best = Some((trial, fitness));
+                }
+            }
+            let Some((best_draft, best_fitness)) = best else {
+                break;
+            };
+            if compare_feature_filter_fitness(&best_fitness, &current_fitness) != Ordering::Less {
+                break;
+            }
+            current = best_draft;
+            drafts.push(current.clone());
+        }
+    }
+    Ok(drafts)
+}
+
+fn feature_filter_draft_denies(draft: &FeatureFilterDraft, dimension: &str, value: &str) -> bool {
+    draft
+        .deny_tag_values
+        .get(dimension)
+        .is_some_and(|values| values.contains(value))
+}
+
+fn feature_filter_draft_key(draft: &FeatureFilterDraft) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "require_tags": draft.require_tags,
+        "deny_tag_values": draft.deny_tag_values,
+    }))
+    .unwrap_or_default()
+}
+
+fn evaluate_feature_filter_draft(
+    folds: &[FeatureFilterFold],
+    draft: &FeatureFilterDraft,
+    input: &StrategyBuilderFeatureFilterSearchInput,
+) -> (FeatureFilterFitness, Vec<FeatureFilterFoldReport>) {
+    let mut fold_reports = Vec::new();
+    let mut fold_pnls = Vec::new();
+    let mut trades = 0u64;
+    let mut wins = 0u64;
+    let mut losses = 0u64;
+    let mut total_pnl = 0.0;
+    let mut gross_profit = 0.0;
+    let mut gross_loss = 0.0;
+    let mut positive_trades = 0u64;
+    let mut negative_trades = 0u64;
+
+    for fold in folds {
+        let mut fold_trades = 0u64;
+        let mut fold_wins = 0u64;
+        let mut fold_losses = 0u64;
+        let mut fold_pnl = 0.0;
+        for row in &fold.rows {
+            if !feature_filter_row_passes(row, draft) {
+                continue;
+            }
+            fold_trades += 1;
+            trades += 1;
+            if row.won {
+                fold_wins += 1;
+                wins += 1;
+            } else {
+                fold_losses += 1;
+                losses += 1;
+            }
+            fold_pnl += row.pnl;
+            total_pnl += row.pnl;
+            if row.pnl > 0.0 {
+                gross_profit += row.pnl;
+                positive_trades += 1;
+            } else if row.pnl < 0.0 {
+                gross_loss += row.pnl.abs();
+                negative_trades += 1;
+            }
+        }
+        if fold_trades > 0 {
+            fold_pnls.push(fold_pnl);
+        }
+        fold_reports.push(FeatureFilterFoldReport {
+            feature_path: fold.path.clone(),
+            trades: fold_trades,
+            wins: fold_wins,
+            losses: fold_losses,
+            total_pnl: fold_pnl,
+        });
+    }
+
+    let eligible_reports = fold_pnls.len();
+    let worst_report_pnl = fold_pnls.iter().copied().reduce(f64::min).unwrap_or(0.0);
+    let cvar_pnl = feature_filter_cvar(&fold_pnls, 0.20);
+    let profit_factor = if gross_loss > 0.0 {
+        gross_profit / gross_loss
+    } else if gross_profit > 0.0 {
+        1.0e9
+    } else {
+        0.0
+    };
+    let avg_win = if positive_trades > 0 {
+        gross_profit / positive_trades as f64
+    } else {
+        0.0
+    };
+    let avg_loss = if negative_trades > 0 {
+        gross_loss / negative_trades as f64
+    } else {
+        0.0
+    };
+    let payoff_ratio = if avg_loss > 0.0 {
+        avg_win / avg_loss
+    } else if avg_win > 0.0 {
+        1.0e9
+    } else {
+        0.0
+    };
+    let wilson_win_rate_lower = wilson_lower(wins as usize, trades as usize);
+    let mut failure_reasons = Vec::new();
+    if trades < input.min_total_trades {
+        failure_reasons.push("trades_below_gate".to_string());
+    }
+    if eligible_reports < input.min_eligible_reports {
+        failure_reasons.push("eligible_reports_below_gate".to_string());
+    }
+    if total_pnl + 1e-9 < input.min_total_pnl {
+        failure_reasons.push("total_pnl_below_gate".to_string());
+    }
+    if worst_report_pnl + 1e-9 < input.min_worst_report_pnl {
+        failure_reasons.push("worst_report_pnl_below_gate".to_string());
+    }
+    let passed = failure_reasons.is_empty();
+    (
+        FeatureFilterFitness {
+            passed,
+            failure_reasons,
+            eligible_reports,
+            trades,
+            wins,
+            losses,
+            total_pnl,
+            worst_report_pnl,
+            cvar_pnl,
+            profit_factor,
+            payoff_ratio,
+            wilson_win_rate_lower,
+        },
+        fold_reports,
+    )
+}
+
+fn feature_filter_row_passes(row: &FeatureFilterRow, draft: &FeatureFilterDraft) -> bool {
+    for (dimension, value) in &draft.require_tags {
+        if row.causal_tags.get(dimension) != Some(value) {
+            return false;
+        }
+    }
+    for (dimension, denied_values) in &draft.deny_tag_values {
+        if row
+            .causal_tags
+            .get(dimension)
+            .is_some_and(|value| denied_values.contains(value))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn compare_feature_filter_candidates(
+    left: &FeatureFilterCandidate,
+    right: &FeatureFilterCandidate,
+) -> Ordering {
+    compare_feature_filter_fitness(&left.fitness, &right.fitness)
+        .then_with(|| left.require_tags.len().cmp(&right.require_tags.len()))
+        .then_with(|| feature_filter_deny_count(left).cmp(&feature_filter_deny_count(right)))
+        .then_with(|| left.candidate_id.cmp(&right.candidate_id))
+}
+
+fn compare_feature_filter_fitness(
+    left: &FeatureFilterFitness,
+    right: &FeatureFilterFitness,
+) -> Ordering {
+    right
+        .passed
+        .cmp(&left.passed)
+        .then_with(|| left.failure_reasons.len().cmp(&right.failure_reasons.len()))
+        .then_with(|| left.losses.cmp(&right.losses))
+        .then_with(|| f64_desc(left.worst_report_pnl, right.worst_report_pnl))
+        .then_with(|| f64_desc(left.cvar_pnl, right.cvar_pnl))
+        .then_with(|| f64_desc(left.payoff_ratio, right.payoff_ratio))
+        .then_with(|| f64_desc(left.profit_factor, right.profit_factor))
+        .then_with(|| f64_desc(left.wilson_win_rate_lower, right.wilson_win_rate_lower))
+        .then_with(|| right.eligible_reports.cmp(&left.eligible_reports))
+        .then_with(|| right.trades.cmp(&left.trades))
+        .then_with(|| f64_desc(left.total_pnl, right.total_pnl))
+}
+
+fn feature_filter_deny_count(candidate: &FeatureFilterCandidate) -> usize {
+    candidate.deny_tag_values.values().map(BTreeSet::len).sum()
+}
+
+fn feature_filter_cvar(values: &[f64], alpha: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    let tail_len = ((sorted.len() as f64) * alpha).ceil().max(1.0) as usize;
+    let tail_len = tail_len.min(sorted.len());
+    sorted.iter().take(tail_len).sum::<f64>() / tail_len as f64
+}
+
+fn causal_input_from_evolution(
+    input: &StrategyBuilderEvolveSearchInput,
+) -> StrategyBuilderCausalPolicySearchInput {
+    StrategyBuilderCausalPolicySearchInput {
+        report_paths: input.report_paths.clone(),
+        min_train_reports: input.min_train_reports,
+        min_train_trades: input.min_train_trades,
+        min_oos_trades: input.min_oos_trades,
+        min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+        min_oos_total_pnl: input.min_oos_total_pnl,
+        min_oos_profitable_reports: input.min_oos_profitable_reports,
+        min_oos_eligible_reports: input.min_oos_eligible_reports,
+        min_worst_oos_pnl: input.min_worst_oos_pnl,
+        max_require_terms: input.max_require_terms,
+        max_deny_rules: input.max_deny_rules,
+        max_deny_terms: input.max_deny_terms,
+        min_deny_trades: input.min_deny_trades,
+        min_deny_loss_pnl: input.min_deny_loss_pnl,
+        min_deny_loss_reports: input.min_deny_loss_reports,
+        tail_alpha: input.tail_alpha,
+        min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+        loss_burst_lookback: input.loss_burst_lookback,
+        max_loss_burst_reports: input.max_loss_burst_reports,
+        tail_first_ranking: true,
+        min_oos_payoff_ratio: input.min_oos_payoff_ratio,
+        max_oos_worst_loss_to_avg_win: input.max_oos_worst_loss_to_avg_win,
+        prior_loss_cluster_lookback: input.prior_loss_cluster_lookback,
+        max_prior_loss_burst_reports: input.max_prior_loss_burst_reports,
+        min_prior_payoff_ratio: input.min_prior_payoff_ratio,
+        max_prior_worst_loss_to_avg_win: input.max_prior_worst_loss_to_avg_win,
+        meta_label_min_support: input.meta_label_min_support,
+        meta_label_alpha: input.meta_label_alpha,
+        meta_label_min_quantile_pnl: input.meta_label_min_quantile_pnl,
+        meta_label_max_loss_rate: input.meta_label_max_loss_rate,
+        meta_label_require_supported: input.meta_label_require_supported,
+        meta_label_max_generalization_terms: input.meta_label_max_generalization_terms,
+        top: input.population.max(input.top).max(1),
+    }
+}
+
 fn selectivity_search_from_folds(
     folds: &[SelectivityFold],
     input: &StrategyBuilderSelectivitySearchInput,
@@ -2810,6 +4209,2036 @@ fn causal_policy_search_from_folds(
     }
 }
 
+fn evolve_search_from_report_set(
+    report_set: &SelectivityReportSet,
+    input: &StrategyBuilderEvolveSearchInput,
+    causal_input: &StrategyBuilderCausalPolicySearchInput,
+) -> Result<StrategyBuilderEvolveSearch> {
+    let variants = variant_names(&report_set.folds);
+    if variants.is_empty() {
+        bail!("evolve-search found no variants in the input reports");
+    }
+    let tag_universe = causal_tag_universe(&report_set.folds);
+    if tag_universe.is_empty() {
+        bail!("evolve-search found no causal regime tags in the input reports");
+    }
+    let historical_genomes = historical_evolution_seed_genomes(report_set, input, &variants)?;
+
+    let mut rng = StdRng::seed_from_u64(input.seed);
+    let mut population = initial_evolution_population(
+        report_set,
+        input,
+        &tag_universe,
+        &variants,
+        &historical_genomes,
+        &mut rng,
+    );
+    let mut all_candidates = Vec::new();
+    let mut trial_ledger = Vec::new();
+    let mut generation_reports = Vec::new();
+
+    for generation in 0..input.generations {
+        let mut evaluated = population
+            .iter()
+            .map(|member| {
+                evaluate_evolution_genome_against_variants(
+                    &report_set.folds,
+                    causal_input,
+                    generation,
+                    member.parent_hashes.clone(),
+                    member.genome.clone(),
+                    &report_set.variants,
+                )
+            })
+            .collect::<Vec<_>>();
+        assign_evolution_pareto_fronts(&mut evaluated);
+        evaluated.sort_by(compare_evolution_candidates);
+        for (idx, candidate) in evaluated.iter_mut().enumerate() {
+            candidate.rank = idx + 1;
+        }
+
+        trial_ledger.extend(evaluated.iter().map(evolution_trial_ledger_row));
+        all_candidates.extend(evaluated.clone());
+
+        let survivor_limit = input
+            .elite_count
+            .min(evaluated.len())
+            .max(1)
+            .min(input.population);
+        let survivor_indexes =
+            evolution_diverse_candidate_indexes(&evaluated, survivor_limit, variants.len());
+        let survivor_hashes = survivor_indexes
+            .iter()
+            .map(|idx| evaluated[*idx].genome_hash.clone())
+            .collect::<Vec<_>>();
+        generation_reports.push(EvolutionGeneration {
+            generation,
+            population_count: population.len(),
+            evaluated_count: evaluated.len(),
+            pareto_front_count: evaluated
+                .iter()
+                .map(|candidate| candidate.pareto_front)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            best_candidate_ids: evaluated
+                .iter()
+                .take(5)
+                .map(|candidate| candidate.candidate_id.clone())
+                .collect(),
+            survivor_hashes: survivor_hashes.clone(),
+        });
+
+        if generation + 1 == input.generations {
+            break;
+        }
+        population = next_evolution_population(
+            &evaluated,
+            input,
+            &tag_universe,
+            &variants,
+            &report_set.variants,
+            &survivor_indexes,
+            &mut rng,
+        );
+    }
+
+    let mut unique_candidates = unique_evolution_candidates(all_candidates);
+    assign_evolution_pareto_fronts(&mut unique_candidates);
+    unique_candidates.sort_by(compare_evolution_candidates);
+    for (idx, candidate) in unique_candidates.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    let candidate_count = unique_candidates.len();
+    let any_passed = unique_candidates.iter().any(|candidate| candidate.passed);
+    let failure_summary = evolution_failure_summary(&unique_candidates);
+    unique_candidates = select_evolution_output_candidates(&unique_candidates, input.top.max(1));
+
+    let config = evolution_run_config(input);
+    let run_hash = stable_json_hash(&config);
+    let mut artifact_paths = BTreeMap::new();
+    artifact_paths.insert(
+        "summary".to_string(),
+        input
+            .out_dir
+            .join("evolution_summary.json")
+            .display()
+            .to_string(),
+    );
+    artifact_paths.insert(
+        "trial_ledger".to_string(),
+        input
+            .out_dir
+            .join("trial_ledger.jsonl")
+            .display()
+            .to_string(),
+    );
+    artifact_paths.insert(
+        "generations".to_string(),
+        input.out_dir.join("generations").display().to_string(),
+    );
+    artifact_paths.insert(
+        "candidates".to_string(),
+        input.out_dir.join("candidates").display().to_string(),
+    );
+
+    let mut notes = vec![
+        "evolve-search is offline research only; it does not mutate live parameters or registry state".to_string(),
+        "static/report fitness is hypothesis context; replay is required before promotion credit".to_string(),
+        "strategy-knob or selectivity counterfactuals receive no source-report fitness credit; their artifacts are replay hypotheses only".to_string(),
+        "top artifacts reserve replay-hypothesis capacity for runtime counterfactuals so exact replay can feed successful variants into the next evolution run".to_string(),
+        "genomes emit only runtime-supported single-tag deny filters".to_string(),
+    ];
+    if !input.historical_search_paths.is_empty() {
+        notes.push(format!(
+            "seeded {} historical genomes from {} search artifact(s)",
+            historical_genomes.len(),
+            input.historical_search_paths.len()
+        ));
+    }
+    if !any_passed {
+        notes.push(format!(
+            "no candidate passed configured tail-first gates; top failure classes: {}",
+            failure_summary
+        ));
+    }
+
+    Ok(StrategyBuilderEvolveSearch {
+        schema_version: 1,
+        ok: any_passed,
+        report_count: report_set.folds.len(),
+        candidate_count,
+        run: EvolutionRunManifest {
+            schema_version: 1,
+            run_id: format!("evo_{}", &run_hash[..16]),
+            generated_at: "offline_deterministic".to_string(),
+            config,
+            artifact_paths,
+        },
+        methodology: vec![
+            "Seed the population from current report variants, supplied historical search artifacts, and observed causal tag policies; bias initialization toward direction, reversion, tight/fresh/deep order-book, and maker-safe contexts.".to_string(),
+            "Mutate runtime-safe StrategyVariant thresholds, execution and microstructure knobs plus causal require tags and single-tag deny vetoes from the frozen causal policy dimensions; crossover stays within one source-variant family.".to_string(),
+            "Evaluate genomes with the same chronological feed-forward report mechanics as causal-policy-search; optional deny learning is prior-only. Any strategy-knob or runtime-selectivity change is marked replay-required because source reports cannot score counterfactual re-entry paths.".to_string(),
+            "Apply a deterministic source-family diversity cap to elites and parent pools before mutation.".to_string(),
+            "Rank candidates with NSGA-II-style non-dominated fronts and a tail-first comparator: gates, loss burst, worst fold, CVaR, payoff geometry, Wilson lower bound, coverage, median expectancy, then total PnL.".to_string(),
+            "Write deterministic research artifacts only; promotion remains blocked until replay, robust-promote, zone audit, evidence export, and registry audit pass.".to_string(),
+        ],
+        gates: causal_policy_gates(causal_input),
+        generations: generation_reports,
+        candidates: unique_candidates,
+        notes,
+        trial_ledger,
+    })
+}
+
+fn evolution_run_config(input: &StrategyBuilderEvolveSearchInput) -> EvolutionRunConfig {
+    EvolutionRunConfig {
+        seed: input.seed,
+        population: input.population,
+        generations: input.generations,
+        elite_count: input.elite_count,
+        top: input.top,
+        report_paths: input.report_paths.clone(),
+        historical_search_paths: input.historical_search_paths.clone(),
+        out_dir: input.out_dir.display().to_string(),
+        replay: EvolutionReplayConfig {
+            start: input.replay_start.clone(),
+            end: input.replay_end.clone(),
+            profile: input.replay_profile.clone(),
+            zone_mode: input.replay_zone_mode.clone(),
+            latency_ms: input.latency_ms,
+            latency_audit_json: input.latency_audit_json.clone(),
+            btc_csv: input.btc_csv.clone(),
+            fold_hours: input.fold_hours,
+            threads: input.threads,
+            window_minutes: input.window_minutes,
+            atomic_parquet: input.atomic_parquet,
+            execute: false,
+        },
+    }
+}
+
+fn causal_policy_gates(input: &StrategyBuilderCausalPolicySearchInput) -> CausalPolicySearchGates {
+    CausalPolicySearchGates {
+        min_train_reports: input.min_train_reports,
+        min_train_trades: input.min_train_trades,
+        min_oos_trades: input.min_oos_trades,
+        min_oos_wilson_win_rate_lower: input.min_oos_wilson_win_rate_lower,
+        min_oos_total_pnl: input.min_oos_total_pnl,
+        min_oos_profitable_reports: input.min_oos_profitable_reports,
+        min_oos_eligible_reports: input.min_oos_eligible_reports,
+        min_worst_oos_pnl: input.min_worst_oos_pnl,
+        max_require_terms: input.max_require_terms,
+        max_deny_rules: input.max_deny_rules,
+        max_deny_terms: input.max_deny_terms,
+        min_deny_trades: input.min_deny_trades,
+        min_deny_loss_pnl: input.min_deny_loss_pnl,
+        min_deny_loss_reports: input.min_deny_loss_reports,
+        tail_alpha: input.tail_alpha,
+        min_oos_cvar_pnl: input.min_oos_cvar_pnl,
+        loss_burst_lookback: input.loss_burst_lookback,
+        max_loss_burst_reports: input.max_loss_burst_reports,
+        tail_first_ranking: input.tail_first_ranking,
+        min_oos_payoff_ratio: input.min_oos_payoff_ratio,
+        max_oos_worst_loss_to_avg_win: input.max_oos_worst_loss_to_avg_win,
+        prior_loss_cluster_lookback: input.prior_loss_cluster_lookback,
+        max_prior_loss_burst_reports: input.max_prior_loss_burst_reports,
+        min_prior_payoff_ratio: input.min_prior_payoff_ratio,
+        max_prior_worst_loss_to_avg_win: input.max_prior_worst_loss_to_avg_win,
+        meta_label_min_support: input.meta_label_min_support,
+        meta_label_alpha: input.meta_label_alpha,
+        meta_label_min_quantile_pnl: input.meta_label_min_quantile_pnl,
+        meta_label_max_loss_rate: input.meta_label_max_loss_rate,
+        meta_label_require_supported: input.meta_label_require_supported,
+        meta_label_max_generalization_terms: input.meta_label_max_generalization_terms,
+    }
+}
+
+fn causal_tag_universe(folds: &[SelectivityFold]) -> BTreeMap<String, BTreeSet<String>> {
+    let allowed = CAUSAL_POLICY_DIMENSIONS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut universe: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for fold in folds {
+        for variant in &fold.variants {
+            for regime in &variant.tagged_regimes {
+                for (dimension, value) in &regime.tags {
+                    if allowed.contains(dimension.as_str()) {
+                        universe
+                            .entry(dimension.clone())
+                            .or_default()
+                            .insert(value.clone());
+                    }
+                }
+            }
+        }
+    }
+    universe
+}
+
+fn initial_evolution_population(
+    report_set: &SelectivityReportSet,
+    input: &StrategyBuilderEvolveSearchInput,
+    tag_universe: &BTreeMap<String, BTreeSet<String>>,
+    variants: &[String],
+    historical_genomes: &[EvolutionGenome],
+    rng: &mut StdRng,
+) -> Vec<EvolutionPopulationMember> {
+    let mut population = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut keys = causal_policy_candidate_keys(&report_set.folds, input.max_require_terms);
+    keys.sort_by(|a, b| {
+        evolution_tag_bias_score(&b.require_tags)
+            .cmp(&evolution_tag_bias_score(&a.require_tags))
+            .then_with(|| a.variant.cmp(&b.variant))
+            .then_with(|| policy_label(&a.require_tags).cmp(&policy_label(&b.require_tags)))
+    });
+
+    let base_variant_limit = if !keys.is_empty() && input.population > 1 {
+        variants.len().min((input.population / 4).max(1))
+    } else {
+        variants.len().min(input.population)
+    };
+    for variant in variants.iter().take(base_variant_limit) {
+        let genome = EvolutionGenome {
+            schema_version: 1,
+            variant: variant.clone(),
+            require_tags: BTreeMap::new(),
+            deny_tags: BTreeMap::new(),
+            knobs: report_set
+                .variants
+                .get(variant)
+                .map(evolution_knobs_from_variant)
+                .unwrap_or_default(),
+        };
+        push_unique_evolution_member(&mut population, &mut seen, genome, Vec::new());
+    }
+
+    let path_seed_limit = if input.population >= 4 {
+        (input.population / 6).max(1)
+    } else {
+        0
+    };
+    let path_seeds = [(10.0, 0.06), (15.0, 0.08), (30.0, 0.10)];
+    let mut path_seed_count = 0_usize;
+    'variant_path_seeds: for variant in variants {
+        for (lookback_seconds, max_runup) in path_seeds {
+            if population.len() >= input.population || path_seed_count >= path_seed_limit {
+                break 'variant_path_seeds;
+            }
+            let mut genome = EvolutionGenome {
+                schema_version: 1,
+                variant: variant.clone(),
+                require_tags: BTreeMap::new(),
+                deny_tags: BTreeMap::new(),
+                knobs: report_set
+                    .variants
+                    .get(variant)
+                    .map(evolution_knobs_from_variant)
+                    .unwrap_or_default(),
+            };
+            genome.knobs.recent_mid_lookback_seconds = Some(lookback_seconds);
+            genome.knobs.max_recent_mid_runup = Some(max_runup);
+            normalize_evolution_knobs(&mut genome.knobs);
+            if push_unique_evolution_member(&mut population, &mut seen, genome, Vec::new()) {
+                path_seed_count += 1;
+            }
+        }
+    }
+
+    let historical_limit = if !keys.is_empty() && input.population > 2 {
+        (input.population / 3).max(1)
+    } else {
+        input.population
+    };
+    for genome in historical_genomes.iter().take(historical_limit) {
+        if population.len() >= input.population {
+            break;
+        }
+        let mut genome = genome.clone();
+        normalize_evolution_genome(&mut genome, tag_universe, input);
+        if genome.require_tags.is_empty() && genome.deny_tags.is_empty() {
+            continue;
+        }
+        push_unique_evolution_member(&mut population, &mut seen, genome, Vec::new());
+    }
+
+    for key in &keys {
+        if population.len() >= input.population {
+            break;
+        }
+        let genome = evolution_genome_from_key(key, &report_set.variants);
+        push_unique_evolution_member(&mut population, &mut seen, genome, Vec::new());
+    }
+
+    let mut attempts = 0_usize;
+    while population.len() < input.population && attempts < input.population.saturating_mul(40) {
+        attempts += 1;
+        let genome = if keys.is_empty() {
+            let variant = variants[rng.gen_range(0..variants.len())].clone();
+            EvolutionGenome {
+                schema_version: 1,
+                variant: variant.clone(),
+                require_tags: BTreeMap::new(),
+                deny_tags: BTreeMap::new(),
+                knobs: report_set
+                    .variants
+                    .get(&variant)
+                    .map(evolution_knobs_from_variant)
+                    .unwrap_or_default(),
+            }
+        } else {
+            let key = keys[rng.gen_range(0..keys.len())].clone();
+            evolution_genome_from_key(&key, &report_set.variants)
+        };
+        let genome = mutate_evolution_genome(
+            genome,
+            tag_universe,
+            variants,
+            &report_set.variants,
+            input,
+            rng,
+        );
+        push_unique_evolution_member(&mut population, &mut seen, genome, Vec::new());
+    }
+    population
+}
+
+fn historical_evolution_seed_genomes(
+    report_set: &SelectivityReportSet,
+    input: &StrategyBuilderEvolveSearchInput,
+    variants: &[String],
+) -> Result<Vec<EvolutionGenome>> {
+    if input.historical_search_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let valid_variants = variants.iter().cloned().collect::<BTreeSet<_>>();
+    let mut genomes = Vec::new();
+    let mut seen = BTreeSet::new();
+    for path in &input.historical_search_paths {
+        let payload = std::fs::read_to_string(path)
+            .with_context(|| format!("read historical evolution seed artifact {path}"))?;
+        let value: serde_json::Value = serde_json::from_str(&payload)
+            .with_context(|| format!("parse historical evolution seed artifact {path}"))?;
+        let Some(candidates) = value.get("candidates").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for candidate in candidates {
+            for genome in historical_evolution_genomes_from_candidate(
+                candidate,
+                report_set,
+                variants,
+                &valid_variants,
+            ) {
+                if genome.require_tags.is_empty() && genome.deny_tags.is_empty() {
+                    continue;
+                }
+                let hash = evolution_genome_hash(&genome);
+                if seen.insert(hash) {
+                    genomes.push(genome);
+                }
+            }
+        }
+    }
+    Ok(genomes)
+}
+
+fn historical_evolution_genomes_from_candidate(
+    candidate: &serde_json::Value,
+    report_set: &SelectivityReportSet,
+    variants: &[String],
+    valid_variants: &BTreeSet<String>,
+) -> Vec<EvolutionGenome> {
+    let source_variant = candidate
+        .pointer("/genome/variant")
+        .and_then(|value| value.as_str())
+        .or_else(|| candidate.get("variant").and_then(|value| value.as_str()));
+    let historical_knobs = candidate
+        .pointer("/genome/knobs")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<EvolutionStrategyKnobs>(value).ok());
+    let mut require_tags = tags_from_json_object(candidate.pointer("/genome/require_tags"));
+    if require_tags.is_empty() {
+        require_tags = tags_from_json_object(candidate.pointer("/final_policy/require_tags"));
+    }
+    if require_tags.is_empty() {
+        require_tags = tags_from_arg_array(candidate.pointer("/final_policy/harness_require_args"));
+    }
+
+    let mut deny_tags = tags_from_json_object(candidate.pointer("/genome/deny_tags"));
+    if deny_tags.is_empty() {
+        deny_tags = tags_from_arg_array(candidate.pointer("/final_policy/harness_deny_args"));
+    }
+    if deny_tags.is_empty() {
+        deny_tags = tags_from_policy_rules(candidate.pointer("/final_policy/deny_rules"));
+    }
+
+    if require_tags.is_empty() && deny_tags.is_empty() {
+        return Vec::new();
+    }
+
+    let target_variants = if let Some(variant) = source_variant {
+        if valid_variants.contains(variant) {
+            vec![variant.to_string()]
+        } else {
+            variants.to_vec()
+        }
+    } else {
+        variants.to_vec()
+    };
+
+    target_variants
+        .into_iter()
+        .map(|variant| EvolutionGenome {
+            schema_version: 1,
+            knobs: if source_variant == Some(variant.as_str()) {
+                historical_knobs.clone().unwrap_or_else(|| {
+                    report_set
+                        .variants
+                        .get(&variant)
+                        .map(evolution_knobs_from_variant)
+                        .unwrap_or_default()
+                })
+            } else {
+                report_set
+                    .variants
+                    .get(&variant)
+                    .map(evolution_knobs_from_variant)
+                    .unwrap_or_default()
+            },
+            variant,
+            require_tags: require_tags.clone(),
+            deny_tags: deny_tags.clone(),
+        })
+        .collect()
+}
+
+fn tags_from_json_object(value: Option<&serde_json::Value>) -> BTreeMap<String, String> {
+    value
+        .and_then(|value| value.as_object())
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(dimension, value)| {
+                    value
+                        .as_str()
+                        .map(|tag_value| (dimension.clone(), tag_value.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tags_from_arg_array(value: Option<&serde_json::Value>) -> BTreeMap<String, String> {
+    value
+        .and_then(|value| value.as_array())
+        .map(|args| {
+            args.iter()
+                .filter_map(|value| value.as_str())
+                .filter_map(tag_from_arg)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tags_from_policy_rules(value: Option<&serde_json::Value>) -> BTreeMap<String, String> {
+    let Some(rules) = value.and_then(|value| value.as_array()) else {
+        return BTreeMap::new();
+    };
+    let mut tags = BTreeMap::new();
+    for rule in rules {
+        let rule_tags = tags_from_json_object(rule.get("match_tags"));
+        if rule_tags.len() == 1 {
+            tags.extend(rule_tags);
+        }
+    }
+    tags
+}
+
+fn tag_from_arg(raw: &str) -> Option<(String, String)> {
+    let (dimension, value) = raw.split_once('=')?;
+    if dimension.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some((dimension.to_string(), value.to_string()))
+}
+
+fn tags_from_cli_args(args: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut tags = BTreeMap::new();
+    for raw in args {
+        let (dimension, value) =
+            tag_from_arg(raw).with_context(|| format!("invalid causal tag `{raw}`"))?;
+        if let Some(existing) = tags.insert(dimension.clone(), value.clone()) {
+            if existing != value {
+                bail!("conflicting causal tag values for {dimension}: {existing} vs {value}");
+            }
+        }
+    }
+    Ok(tags)
+}
+
+fn tag_values_from_cli_args(args: &[String]) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut tags: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for raw in args {
+        let (dimension, value) =
+            tag_from_arg(raw).with_context(|| format!("invalid causal tag `{raw}`"))?;
+        tags.entry(dimension).or_default().insert(value);
+    }
+    Ok(tags)
+}
+
+fn push_unique_evolution_member(
+    population: &mut Vec<EvolutionPopulationMember>,
+    seen: &mut BTreeSet<String>,
+    genome: EvolutionGenome,
+    parent_hashes: Vec<String>,
+) -> bool {
+    let hash = evolution_genome_hash(&genome);
+    if !seen.insert(hash) {
+        return false;
+    }
+    population.push(EvolutionPopulationMember {
+        genome,
+        parent_hashes,
+    });
+    true
+}
+
+fn evolution_genome_from_key(
+    key: &CausalPolicyKey,
+    variants: &BTreeMap<String, StrategyVariant>,
+) -> EvolutionGenome {
+    EvolutionGenome {
+        schema_version: 1,
+        variant: key.variant.clone(),
+        require_tags: key.require_tags.clone(),
+        deny_tags: BTreeMap::new(),
+        knobs: variants
+            .get(&key.variant)
+            .map(evolution_knobs_from_variant)
+            .unwrap_or_default(),
+    }
+}
+
+fn evolution_knobs_from_variant(variant: &StrategyVariant) -> EvolutionStrategyKnobs {
+    EvolutionStrategyKnobs {
+        min_confidence: Some(variant.min_confidence),
+        min_edge: Some(variant.min_edge),
+        early_min_z: Some(variant.zone_config.early_min_z),
+        primary_min_z: Some(variant.zone_config.primary_min_z),
+        late_min_z: Some(variant.zone_config.late_min_z),
+        terminal_min_z: Some(variant.zone_config.terminal_min_z),
+        min_price: Some(variant.zone_config.min_price),
+        max_price: Some(variant.zone_config.max_price),
+        min_ev_buffer: Some(variant.zone_config.min_ev_buffer),
+        settlement_guard_minutes: Some(variant.zone_config.settlement_guard_minutes),
+        settlement_min_abs_move_usd: Some(variant.zone_config.settlement_min_abs_move_usd),
+        min_reversion_count: Some(variant.zone_config.min_reversion_count),
+        max_reversion_count: Some(variant.zone_config.max_reversion_count),
+        prefer_maker: Some(variant.prefer_maker),
+        max_spread: Some(variant.microstructure.max_spread),
+        min_book_depth: Some(variant.microstructure.min_book_depth),
+        min_book_pressure: Some(variant.microstructure.min_book_pressure),
+        recent_mid_lookback_seconds: Some(variant.microstructure.recent_mid_lookback_seconds),
+        max_recent_mid_runup: Some(variant.microstructure.max_recent_mid_runup),
+    }
+}
+
+fn evolution_tag_bias_score(tags: &BTreeMap<String, String>) -> i32 {
+    tags.iter()
+        .map(|(dimension, value)| match dimension.as_str() {
+            "book_spread" if value.contains("lte") || value.contains("zero") => 5,
+            "book_age" if value.contains("lte") || value.contains("ms") => 5,
+            "book_min_depth" => 4,
+            "book_pressure" if value.contains("positive") => 4,
+            "bookwalk_slippage" if value.contains("zero") || value.contains("lte") => 4,
+            "book_runup" if value.contains("lte") => 5,
+            "outcome_overround" if value.contains("lte") => 5,
+            "btc_impulse_10s" => 2,
+            "reversion" => 3,
+            "confidence" | "z" | "edge" => 2,
+            "utc_session" => 1,
+            "utc_hour" => 1,
+            "direction_utc_session" => 1,
+            "direction_utc_hour" => 1,
+            "direction" | "zone" => 1,
+            _ => 0,
+        })
+        .sum()
+}
+
+fn next_evolution_population(
+    evaluated: &[EvolutionCandidate],
+    input: &StrategyBuilderEvolveSearchInput,
+    tag_universe: &BTreeMap<String, BTreeSet<String>>,
+    variants: &[String],
+    variant_params: &BTreeMap<String, StrategyVariant>,
+    survivor_indexes: &[usize],
+    rng: &mut StdRng,
+) -> Vec<EvolutionPopulationMember> {
+    let mut next = Vec::new();
+    let mut seen = BTreeSet::new();
+    for idx in survivor_indexes {
+        let candidate = &evaluated[*idx];
+        push_unique_evolution_member(
+            &mut next,
+            &mut seen,
+            candidate.genome.clone(),
+            vec![candidate.genome_hash.clone()],
+        );
+    }
+
+    let parent_pool_limit = evaluated.len().min((survivor_indexes.len() * 3).max(2));
+    let parent_pool =
+        evolution_diverse_candidate_indexes(evaluated, parent_pool_limit, variants.len())
+            .into_iter()
+            .map(|idx| &evaluated[idx])
+            .collect::<Vec<_>>();
+    let mut attempts = 0_usize;
+    while next.len() < input.population && attempts < input.population.saturating_mul(60) {
+        attempts += 1;
+        let parent_a = parent_pool[rng.gen_range(0..parent_pool.len())];
+        let same_family = parent_pool
+            .iter()
+            .filter(|candidate| candidate.genome.variant == parent_a.genome.variant)
+            .copied()
+            .collect::<Vec<_>>();
+        let (genome, parent_hashes) = if same_family.len() > 1 && rng.gen_bool(0.35) {
+            let parent_b = same_family[rng.gen_range(0..same_family.len())];
+            (
+                crossover_evolution_genome(&parent_a.genome, &parent_b.genome, input, rng),
+                vec![parent_a.genome_hash.clone(), parent_b.genome_hash.clone()],
+            )
+        } else {
+            (parent_a.genome.clone(), vec![parent_a.genome_hash.clone()])
+        };
+        let genome =
+            mutate_evolution_genome(genome, tag_universe, variants, variant_params, input, rng);
+        push_unique_evolution_member(&mut next, &mut seen, genome, parent_hashes);
+    }
+    next
+}
+
+fn evolution_diverse_candidate_indexes(
+    evaluated: &[EvolutionCandidate],
+    limit: usize,
+    family_count: usize,
+) -> Vec<usize> {
+    let limit = limit.min(evaluated.len());
+    if limit == 0 {
+        return Vec::new();
+    }
+    let family_cap = if family_count <= 1 {
+        limit
+    } else {
+        limit.div_ceil(2).max(1)
+    };
+    let mut selected = Vec::with_capacity(limit);
+    let mut selected_set = BTreeSet::new();
+    let mut family_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for (idx, candidate) in evaluated.iter().enumerate() {
+        let count = family_counts
+            .get(candidate.genome.variant.as_str())
+            .copied()
+            .unwrap_or_default();
+        if count >= family_cap {
+            continue;
+        }
+        selected.push(idx);
+        selected_set.insert(idx);
+        family_counts.insert(candidate.genome.variant.as_str(), count + 1);
+        if selected.len() == limit {
+            return selected;
+        }
+    }
+    for idx in 0..evaluated.len() {
+        if selected_set.insert(idx) {
+            selected.push(idx);
+            if selected.len() == limit {
+                break;
+            }
+        }
+    }
+    selected
+}
+
+fn mutate_evolution_genome(
+    mut genome: EvolutionGenome,
+    tag_universe: &BTreeMap<String, BTreeSet<String>>,
+    variants: &[String],
+    variant_params: &BTreeMap<String, StrategyVariant>,
+    input: &StrategyBuilderEvolveSearchInput,
+    rng: &mut StdRng,
+) -> EvolutionGenome {
+    let allow_static_deny = input.max_deny_rules > 0;
+    let action_count = if allow_static_deny { 7 } else { 5 };
+    match rng.gen_range(0..action_count) {
+        0 => {
+            if let Some((dimension, value)) = random_evolution_tag(tag_universe, rng) {
+                insert_bounded_tag(
+                    &mut genome.require_tags,
+                    dimension,
+                    value,
+                    input.max_require_terms,
+                    rng,
+                );
+            }
+        }
+        1 => remove_random_tag(&mut genome.require_tags, rng),
+        2 => {
+            if variants.len() > 1 {
+                genome.variant = variants[rng.gen_range(0..variants.len())].clone();
+                sync_evolution_genome_knobs(&mut genome, variant_params);
+            } else if let Some((dimension, value)) = random_evolution_tag(tag_universe, rng) {
+                insert_bounded_tag(
+                    &mut genome.require_tags,
+                    dimension,
+                    value,
+                    input.max_require_terms,
+                    rng,
+                );
+            }
+        }
+        3 => {
+            if let Some((dimension, value)) = random_evolution_tag(tag_universe, rng) {
+                if rng.gen_bool(0.55) {
+                    insert_bounded_tag(
+                        &mut genome.require_tags,
+                        dimension,
+                        value,
+                        input.max_require_terms,
+                        rng,
+                    );
+                } else if allow_static_deny {
+                    insert_bounded_tag(
+                        &mut genome.deny_tags,
+                        dimension,
+                        value,
+                        input.max_deny_rules.max(1),
+                        rng,
+                    );
+                }
+            }
+        }
+        4 => mutate_evolution_knob(&mut genome.knobs, rng),
+        5 => {
+            if let Some((dimension, value)) = random_evolution_tag(tag_universe, rng) {
+                insert_bounded_tag(
+                    &mut genome.deny_tags,
+                    dimension,
+                    value,
+                    input.max_deny_rules.max(1),
+                    rng,
+                );
+            }
+        }
+        _ => remove_random_tag(&mut genome.deny_tags, rng),
+    }
+    normalize_evolution_genome(&mut genome, tag_universe, input);
+    genome
+}
+
+fn mutate_evolution_knob(knobs: &mut EvolutionStrategyKnobs, rng: &mut StdRng) {
+    match rng.gen_range(0..19) {
+        0 => knobs.min_confidence = Some(random_choice_f64(rng, &[0.40, 0.50, 0.60, 0.70])),
+        1 => knobs.min_edge = Some(random_choice_f64(rng, &[0.03, 0.07, 0.10, 0.15])),
+        2 => knobs.early_min_z = Some(random_choice_f64(rng, &[0.50, 0.70, 0.90, 1.10, 1.50])),
+        3 => knobs.primary_min_z = Some(random_choice_f64(rng, &[0.50, 0.70, 0.90, 1.10, 1.50])),
+        4 => knobs.late_min_z = Some(random_choice_f64(rng, &[0.50, 0.70, 0.90, 1.10, 1.50])),
+        5 => knobs.terminal_min_z = Some(random_choice_f64(rng, &[0.50, 0.70, 0.90, 1.10, 1.50])),
+        6 => knobs.min_price = Some(random_choice_f64(rng, &[0.10, 0.50, 0.75])),
+        7 => knobs.max_price = Some(random_choice_f64(rng, &[0.75, 0.85, 0.90])),
+        8 => knobs.min_ev_buffer = Some(random_choice_f64(rng, &[-1.0, 0.0, 0.03, 0.05])),
+        9 => knobs.settlement_guard_minutes = Some(random_choice_f64(rng, &[1.0, 2.0, 3.0])),
+        10 => knobs.settlement_min_abs_move_usd = Some(random_choice_f64(rng, &[5.0, 10.0, 15.0])),
+        11 => knobs.min_reversion_count = Some(random_choice_u64(rng, &[0, 1, 2])),
+        12 => knobs.max_reversion_count = Some(random_choice_u64(rng, &[2, 3, u64::MAX])),
+        13 => knobs.prefer_maker = Some(rng.gen_bool(0.5)),
+        14 => knobs.max_spread = Some(random_choice_f64(rng, &[0.02, 0.03, 1.0])),
+        15 => knobs.min_book_depth = Some(random_choice_f64(rng, &[0.0, 50.0, 100.0, 250.0])),
+        16 => knobs.min_book_pressure = Some(random_choice_f64(rng, &[-1.0, 0.0, 0.10])),
+        17 => {
+            knobs.recent_mid_lookback_seconds =
+                Some(random_choice_f64(rng, &[5.0, 10.0, 15.0, 30.0]))
+        }
+        _ => {
+            knobs.max_recent_mid_runup =
+                Some(random_choice_f64(rng, &[0.04, 0.06, 0.08, 0.10, 1.0]))
+        }
+    }
+    normalize_evolution_knobs(knobs);
+}
+
+fn random_choice_f64(rng: &mut StdRng, values: &[f64]) -> f64 {
+    values[rng.gen_range(0..values.len())]
+}
+
+fn random_choice_u64(rng: &mut StdRng, values: &[u64]) -> u64 {
+    values[rng.gen_range(0..values.len())]
+}
+
+fn normalize_evolution_knobs(knobs: &mut EvolutionStrategyKnobs) {
+    if let Some(value) = knobs.min_confidence {
+        knobs.min_confidence = Some(value.clamp(0.0, 1.0));
+    }
+    if let Some(value) = knobs.min_edge {
+        knobs.min_edge = Some(value.clamp(0.0, 1.0));
+    }
+    for value in [
+        &mut knobs.early_min_z,
+        &mut knobs.primary_min_z,
+        &mut knobs.late_min_z,
+        &mut knobs.terminal_min_z,
+    ] {
+        if let Some(z) = *value {
+            *value = Some(z.clamp(0.0, 10.0));
+        }
+    }
+    if let Some(value) = knobs.min_price {
+        knobs.min_price = Some(value.clamp(0.01, 0.99));
+    }
+    if let Some(value) = knobs.max_price {
+        knobs.max_price = Some(value.clamp(0.01, 0.99));
+    }
+    if let (Some(min_price), Some(max_price)) = (knobs.min_price, knobs.max_price) {
+        if max_price < min_price {
+            knobs.max_price = Some(min_price);
+        }
+    }
+    if let Some(value) = knobs.min_ev_buffer {
+        knobs.min_ev_buffer = Some(value.clamp(-1.0, 1.0));
+    }
+    if let Some(value) = knobs.settlement_guard_minutes {
+        knobs.settlement_guard_minutes = Some(value.clamp(0.0, 10.0));
+    }
+    if let Some(value) = knobs.settlement_min_abs_move_usd {
+        knobs.settlement_min_abs_move_usd = Some(value.clamp(0.0, 100.0));
+    }
+    if let (Some(min_reversion), Some(max_reversion)) =
+        (knobs.min_reversion_count, knobs.max_reversion_count)
+    {
+        if max_reversion != u64::MAX && max_reversion < min_reversion {
+            knobs.max_reversion_count = Some(min_reversion);
+        }
+    }
+    if let Some(value) = knobs.max_spread {
+        knobs.max_spread = Some(value.max(0.0));
+    }
+    if let Some(value) = knobs.min_book_depth {
+        knobs.min_book_depth = Some(value.max(0.0));
+    }
+    if let Some(value) = knobs.min_book_pressure {
+        knobs.min_book_pressure = Some(value.clamp(-1.0, 1.0));
+    }
+    if let Some(value) = knobs.recent_mid_lookback_seconds {
+        knobs.recent_mid_lookback_seconds = Some(value.clamp(1.0, 300.0));
+    }
+    if let Some(value) = knobs.max_recent_mid_runup {
+        knobs.max_recent_mid_runup = Some(value.clamp(0.0, 1.0));
+    }
+}
+
+fn crossover_evolution_genome(
+    left: &EvolutionGenome,
+    right: &EvolutionGenome,
+    input: &StrategyBuilderEvolveSearchInput,
+    rng: &mut StdRng,
+) -> EvolutionGenome {
+    let mut child = left.clone();
+    if left.variant != right.variant {
+        return child;
+    }
+    child.require_tags.clear();
+    child.deny_tags.clear();
+    for (dimension, value) in left.require_tags.iter().chain(right.require_tags.iter()) {
+        if child.require_tags.len() < input.max_require_terms && rng.gen_bool(0.65) {
+            child.require_tags.insert(dimension.clone(), value.clone());
+        }
+    }
+    for (dimension, value) in left.deny_tags.iter().chain(right.deny_tags.iter()) {
+        if child.deny_tags.len() < input.max_deny_rules && rng.gen_bool(0.50) {
+            child.deny_tags.insert(dimension.clone(), value.clone());
+        }
+    }
+    macro_rules! choose_knob {
+        ($field:ident) => {
+            if rng.gen_bool(0.5) {
+                left.knobs.$field
+            } else {
+                right.knobs.$field
+            }
+        };
+    }
+    child.knobs = EvolutionStrategyKnobs {
+        min_confidence: choose_knob!(min_confidence),
+        min_edge: choose_knob!(min_edge),
+        early_min_z: choose_knob!(early_min_z),
+        primary_min_z: choose_knob!(primary_min_z),
+        late_min_z: choose_knob!(late_min_z),
+        terminal_min_z: choose_knob!(terminal_min_z),
+        min_price: choose_knob!(min_price),
+        max_price: choose_knob!(max_price),
+        min_ev_buffer: choose_knob!(min_ev_buffer),
+        settlement_guard_minutes: choose_knob!(settlement_guard_minutes),
+        settlement_min_abs_move_usd: choose_knob!(settlement_min_abs_move_usd),
+        min_reversion_count: choose_knob!(min_reversion_count),
+        max_reversion_count: choose_knob!(max_reversion_count),
+        prefer_maker: choose_knob!(prefer_maker),
+        max_spread: choose_knob!(max_spread),
+        min_book_depth: choose_knob!(min_book_depth),
+        min_book_pressure: choose_knob!(min_book_pressure),
+        recent_mid_lookback_seconds: choose_knob!(recent_mid_lookback_seconds),
+        max_recent_mid_runup: choose_knob!(max_recent_mid_runup),
+    };
+    normalize_evolution_knobs(&mut child.knobs);
+    child
+}
+
+fn sync_evolution_genome_knobs(
+    genome: &mut EvolutionGenome,
+    variants: &BTreeMap<String, StrategyVariant>,
+) {
+    genome.knobs = variants
+        .get(&genome.variant)
+        .map(evolution_knobs_from_variant)
+        .unwrap_or_default();
+}
+
+fn normalize_evolution_genome(
+    genome: &mut EvolutionGenome,
+    tag_universe: &BTreeMap<String, BTreeSet<String>>,
+    input: &StrategyBuilderEvolveSearchInput,
+) {
+    genome.require_tags.retain(|dimension, value| {
+        tag_universe
+            .get(dimension)
+            .is_some_and(|values| values.contains(value))
+    });
+    genome.deny_tags.retain(|dimension, value| {
+        tag_universe
+            .get(dimension)
+            .is_some_and(|values| values.contains(value))
+            && genome
+                .require_tags
+                .get(dimension)
+                .is_none_or(|required| required != value)
+    });
+    while genome.require_tags.len() > input.max_require_terms {
+        let Some(last) = genome.require_tags.keys().next_back().cloned() else {
+            break;
+        };
+        genome.require_tags.remove(&last);
+    }
+    while genome.deny_tags.len() > input.max_deny_rules {
+        let Some(last) = genome.deny_tags.keys().next_back().cloned() else {
+            break;
+        };
+        genome.deny_tags.remove(&last);
+    }
+}
+
+fn random_evolution_tag(
+    tag_universe: &BTreeMap<String, BTreeSet<String>>,
+    rng: &mut StdRng,
+) -> Option<(String, String)> {
+    let dimensions = tag_universe.keys().collect::<Vec<_>>();
+    if dimensions.is_empty() {
+        return None;
+    }
+    let dimension = dimensions[rng.gen_range(0..dimensions.len())];
+    let values = tag_universe.get(dimension)?.iter().collect::<Vec<_>>();
+    if values.is_empty() {
+        return None;
+    }
+    Some((
+        dimension.clone(),
+        values[rng.gen_range(0..values.len())].clone(),
+    ))
+}
+
+fn insert_bounded_tag(
+    tags: &mut BTreeMap<String, String>,
+    dimension: String,
+    value: String,
+    max_terms: usize,
+    rng: &mut StdRng,
+) {
+    if max_terms == 0 {
+        return;
+    }
+    if !tags.contains_key(&dimension) && tags.len() >= max_terms {
+        remove_random_tag(tags, rng);
+    }
+    tags.insert(dimension, value);
+}
+
+fn remove_random_tag(tags: &mut BTreeMap<String, String>, rng: &mut StdRng) {
+    if tags.is_empty() {
+        return;
+    }
+    let keys = tags.keys().cloned().collect::<Vec<_>>();
+    let key = &keys[rng.gen_range(0..keys.len())];
+    tags.remove(key);
+}
+
+#[cfg(test)]
+fn evaluate_evolution_genome(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    generation: usize,
+    parent_hashes: Vec<String>,
+    genome: EvolutionGenome,
+) -> EvolutionCandidate {
+    evaluate_evolution_genome_with_evidence(
+        folds,
+        input,
+        generation,
+        parent_hashes,
+        genome,
+        true,
+        true,
+    )
+}
+
+fn evaluate_evolution_genome_against_variants(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    generation: usize,
+    parent_hashes: Vec<String>,
+    genome: EvolutionGenome,
+    variants: &BTreeMap<String, StrategyVariant>,
+) -> EvolutionCandidate {
+    let candidate = evaluate_causal_policy_candidate_with_fixed_denies(
+        folds,
+        input,
+        CausalPolicyKey {
+            variant: genome.variant.clone(),
+            require_tags: genome.require_tags.clone(),
+        },
+        &genome.deny_tags,
+    );
+    let (replayable_policy, replay_error, static_selectivity_exact) =
+        match variants.get(&genome.variant) {
+            Some(source) => match runtime_selectivity_from_causal_policy(
+                &source.selectivity,
+                &candidate.final_policy,
+            ) {
+                Ok(runtime_selectivity) => (true, None, runtime_selectivity == source.selectivity),
+                Err(err) => (false, Some(err.to_string()), false),
+            },
+            None => (false, None, false),
+        };
+    let static_knobs_exact = variants
+        .get(&genome.variant)
+        .map(evolution_knobs_from_variant)
+        .is_some_and(|source| source == genome.knobs);
+    let static_fitness_exact = static_knobs_exact && static_selectivity_exact;
+    let mut evaluated = build_evolution_candidate(
+        input,
+        generation,
+        parent_hashes,
+        genome,
+        candidate,
+        replayable_policy,
+        static_fitness_exact,
+    );
+    if let Some(err) = replay_error {
+        evaluated
+            .notes
+            .push(format!("runtime policy is not executable: {err}"));
+    }
+    if let Some(source) = variants.get(&evaluated.genome.variant) {
+        if source.use_perfect_fill {
+            reject_evolution_execution_model(
+                &mut evaluated,
+                "perfect_fill_model_not_promotable",
+                "perfect-fill candidates are sanity baselines only",
+            );
+        }
+        if evaluated
+            .genome
+            .knobs
+            .prefer_maker
+            .unwrap_or(source.prefer_maker)
+        {
+            reject_evolution_execution_model(
+                &mut evaluated,
+                "synthetic_maker_fill_model_not_promotable",
+                "maker hypotheses require a queue/trade-calibrated replay before promotion",
+            );
+        }
+    }
+    evaluated
+}
+
+fn reject_evolution_execution_model(
+    candidate: &mut EvolutionCandidate,
+    failure_reason: &str,
+    note: &str,
+) {
+    if !candidate
+        .fitness
+        .failure_reasons
+        .iter()
+        .any(|reason| reason == failure_reason)
+    {
+        candidate
+            .fitness
+            .failure_reasons
+            .push(failure_reason.to_string());
+        candidate.fitness.gate_failures += 1;
+    }
+    candidate.fitness.passed = false;
+    candidate.passed = false;
+    candidate.notes.push(note.to_string());
+}
+
+#[cfg(test)]
+fn evaluate_evolution_genome_with_evidence(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    generation: usize,
+    parent_hashes: Vec<String>,
+    genome: EvolutionGenome,
+    replayable_policy: bool,
+    static_fitness_exact: bool,
+) -> EvolutionCandidate {
+    let candidate = evaluate_causal_policy_candidate_with_fixed_denies(
+        folds,
+        input,
+        CausalPolicyKey {
+            variant: genome.variant.clone(),
+            require_tags: genome.require_tags.clone(),
+        },
+        &genome.deny_tags,
+    );
+    build_evolution_candidate(
+        input,
+        generation,
+        parent_hashes,
+        genome,
+        candidate,
+        replayable_policy,
+        static_fitness_exact,
+    )
+}
+
+fn build_evolution_candidate(
+    input: &StrategyBuilderCausalPolicySearchInput,
+    generation: usize,
+    parent_hashes: Vec<String>,
+    genome: EvolutionGenome,
+    candidate: CausalPolicyCandidateReport,
+    replayable_policy: bool,
+    static_fitness_exact: bool,
+) -> EvolutionCandidate {
+    let genome_hash = evolution_genome_hash(&genome);
+    let fitness = evolution_fitness(&candidate, input, replayable_policy, static_fitness_exact);
+    let mut notes = candidate.notes.clone();
+    if !genome.deny_tags.is_empty() {
+        notes.push(
+            "genome includes fixed single-tag deny filters before prior-only deny learning"
+                .to_string(),
+        );
+    }
+    if !static_fitness_exact {
+        notes.push(
+            "strategy knobs or runtime selectivity differ from the source report; static fitness is not credited and exact replay is required"
+                .to_string(),
+        );
+    }
+    EvolutionCandidate {
+        rank: 0,
+        passed: fitness.passed,
+        generation,
+        pareto_front: usize::MAX,
+        candidate_id: format!("evo_{}", &genome_hash[..16]),
+        genome_hash,
+        parent_hashes,
+        genome,
+        fitness,
+        final_policy: candidate.final_policy,
+        aggregate_static_final_policy: candidate.aggregate_static_final_policy,
+        fold_forward: candidate.fold_forward,
+        variant_path: None,
+        replay_manifest_path: None,
+        notes,
+    }
+}
+
+fn evolution_genome_hash(genome: &EvolutionGenome) -> String {
+    stable_json_hash(genome)
+}
+
+fn evolution_fitness(
+    candidate: &CausalPolicyCandidateReport,
+    input: &StrategyBuilderCausalPolicySearchInput,
+    replayable_policy: bool,
+    static_fitness_exact: bool,
+) -> EvolutionFitness {
+    let fold = &candidate.fold_forward;
+    let stats = &fold.stats;
+    let mut failure_reasons = Vec::new();
+    if !replayable_policy {
+        failure_reasons.push("source_variant_not_replayable".to_string());
+    }
+    if !static_fitness_exact {
+        failure_reasons.push("report_counterfactual_requires_replay".to_string());
+    }
+    if stats.trades < input.min_oos_trades {
+        failure_reasons.push("oos_trades_below_gate".to_string());
+    }
+    if stats.wilson_win_rate_lower < input.min_oos_wilson_win_rate_lower {
+        failure_reasons.push("wilson_lower_below_gate".to_string());
+    }
+    if stats.total_pnl < input.min_oos_total_pnl {
+        failure_reasons.push("total_pnl_below_gate".to_string());
+    }
+    if fold.profitable_reports < input.min_oos_profitable_reports {
+        failure_reasons.push("profitable_reports_below_gate".to_string());
+    }
+    if input.min_oos_eligible_reports > 0 && fold.eligible_reports < input.min_oos_eligible_reports
+    {
+        failure_reasons.push("eligible_reports_below_gate".to_string());
+    }
+    if fold.eligible_reports == 0 {
+        if fold
+            .decisions
+            .iter()
+            .any(|decision| decision.reason == "policy_prior_stats_failed_train_gates")
+        {
+            failure_reasons.push("all_oos_blocked_by_prior_train_gates".to_string());
+        } else if fold
+            .decisions
+            .iter()
+            .any(|decision| decision.reason == "policy_had_no_oos_trades")
+        {
+            failure_reasons.push("all_oos_abstained_no_trades".to_string());
+        } else {
+            failure_reasons.push("no_eligible_oos_reports".to_string());
+        }
+    }
+    if fold.worst_report_pnl < input.min_worst_oos_pnl {
+        failure_reasons.push("worst_fold_below_gate".to_string());
+    }
+    if fold.tail.cvar_pnl < input.min_oos_cvar_pnl {
+        failure_reasons.push("cvar_below_gate".to_string());
+    }
+    if input.max_loss_burst_reports > 0
+        && fold.tail.max_loss_burst_reports > input.max_loss_burst_reports
+    {
+        failure_reasons.push("loss_burst_above_gate".to_string());
+    }
+    if input.min_oos_payoff_ratio > 0.0 && stats.payoff_ratio < input.min_oos_payoff_ratio {
+        failure_reasons.push("payoff_ratio_below_gate".to_string());
+    }
+    if input.max_oos_worst_loss_to_avg_win > 0.0
+        && stats.worst_loss_to_avg_win > input.max_oos_worst_loss_to_avg_win
+    {
+        failure_reasons.push("worst_loss_to_avg_win_above_gate".to_string());
+    }
+
+    EvolutionFitness {
+        passed: candidate.passed && replayable_policy && static_fitness_exact,
+        replayable_policy,
+        static_fitness_exact,
+        gate_failures: failure_reasons.len(),
+        failure_reasons,
+        eligible_reports: fold.eligible_reports,
+        profitable_reports: fold.profitable_reports,
+        losing_reports: fold.losing_reports,
+        abstained_reports: fold.abstained_reports,
+        trades: stats.trades,
+        wins: stats.wins,
+        losses: stats.losses,
+        wilson_win_rate_lower: stats.wilson_win_rate_lower,
+        total_pnl: stats.total_pnl,
+        worst_report_pnl: fold.worst_report_pnl,
+        cvar_pnl: fold.tail.cvar_pnl,
+        max_loss_burst_reports: fold.tail.max_loss_burst_reports,
+        worst_loss_to_avg_win: stats.worst_loss_to_avg_win,
+        payoff_ratio: stats.payoff_ratio,
+        profit_factor: stats.profit_factor,
+        median_expectancy: median_oos_expectancy(fold),
+    }
+}
+
+fn median_oos_expectancy(fold: &CausalPolicyFoldForwardReport) -> f64 {
+    let mut values = fold
+        .decisions
+        .iter()
+        .filter_map(|decision| decision.oos.as_ref())
+        .filter(|stats| stats.trades > 0)
+        .map(|stats| stats.avg_pnl)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    values[values.len() / 2]
+}
+
+fn assign_evolution_pareto_fronts(candidates: &mut [EvolutionCandidate]) {
+    let mut remaining = (0..candidates.len()).collect::<BTreeSet<_>>();
+    let mut front = 0_usize;
+    while !remaining.is_empty() {
+        let current = remaining.iter().copied().collect::<Vec<_>>();
+        let mut non_dominated = Vec::new();
+        for idx in &current {
+            let dominated = current.iter().any(|other| {
+                other != idx && evolution_dominates(&candidates[*other], &candidates[*idx])
+            });
+            if !dominated {
+                non_dominated.push(*idx);
+            }
+        }
+        if non_dominated.is_empty() {
+            for idx in current {
+                candidates[idx].pareto_front = front;
+                remaining.remove(&idx);
+            }
+        } else {
+            for idx in non_dominated {
+                candidates[idx].pareto_front = front;
+                remaining.remove(&idx);
+            }
+        }
+        front += 1;
+    }
+}
+
+fn evolution_dominates(left: &EvolutionCandidate, right: &EvolutionCandidate) -> bool {
+    let checks = [
+        compare_bool_obj(left.passed, right.passed),
+        compare_bool_obj(
+            left.fitness.replayable_policy,
+            right.fitness.replayable_policy,
+        ),
+        compare_bool_obj(
+            left.fitness.static_fitness_exact,
+            right.fitness.static_fitness_exact,
+        ),
+        compare_low_obj(
+            left.fitness.gate_failures as f64,
+            right.fitness.gate_failures as f64,
+        ),
+        compare_low_obj(
+            left.fitness.max_loss_burst_reports as f64,
+            right.fitness.max_loss_burst_reports as f64,
+        ),
+        compare_high_obj(
+            left.fitness.worst_report_pnl,
+            right.fitness.worst_report_pnl,
+        ),
+        compare_high_obj(left.fitness.cvar_pnl, right.fitness.cvar_pnl),
+        compare_low_obj(
+            left.fitness.worst_loss_to_avg_win,
+            right.fitness.worst_loss_to_avg_win,
+        ),
+        compare_high_obj(left.fitness.payoff_ratio, right.fitness.payoff_ratio),
+        compare_high_obj(left.fitness.profit_factor, right.fitness.profit_factor),
+        compare_high_obj(
+            left.fitness.wilson_win_rate_lower,
+            right.fitness.wilson_win_rate_lower,
+        ),
+        compare_high_obj(
+            left.fitness.eligible_reports as f64,
+            right.fitness.eligible_reports as f64,
+        ),
+        compare_high_obj(left.fitness.trades as f64, right.fitness.trades as f64),
+        compare_high_obj(
+            left.fitness.median_expectancy,
+            right.fitness.median_expectancy,
+        ),
+        compare_high_obj(left.fitness.total_pnl, right.fitness.total_pnl),
+    ];
+    checks.iter().all(|comparison| *comparison >= 0)
+        && checks.iter().any(|comparison| *comparison > 0)
+}
+
+fn compare_bool_obj(left: bool, right: bool) -> i8 {
+    match (left, right) {
+        (true, false) => 1,
+        (false, true) => -1,
+        _ => 0,
+    }
+}
+
+fn compare_high_obj(left: f64, right: f64) -> i8 {
+    if left > right + 1e-12 {
+        1
+    } else if left + 1e-12 < right {
+        -1
+    } else {
+        0
+    }
+}
+
+fn compare_low_obj(left: f64, right: f64) -> i8 {
+    compare_high_obj(-left, -right)
+}
+
+fn compare_evolution_candidates(left: &EvolutionCandidate, right: &EvolutionCandidate) -> Ordering {
+    left.pareto_front
+        .cmp(&right.pareto_front)
+        .then_with(|| right.passed.cmp(&left.passed))
+        .then_with(|| {
+            right
+                .fitness
+                .replayable_policy
+                .cmp(&left.fitness.replayable_policy)
+        })
+        .then_with(|| {
+            right
+                .fitness
+                .static_fitness_exact
+                .cmp(&left.fitness.static_fitness_exact)
+        })
+        .then_with(|| left.fitness.gate_failures.cmp(&right.fitness.gate_failures))
+        .then_with(|| {
+            left.fitness
+                .max_loss_burst_reports
+                .cmp(&right.fitness.max_loss_burst_reports)
+        })
+        .then_with(|| {
+            f64_desc(
+                left.fitness.worst_report_pnl,
+                right.fitness.worst_report_pnl,
+            )
+        })
+        .then_with(|| f64_desc(left.fitness.cvar_pnl, right.fitness.cvar_pnl))
+        .then_with(|| {
+            f64_asc(
+                left.fitness.worst_loss_to_avg_win,
+                right.fitness.worst_loss_to_avg_win,
+            )
+        })
+        .then_with(|| f64_desc(left.fitness.payoff_ratio, right.fitness.payoff_ratio))
+        .then_with(|| f64_desc(left.fitness.profit_factor, right.fitness.profit_factor))
+        .then_with(|| {
+            f64_desc(
+                left.fitness.wilson_win_rate_lower,
+                right.fitness.wilson_win_rate_lower,
+            )
+        })
+        .then_with(|| {
+            right
+                .fitness
+                .eligible_reports
+                .cmp(&left.fitness.eligible_reports)
+        })
+        .then_with(|| right.fitness.trades.cmp(&left.fitness.trades))
+        .then_with(|| {
+            f64_desc(
+                left.fitness.median_expectancy,
+                right.fitness.median_expectancy,
+            )
+        })
+        .then_with(|| f64_desc(left.fitness.total_pnl, right.fitness.total_pnl))
+        .then_with(|| {
+            left.genome
+                .require_tags
+                .len()
+                .cmp(&right.genome.require_tags.len())
+        })
+        .then_with(|| {
+            left.genome
+                .deny_tags
+                .len()
+                .cmp(&right.genome.deny_tags.len())
+        })
+        .then_with(|| left.genome.variant.cmp(&right.genome.variant))
+        .then_with(|| left.genome_hash.cmp(&right.genome_hash))
+}
+
+fn compare_evolution_replay_hypotheses(
+    left: &EvolutionCandidate,
+    right: &EvolutionCandidate,
+) -> Ordering {
+    evolution_actionable_gate_failures(left)
+        .cmp(&evolution_actionable_gate_failures(right))
+        .then_with(|| {
+            left.fitness
+                .max_loss_burst_reports
+                .cmp(&right.fitness.max_loss_burst_reports)
+        })
+        .then_with(|| {
+            f64_desc(
+                left.fitness.worst_report_pnl,
+                right.fitness.worst_report_pnl,
+            )
+        })
+        .then_with(|| f64_desc(left.fitness.cvar_pnl, right.fitness.cvar_pnl))
+        .then_with(|| {
+            f64_asc(
+                left.fitness.worst_loss_to_avg_win,
+                right.fitness.worst_loss_to_avg_win,
+            )
+        })
+        .then_with(|| f64_desc(left.fitness.payoff_ratio, right.fitness.payoff_ratio))
+        .then_with(|| f64_desc(left.fitness.profit_factor, right.fitness.profit_factor))
+        .then_with(|| {
+            f64_desc(
+                left.fitness.wilson_win_rate_lower,
+                right.fitness.wilson_win_rate_lower,
+            )
+        })
+        .then_with(|| {
+            right
+                .fitness
+                .eligible_reports
+                .cmp(&left.fitness.eligible_reports)
+        })
+        .then_with(|| right.fitness.trades.cmp(&left.fitness.trades))
+        .then_with(|| f64_desc(left.fitness.total_pnl, right.fitness.total_pnl))
+        .then_with(|| left.genome_hash.cmp(&right.genome_hash))
+}
+
+fn evolution_actionable_gate_failures(candidate: &EvolutionCandidate) -> usize {
+    candidate
+        .fitness
+        .failure_reasons
+        .iter()
+        .filter(|reason| reason.as_str() != "report_counterfactual_requires_replay")
+        .count()
+}
+
+fn select_evolution_output_candidates(
+    sorted: &[EvolutionCandidate],
+    top: usize,
+) -> Vec<EvolutionCandidate> {
+    let limit = top.max(1).min(sorted.len());
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mutation_quota = if limit > 1 { limit / 2 } else { 0 };
+    let exact_quota = limit - mutation_quota;
+    let mut selected = Vec::with_capacity(limit);
+    let mut selected_hashes = BTreeSet::new();
+
+    for candidate in sorted
+        .iter()
+        .filter(|candidate| candidate.fitness.static_fitness_exact)
+        .take(exact_quota)
+    {
+        selected_hashes.insert(candidate.genome_hash.clone());
+        selected.push(candidate.clone());
+    }
+
+    let mut replay_hypotheses = sorted
+        .iter()
+        .filter(|candidate| !candidate.fitness.static_fitness_exact)
+        .cloned()
+        .collect::<Vec<_>>();
+    replay_hypotheses.sort_by(compare_evolution_replay_hypotheses);
+    for candidate in replay_hypotheses.into_iter().take(mutation_quota) {
+        if selected_hashes.insert(candidate.genome_hash.clone()) {
+            selected.push(candidate);
+        }
+    }
+
+    for candidate in sorted {
+        if selected.len() == limit {
+            break;
+        }
+        if selected_hashes.insert(candidate.genome_hash.clone()) {
+            selected.push(candidate.clone());
+        }
+    }
+    selected.sort_by(compare_evolution_candidates);
+    for (idx, candidate) in selected.iter_mut().enumerate() {
+        candidate.rank = idx + 1;
+    }
+    selected
+}
+
+fn unique_evolution_candidates(candidates: Vec<EvolutionCandidate>) -> Vec<EvolutionCandidate> {
+    let mut by_hash: BTreeMap<String, EvolutionCandidate> = BTreeMap::new();
+    for candidate in candidates {
+        by_hash
+            .entry(candidate.genome_hash.clone())
+            .and_modify(|existing| {
+                if compare_evolution_candidates(&candidate, existing) == Ordering::Less {
+                    *existing = candidate.clone();
+                }
+            })
+            .or_insert(candidate);
+    }
+    by_hash.into_values().collect()
+}
+
+fn evolution_trial_ledger_row(candidate: &EvolutionCandidate) -> EvolutionTrialLedgerRow {
+    EvolutionTrialLedgerRow {
+        generation: candidate.generation,
+        candidate_id: candidate.candidate_id.clone(),
+        genome_hash: candidate.genome_hash.clone(),
+        parent_hashes: candidate.parent_hashes.clone(),
+        passed: candidate.passed,
+        replayable_policy: candidate.fitness.replayable_policy,
+        static_fitness_exact: candidate.fitness.static_fitness_exact,
+        gate_failures: candidate.fitness.gate_failures,
+        pareto_front: candidate.pareto_front,
+        failure_reasons: candidate.fitness.failure_reasons.clone(),
+        eligible_reports: candidate.fitness.eligible_reports,
+        abstained_reports: candidate.fitness.abstained_reports,
+        trades: candidate.fitness.trades,
+        total_pnl: candidate.fitness.total_pnl,
+        worst_report_pnl: candidate.fitness.worst_report_pnl,
+        cvar_pnl: candidate.fitness.cvar_pnl,
+        max_loss_burst_reports: candidate.fitness.max_loss_burst_reports,
+        payoff_ratio: candidate.fitness.payoff_ratio,
+        profit_factor: candidate.fitness.profit_factor,
+        wilson_win_rate_lower: candidate.fitness.wilson_win_rate_lower,
+    }
+}
+
+fn evolution_failure_summary(candidates: &[EvolutionCandidate]) -> String {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for candidate in candidates {
+        for reason in &candidate.fitness.failure_reasons {
+            *counts.entry(reason.clone()).or_default() += 1;
+        }
+    }
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    let mut counts = counts.into_iter().collect::<Vec<_>>();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    counts
+        .into_iter()
+        .take(5)
+        .map(|(reason, count)| format!("{reason}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn write_evolution_artifacts(
+    search: &mut StrategyBuilderEvolveSearch,
+    report_set: &SelectivityReportSet,
+    input: &StrategyBuilderEvolveSearchInput,
+) -> Result<()> {
+    std::fs::create_dir_all(&input.out_dir)
+        .with_context(|| format!("create evolution output dir {}", input.out_dir.display()))?;
+    let generations_dir = input.out_dir.join("generations");
+    let candidates_dir = input.out_dir.join("candidates");
+    std::fs::create_dir_all(&generations_dir)
+        .with_context(|| format!("create {}", generations_dir.display()))?;
+    std::fs::create_dir_all(&candidates_dir)
+        .with_context(|| format!("create {}", candidates_dir.display()))?;
+
+    for generation in &search.generations {
+        let path = generations_dir.join(format!("generation_{:03}.json", generation.generation));
+        write_json_artifact_atomic(&path, generation)
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+
+    for candidate in &mut search.candidates {
+        let candidate_dir = candidates_dir.join(format!(
+            "candidate_rank_{:03}_{}",
+            candidate.rank,
+            &candidate.genome_hash[..8]
+        ));
+        std::fs::create_dir_all(&candidate_dir)
+            .with_context(|| format!("create {}", candidate_dir.display()))?;
+
+        let genome_path = candidate_dir.join("genome.json");
+        write_json_artifact_atomic(&genome_path, &candidate.genome)
+            .with_context(|| format!("write {}", genome_path.display()))?;
+
+        if !candidate.fitness.replayable_policy {
+            candidate.notes.push(
+                "variant.json omitted because the evolved policy conflicts with its source variant"
+                    .to_string(),
+            );
+        } else if let Some(base_variant) = report_set.variants.get(&candidate.genome.variant) {
+            let variant =
+                executable_evolution_variant(base_variant, candidate).with_context(|| {
+                    format!("materialize evolved candidate {}", candidate.candidate_id)
+                })?;
+            let variant_path = candidate_dir.join("variant.json");
+            write_json_artifact_atomic(&variant_path, &variant)
+                .with_context(|| format!("write {}", variant_path.display()))?;
+            candidate.variant_path = Some(variant_path.display().to_string());
+        } else {
+            candidate.notes.push(
+                "source reports did not include executable StrategyVariant params for variant.json"
+                    .to_string(),
+            );
+        }
+
+        if input.replay_start.is_some() && candidate.variant_path.is_some() {
+            let replay_manifest = evolution_replay_manifest(candidate, input, &candidate_dir);
+            let replay_path = candidate_dir.join("rolling_history_manifest.json");
+            write_json_artifact_atomic(&replay_path, &replay_manifest)
+                .with_context(|| format!("write {}", replay_path.display()))?;
+            candidate.replay_manifest_path = Some(replay_path.display().to_string());
+        } else if input.replay_start.is_some() {
+            candidate.notes.push(
+                "replay manifest omitted because no executable variant was written".to_string(),
+            );
+        }
+    }
+
+    let ledger_path = input.out_dir.join("trial_ledger.jsonl");
+    write_jsonl_artifact_atomic(&ledger_path, &search.trial_ledger)
+        .with_context(|| format!("write {}", ledger_path.display()))?;
+
+    let summary_path = input.out_dir.join("evolution_summary.json");
+    write_json_artifact_atomic(&summary_path, search)
+        .with_context(|| format!("write {}", summary_path.display()))?;
+    Ok(())
+}
+
+fn executable_evolution_variant(
+    base_variant: &StrategyVariant,
+    candidate: &EvolutionCandidate,
+) -> Result<StrategyVariant> {
+    let mut variant = base_variant.clone();
+    variant.name = format!(
+        "{}_evo_{}",
+        safe_path_component(&candidate.genome.variant),
+        &candidate.genome_hash[..8]
+    );
+    variant.selectivity =
+        runtime_selectivity_from_causal_policy(&variant.selectivity, &candidate.final_policy)?;
+    apply_evolution_knobs_to_variant(&mut variant, &candidate.genome.knobs);
+    Ok(variant)
+}
+
+fn runtime_selectivity_from_causal_policy(
+    source: &SelectivityFilter,
+    policy: &CausalPolicyReport,
+) -> Result<SelectivityFilter> {
+    let mut require_tags = policy.require_tags.clone();
+    for (dimension, value) in tags_from_cli_args(&policy.harness_require_args)? {
+        if let Some(existing) = require_tags.insert(dimension.clone(), value.clone()) {
+            if existing != value {
+                bail!("conflicting runtime require tags for {dimension}: {existing} vs {value}");
+            }
+        }
+    }
+
+    let mut deny_tag_values = tag_values_from_cli_args(&policy.harness_deny_args)?;
+    for rule in &policy.deny_rules {
+        if rule.match_tags.len() != 1 {
+            bail!(
+                "evolved candidate contains unsupported multi-term runtime deny rule: {}",
+                serde_json::to_string(&rule.match_tags).unwrap_or_else(|_| "<invalid>".to_string())
+            );
+        }
+        for (dimension, value) in &rule.match_tags {
+            deny_tag_values
+                .entry(dimension.clone())
+                .or_default()
+                .insert(value.clone());
+        }
+    }
+
+    validate_causal_tag_map(&require_tags)?;
+    validate_causal_tag_values(&deny_tag_values)?;
+    for (dimension, value) in &require_tags {
+        if deny_tag_values
+            .get(dimension)
+            .is_some_and(|denied| denied.contains(value))
+        {
+            bail!("runtime selectivity cannot both require and deny {dimension}={value}");
+        }
+    }
+
+    merge_runtime_selectivity(source, &require_tags, &deny_tag_values)
+}
+
+fn apply_evolution_knobs_to_variant(variant: &mut StrategyVariant, knobs: &EvolutionStrategyKnobs) {
+    if let Some(value) = knobs.min_confidence {
+        variant.min_confidence = value;
+        variant.zone_config.early_min_confidence = value;
+        variant.zone_config.late_min_confidence = value;
+        variant.zone_config.terminal_min_confidence = value;
+    }
+    if let Some(value) = knobs.min_edge {
+        variant.min_edge = value;
+        variant.zone_config.early_min_edge = value;
+        variant.zone_config.late_min_edge = value;
+        variant.zone_config.terminal_min_edge = value;
+    }
+    if let Some(value) = knobs.early_min_z {
+        variant.zone_config.early_min_z = value;
+    }
+    if let Some(value) = knobs.primary_min_z {
+        variant.zone_config.primary_min_z = value;
+    }
+    if let Some(value) = knobs.late_min_z {
+        variant.zone_config.late_min_z = value;
+    }
+    if let Some(value) = knobs.terminal_min_z {
+        variant.zone_config.terminal_min_z = value;
+    }
+    if let Some(value) = knobs.min_price {
+        variant.zone_config.min_price = value;
+    }
+    if let Some(value) = knobs.max_price {
+        variant.zone_config.max_price = value;
+    }
+    if variant.zone_config.max_price < variant.zone_config.min_price {
+        variant.zone_config.max_price = variant.zone_config.min_price;
+    }
+    if let Some(value) = knobs.min_ev_buffer {
+        variant.zone_config.min_ev_buffer = value;
+    }
+    if let Some(value) = knobs.settlement_guard_minutes {
+        variant.zone_config.settlement_guard_minutes = value;
+    }
+    if let Some(value) = knobs.settlement_min_abs_move_usd {
+        variant.zone_config.settlement_min_abs_move_usd = value;
+    }
+    if let Some(value) = knobs.min_reversion_count {
+        variant.zone_config.min_reversion_count = value;
+    }
+    if let Some(value) = knobs.max_reversion_count {
+        variant.zone_config.max_reversion_count = value;
+    }
+    if variant.zone_config.max_reversion_count != u64::MAX
+        && variant.zone_config.max_reversion_count < variant.zone_config.min_reversion_count
+    {
+        variant.zone_config.max_reversion_count = variant.zone_config.min_reversion_count;
+    }
+    if let Some(value) = knobs.prefer_maker {
+        variant.prefer_maker = value;
+    }
+    if let Some(value) = knobs.max_spread {
+        variant.microstructure.max_spread = value;
+    }
+    if let Some(value) = knobs.min_book_depth {
+        variant.microstructure.min_book_depth = value;
+    }
+    if let Some(value) = knobs.min_book_pressure {
+        variant.microstructure.min_book_pressure = value;
+    }
+    if let Some(value) = knobs.recent_mid_lookback_seconds {
+        variant.microstructure.recent_mid_lookback_seconds = value;
+    }
+    if let Some(value) = knobs.max_recent_mid_runup {
+        variant.microstructure.max_recent_mid_runup = value;
+    }
+}
+
+fn evolution_replay_manifest(
+    candidate: &EvolutionCandidate,
+    input: &StrategyBuilderEvolveSearchInput,
+    candidate_dir: &Path,
+) -> serde_json::Value {
+    let mut args = vec![
+        "strategy-builder".to_string(),
+        "rolling-history".to_string(),
+        "--start".to_string(),
+        input.replay_start.clone().unwrap_or_default(),
+        "--end".to_string(),
+        input.replay_end.clone().unwrap_or_default(),
+        "--out-dir".to_string(),
+        candidate_dir.display().to_string(),
+        "--latency-ms".to_string(),
+        input.latency_ms.to_string(),
+        "--threads".to_string(),
+        input.threads.to_string(),
+        "--window-minutes".to_string(),
+        input.window_minutes.to_string(),
+        "--fold-hours".to_string(),
+        input.fold_hours.to_string(),
+        "--profile".to_string(),
+        input.replay_profile.clone(),
+        "--zone-mode".to_string(),
+        input.replay_zone_mode.clone(),
+    ];
+    if let Some(path) = &input.latency_audit_json {
+        args.push("--latency-audit-json".to_string());
+        args.push(path.clone());
+    }
+    if let Some(path) = &input.btc_csv {
+        args.push("--btc-csv".to_string());
+        args.push(path.clone());
+    }
+    if input.atomic_parquet {
+        args.push("--atomic-parquet".to_string());
+    }
+    if let Some(path) = &candidate.variant_path {
+        args.push("--variant-json".to_string());
+        args.push(path.clone());
+    } else {
+        for tag in &candidate.final_policy.harness_require_args {
+            args.push("--require-causal-tag".to_string());
+            args.push(tag.clone());
+        }
+        for tag in &candidate.final_policy.harness_deny_args {
+            args.push("--deny-causal-tag".to_string());
+            args.push(tag.clone());
+        }
+    }
+
+    serde_json::json!({
+        "schema_version": 1,
+        "mode": "dry_run",
+        "execute": false,
+        "candidate_id": candidate.candidate_id,
+        "genome_hash": candidate.genome_hash,
+        "passed_static_evolution": candidate.passed,
+        "variant_json": candidate.variant_path.as_deref(),
+        "harness_require_args": candidate.final_policy.harness_require_args,
+        "harness_deny_args": candidate.final_policy.harness_deny_args,
+        "rolling_history_args": args,
+        "methodology": [
+            "Generated from evolve-search output only; no replay was executed.",
+            "When variant_json is present, rolling-history replays that exact serialized StrategyVariant instead of expanding the profile grid.",
+            "Run the args with --execute only after selecting the candidate for replay validation.",
+            "Static evolution fitness is not promotion evidence."
+        ],
+    })
+}
+
+fn write_json_artifact_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create artifact dir {}", parent.display()))?;
+        }
+    }
+    let mut payload = serde_json::to_vec_pretty(value).context("serialize artifact JSON")?;
+    payload.push(b'\n');
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact.json");
+    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, payload)
+        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("rename artifact into {}", path.display()))?;
+    Ok(())
+}
+
+fn write_jsonl_artifact_atomic<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create artifact dir {}", parent.display()))?;
+        }
+    }
+    let mut payload = Vec::new();
+    for row in rows {
+        serde_json::to_writer(&mut payload, row).context("serialize artifact JSONL row")?;
+        payload.push(b'\n');
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact.jsonl");
+    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, payload)
+        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("rename artifact into {}", path.display()))?;
+    Ok(())
+}
+
 fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
     let mut names = BTreeSet::new();
     for fold in folds {
@@ -3260,6 +6689,15 @@ fn evaluate_causal_policy_candidate(
     input: &StrategyBuilderCausalPolicySearchInput,
     candidate: CausalPolicyKey,
 ) -> CausalPolicyCandidateReport {
+    evaluate_causal_policy_candidate_with_fixed_denies(folds, input, candidate, &BTreeMap::new())
+}
+
+fn evaluate_causal_policy_candidate_with_fixed_denies(
+    folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    candidate: CausalPolicyKey,
+    fixed_deny_tags: &BTreeMap<String, String>,
+) -> CausalPolicyCandidateReport {
     let mut oos = TradePnlDiagnostics::default();
     let mut eligible_reports = 0_usize;
     let mut profitable_reports = 0_usize;
@@ -3276,7 +6714,12 @@ fn evaluate_causal_policy_candidate(
                 train_reports: idx,
                 policy: causal_policy_report(&CausalPolicy {
                     require_tags: candidate.require_tags.clone(),
-                    deny_rules: Vec::new(),
+                    deny_rules: fixed_causal_policy_deny_rules(
+                        &folds[..idx],
+                        &candidate.variant,
+                        &candidate.require_tags,
+                        fixed_deny_tags,
+                    ),
                 }),
                 train: None,
                 prior_tail: None,
@@ -3290,11 +6733,12 @@ fn evaluate_causal_policy_candidate(
         }
 
         let prior_folds = &folds[..idx];
-        let deny_rules = learn_causal_policy_deny_rules(
+        let deny_rules = merged_causal_policy_deny_rules(
             prior_folds,
             input,
             &candidate.variant,
             &candidate.require_tags,
+            fixed_deny_tags,
         );
         let policy = CausalPolicy {
             require_tags: candidate.require_tags.clone(),
@@ -3480,11 +6924,12 @@ fn evaluate_causal_policy_candidate(
 
     let final_policy = CausalPolicy {
         require_tags: candidate.require_tags.clone(),
-        deny_rules: learn_causal_policy_deny_rules(
+        deny_rules: merged_causal_policy_deny_rules(
             folds,
             input,
             &candidate.variant,
             &candidate.require_tags,
+            fixed_deny_tags,
         ),
     };
     let aggregate_static_final_policy =
@@ -3501,6 +6946,9 @@ fn evaluate_causal_policy_candidate(
             "multi-term deny rules are analytic only unless runtime conjunction-deny support is added"
                 .to_string(),
         );
+    }
+    if !fixed_deny_tags.is_empty() {
+        notes.push("fixed deny tags were supplied by an evolution genome".to_string());
     }
     if !passed {
         notes.push("candidate did not pass configured OOS gates".to_string());
@@ -3521,6 +6969,87 @@ fn evaluate_causal_policy_candidate(
         fold_forward,
         notes,
     }
+}
+
+fn merged_causal_policy_deny_rules(
+    prior_folds: &[SelectivityFold],
+    input: &StrategyBuilderCausalPolicySearchInput,
+    variant: &str,
+    require_tags: &BTreeMap<String, String>,
+    fixed_deny_tags: &BTreeMap<String, String>,
+) -> Vec<CausalPolicyRule> {
+    let mut rules =
+        fixed_causal_policy_deny_rules(prior_folds, variant, require_tags, fixed_deny_tags);
+    let mut seen = rules
+        .iter()
+        .map(|rule| rule.label.clone())
+        .collect::<BTreeSet<_>>();
+    for rule in learn_causal_policy_deny_rules(prior_folds, input, variant, require_tags) {
+        if seen.insert(rule.label.clone()) {
+            rules.push(rule);
+        }
+    }
+    rules
+}
+
+fn fixed_causal_policy_deny_rules(
+    folds: &[SelectivityFold],
+    variant: &str,
+    require_tags: &BTreeMap<String, String>,
+    fixed_deny_tags: &BTreeMap<String, String>,
+) -> Vec<CausalPolicyRule> {
+    fixed_deny_tags
+        .iter()
+        .filter_map(|(dimension, value)| {
+            if !CAUSAL_POLICY_DIMENSIONS.contains(&dimension.as_str()) {
+                return None;
+            }
+            if require_tags
+                .get(dimension)
+                .is_some_and(|required| required == value)
+            {
+                return None;
+            }
+            let mut match_tags = BTreeMap::new();
+            match_tags.insert(dimension.clone(), value.clone());
+            let mut stats = TradePnlDiagnostics::default();
+            let mut reports_with_trades = 0_usize;
+            for fold in folds {
+                let fold_stats =
+                    stats_for_causal_policy_rule_match(fold, variant, require_tags, &match_tags);
+                if fold_stats.trades > 0 {
+                    reports_with_trades += 1;
+                }
+                stats.merge_from(&fold_stats);
+            }
+            Some(CausalPolicyRule {
+                label: policy_label(&match_tags),
+                match_tags,
+                reports_with_trades,
+                stats,
+            })
+        })
+        .collect()
+}
+
+fn stats_for_causal_policy_rule_match(
+    fold: &SelectivityFold,
+    variant: &str,
+    require_tags: &BTreeMap<String, String>,
+    match_tags: &BTreeMap<String, String>,
+) -> TradePnlDiagnostics {
+    let mut stats = TradePnlDiagnostics::default();
+    let Some(variant_fold) = fold.variants.iter().find(|entry| entry.name == variant) else {
+        return stats;
+    };
+    for regime in &variant_fold.tagged_regimes {
+        if policy_tags_match(require_tags, &regime.tags)
+            && policy_tags_match(match_tags, &regime.tags)
+        {
+            stats.merge_from(&regime.stats);
+        }
+    }
+    stats
 }
 
 fn learn_causal_policy_deny_rules(
@@ -3884,7 +7413,7 @@ fn prior_pnls_by_policy_tag_pattern(
                 let pattern = policy_label(&match_tags);
                 fold_patterns
                     .entry(pattern)
-                    .or_insert_with(TradePnlDiagnostics::default)
+                    .or_default()
                     .merge_from(regime_stats);
             }
         }
@@ -4370,10 +7899,23 @@ fn causal_tags_from_regime(regime: &str) -> BTreeMap<String, String> {
                 "vol" => "volatility",
                 "rev" => "reversion",
                 "min" => "minutes_remaining",
-                "zone" | "price" | "edge" | "z" | "book_spread" | "book_min_depth"
-                | "book_pressure" | "book_imbalance" | "bookwalk_slippage" | "book_age" => {
-                    dimension.as_str()
-                }
+                "zone"
+                | "price"
+                | "edge"
+                | "z"
+                | "book_spread"
+                | "book_min_depth"
+                | "book_pressure"
+                | "book_imbalance"
+                | "bookwalk_slippage"
+                | "book_age"
+                | "book_runup"
+                | "btc_impulse_10s"
+                | "outcome_overround"
+                | "utc_session"
+                | "utc_hour"
+                | "direction_utc_session"
+                | "direction_utc_hour" => dimension.as_str(),
                 _ => return None,
             };
             Some((dimension.to_string(), value))
@@ -4626,18 +8168,58 @@ const CAUSAL_POLICY_DIMENSIONS: &[&str] = &[
     "volatility",
     "reversion",
     "minutes_remaining",
+    "utc_session",
+    "utc_hour",
+    "direction_utc_session",
+    "direction_utc_hour",
     "book_spread",
     "book_min_depth",
     "book_pressure",
     "book_imbalance",
     "bookwalk_slippage",
     "book_age",
+    "book_runup",
+    "btc_impulse_10s",
+    "outcome_overround",
 ];
 
 const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
+    &[
+        "zone",
+        "dir",
+        "price",
+        "edge",
+        "z",
+        "conf",
+        "rev",
+        "min",
+        "direction_utc_session",
+    ],
+    &[
+        "zone",
+        "dir",
+        "price",
+        "edge",
+        "z",
+        "conf",
+        "rev",
+        "min",
+        "utc_session",
+    ],
     &["zone", "dir", "price", "edge", "z", "conf", "rev", "min"],
+    &[
+        "zone",
+        "dir",
+        "price",
+        "edge",
+        "z",
+        "conf",
+        "direction_utc_session",
+    ],
+    &["zone", "dir", "price", "edge", "z", "conf", "utc_session"],
     &["zone", "dir", "price", "edge", "z", "conf", "min"],
     &["zone", "dir", "price", "z", "conf", "min"],
+    &["zone", "price", "edge", "z", "conf", "vol", "utc_session"],
     &["zone", "price", "edge", "z", "conf", "vol", "min"],
     &["zone", "price", "edge", "z", "conf", "min"],
     &["zone", "price", "z", "conf", "min"],
@@ -6279,6 +9861,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn causal_regime_parser_keeps_evolution_quality_dimensions() {
+        let tags = causal_tags_from_regime(
+            "zone=primary|dir=up|book_runup=lte_0.02|btc_impulse_10s=8_12|outcome_overround=lte_0.02",
+        );
+
+        assert_eq!(tags.get("book_runup").map(String::as_str), Some("lte_0.02"));
+        assert_eq!(
+            tags.get("btc_impulse_10s").map(String::as_str),
+            Some("8_12")
+        );
+        assert_eq!(
+            tags.get("outcome_overround").map(String::as_str),
+            Some("lte_0.02")
+        );
+    }
+
+    #[test]
     fn plan_includes_replay_and_diagnostics_stages() {
         let plan = build_plan(StrategyBuilderPlanInput {
             start: "2026-04-23T00:00:00Z".to_string(),
@@ -7887,6 +11486,809 @@ mod tests {
         assert!(!low_exposure.also_maker);
     }
 
+    #[test]
+    fn evolution_mutation_is_deterministic_and_bounded() {
+        let mut tag_universe = BTreeMap::new();
+        tag_universe.insert(
+            "direction".to_string(),
+            ["up".to_string(), "down".to_string()].into_iter().collect(),
+        );
+        tag_universe.insert(
+            "zone".to_string(),
+            ["early".to_string(), "primary".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        let variants = vec!["candidate".to_string(), "challenger".to_string()];
+        let variant_params = BTreeMap::new();
+        let mut input = evolve_input(5);
+        input.max_require_terms = 1;
+        input.max_deny_rules = 1;
+        let genome = EvolutionGenome {
+            schema_version: 1,
+            variant: "candidate".to_string(),
+            require_tags: BTreeMap::new(),
+            deny_tags: BTreeMap::new(),
+            knobs: EvolutionStrategyKnobs::default(),
+        };
+
+        let mut left_rng = StdRng::seed_from_u64(7);
+        let mut right_rng = StdRng::seed_from_u64(7);
+        let left = mutate_evolution_genome(
+            genome.clone(),
+            &tag_universe,
+            &variants,
+            &variant_params,
+            &input,
+            &mut left_rng,
+        );
+        let right = mutate_evolution_genome(
+            genome,
+            &tag_universe,
+            &variants,
+            &variant_params,
+            &input,
+            &mut right_rng,
+        );
+
+        assert_eq!(left, right);
+        assert!(left.require_tags.len() <= 1);
+        assert!(left.deny_tags.len() <= 1);
+        assert_eq!(evolution_genome_hash(&left), evolution_genome_hash(&right));
+    }
+
+    #[test]
+    fn evolution_variant_mutation_syncs_knob_metadata() {
+        let mut variants = BTreeMap::new();
+        let mut candidate = StrategyVariant::baseline();
+        candidate.name = "candidate".to_string();
+        candidate.min_edge = 0.07;
+        candidate.prefer_maker = false;
+        let mut challenger = StrategyVariant::baseline();
+        challenger.name = "challenger".to_string();
+        challenger.min_edge = 0.15;
+        challenger.prefer_maker = true;
+        variants.insert(candidate.name.clone(), candidate);
+        variants.insert(challenger.name.clone(), challenger);
+
+        let mut genome = EvolutionGenome {
+            schema_version: 1,
+            variant: "candidate".to_string(),
+            require_tags: BTreeMap::new(),
+            deny_tags: BTreeMap::new(),
+            knobs: EvolutionStrategyKnobs::default(),
+        };
+        genome.variant = "challenger".to_string();
+        sync_evolution_genome_knobs(&mut genome, &variants);
+
+        assert_eq!(genome.knobs.min_edge, Some(0.15));
+        assert_eq!(genome.knobs.prefer_maker, Some(true));
+    }
+
+    #[test]
+    fn evolution_knob_mutation_is_deterministic_and_bounded() {
+        let mut left = EvolutionStrategyKnobs {
+            min_price: Some(0.90),
+            max_price: Some(0.10),
+            min_reversion_count: Some(3),
+            max_reversion_count: Some(1),
+            ..EvolutionStrategyKnobs::default()
+        };
+        let mut right = left.clone();
+        let mut left_rng = StdRng::seed_from_u64(19);
+        let mut right_rng = StdRng::seed_from_u64(19);
+
+        mutate_evolution_knob(&mut left, &mut left_rng);
+        mutate_evolution_knob(&mut right, &mut right_rng);
+
+        assert_eq!(left, right);
+        if let (Some(min_price), Some(max_price)) = (left.min_price, left.max_price) {
+            assert!(min_price >= 0.01);
+            assert!(max_price <= 0.99);
+            assert!(max_price >= min_price);
+        }
+        if let (Some(min_reversion), Some(max_reversion)) =
+            (left.min_reversion_count, left.max_reversion_count)
+        {
+            assert!(max_reversion == u64::MAX || max_reversion >= min_reversion);
+        }
+        if let Some(pressure) = left.min_book_pressure {
+            assert!((-1.0..=1.0).contains(&pressure));
+        }
+    }
+
+    #[test]
+    fn evolution_crossover_preserves_same_family_knob_genes() {
+        let input = evolve_input(5);
+        let mut left = evolution_test_genome("candidate", &[("direction", "up")], &[]);
+        left.knobs.min_edge = Some(0.03);
+        left.knobs.primary_min_z = Some(0.90);
+        let mut right = evolution_test_genome("candidate", &[("zone", "primary")], &[]);
+        right.knobs.min_edge = Some(0.15);
+        right.knobs.primary_min_z = Some(1.50);
+        let mut rng = StdRng::seed_from_u64(23);
+
+        let child = crossover_evolution_genome(&left, &right, &input, &mut rng);
+
+        assert_eq!(child.variant, "candidate");
+        assert!([Some(0.03), Some(0.15)].contains(&child.knobs.min_edge));
+        assert!([Some(0.90), Some(1.50)].contains(&child.knobs.primary_min_z));
+    }
+
+    #[test]
+    fn evolution_survivor_cap_preserves_multiple_variant_families() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(3, 0, 3.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let causal_input = causal_input_from_evolution(&evolve_input(5));
+        let base = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("family_a", &[("direction", "up")], &[]),
+        );
+        let mut evaluated = Vec::new();
+        for idx in 0..4 {
+            let mut candidate = base.clone();
+            candidate.genome.variant = "family_a".to_string();
+            candidate.genome_hash = format!("a{idx}");
+            evaluated.push(candidate);
+        }
+        for idx in 0..2 {
+            let mut candidate = base.clone();
+            candidate.genome.variant = "family_b".to_string();
+            candidate.genome_hash = format!("b{idx}");
+            evaluated.push(candidate);
+        }
+
+        let selected = evolution_diverse_candidate_indexes(&evaluated, 4, 2);
+        let families = selected
+            .iter()
+            .map(|idx| evaluated[*idx].genome.variant.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            families
+                .iter()
+                .filter(|family| **family == "family_a")
+                .count(),
+            2
+        );
+        assert_eq!(
+            families
+                .iter()
+                .filter(|family| **family == "family_b")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn evolution_output_reserves_exact_replay_hypotheses() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(3, 0, 3.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let causal_input = causal_input_from_evolution(&evolve_input(5));
+        let base = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "up")], &[]),
+        );
+        let mut sorted = Vec::new();
+        for idx in 0..4 {
+            let mut exact = base.clone();
+            exact.genome_hash = format!("exact-{idx}");
+            sorted.push(exact);
+        }
+        for idx in 0..4 {
+            let mut replay = base.clone();
+            replay.genome_hash = format!("replay-{idx}");
+            replay.genome.knobs.max_recent_mid_runup = Some(0.06 + idx as f64 * 0.01);
+            replay.passed = false;
+            replay.fitness.passed = false;
+            replay.fitness.static_fitness_exact = false;
+            replay.fitness.gate_failures = 1;
+            replay.fitness.failure_reasons =
+                vec!["report_counterfactual_requires_replay".to_string()];
+            sorted.push(replay);
+        }
+        sorted.sort_by(compare_evolution_candidates);
+
+        let selected = select_evolution_output_candidates(&sorted, 4);
+
+        assert_eq!(selected.len(), 4);
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|candidate| candidate.fitness.static_fitness_exact)
+                .count(),
+            2
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|candidate| !candidate.fitness.static_fitness_exact)
+                .count(),
+            2
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .map(|candidate| candidate.rank)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn evolution_materialized_variant_applies_genome_knobs() {
+        let folds = vec![
+            selectivity_fold(vec![("direction=up", pnl_stats(3, 0, 3.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![("direction=up", pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let causal_input = causal_input_from_evolution(&evolve_input(5));
+        let mut genome = evolution_test_genome("candidate", &[("direction", "up")], &[]);
+        genome.knobs = EvolutionStrategyKnobs {
+            min_confidence: Some(0.70),
+            min_edge: Some(0.15),
+            early_min_z: Some(0.90),
+            primary_min_z: Some(1.10),
+            late_min_z: Some(1.50),
+            terminal_min_z: Some(2.00),
+            min_price: Some(0.50),
+            max_price: Some(0.85),
+            min_ev_buffer: Some(0.03),
+            settlement_guard_minutes: Some(3.0),
+            settlement_min_abs_move_usd: Some(15.0),
+            min_reversion_count: Some(1),
+            max_reversion_count: Some(2),
+            prefer_maker: Some(true),
+            max_spread: Some(0.03),
+            min_book_depth: Some(100.0),
+            min_book_pressure: Some(0.10),
+            recent_mid_lookback_seconds: Some(15.0),
+            max_recent_mid_runup: Some(0.08),
+        };
+        let candidate = evaluate_evolution_genome(&folds, &causal_input, 0, Vec::new(), genome);
+        let base = StrategyVariant::baseline();
+
+        let materialized = executable_evolution_variant(&base, &candidate).unwrap();
+
+        assert_eq!(materialized.min_confidence, 0.70);
+        assert_eq!(materialized.zone_config.early_min_confidence, 0.70);
+        assert_eq!(materialized.min_edge, 0.15);
+        assert_eq!(materialized.zone_config.early_min_edge, 0.15);
+        assert_eq!(materialized.zone_config.early_min_z, 0.90);
+        assert_eq!(materialized.zone_config.primary_min_z, 1.10);
+        assert_eq!(materialized.zone_config.late_min_z, 1.50);
+        assert_eq!(materialized.zone_config.terminal_min_z, 2.00);
+        assert_eq!(materialized.zone_config.min_price, 0.50);
+        assert_eq!(materialized.zone_config.max_price, 0.85);
+        assert_eq!(materialized.zone_config.min_ev_buffer, 0.03);
+        assert_eq!(materialized.zone_config.settlement_guard_minutes, 3.0);
+        assert_eq!(materialized.zone_config.settlement_min_abs_move_usd, 15.0);
+        assert_eq!(materialized.zone_config.min_reversion_count, 1);
+        assert_eq!(materialized.zone_config.max_reversion_count, 2);
+        assert!(materialized.prefer_maker);
+        assert_eq!(materialized.microstructure.max_spread, 0.03);
+        assert_eq!(materialized.microstructure.min_book_depth, 100.0);
+        assert_eq!(materialized.microstructure.min_book_pressure, 0.10);
+        assert_eq!(
+            materialized.microstructure.recent_mid_lookback_seconds,
+            15.0
+        );
+        assert_eq!(materialized.microstructure.max_recent_mid_runup, 0.08);
+        assert_eq!(
+            materialized.selectivity.require_tags.get("direction"),
+            Some(&"up".to_string())
+        );
+    }
+
+    #[test]
+    fn evolution_materialized_variant_embeds_harness_policy_args() {
+        let folds = vec![
+            selectivity_fold(vec![("book_age=lte_100ms", pnl_stats(3, 0, 3.0, 0.0))]),
+            selectivity_fold(vec![("book_age=lte_100ms", pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![("book_age=lte_100ms", pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let causal_input = causal_input_from_evolution(&evolve_input(5));
+        let genome = evolution_test_genome("candidate", &[("book_age", "lte_100ms")], &[]);
+        let mut candidate = evaluate_evolution_genome(&folds, &causal_input, 0, Vec::new(), genome);
+        candidate.final_policy.require_tags.clear();
+        candidate.final_policy.deny_rules.clear();
+        candidate.final_policy.harness_require_args = vec![
+            "book_age=lte_100ms".to_string(),
+            "reversion=1_2".to_string(),
+        ];
+        candidate.final_policy.harness_deny_args = vec!["direction=up".to_string()];
+        let base = StrategyVariant::baseline();
+
+        let materialized = executable_evolution_variant(&base, &candidate).unwrap();
+
+        assert_eq!(
+            materialized.selectivity.require_tags.get("book_age"),
+            Some(&"lte_100ms".to_string())
+        );
+        assert_eq!(
+            materialized.selectivity.require_tags.get("reversion"),
+            Some(&"1_2".to_string())
+        );
+        assert!(materialized
+            .selectivity
+            .deny_tag_values
+            .get("direction")
+            .is_some_and(|values| values.contains("up")));
+    }
+
+    #[test]
+    fn evolution_extracts_historical_policy_seed_genome() {
+        let mut variants = BTreeMap::new();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "candidate".to_string();
+        variant.min_edge = 0.09;
+        variants.insert(variant.name.clone(), variant);
+        let report_set = SelectivityReportSet {
+            folds: Vec::new(),
+            variants,
+        };
+        let candidate = serde_json::json!({
+            "variant": "candidate",
+            "final_policy": {
+                "require_tags": {"reversion": "1_2"},
+                "harness_require_args": ["reversion=1_2"],
+                "harness_deny_args": ["z=gte_1.5"]
+            }
+        });
+        let valid_variants = ["candidate".to_string()].into_iter().collect();
+
+        let genomes = historical_evolution_genomes_from_candidate(
+            &candidate,
+            &report_set,
+            &["candidate".to_string()],
+            &valid_variants,
+        );
+        assert_eq!(genomes.len(), 1);
+        let genome = &genomes[0];
+
+        assert_eq!(genome.variant, "candidate");
+        assert_eq!(
+            genome.require_tags.get("reversion").map(String::as_str),
+            Some("1_2")
+        );
+        assert_eq!(
+            genome.deny_tags.get("z").map(String::as_str),
+            Some("gte_1.5")
+        );
+        assert_eq!(genome.knobs.min_edge, Some(0.09));
+    }
+
+    #[test]
+    fn evolution_remaps_historical_policy_when_variant_is_absent() {
+        let mut variants = BTreeMap::new();
+        for name in ["fresh_a", "fresh_b"] {
+            let mut variant = StrategyVariant::baseline();
+            variant.name = name.to_string();
+            variants.insert(variant.name.clone(), variant);
+        }
+        let report_set = SelectivityReportSet {
+            folds: Vec::new(),
+            variants,
+        };
+        let candidate = serde_json::json!({
+            "variant": "old_profile",
+            "final_policy": {
+                "harness_require_args": ["book_age=lte_100ms"],
+                "harness_deny_args": ["edge=gte_0.15"]
+            }
+        });
+        let current_variants = vec!["fresh_a".to_string(), "fresh_b".to_string()];
+        let valid_variants = current_variants.iter().cloned().collect();
+
+        let genomes = historical_evolution_genomes_from_candidate(
+            &candidate,
+            &report_set,
+            &current_variants,
+            &valid_variants,
+        );
+
+        assert_eq!(genomes.len(), 2);
+        assert_eq!(genomes[0].variant, "fresh_a");
+        assert_eq!(
+            genomes[1].require_tags.get("book_age").map(String::as_str),
+            Some("lte_100ms")
+        );
+        assert_eq!(
+            genomes[1].deny_tags.get("edge").map(String::as_str),
+            Some("gte_0.15")
+        );
+    }
+
+    #[test]
+    fn evolution_tail_first_ranking_prefers_cleaner_tail_over_higher_pnl() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let primary_up =
+            "regime=zone=primary|dir=up|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (primary_up, pnl_stats(4, 0, 4.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (primary_up, pnl_stats(4, 0, 4.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(10, 0, 10.0, 0.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(0, 1, 0.0, -4.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(0, 1, 0.0, -4.0)),
+                (primary_up, pnl_stats(0, 1, 0.0, -1.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(20, 0, 20.0, 0.0)),
+                (primary_up, pnl_stats(3, 0, 3.0, 0.0)),
+            ]),
+        ];
+        let mut input = evolve_input(10);
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 4;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        input.min_worst_oos_pnl = -10.0;
+        input.loss_burst_lookback = 2;
+        let causal_input = causal_input_from_evolution(&input);
+        let mut down = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "down")], &[]),
+        );
+        let mut up = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "up")], &[]),
+        );
+        down.pareto_front = 0;
+        up.pareto_front = 0;
+
+        assert!(down.fitness.total_pnl > up.fitness.total_pnl);
+        assert_eq!(compare_evolution_candidates(&up, &down), Ordering::Less);
+    }
+
+    #[test]
+    fn evolution_blocks_thin_eligible_report_candidate() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let mut input = evolve_input(10);
+        input.max_deny_rules = 0;
+        input.min_oos_eligible_reports = 2;
+        let causal_input = causal_input_from_evolution(&input);
+        let candidate = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "down")], &[]),
+        );
+
+        assert_eq!(candidate.fitness.eligible_reports, 1);
+        assert!(!candidate.passed);
+        assert!(candidate
+            .fitness
+            .failure_reasons
+            .iter()
+            .any(|reason| reason == "eligible_reports_below_gate"));
+    }
+
+    #[test]
+    fn evolution_accepts_exact_no_arg_variant_for_replay() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let mut input = evolve_input(10);
+        input.min_oos_trades = 5;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        let causal_input = causal_input_from_evolution(&input);
+        let candidate = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[], &[]),
+        );
+
+        assert!(candidate.fitness.replayable_policy);
+        assert!(candidate.fitness.static_fitness_exact);
+        assert!(candidate.passed);
+    }
+
+    #[test]
+    fn evolution_requires_replay_for_mutated_strategy_knobs() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=1.1_1.5|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let mut input = evolve_input(10);
+        input.min_oos_trades = 5;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        let causal_input = causal_input_from_evolution(&input);
+        let mut source = StrategyVariant::baseline();
+        source.name = "candidate".to_string();
+        let mut genome = evolution_test_genome("candidate", &[], &[]);
+        genome.knobs = evolution_knobs_from_variant(&source);
+        genome.knobs.primary_min_z = Some(source.zone_config.primary_min_z + 0.20);
+        let variants = [(source.name.clone(), source)].into_iter().collect();
+
+        let candidate = evaluate_evolution_genome_against_variants(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            genome,
+            &variants,
+        );
+
+        assert!(candidate.fitness.replayable_policy);
+        assert!(!candidate.fitness.static_fitness_exact);
+        assert!(!candidate.passed);
+        assert!(candidate
+            .fitness
+            .failure_reasons
+            .iter()
+            .any(|reason| reason == "report_counterfactual_requires_replay"));
+    }
+
+    #[test]
+    fn evolution_requires_replay_for_counterfactual_selectivity() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=1.1_1.5|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let mut input = evolve_input(10);
+        input.max_deny_rules = 0;
+        input.min_oos_trades = 5;
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        let causal_input = causal_input_from_evolution(&input);
+        let mut source = StrategyVariant::baseline();
+        source.name = "candidate".to_string();
+        let mut genome = evolution_test_genome("candidate", &[("direction", "down")], &[]);
+        genome.knobs = evolution_knobs_from_variant(&source);
+        let variants = [(source.name.clone(), source)].into_iter().collect();
+
+        let candidate = evaluate_evolution_genome_against_variants(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            genome,
+            &variants,
+        );
+
+        assert!(candidate.fitness.replayable_policy);
+        assert!(!candidate.fitness.static_fitness_exact);
+        assert!(!candidate.passed);
+        assert!(candidate
+            .fitness
+            .failure_reasons
+            .iter()
+            .any(|reason| reason == "report_counterfactual_requires_replay"));
+    }
+
+    #[test]
+    fn evolution_rejects_policy_conflicting_with_source_selectivity() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=1.1_1.5|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(4, 0, 4.0, 0.0))]),
+            selectivity_fold(vec![(primary_down, pnl_stats(5, 0, 5.0, 0.0))]),
+        ];
+        let mut input = evolve_input(10);
+        input.min_oos_wilson_win_rate_lower = 0.0;
+        let causal_input = causal_input_from_evolution(&input);
+        let mut source = StrategyVariant::baseline();
+        source.name = "candidate".to_string();
+        source
+            .selectivity
+            .require_tags
+            .insert("reversion".to_string(), "1_2".to_string());
+        let mut genome = evolution_test_genome("candidate", &[], &[("reversion", "1_2")]);
+        genome.knobs = evolution_knobs_from_variant(&source);
+        let variants = [(source.name.clone(), source)].into_iter().collect();
+
+        let candidate = evaluate_evolution_genome_against_variants(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            genome,
+            &variants,
+        );
+
+        assert!(!candidate.fitness.replayable_policy);
+        assert!(!candidate.fitness.static_fitness_exact);
+        assert!(!candidate.passed);
+        assert!(candidate
+            .fitness
+            .failure_reasons
+            .iter()
+            .any(|reason| reason == "source_variant_not_replayable"));
+        assert!(candidate
+            .notes
+            .iter()
+            .any(|note| note.contains("cannot both require and deny reversion=1_2")));
+    }
+
+    #[test]
+    fn evolution_replay_manifest_is_dry_run_with_policy_args() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(5, 0, 5.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -5.0)),
+            ]),
+        ];
+        let mut input = evolve_input(10);
+        input.replay_start = Some("2026-05-28T00:00:00Z".to_string());
+        input.replay_end = Some("2026-06-10T23:00:00Z".to_string());
+        input.atomic_parquet = true;
+        input.latency_ms = 128;
+        let causal_input = causal_input_from_evolution(&input);
+        let candidate = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "down")], &[("zone", "early")]),
+        );
+        let manifest =
+            evolution_replay_manifest(&candidate, &input, Path::new("/tmp/evo_candidate"));
+        let args = manifest
+            .get("rolling_history_args")
+            .and_then(|value| value.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            manifest.get("execute").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert!(!args.contains(&"--execute"));
+        assert!(args.windows(2).any(|pair| pair == ["--latency-ms", "128"]));
+        assert!(args.contains(&"--atomic-parquet"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--require-causal-tag", "direction=down"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--deny-causal-tag", "zone=early"]));
+    }
+
+    #[test]
+    fn evolution_replay_manifest_prefers_exact_variant_json() {
+        let primary_down =
+            "regime=zone=primary|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let early_down =
+            "regime=zone=early|dir=down|price=0.75_0.90|edge=0.07_0.15|z=0.7_1.1|conf=0.50_0.70|vol=lt_0.40|rev=1_2|min=2_4";
+        let folds = vec![
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(4, 0, 4.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -3.0)),
+            ]),
+            selectivity_fold(vec![
+                (primary_down, pnl_stats(5, 0, 5.0, 0.0)),
+                (early_down, pnl_stats(0, 2, 0.0, -5.0)),
+            ]),
+        ];
+        let mut input = evolve_input(10);
+        input.replay_start = Some("2026-05-28T00:00:00Z".to_string());
+        input.replay_end = Some("2026-06-10T23:00:00Z".to_string());
+        input.atomic_parquet = true;
+        input.latency_ms = 128;
+        let causal_input = causal_input_from_evolution(&input);
+        let mut candidate = evaluate_evolution_genome(
+            &folds,
+            &causal_input,
+            0,
+            Vec::new(),
+            evolution_test_genome("candidate", &[("direction", "down")], &[("zone", "early")]),
+        );
+        candidate.variant_path = Some("/tmp/evo_candidate/variant.json".to_string());
+        let manifest =
+            evolution_replay_manifest(&candidate, &input, Path::new("/tmp/evo_candidate"));
+        let args = manifest
+            .get("rolling_history_args")
+            .and_then(|value| value.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            manifest.get("variant_json").and_then(|v| v.as_str()),
+            Some("/tmp/evo_candidate/variant.json")
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--variant-json", "/tmp/evo_candidate/variant.json"]));
+        assert!(!args.contains(&"--require-causal-tag"));
+        assert!(!args.contains(&"--deny-causal-tag"));
+        assert!(args.contains(&"--atomic-parquet"));
+    }
+
+    #[test]
+    fn evolution_rejects_unsupported_multi_term_denies() {
+        let mut input = evolve_input(5);
+        input.max_deny_terms = 2;
+        let err = validate_evolve_search_input(&input).unwrap_err();
+        assert!(err.to_string().contains("single-tag deny"));
+    }
+
+    #[test]
+    fn evolution_atomic_json_writer_replaces_payload() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("artifact.json");
+        write_json_artifact_atomic(&path, &serde_json::json!({"version": 1})).unwrap();
+        write_json_artifact_atomic(&path, &serde_json::json!({"version": 2})).unwrap();
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["version"], 2);
+        assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp.")));
+    }
+
     fn selectivity_input(top: usize) -> StrategyBuilderSelectivitySearchInput {
         StrategyBuilderSelectivitySearchInput {
             report_paths: Vec::new(),
@@ -7980,6 +12382,444 @@ mod tests {
             meta_label_max_generalization_terms: 0,
             top,
         }
+    }
+
+    fn evolve_input(top: usize) -> StrategyBuilderEvolveSearchInput {
+        StrategyBuilderEvolveSearchInput {
+            report_paths: vec![
+                "fold0.json".to_string(),
+                "fold1.json".to_string(),
+                "fold2.json".to_string(),
+            ],
+            historical_search_paths: Vec::new(),
+            out_dir: PathBuf::from("target/evolve-test"),
+            seed: 42,
+            population: 8,
+            generations: 2,
+            elite_count: 2,
+            min_train_reports: 2,
+            min_train_trades: 4,
+            min_oos_trades: 5,
+            min_oos_wilson_win_rate_lower: 0.50,
+            min_oos_total_pnl: 0.0,
+            min_oos_profitable_reports: 1,
+            min_oos_eligible_reports: 0,
+            min_worst_oos_pnl: 0.0,
+            max_require_terms: 3,
+            max_deny_rules: 1,
+            max_deny_terms: 1,
+            min_deny_trades: 1,
+            min_deny_loss_pnl: 0.0,
+            min_deny_loss_reports: 1,
+            tail_alpha: 0.20,
+            min_oos_cvar_pnl: -1.0e9,
+            loss_burst_lookback: 0,
+            max_loss_burst_reports: 0,
+            min_oos_payoff_ratio: 0.0,
+            max_oos_worst_loss_to_avg_win: 0.0,
+            prior_loss_cluster_lookback: 0,
+            max_prior_loss_burst_reports: 0,
+            min_prior_payoff_ratio: 0.0,
+            max_prior_worst_loss_to_avg_win: 0.0,
+            meta_label_min_support: 0,
+            meta_label_alpha: 0.20,
+            meta_label_min_quantile_pnl: -1.0e9,
+            meta_label_max_loss_rate: 1.0,
+            meta_label_require_supported: false,
+            meta_label_max_generalization_terms: 0,
+            top,
+            replay_start: None,
+            replay_end: None,
+            replay_profile: "a_plus5m".to_string(),
+            replay_zone_mode: "early".to_string(),
+            latency_ms: 128,
+            latency_audit_json: None,
+            btc_csv: None,
+            fold_hours: 8,
+            threads: 0,
+            window_minutes: 5.0,
+            atomic_parquet: false,
+        }
+    }
+
+    fn evolution_test_genome(
+        variant: &str,
+        require: &[(&str, &str)],
+        deny: &[(&str, &str)],
+    ) -> EvolutionGenome {
+        EvolutionGenome {
+            schema_version: 1,
+            variant: variant.to_string(),
+            require_tags: require
+                .iter()
+                .map(|(dimension, value)| ((*dimension).to_string(), (*value).to_string()))
+                .collect(),
+            deny_tags: deny
+                .iter()
+                .map(|(dimension, value)| ((*dimension).to_string(), (*value).to_string()))
+                .collect(),
+            knobs: EvolutionStrategyKnobs::default(),
+        }
+    }
+
+    #[test]
+    fn materialize_policy_variant_writes_exact_runtime_selectivity() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "candidate".to_string();
+        variant
+            .selectivity
+            .require_tags
+            .insert("reversion".to_string(), "1_2".to_string());
+        let source_report = write_materialize_source_report(&tmp, &variant);
+        let search_path = tmp.path().join("search.json");
+        std::fs::write(
+            &search_path,
+            serde_json::to_vec(&serde_json::json!({
+                "candidates": [{
+                    "rank": 1,
+                    "variant": "candidate",
+                    "final_policy": {
+                        "require_tags": {"direction": "up"},
+                        "deny_rules": [{
+                            "label": "zone=primary",
+                            "match_tags": {"zone": "primary"}
+                        }],
+                        "harness_require_args": ["direction=up"],
+                        "harness_deny_args": ["zone=primary"]
+                    }
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output_path = tmp.path().join("variant.json");
+
+        let summary = materialize_policy_variant(StrategyBuilderMaterializePolicyVariantInput {
+            search_path,
+            source_report_paths: vec![source_report.display().to_string()],
+            rank: 1,
+            output_path: output_path.clone(),
+        })
+        .unwrap();
+        let materialized: StrategyVariant =
+            serde_json::from_slice(&std::fs::read(&output_path).unwrap()).unwrap();
+
+        assert_eq!(summary.rank, 1);
+        assert_eq!(summary.source_variant, "candidate");
+        assert!(!summary.variant_hash.is_empty());
+        assert!(materialized.name.ends_with("_policy_rank001"));
+        assert_eq!(
+            materialized.selectivity.require_tags.get("reversion"),
+            Some(&"1_2".to_string())
+        );
+        assert_eq!(
+            materialized.selectivity.require_tags.get("direction"),
+            Some(&"up".to_string())
+        );
+        assert!(materialized
+            .selectivity
+            .deny_tag_values
+            .get("zone")
+            .is_some_and(|values| values.contains("primary")));
+        assert_eq!(
+            summary.selectivity.require_tags.get("reversion"),
+            Some(&"1_2".to_string())
+        );
+    }
+
+    #[test]
+    fn materialize_policy_variant_rejects_unsupported_multi_term_deny() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "candidate".to_string();
+        let source_report = write_materialize_source_report(&tmp, &variant);
+        let search_path = tmp.path().join("search.json");
+        std::fs::write(
+            &search_path,
+            serde_json::to_vec(&serde_json::json!({
+                "candidates": [{
+                    "rank": 1,
+                    "variant": "candidate",
+                    "final_policy": {
+                        "require_tags": {},
+                        "deny_rules": [{
+                            "label": "direction=down|z=gte_1.5",
+                            "match_tags": {
+                                "direction": "down",
+                                "z": "gte_1.5"
+                            }
+                        }],
+                        "harness_require_args": [],
+                        "harness_deny_args": []
+                    }
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output_path = tmp.path().join("variant.json");
+
+        let err = materialize_policy_variant(StrategyBuilderMaterializePolicyVariantInput {
+            search_path,
+            source_report_paths: vec![source_report.display().to_string()],
+            rank: 1,
+            output_path,
+        })
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("unsupported multi-term runtime deny rule"));
+    }
+
+    #[test]
+    fn materialize_sweep_variant_writes_exact_runtime_selectivity() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "candidate".to_string();
+        variant.prefer_maker = true;
+        variant
+            .selectivity
+            .require_tags
+            .insert("reversion".to_string(), "1_2".to_string());
+        let source_report = write_materialize_source_report(&tmp, &variant);
+        let output_path = tmp.path().join("variant.json");
+
+        let summary = materialize_sweep_variant(StrategyBuilderMaterializeSweepVariantInput {
+            report_path: source_report,
+            rank: 1,
+            output_path: output_path.clone(),
+            require_causal_tag: vec!["direction=up".to_string()],
+            deny_causal_tag: vec!["zone=primary".to_string()],
+        })
+        .unwrap();
+        let materialized: StrategyVariant =
+            serde_json::from_slice(&std::fs::read(&output_path).unwrap()).unwrap();
+
+        assert_eq!(summary.rank, 1);
+        assert_eq!(summary.source_variant, "candidate");
+        assert!(!summary.variant_hash.is_empty());
+        assert!(materialized.name.ends_with("_sweep_rank001"));
+        assert!(materialized.prefer_maker);
+        assert_eq!(
+            materialized.selectivity.require_tags.get("reversion"),
+            Some(&"1_2".to_string())
+        );
+        assert_eq!(
+            materialized.selectivity.require_tags.get("direction"),
+            Some(&"up".to_string())
+        );
+        assert!(materialized
+            .selectivity
+            .deny_tag_values
+            .get("zone")
+            .is_some_and(|values| values.contains("primary")));
+    }
+
+    #[test]
+    fn materialize_sweep_variant_rejects_runtime_selectivity_conflict() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "candidate".to_string();
+        let source_report = write_materialize_source_report(&tmp, &variant);
+        let output_path = tmp.path().join("variant.json");
+
+        let err = materialize_sweep_variant(StrategyBuilderMaterializeSweepVariantInput {
+            report_path: source_report,
+            rank: 1,
+            output_path,
+            require_causal_tag: vec!["direction=up".to_string()],
+            deny_causal_tag: vec!["direction=up".to_string()],
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("both requires and denies"));
+    }
+
+    #[test]
+    fn feature_filter_search_writes_ranked_exact_variants() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.name = "base_candidate".to_string();
+        variant
+            .selectivity
+            .require_tags
+            .insert("price".to_string(), "0.50_0.75".to_string());
+        let base_variant_path = tmp.path().join("base_variant.json");
+        write_json_artifact_atomic(&base_variant_path, &variant).unwrap();
+        let feature_a = tmp.path().join("features_a.json");
+        let feature_b = tmp.path().join("features_b.json");
+        write_json_artifact_atomic(
+            &feature_a,
+            &serde_json::json!({
+                "rows": [
+                    {
+                        "pnl_after_fee": 2.0,
+                        "won": true,
+                        "causal_tags": {
+                            "direction": "up",
+                            "zone": "early",
+                            "price": "0.50_0.75",
+                            "reversion": "1_2"
+                        }
+                    },
+                    {
+                        "pnl_after_fee": -3.0,
+                        "won": false,
+                        "causal_tags": {
+                            "direction": "up",
+                            "zone": "primary",
+                            "price": "0.50_0.75",
+                            "reversion": "1_2"
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap();
+        write_json_artifact_atomic(
+            &feature_b,
+            &serde_json::json!({
+                "rows": [
+                    {
+                        "pnl_after_fee": 2.5,
+                        "won": true,
+                        "causal_tags": {
+                            "direction": "up",
+                            "zone": "early",
+                            "price": "0.50_0.75",
+                            "reversion": "1_2"
+                        }
+                    },
+                    {
+                        "pnl_after_fee": -2.0,
+                        "won": false,
+                        "causal_tags": {
+                            "direction": "up",
+                            "zone": "primary",
+                            "price": "0.50_0.75",
+                            "reversion": "1_2"
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap();
+
+        let summary = feature_filter_search(StrategyBuilderFeatureFilterSearchInput {
+            feature_paths: vec![
+                feature_a.display().to_string(),
+                feature_b.display().to_string(),
+            ],
+            base_variant_path,
+            out_dir: tmp.path().join("feature_search"),
+            top: 5,
+            max_require_terms: 2,
+            max_deny_terms: 2,
+            min_atom_trades: 1,
+            max_atoms: 20,
+            min_total_trades: 2,
+            min_eligible_reports: 2,
+            min_total_pnl: 0.0,
+            min_worst_report_pnl: 0.0,
+        })
+        .unwrap();
+
+        assert!(summary.ok);
+        assert!(!summary.candidates.is_empty());
+        let top = &summary.candidates[0];
+        assert!(top.passed);
+        assert_eq!(top.fitness.losses, 0);
+        assert_eq!(top.fitness.eligible_reports, 2);
+        assert!(top
+            .deny_tag_values
+            .get("zone")
+            .is_some_and(|values| values.contains("primary")));
+        let materialized: StrategyVariant =
+            serde_json::from_slice(&std::fs::read(&top.variant_path).unwrap()).unwrap();
+        assert!(materialized.name.ends_with("_feature_rank001"));
+        assert_eq!(
+            materialized.selectivity.require_tags.get("price"),
+            Some(&"0.50_0.75".to_string())
+        );
+        assert!(materialized
+            .selectivity
+            .deny_tag_values
+            .get("zone")
+            .is_some_and(|values| values.contains("primary")));
+        assert!(summary.out_dir.ends_with("feature_search"));
+        assert!(std::path::Path::new(&top.variant_path).exists());
+    }
+
+    #[test]
+    fn feature_filter_search_rejects_empty_feature_list() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let err = feature_filter_search(StrategyBuilderFeatureFilterSearchInput {
+            feature_paths: Vec::new(),
+            base_variant_path: tmp.path().join("base_variant.json"),
+            out_dir: tmp.path().join("feature_search"),
+            top: 5,
+            max_require_terms: 2,
+            max_deny_terms: 2,
+            min_atom_trades: 1,
+            max_atoms: 20,
+            min_total_trades: 2,
+            min_eligible_reports: 2,
+            min_total_pnl: 0.0,
+            min_worst_report_pnl: 0.0,
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("at least one --feature report"));
+    }
+
+    fn write_materialize_source_report(
+        tmp: &tempfile::TempDir,
+        variant: &StrategyVariant,
+    ) -> PathBuf {
+        let path = tmp.path().join("source_report.json");
+        let mut src = crate::data::manifest::DataSourceManifest::new("pmxt", "order_book_l2");
+        src.complete = true;
+        let report = crate::backtest::experiment::ExperimentReport {
+            schema_version: 1,
+            generated_at: "2026-05-22T00:00:00Z".to_string(),
+            label: "source".to_string(),
+            mode: "backtest".to_string(),
+            start: "2026-05-21T00:00:00Z".to_string(),
+            end: "2026-05-21T07:00:00Z".to_string(),
+            bankroll_usd: 100.0,
+            latency_ms: 128,
+            market_catalog: crate::data::catalog::MarketCatalog::default(),
+            data_manifest: crate::data::manifest::DataManifest::new(vec![src], Vec::new()),
+            variants: vec![crate::backtest::experiment::VariantReport {
+                strategy: crate::strategy::spec::StrategySpec::new("s", "1", "hash", "risk"),
+                strategy_params: serde_json::to_value(variant).unwrap(),
+                trades: 0,
+                wins: 0,
+                losses: 0,
+                unresolved_fills: 0,
+                execution_attempts: 0,
+                fills_success: 0,
+                fills_failed: 0,
+                fill_rate: 0.0,
+                reject_reasons: BTreeMap::new(),
+                breaker_tripped: false,
+                breaker_reason: None,
+                breaker_tripped_at_s: None,
+                breaker_realized_drawdown_pct: 0.0,
+                breaker_stressed_drawdown_pct: 0.0,
+                diagnostics: crate::backtest::resolver::BacktestDiagnostics::default(),
+                win_rate: 0.0,
+                total_pnl: 0.0,
+                avg_pnl: 0.0,
+                total_fees: 0.0,
+                sharpe_like: 0.0,
+                by_zone: BTreeMap::new(),
+            }],
+        };
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+        path
     }
 
     fn multi_guard_input(top: usize) -> StrategyBuilderMultiGuardSearchInput {

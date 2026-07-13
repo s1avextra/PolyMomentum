@@ -9,7 +9,7 @@
 //!
 //! Lookup is `O(log n)` via binary search over the sorted timestamp vector.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -21,6 +21,7 @@ use serde_json::Value;
 pub struct BTCHistory {
     pub(crate) timestamps_ms: Vec<i64>, // sorted ascending
     pub(crate) prices: Vec<f64>,
+    source_kind: String,
 }
 
 impl BTCHistory {
@@ -32,12 +33,49 @@ impl BTCHistory {
         self.timestamps_ms.len()
     }
 
+    pub fn source_kind(&self) -> &str {
+        if self.source_kind.is_empty() {
+            "unknown"
+        } else {
+            &self.source_kind
+        }
+    }
+
     pub fn first_timestamp_ms(&self) -> i64 {
         self.timestamps_ms.first().copied().unwrap_or(0)
     }
 
     pub fn last_timestamp_ms(&self) -> i64 {
         self.timestamps_ms.last().copied().unwrap_or(0)
+    }
+
+    pub fn median_interval_ms(&self, start_ms: i64, end_ms: i64) -> Option<i64> {
+        let mut intervals = self.intervals_in_range(start_ms, end_ms);
+        if intervals.is_empty() {
+            return None;
+        }
+        intervals.sort_unstable();
+        Some(intervals[intervals.len() / 2])
+    }
+
+    pub fn max_gap_ms(&self, start_ms: i64, end_ms: i64) -> Option<i64> {
+        self.intervals_in_range(start_ms, end_ms).into_iter().max()
+    }
+
+    fn intervals_in_range(&self, start_ms: i64, end_ms: i64) -> Vec<i64> {
+        if self.timestamps_ms.len() < 2 || end_ms < start_ms {
+            return Vec::new();
+        }
+        let mut lo = self.timestamps_ms.partition_point(|&ts| ts < start_ms);
+        lo = lo.saturating_sub(1);
+        let hi = self.timestamps_ms.partition_point(|&ts| ts <= end_ms);
+        self.timestamps_ms[lo..hi]
+            .windows(2)
+            .filter_map(|pair| {
+                let gap = pair[1] - pair[0];
+                (gap > 0).then_some(gap)
+            })
+            .collect()
     }
 
     /// Load a CSV. Auto-detects schema:
@@ -52,39 +90,40 @@ impl BTCHistory {
             .has_headers(true)
             .from_path(path)
             .with_context(|| format!("open csv {}", path.display()))?;
-        let headers: Vec<String> = reader
-            .headers()?
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers: Vec<String> = reader.headers()?.iter().map(|s| s.to_string()).collect();
         if headers.is_empty() {
             return Ok(0);
         }
 
         let lower: Vec<String> = headers.iter().map(|h| h.to_lowercase()).collect();
-        let (ts_idx, price_idx, is_kline) = if lower.contains(&"timestamp".to_string())
-            && lower.contains(&"close".to_string())
-        {
-            (
-                lower.iter().position(|h| h == "timestamp").unwrap(),
-                lower.iter().position(|h| h == "close").unwrap(),
-                true,
-            )
-        } else if lower.contains(&"timestamp_ms".to_string())
-            && lower.contains(&"price".to_string())
-        {
-            (
-                lower.iter().position(|h| h == "timestamp_ms").unwrap(),
-                lower.iter().position(|h| h == "price").unwrap(),
-                false,
-            )
-        } else if lower.contains(&"timestamp".to_string()) && lower.len() >= 6 {
-            (lower.iter().position(|h| h == "timestamp").unwrap(), 4, true)
-        } else {
-            anyhow::bail!("unknown CSV schema in {}: {:?}", path.display(), headers);
-        };
+        let source_idx = lower.iter().position(|header| header == "source");
+        let (ts_idx, price_idx, is_kline) =
+            if lower.contains(&"timestamp".to_string()) && lower.contains(&"close".to_string()) {
+                (
+                    lower.iter().position(|h| h == "timestamp").unwrap(),
+                    lower.iter().position(|h| h == "close").unwrap(),
+                    true,
+                )
+            } else if lower.contains(&"timestamp_ms".to_string())
+                && lower.contains(&"price".to_string())
+            {
+                (
+                    lower.iter().position(|h| h == "timestamp_ms").unwrap(),
+                    lower.iter().position(|h| h == "price").unwrap(),
+                    false,
+                )
+            } else if lower.contains(&"timestamp".to_string()) && lower.len() >= 6 {
+                (
+                    lower.iter().position(|h| h == "timestamp").unwrap(),
+                    4,
+                    true,
+                )
+            } else {
+                anyhow::bail!("unknown CSV schema in {}: {:?}", path.display(), headers);
+            };
 
         let mut raw: Vec<(i64, f64)> = Vec::new();
+        let mut source_values = BTreeSet::new();
         for rec in reader.records() {
             let rec = match rec {
                 Ok(r) => r,
@@ -98,9 +137,15 @@ impl BTCHistory {
                 None => continue,
             };
             let price = match rec.get(price_idx).and_then(|s| s.parse::<f64>().ok()) {
-                Some(v) if v > 0.0 => v,
+                Some(v) if v > 0.0 && v.is_finite() => v,
                 _ => continue,
             };
+            if let Some(source) = source_idx.and_then(|index| rec.get(index)) {
+                let source = source.trim().to_ascii_lowercase();
+                if !source.is_empty() {
+                    source_values.insert(source);
+                }
+            }
             raw.push((ts, price));
         }
         if raw.is_empty() {
@@ -109,6 +154,12 @@ impl BTCHistory {
         raw.sort_by_key(|r| r.0);
 
         let added = raw.len();
+        let loaded_source_kind = if is_kline {
+            "binance_btcusdt_klines"
+        } else {
+            classify_btc_source_values(&source_values)
+        };
+        self.merge_source_kind(loaded_source_kind);
         if is_kline {
             // Detect interval as the smallest positive gap; treat that as the
             // bar width. Storing at open_time + interval guarantees no
@@ -147,9 +198,7 @@ impl BTCHistory {
         symbol: &str,
         interval: &str,
     ) -> Result<usize> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
         let mut cursor = start_ms;
         let mut added = 0usize;
         while cursor < end_ms {
@@ -209,6 +258,7 @@ impl BTCHistory {
             }
         }
         if added > 0 {
+            self.merge_source_kind("binance_btcusdt_klines");
             self.dedupe_and_sort();
         }
         Ok(added)
@@ -236,6 +286,14 @@ impl BTCHistory {
         }
     }
 
+    fn merge_source_kind(&mut self, loaded: &str) {
+        if self.source_kind.is_empty() || self.source_kind == "unknown" {
+            self.source_kind = loaded.to_string();
+        } else if self.source_kind != loaded {
+            self.source_kind = "multi_source_proxy".to_string();
+        }
+    }
+
     /// Most recent observable price at time T. Returns 0 if no data is
     /// available at or before T.
     pub fn price_at(&self, timestamp_ms: i64) -> f64 {
@@ -258,12 +316,8 @@ impl BTCHistory {
     /// the window has no ticks.
     #[cfg(test)]
     pub fn range_at(&self, start_ms: i64, end_ms: i64) -> (f64, f64, f64, f64) {
-        let lo = self
-            .timestamps_ms
-            .partition_point(|&t| t < start_ms);
-        let hi = self
-            .timestamps_ms
-            .partition_point(|&t| t <= end_ms);
+        let lo = self.timestamps_ms.partition_point(|&t| t < start_ms);
+        let hi = self.timestamps_ms.partition_point(|&t| t <= end_ms);
         if lo >= hi {
             return (0.0, 0.0, 0.0, 0.0);
         }
@@ -297,35 +351,45 @@ impl BTCHistory {
         let window_ts = &self.timestamps_ms[lo..hi];
         let window_p = &self.prices[lo..hi];
 
-        let mut log_returns: Vec<f64> = Vec::with_capacity(window_p.len().saturating_sub(1));
-        let mut deltas: Vec<f64> = Vec::with_capacity(window_p.len().saturating_sub(1));
-        for i in 1..window_p.len() {
-            if window_p[i - 1] <= 0.0 {
-                continue;
-            }
-            let r = (window_p[i] / window_p[i - 1]).ln();
-            let dt = (window_ts[i] - window_ts[i - 1]) as f64 / 1000.0;
-            if dt > 0.0 {
-                log_returns.push(r);
-                deltas.push(dt);
-            }
-        }
-        if log_returns.len() < 20 {
-            return 0.50;
-        }
-        let avg_dt = deltas.iter().sum::<f64>() / deltas.len() as f64;
-        let mean_r = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
-        let var_r = log_returns
+        crate::strategy::momentum::annualized_realized_vol(
+            window_ts
+                .iter()
+                .zip(window_p.iter())
+                .map(|(timestamp_ms, price)| (*timestamp_ms as f64 / 1000.0, *price)),
+            20,
+        )
+        .unwrap_or(0.50)
+    }
+}
+
+pub fn classify_btc_source_values(source_values: &BTreeSet<String>) -> &'static str {
+    const CHAINLINK_SOURCES: &[&str] = &[
+        "chainlink_btc_usd_data_stream",
+        "crypto_prices_chainlink",
+        "polymarket_rtds_chainlink_btc_usd",
+    ];
+    const BINANCE_SOURCES: &[&str] = &[
+        "binance",
+        "binance_btcusdt_klines",
+        "binance_btcusdt_rtds",
+        "crypto_prices",
+    ];
+    if !source_values.is_empty()
+        && source_values
             .iter()
-            .map(|r| (r - mean_r).powi(2))
-            .sum::<f64>()
-            / log_returns.len() as f64;
-        if avg_dt <= 0.0 {
-            return 0.50;
-        }
-        let var_per_second = var_r / avg_dt;
-        let annualized = (var_per_second * 365.25 * 86400.0).sqrt();
-        annualized.clamp(0.05, 5.0)
+            .all(|source| CHAINLINK_SOURCES.contains(&source.as_str()))
+    {
+        "chainlink_btc_usd_data_stream"
+    } else if !source_values.is_empty()
+        && source_values
+            .iter()
+            .all(|source| BINANCE_SOURCES.contains(&source.as_str()))
+    {
+        "binance_btcusdt_klines"
+    } else if source_values.len() > 1 {
+        "multi_source_proxy"
+    } else {
+        "csv_unclassified"
     }
 }
 
@@ -363,6 +427,7 @@ mod tests {
         ]);
         let mut h = BTCHistory::new();
         h.load_csv(f.path()).unwrap();
+        assert_eq!(h.source_kind(), "binance_btcusdt_klines");
 
         // Interval = 60_000 ms. Stored timestamps = open_time + 60_000.
         // Query at exact open_time => returns 0 (no kline closed yet).
@@ -383,9 +448,41 @@ mod tests {
         ]);
         let mut h = BTCHistory::new();
         h.load_csv(f.path()).unwrap();
+        assert_eq!(h.timestamps_ms.len(), h.prices.len());
+        assert_eq!(h.n_ticks(), 3);
         assert_eq!(h.price_at(1_699_999_999_000), 0.0);
         assert!((h.price_at(1_700_000_001_500) - 70010.0).abs() < 1e-9);
         assert!((h.price_at(1_700_000_010_000) - 70020.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn collector_tick_csv_rejects_non_finite_prices() {
+        let f = write_csv(&[
+            "timestamp_ms,source,price",
+            "1700000000000,binance,70000",
+            "1700000001000,binance,inf",
+            "1700000002000,binance,70020",
+        ]);
+        let mut h = BTCHistory::new();
+        h.load_csv(f.path()).unwrap();
+
+        assert_eq!(h.timestamps_ms.len(), h.prices.len());
+        assert_eq!(h.n_ticks(), 2);
+        assert_eq!(h.price_at(1_700_000_001_000), 70000.0);
+        assert_eq!(h.price_at(1_700_000_002_000), 70020.0);
+    }
+
+    #[test]
+    fn collector_tick_csv_records_chainlink_provenance() {
+        let f = write_csv(&[
+            "timestamp_ms,source,price",
+            "1700000000000,chainlink_btc_usd_data_stream,70000",
+            "1700000001000,chainlink_btc_usd_data_stream,70010",
+        ]);
+        let mut h = BTCHistory::new();
+        h.load_csv(f.path()).unwrap();
+
+        assert_eq!(h.source_kind(), "chainlink_btc_usd_data_stream");
     }
 
     #[test]
@@ -395,6 +492,16 @@ mod tests {
         h.timestamps_ms = vec![1, 2, 3];
         h.prices = vec![100.0, 101.0, 99.0];
         assert!((h.realized_vol_at(3, 3600.0) - 0.50).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tape_cadence_reports_internal_gap() {
+        let mut h = BTCHistory::new();
+        h.timestamps_ms = vec![1_000, 2_000, 3_000, 15_000, 16_000];
+        h.prices = vec![100.0, 101.0, 102.0, 103.0, 104.0];
+
+        assert_eq!(h.median_interval_ms(1_000, 16_000), Some(1_000));
+        assert_eq!(h.max_gap_ms(1_000, 16_000), Some(12_000));
     }
 
     #[test]

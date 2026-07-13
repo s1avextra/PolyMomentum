@@ -20,7 +20,8 @@ use crate::backtest::distill;
 use crate::backtest::fill_model::Perfect;
 use crate::backtest::harness::CandleUniverse;
 use crate::backtest::l2_replay::{
-    BacktestOrder, FillModel, L2BacktestEngine, StaticLatencyConfig, Strategy, TokenBook,
+    BacktestOrder, FillModel, L2BacktestEngine, L2MidHistory, StaticLatencyConfig, Strategy,
+    TokenBook,
 };
 use crate::backtest::pmxt::PMXTv2Loader;
 use crate::data::scanner::CandleContract;
@@ -240,7 +241,7 @@ impl Strategy for EvalCacheGenerator {
         timestamp_s: f64,
         token_id: &str,
         book: &TokenBook,
-        _history: &BTreeMap<String, Vec<(f64, f64)>>,
+        _history: &L2MidHistory,
     ) -> Vec<BacktestOrder> {
         self.books.insert(token_id.to_string(), book.clone());
         let Some(runtime) = self.universe_by_token.get(token_id).cloned() else {

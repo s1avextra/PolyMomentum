@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 use crate::fair_value::binary_option_price_with_rate;
 use crate::strategy::momentum::MomentumSignal;
 
@@ -30,11 +31,91 @@ pub struct CandleDecision {
     pub zone: String,
     pub fair_value: f64,
     pub market_price: f64,
+    #[serde(default)]
+    pub gross_edge: f64,
+    #[serde(default)]
+    pub entry_fee_per_share: f64,
+    /// Expected edge after entry fee, before settlement payoff.
     pub edge: f64,
     pub minutes_remaining: f64,
     pub yes_no_vig: f64,
     #[serde(default)]
     pub regime: DecisionRegime,
+}
+
+impl CandleDecision {
+    /// Revalidate a taker decision at the visible-depth VWAP and FOK limit.
+    /// This keeps top-of-book signals from passing gates that their executable
+    /// order would fail after walking the book.
+    pub fn reprice_for_taker_execution(
+        &mut self,
+        execution_vwap: f64,
+        worst_price: f64,
+        entry_fee_rate: f64,
+        min_edge: f64,
+        cfg: &ZoneConfig,
+    ) -> Result<(), SkipReason> {
+        if !(execution_vwap.is_finite()
+            && worst_price.is_finite()
+            && entry_fee_rate.is_finite()
+            && min_edge.is_finite()
+            && execution_vwap > 0.0
+            && execution_vwap <= 1.0
+            && worst_price + 1e-12 >= execution_vwap
+            && worst_price <= 1.0
+            && entry_fee_rate >= 0.0)
+        {
+            return Err(SkipReason::new(
+                "invalid_execution_quote",
+                &self.zone,
+                format!("vwap={execution_vwap} worst={worst_price} fee_rate={entry_fee_rate}"),
+            ));
+        }
+        if execution_vwap < cfg.min_price || worst_price > cfg.max_price {
+            return Err(SkipReason::new(
+                "execution_price_out_of_range",
+                &self.zone,
+                format!(
+                    "vwap={execution_vwap:.4} worst={worst_price:.4} range=[{:.4},{:.4}]",
+                    cfg.min_price, cfg.max_price
+                ),
+            ));
+        }
+
+        let gross_edge = self.fair_value - execution_vwap;
+        let entry_fee_per_share = entry_fee_rate * execution_vwap * (1.0 - execution_vwap);
+        let edge = gross_edge - entry_fee_per_share;
+        if edge < cfg.min_ev_buffer {
+            return Err(SkipReason::new(
+                "execution_negative_ev",
+                &self.zone,
+                format!("{edge:.4} < {:.4}", cfg.min_ev_buffer),
+            ));
+        }
+        if self.zone != "terminal" && gross_edge > cfg.edge_cap {
+            return Err(SkipReason::new(
+                "execution_edge_too_high_stale",
+                &self.zone,
+                format!("{gross_edge:.4} > {:.4}", cfg.edge_cap),
+            ));
+        }
+        let (_, _, required_edge) = zone_thresholds(&self.zone, 0.0, min_edge, cfg);
+        if edge < required_edge {
+            return Err(SkipReason::new(
+                "execution_low_edge",
+                &self.zone,
+                format!("{edge:.4} < {required_edge:.4}"),
+            ));
+        }
+
+        self.market_price = execution_vwap;
+        self.gross_edge = gross_edge;
+        self.entry_fee_per_share = entry_fee_per_share;
+        self.edge = edge;
+        self.regime.price_bucket = bucket_market_price(execution_vwap);
+        self.regime.edge_bucket = bucket_edge(edge);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +131,10 @@ pub struct DecisionRegime {
     pub reversion_count: u32,
     pub minutes_remaining_bucket: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utc_hour_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utc_session_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_spread_bucket: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_min_depth_bucket: Option<String>,
@@ -61,6 +146,12 @@ pub struct DecisionRegime {
     pub bookwalk_slippage_bucket: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_age_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_runup_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directional_impulse_10s_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_overround_bucket: Option<String>,
 }
 
 impl Default for DecisionRegime {
@@ -76,12 +167,17 @@ impl Default for DecisionRegime {
             reversion_bucket: "unknown".to_string(),
             reversion_count: 0,
             minutes_remaining_bucket: "unknown".to_string(),
+            utc_hour_bucket: None,
+            utc_session_bucket: None,
             book_spread_bucket: None,
             book_min_depth_bucket: None,
             book_pressure_bucket: None,
             book_imbalance_bucket: None,
             bookwalk_slippage_bucket: None,
             book_age_bucket: None,
+            book_runup_bucket: None,
+            directional_impulse_10s_bucket: None,
+            outcome_overround_bucket: None,
         }
     }
 }
@@ -106,12 +202,19 @@ impl DecisionRegime {
             reversion_bucket: bucket_reversions(signal.reversion_count),
             reversion_count: signal.reversion_count,
             minutes_remaining_bucket: bucket_minutes_remaining(minutes_remaining),
+            utc_hour_bucket: None,
+            utc_session_bucket: None,
             book_spread_bucket: None,
             book_min_depth_bucket: None,
             book_pressure_bucket: None,
             book_imbalance_bucket: None,
             bookwalk_slippage_bucket: None,
             book_age_bucket: None,
+            book_runup_bucket: None,
+            directional_impulse_10s_bucket: signal
+                .directional_impulse_10s_bps
+                .map(bucket_directional_impulse_bps),
+            outcome_overround_bucket: None,
         }
     }
 
@@ -127,6 +230,17 @@ impl DecisionRegime {
             format!("rev={}", self.reversion_bucket),
             format!("min={}", self.minutes_remaining_bucket),
         ];
+        if let Some(bucket) = &self.utc_session_bucket {
+            parts.push(format!("utc_session={bucket}"));
+            parts.push(format!(
+                "direction_utc_session={}_{}",
+                self.direction, bucket
+            ));
+        }
+        if let Some(bucket) = &self.utc_hour_bucket {
+            parts.push(format!("utc_hour={bucket}"));
+            parts.push(format!("direction_utc_hour={}_{}", self.direction, bucket));
+        }
         if let Some(bucket) = &self.book_spread_bucket {
             parts.push(format!("book_spread={bucket}"));
         }
@@ -144,6 +258,15 @@ impl DecisionRegime {
         }
         if let Some(bucket) = &self.book_age_bucket {
             parts.push(format!("book_age={bucket}"));
+        }
+        if let Some(bucket) = &self.book_runup_bucket {
+            parts.push(format!("book_runup={bucket}"));
+        }
+        if let Some(bucket) = &self.directional_impulse_10s_bucket {
+            parts.push(format!("btc_impulse_10s={bucket}"));
+        }
+        if let Some(bucket) = &self.outcome_overround_bucket {
+            parts.push(format!("outcome_overround={bucket}"));
         }
         parts.join("|")
     }
@@ -164,6 +287,20 @@ impl DecisionRegime {
                 self.minutes_remaining_bucket.clone(),
             ),
         ];
+        if let Some(bucket) = &self.utc_session_bucket {
+            tags.push(("utc_session".to_string(), bucket.clone()));
+            tags.push((
+                "direction_utc_session".to_string(),
+                format!("{}_{}", self.direction, bucket),
+            ));
+        }
+        if let Some(bucket) = &self.utc_hour_bucket {
+            tags.push(("utc_hour".to_string(), bucket.clone()));
+            tags.push((
+                "direction_utc_hour".to_string(),
+                format!("{}_{}", self.direction, bucket),
+            ));
+        }
         if let Some(bucket) = &self.book_spread_bucket {
             tags.push(("book_spread".to_string(), bucket.clone()));
         }
@@ -182,9 +319,28 @@ impl DecisionRegime {
         if let Some(bucket) = &self.book_age_bucket {
             tags.push(("book_age".to_string(), bucket.clone()));
         }
+        if let Some(bucket) = &self.book_runup_bucket {
+            tags.push(("book_runup".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.directional_impulse_10s_bucket {
+            tags.push(("btc_impulse_10s".to_string(), bucket.clone()));
+        }
+        if let Some(bucket) = &self.outcome_overround_bucket {
+            tags.push(("outcome_overround".to_string(), bucket.clone()));
+        }
         tags
     }
 
+    pub fn attach_time_inputs(&mut self, timestamp_s: f64) {
+        if !timestamp_s.is_finite() || timestamp_s < 0.0 {
+            return;
+        }
+        let hour = ((timestamp_s.floor() as i64).rem_euclid(86_400) / 3_600) as u8;
+        self.utc_hour_bucket = Some(format!("{hour:02}"));
+        self.utc_session_bucket = Some(bucket_utc_session(hour));
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn attach_orderbook_inputs(
         &mut self,
         best_bid: f64,
@@ -219,6 +375,18 @@ impl DecisionRegime {
         }
         if let Some(age_ms) = book_age_ms {
             self.book_age_bucket = Some(bucket_book_age_ms(age_ms));
+        }
+    }
+
+    pub fn attach_orderbook_path_inputs(&mut self, recent_mid_runup: Option<f64>) {
+        if let Some(runup) = recent_mid_runup {
+            self.book_runup_bucket = Some(bucket_book_runup(runup));
+        }
+    }
+
+    pub fn attach_outcome_market_inputs(&mut self, yes_no_overround: f64) {
+        if yes_no_overround.is_finite() {
+            self.outcome_overround_bucket = Some(bucket_outcome_overround(yes_no_overround));
         }
     }
 }
@@ -492,6 +660,69 @@ fn bucket_book_age_ms(age_ms: f64) -> String {
     }
 }
 
+fn bucket_book_runup(runup: f64) -> String {
+    if !runup.is_finite() || runup < 0.0 {
+        "unknown".to_string()
+    } else if runup <= 0.02 {
+        "lte_0.02".to_string()
+    } else if runup <= 0.05 {
+        "0.02_0.05".to_string()
+    } else if runup <= 0.08 {
+        "0.05_0.08".to_string()
+    } else if runup <= 0.12 {
+        "0.08_0.12".to_string()
+    } else {
+        "gt_0.12".to_string()
+    }
+}
+
+fn bucket_directional_impulse_bps(impulse_bps: f64) -> String {
+    if !impulse_bps.is_finite() {
+        "unknown".to_string()
+    } else if impulse_bps <= 0.0 {
+        "opposite_or_flat".to_string()
+    } else if impulse_bps <= 2.0 {
+        "0_2".to_string()
+    } else if impulse_bps <= 5.0 {
+        "2_5".to_string()
+    } else if impulse_bps <= 8.0 {
+        "5_8".to_string()
+    } else if impulse_bps <= 12.0 {
+        "8_12".to_string()
+    } else {
+        "gt_12".to_string()
+    }
+}
+
+fn bucket_outcome_overround(overround: f64) -> String {
+    if !overround.is_finite() {
+        "unknown".to_string()
+    } else if overround < -0.01 {
+        "negative".to_string()
+    } else if overround <= 0.02 {
+        "lte_0.02".to_string()
+    } else if overround <= 0.05 {
+        "0.02_0.05".to_string()
+    } else if overround <= 0.10 {
+        "0.05_0.10".to_string()
+    } else if overround <= 0.25 {
+        "0.10_0.25".to_string()
+    } else {
+        "gt_0.25".to_string()
+    }
+}
+
+fn bucket_utc_session(hour: u8) -> String {
+    match hour {
+        0..=3 => "00_03".to_string(),
+        4..=7 => "04_07".to_string(),
+        8..=11 => "08_11".to_string(),
+        12..=15 => "12_15".to_string(),
+        16..=19 => "16_19".to_string(),
+        _ => "20_23".to_string(),
+    }
+}
+
 impl Default for ZoneConfig {
     fn default() -> Self {
         Self {
@@ -723,6 +954,43 @@ pub fn decide_candle_trade(
     zone_config: &ZoneConfig,
     cross_asset_boost: f64,
 ) -> DecisionResult {
+    decide_candle_trade_with_fee(
+        signal,
+        minutes_elapsed,
+        minutes_remaining,
+        window_minutes,
+        up_price,
+        down_price,
+        btc_price,
+        open_btc,
+        implied_vol,
+        DEFAULT_CRYPTO_TAKER_FEE_RATE,
+        min_confidence,
+        min_edge,
+        skip_dead_zone,
+        zone_config,
+        cross_asset_boost,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn decide_candle_trade_with_fee(
+    signal: &MomentumSignal,
+    minutes_elapsed: f64,
+    minutes_remaining: f64,
+    window_minutes: f64,
+    up_price: f64,
+    down_price: f64,
+    btc_price: f64,
+    open_btc: f64,
+    implied_vol: f64,
+    entry_fee_rate: f64,
+    min_confidence: f64,
+    min_edge: f64,
+    skip_dead_zone: bool,
+    zone_config: &ZoneConfig,
+    cross_asset_boost: f64,
+) -> DecisionResult {
     let cfg = zone_config;
 
     // 4-zone entry timing
@@ -732,6 +1000,35 @@ pub fn decide_candle_trade(
         1.0
     };
     let zone = zone_for(elapsed_pct);
+    if !minutes_elapsed.is_finite()
+        || !minutes_remaining.is_finite()
+        || !window_minutes.is_finite()
+        || !up_price.is_finite()
+        || !down_price.is_finite()
+        || !btc_price.is_finite()
+        || !open_btc.is_finite()
+        || !implied_vol.is_finite()
+        || !entry_fee_rate.is_finite()
+        || !signal.confidence.is_finite()
+        || !signal.z_score.is_finite()
+        || window_minutes <= 0.0
+        || minutes_remaining <= 0.0
+        || !(0.0..=1.0).contains(&up_price)
+        || up_price == 0.0
+        || !(0.0..=1.0).contains(&down_price)
+        || down_price == 0.0
+        || btc_price <= 0.0
+        || open_btc <= 0.0
+        || implied_vol <= 0.0
+        || entry_fee_rate < 0.0
+        || !matches!(signal.direction.as_str(), "up" | "down")
+    {
+        return DecisionResult::Skip(SkipReason::new(
+            "invalid_decision_input",
+            zone,
+            "non-finite or out-of-domain decision input",
+        ));
+    }
     let (mut z_min_conf, mut z_min_z, z_min_edge) =
         zone_thresholds(zone, min_confidence, min_edge, cfg);
 
@@ -822,17 +1119,6 @@ pub fn decide_candle_trade(
         ));
     }
 
-    if signal.confidence < market_price + cfg.min_ev_buffer {
-        return DecisionResult::Skip(SkipReason::new(
-            "negative_ev",
-            zone,
-            format!(
-                "conf={:.2}<price={:.2}+{:.2}",
-                signal.confidence, market_price, cfg.min_ev_buffer
-            ),
-        ));
-    }
-
     let yes_no_vig = up_price + down_price - 1.0;
 
     let days_remaining = minutes_remaining / 1440.0;
@@ -843,13 +1129,26 @@ pub fn decide_candle_trade(
     } else {
         1.0 - raw_fair
     };
-    let edge = fair_value - market_price;
+    let gross_edge = fair_value - market_price;
+    let entry_fee_per_share = entry_fee_rate * market_price * (1.0 - market_price);
+    let edge = gross_edge - entry_fee_per_share;
 
-    if zone != "terminal" && edge > cfg.edge_cap {
+    if edge < cfg.min_ev_buffer {
+        return DecisionResult::Skip(SkipReason::new(
+            "negative_ev",
+            zone,
+            format!(
+                "fair={fair_value:.3}<price={market_price:.3}+fee={entry_fee_per_share:.4}+buffer={:.3}",
+                cfg.min_ev_buffer,
+            ),
+        ));
+    }
+
+    if zone != "terminal" && gross_edge > cfg.edge_cap {
         return DecisionResult::Skip(SkipReason::new(
             "edge_too_high_stale",
             zone,
-            format!("{:.2}", edge),
+            format!("{:.2}", gross_edge),
         ));
     }
 
@@ -861,7 +1160,7 @@ pub fn decide_candle_trade(
         ));
     }
 
-    let regime = DecisionRegime::from_decision_inputs(
+    let mut regime = DecisionRegime::from_decision_inputs(
         zone,
         signal,
         market_price,
@@ -869,6 +1168,7 @@ pub fn decide_candle_trade(
         implied_vol,
         minutes_remaining,
     );
+    regime.attach_outcome_market_inputs(yes_no_vig);
 
     DecisionResult::Trade(CandleDecision {
         direction: signal.direction.clone(),
@@ -877,6 +1177,8 @@ pub fn decide_candle_trade(
         zone: zone.to_string(),
         fair_value,
         market_price,
+        gross_edge,
+        entry_fee_per_share,
         edge,
         minutes_remaining,
         yes_no_vig,
@@ -887,6 +1189,23 @@ pub fn decide_candle_trade(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_decision() -> CandleDecision {
+        CandleDecision {
+            direction: "up".to_string(),
+            confidence: 0.9,
+            z_score: 2.0,
+            zone: "primary".to_string(),
+            fair_value: 0.80,
+            market_price: 0.50,
+            gross_edge: 0.30,
+            entry_fee_per_share: 0.0175,
+            edge: 0.2825,
+            minutes_remaining: 2.0,
+            yes_no_vig: 0.0,
+            regime: DecisionRegime::default(),
+        }
+    }
 
     fn mk_signal(confidence: f64, z: f64, direction: &str) -> MomentumSignal {
         MomentumSignal {
@@ -901,7 +1220,41 @@ mod tests {
             open_price: 70_000.0,
             z_score: z,
             reversion_count: 1,
+            directional_impulse_10s_bps: None,
         }
+    }
+
+    #[test]
+    fn taker_reprice_uses_executable_vwap_and_fee() {
+        let mut decision = sample_decision();
+        decision
+            .reprice_for_taker_execution(0.70, 0.75, 0.07, 0.07, &ZoneConfig::default())
+            .expect("executable edge should pass");
+        assert!((decision.market_price - 0.70).abs() < 1e-12);
+        assert!((decision.entry_fee_per_share - 0.0147).abs() < 1e-12);
+        assert!((decision.edge - 0.0853).abs() < 1e-12);
+    }
+
+    #[test]
+    fn taker_reprice_rejects_limit_above_max_price() {
+        let mut decision = sample_decision();
+        let skip = decision
+            .reprice_for_taker_execution(0.70, 0.91, 0.07, 0.07, &ZoneConfig::default())
+            .expect_err("FOK limit above max price must fail");
+        assert_eq!(skip.reason, "execution_price_out_of_range");
+    }
+
+    #[test]
+    fn taker_reprice_tolerates_sub_epsilon_vwap_rounding() {
+        let mut decision = sample_decision();
+        decision.fair_value = 0.95;
+        let cfg = ZoneConfig {
+            min_ev_buffer: 0.0,
+            ..ZoneConfig::default()
+        };
+        decision
+            .reprice_for_taker_execution(0.7900000000000001, 0.79, 0.0, 0.0, &cfg)
+            .expect("tick-rounded limit should cover epsilon-only VWAP drift");
     }
 
     #[test]
@@ -1204,9 +1557,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_negative_ev() {
-        // confidence ~ market_price → negative_ev gate
-        let sig = mk_signal(0.65, 1.5, "up");
+    fn rejects_negative_fair_value_ev_even_with_high_confidence() {
+        let sig = mk_signal(0.95, 1.5, "up");
         let cfg = ZoneConfig::default();
         let r = decide_candle_trade(
             &sig,
@@ -1215,7 +1567,7 @@ mod tests {
             5.0,
             0.65,
             0.35,
-            70_100.0,
+            69_990.0,
             70_000.0,
             0.5,
             DEFAULT_MIN_CONFIDENCE,
@@ -1231,9 +1583,121 @@ mod tests {
     }
 
     #[test]
+    fn fair_value_ev_does_not_treat_confidence_as_probability() {
+        let sig = mk_signal(0.65, 1.5, "up");
+        let cfg = ZoneConfig {
+            edge_cap: 1.0,
+            ..ZoneConfig::default()
+        };
+        let r = decide_candle_trade(
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            0.65,
+            0.35,
+            70_500.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            true,
+            &cfg,
+            0.0,
+        );
+        assert!(matches!(r, DecisionResult::Trade(_)));
+    }
+
+    #[test]
+    fn entry_ev_gate_uses_fee_adjusted_edge() {
+        let sig = mk_signal(0.95, 1.5, "up");
+        let cfg = ZoneConfig {
+            min_ev_buffer: 0.05,
+            early_min_edge: 0.0,
+            late_min_edge: 0.0,
+            terminal_min_edge: 0.0,
+            primary_min_z: 0.0,
+            late_min_z: 0.0,
+            edge_cap: 1.0,
+            ..ZoneConfig::default()
+        };
+        let fair = binary_option_price_with_rate(70_050.0, 70_000.0, 1.0 / 1440.0, 0.5, 0.05);
+        let market = fair - 0.06;
+        let without_fee = decide_candle_trade_with_fee(
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            market,
+            1.0 - market,
+            70_050.0,
+            70_000.0,
+            0.5,
+            0.0,
+            DEFAULT_MIN_CONFIDENCE,
+            0.0,
+            false,
+            &cfg,
+            0.0,
+        );
+        let with_fee = decide_candle_trade_with_fee(
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            market,
+            1.0 - market,
+            70_050.0,
+            70_000.0,
+            0.5,
+            0.07,
+            DEFAULT_MIN_CONFIDENCE,
+            0.0,
+            false,
+            &cfg,
+            0.0,
+        );
+
+        assert!(matches!(without_fee, DecisionResult::Trade(_)));
+        assert!(matches!(
+            with_fee,
+            DecisionResult::Skip(SkipReason { reason, .. }) if reason == "negative_ev"
+        ));
+    }
+
+    #[test]
+    fn non_finite_decision_input_fails_closed() {
+        let sig = mk_signal(0.95, 1.5, "up");
+        let result = decide_candle_trade(
+            &sig,
+            4.0,
+            1.0,
+            5.0,
+            f64::NAN,
+            0.5,
+            70_050.0,
+            70_000.0,
+            0.5,
+            DEFAULT_MIN_CONFIDENCE,
+            DEFAULT_MIN_EDGE,
+            false,
+            &ZoneConfig::default(),
+            0.0,
+        );
+
+        assert!(matches!(
+            result,
+            DecisionResult::Skip(SkipReason { reason, .. }) if reason == "invalid_decision_input"
+        ));
+    }
+
+    #[test]
     fn decision_regime_uses_only_pre_trade_inputs() {
-        let sig = mk_signal(0.76, 1.3, "down");
-        let regime = DecisionRegime::from_decision_inputs("terminal", &sig, 0.42, 0.09, 0.75, 0.8);
+        let mut sig = mk_signal(0.76, 1.3, "down");
+        sig.directional_impulse_10s_bps = Some(8.2);
+        let mut regime =
+            DecisionRegime::from_decision_inputs("terminal", &sig, 0.42, 0.09, 0.75, 0.8);
+        regime.attach_outcome_market_inputs(0.80);
 
         assert_eq!(regime.zone, "terminal");
         assert_eq!(regime.direction, "down");
@@ -1244,8 +1708,34 @@ mod tests {
         assert_eq!(regime.volatility_bucket, "0.40_0.80");
         assert_eq!(regime.reversion_bucket, "1_2");
         assert_eq!(regime.minutes_remaining_bucket, "lte_1");
+        assert_eq!(
+            regime.directional_impulse_10s_bucket.as_deref(),
+            Some("8_12")
+        );
+        assert_eq!(regime.outcome_overround_bucket.as_deref(), Some("gt_0.25"));
         assert!(regime.key().contains("zone=terminal"));
+        assert!(regime.key().contains("btc_impulse_10s=8_12"));
+        assert!(regime.key().contains("outcome_overround=gt_0.25"));
         assert!(!regime.key().contains("book_"));
+        assert!(!regime.key().contains("utc_hour="));
+
+        let mut with_time = regime.clone();
+        with_time.attach_time_inputs(16.0 * 3_600.0 + 15.0);
+        assert_eq!(with_time.utc_hour_bucket.as_deref(), Some("16"));
+        assert_eq!(with_time.utc_session_bucket.as_deref(), Some("16_19"));
+        assert!(with_time.key().contains("utc_session=16_19"));
+        assert!(with_time.key().contains("utc_hour=16"));
+        assert!(with_time.key().contains("direction_utc_session=down_16_19"));
+        assert!(with_time.key().contains("direction_utc_hour=down_16"));
+        assert!(with_time
+            .causal_tags()
+            .contains(&("utc_session".to_string(), "16_19".to_string())));
+        assert!(with_time
+            .causal_tags()
+            .contains(&("utc_hour".to_string(), "16".to_string())));
+        assert!(with_time
+            .causal_tags()
+            .contains(&("direction_utc_hour".to_string(), "down_16".to_string())));
 
         let mut invalid_book = regime.clone();
         invalid_book.attach_orderbook_inputs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);

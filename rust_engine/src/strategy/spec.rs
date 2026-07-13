@@ -159,6 +159,8 @@ mod tests {
             zone: "terminal".to_string(),
             fair_value: 0.66,
             market_price: 0.58,
+            gross_edge: 0.08,
+            entry_fee_per_share: 0.0,
             edge: 0.08,
             minutes_remaining: 0.5,
             yes_no_vig: 0.01,

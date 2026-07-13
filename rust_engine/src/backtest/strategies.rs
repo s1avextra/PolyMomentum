@@ -385,6 +385,7 @@ impl StrategyVariant {
                 max_spread: 0.08,
                 min_book_depth: 20.0,
                 min_book_pressure: 0.10,
+                ..MicrostructureConfig::default()
             },
             ..Self::baseline()
         }
@@ -397,6 +398,7 @@ impl StrategyVariant {
                 max_spread: 0.08,
                 min_book_depth: 20.0,
                 min_book_pressure: 0.10,
+                ..MicrostructureConfig::default()
             },
             ..Self::terminal_only()
         }

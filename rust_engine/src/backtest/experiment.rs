@@ -14,7 +14,8 @@ use crate::data::catalog::MarketCatalog;
 use crate::data::manifest::{DataManifest, DataSourceManifest};
 use crate::strategy::spec::StrategySpec;
 
-pub const CURRENT_INVENTORY_MODEL_VERSION: u32 = 2;
+pub const CURRENT_INVENTORY_MODEL_VERSION: u32 = 3;
+pub const CURRENT_REPLAY_SEMANTICS_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentReport {
@@ -318,6 +319,12 @@ pub struct RobustVariantDiagnostics {
     #[serde(default)]
     pub neighbor_observations: usize,
     pub neighbor_positive_rate: f64,
+    #[serde(default)]
+    pub max_price_neighbor_count: usize,
+    #[serde(default)]
+    pub max_price_neighbor_observations: usize,
+    #[serde(default)]
+    pub max_price_neighbor_positive_rate: f64,
     pub fill_rate: f64,
     pub max_stressed_drawdown_pct: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -506,6 +513,7 @@ impl VariantReport {
 
 impl PromotionArtifact {
     pub fn from_report(report: &ExperimentReport, gate: PromotionGate) -> Result<Self> {
+        validate_current_replay_semantics(report)?;
         if gate.require_complete_data && !report.data_manifest.complete {
             bail!("promotion rejected: data manifest is incomplete");
         }
@@ -758,6 +766,12 @@ impl PromotionArtifact {
             selected_diag.neighbor_count,
         ));
         artifact.risk_notes.push(format!(
+            "max_price plateau: positive_rate {:.1}% over {} fold observation(s) from {} exact one-dimensional neighbor(s)",
+            100.0 * selected_diag.max_price_neighbor_positive_rate,
+            selected_diag.max_price_neighbor_observations,
+            selected_diag.max_price_neighbor_count,
+        ));
+        artifact.risk_notes.push(format!(
             "loss asymmetry: profit_factor {:.3}; payoff_ratio {:.3}; worst_loss_to_avg_win {:.3}",
             selected_diag.profit_factor,
             selected_diag.payoff_ratio,
@@ -797,6 +811,9 @@ fn aggregate_reports(
             reports.len(),
             multi_gate.min_reports
         );
+    }
+    for report in reports {
+        validate_current_replay_semantics(report)?;
     }
 
     let mut groups: BTreeMap<String, Vec<&VariantReport>> = BTreeMap::new();
@@ -856,6 +873,10 @@ fn aggregate_reports(
             .map(|r| format!("{}..{}", r.start, r.end))
             .collect::<Vec<_>>()
             .join(","),
+    );
+    src.metadata.insert(
+        "replay_semantics_version".to_string(),
+        CURRENT_REPLAY_SEMANTICS_VERSION.to_string(),
     );
 
     let mut notes = Vec::new();
@@ -1200,6 +1221,11 @@ fn robust_variant_diagnostics(
 
     let (neighbor_count, neighbor_observations, neighbor_positive_rate) =
         neighbor_stability(reports, aggregate, selected);
+    let (
+        max_price_neighbor_count,
+        max_price_neighbor_observations,
+        max_price_neighbor_positive_rate,
+    ) = max_price_stability(reports, aggregate, selected);
     let wilson = wilson_win_rate_lower(selected.wins, selected.trades);
     let drawdown_inverse = (1.0 - selected.breaker_stressed_drawdown_pct).clamp(0.0, 1.0);
     let trade_pnl = &selected.diagnostics.trade_pnl;
@@ -1209,7 +1235,8 @@ fn robust_variant_diagnostics(
     let robust_score = 0.28 * worst_window_expectancy
         + 0.18 * median_window_expectancy
         + 0.15 * wilson
-        + 0.14 * neighbor_positive_rate
+        + 0.07 * neighbor_positive_rate
+        + 0.07 * max_price_neighbor_positive_rate
         + 0.08 * selected.fill_rate
         + 0.05 * drawdown_inverse
         + 0.04 * simplicity
@@ -1229,6 +1256,9 @@ fn robust_variant_diagnostics(
         neighbor_count,
         neighbor_observations,
         neighbor_positive_rate,
+        max_price_neighbor_count,
+        max_price_neighbor_observations,
+        max_price_neighbor_positive_rate,
         fill_rate: selected.fill_rate,
         max_stressed_drawdown_pct: selected.breaker_stressed_drawdown_pct,
         dominant_zone: zone.dominant_zone,
@@ -1363,6 +1393,24 @@ fn robust_rejection_reasons(
             diagnostic.neighbor_positive_rate, gate.min_neighbor_positive_rate
         ));
     }
+    if diagnostic.max_price_neighbor_count < gate.min_neighbor_count {
+        reasons.push(format!(
+            "max_price_neighbor_count {} below minimum {}",
+            diagnostic.max_price_neighbor_count, gate.min_neighbor_count
+        ));
+    }
+    if diagnostic.max_price_neighbor_observations < gate.min_neighbor_observations {
+        reasons.push(format!(
+            "max_price_neighbor_observations {} below minimum {}",
+            diagnostic.max_price_neighbor_observations, gate.min_neighbor_observations
+        ));
+    }
+    if diagnostic.max_price_neighbor_positive_rate < gate.min_neighbor_positive_rate {
+        reasons.push(format!(
+            "max_price_neighbor_positive_rate {:.4} below minimum {:.4}",
+            diagnostic.max_price_neighbor_positive_rate, gate.min_neighbor_positive_rate
+        ));
+    }
     if diagnostic.robust_score < gate.min_robust_score {
         reasons.push(format!(
             "robust_score {:.4} below minimum {:.4}",
@@ -1453,6 +1501,58 @@ fn neighbor_stability(
     } else {
         (neighbor_count, total, positive as f64 / total as f64)
     }
+}
+
+fn max_price_stability(
+    reports: &[ExperimentReport],
+    aggregate: &ExperimentReport,
+    selected: &VariantReport,
+) -> (usize, usize, f64) {
+    let mut neighbor_count = 0_usize;
+    let mut positive = 0_usize;
+    let mut total = 0_usize;
+    for candidate in &aggregate.variants {
+        if candidate.strategy.params_hash == selected.strategy.params_hash
+            || !is_exact_max_price_neighbor(selected, candidate)
+        {
+            continue;
+        }
+        let daily = matching_daily_variants(reports, candidate);
+        if daily.len() != reports.len() {
+            continue;
+        }
+        neighbor_count += 1;
+        for variant in daily {
+            total += 1;
+            if variant.trades > 0 && variant.total_pnl > 0.0 {
+                positive += 1;
+            }
+        }
+    }
+    if total == 0 {
+        (neighbor_count, 0, 0.0)
+    } else {
+        (neighbor_count, total, positive as f64 / total as f64)
+    }
+}
+
+fn is_exact_max_price_neighbor(left: &VariantReport, right: &VariantReport) -> bool {
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_value::<StrategyVariant>(left.strategy_params.clone()),
+        serde_json::from_value::<StrategyVariant>(right.strategy_params.clone()),
+    ) else {
+        return false;
+    };
+    let distance = (left.zone_config.max_price - right.zone_config.max_price).abs();
+    if !(1e-9..=0.101).contains(&distance) {
+        return false;
+    }
+    left.name.clear();
+    right.name.clear();
+    left.zone_config.max_price = 0.0;
+    right.zone_config.max_price = 0.0;
+    crate::strategy::spec::stable_json_hash(&left)
+        == crate::strategy::spec::stable_json_hash(&right)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1758,6 +1858,20 @@ fn promotion_rejection_reasons(selected: &VariantReport, gate: &PromotionGate) -
     if selected.strategy_params.is_null() {
         reasons.push("selected variant lacks strategy_params; regenerate the report".to_string());
     }
+    if let Ok(variant) = serde_json::from_value::<StrategyVariant>(selected.strategy_params.clone())
+    {
+        if variant.use_perfect_fill {
+            reasons.push(
+                "perfect fill model is a sanity baseline and cannot support promotion".to_string(),
+            );
+        }
+        if variant.prefer_maker {
+            reasons.push(
+                "synthetic maker fill probability is not queue/trade calibrated and cannot support promotion"
+                    .to_string(),
+            );
+        }
+    }
     if selected.breaker_tripped {
         let reason = selected.breaker_reason.as_deref().unwrap_or("unknown");
         reasons.push(format!("circuit breaker tripped during backtest: {reason}"));
@@ -1925,6 +2039,34 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
         .insert("token_count".to_string(), catalog.token_count().to_string());
     pmxt.metadata
         .insert("assets".to_string(), catalog.assets().join(","));
+    pmxt.metadata.insert(
+        "replay_semantics_version".to_string(),
+        CURRENT_REPLAY_SEMANTICS_VERSION.to_string(),
+    );
+    pmxt.metadata.insert(
+        "btc_sampling_clock".to_string(),
+        "global_before_market_gates_1hz".to_string(),
+    );
+    pmxt.metadata.insert(
+        "taker_fill_model".to_string(),
+        "max_share_budget_optimized_visible_l2_bookwalk_with_fok_limit".to_string(),
+    );
+    pmxt.metadata.insert(
+        "decision_volatility".to_string(),
+        "causal_1h_realized".to_string(),
+    );
+    pmxt.metadata.insert(
+        "outcome_price_source".to_string(),
+        "fresh_l2_only_no_gamma_fallback".to_string(),
+    );
+    pmxt.metadata.insert(
+        "decision_edge".to_string(),
+        "fair_minus_executable_vwap_minus_effective_entry_fee".to_string(),
+    );
+    pmxt.metadata.insert(
+        "position_sizing".to_string(),
+        "promoted_fraction_caps_stressed_drawdown_and_optimizes_fok_worst_cost".to_string(),
+    );
     if let Some(rearm_s) = cfg.adaptive_rearm_after_s {
         pmxt.metadata.insert(
             "adaptive_health_rearm_seconds".to_string(),
@@ -1943,8 +2085,14 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
     btc.end = end;
     btc.row_count = Some(cfg.btc_history.n_ticks() as u64);
     btc.complete = cfg.btc_history.n_ticks() >= 50;
-    btc.metadata
-        .insert("symbol".to_string(), "BTCUSDT".to_string());
+    btc.metadata.insert(
+        "source_kind".to_string(),
+        cfg.btc_history.source_kind().to_string(),
+    );
+    if cfg.btc_history.source_kind().starts_with("binance_") {
+        btc.metadata
+            .insert("symbol".to_string(), "BTCUSDT".to_string());
+    }
 
     let mut notes = Vec::new();
     let missing = catalog.missing_required_tokens();
@@ -1952,6 +2100,24 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
         notes.push(format!("missing required token ids: {}", missing.join(",")));
     }
     DataManifest::new(vec![pmxt, btc], notes)
+}
+
+pub fn validate_current_replay_semantics(report: &ExperimentReport) -> Result<()> {
+    let observed = report
+        .data_manifest
+        .sources
+        .iter()
+        .find_map(|source| source.metadata.get("replay_semantics_version"))
+        .and_then(|value| value.parse::<u32>().ok());
+    if observed != Some(CURRENT_REPLAY_SEMANTICS_VERSION) {
+        bail!(
+            "evidence report {} uses replay semantics {:?}; rerun it with current semantics v{} before evolution or promotion",
+            report.label,
+            observed,
+            CURRENT_REPLAY_SEMANTICS_VERSION
+        );
+    }
+    Ok(())
 }
 
 pub fn read_report(path: impl AsRef<Path>) -> Result<ExperimentReport> {
@@ -2151,7 +2317,7 @@ mod tests {
     ) -> VariantReport {
         let mut variant = StrategyVariant::baseline();
         variant.name = name.to_string();
-        variant.prefer_maker = true;
+        variant.prefer_maker = false;
         variant.min_confidence = conf;
         variant.min_edge = 0.03;
         variant.zone_config.early_min_confidence = conf;
@@ -2201,8 +2367,55 @@ mod tests {
         assert_eq!(report.mode, "backtest");
         assert_eq!(report.market_catalog.market_count(), 1);
         assert!(report.data_manifest.complete);
+        assert!(report.data_manifest.sources.iter().any(|source| {
+            source.metadata.get("replay_semantics_version")
+                == Some(&CURRENT_REPLAY_SEMANTICS_VERSION.to_string())
+        }));
         assert_eq!(report.variants.len(), 1);
         assert_eq!(report.variants[0].strategy.name, "candle_momentum");
+    }
+
+    #[test]
+    fn promotion_rejects_legacy_replay_semantics() {
+        let cfg = cfg();
+        let mut report = ExperimentReport::from_harness("legacy", &cfg, &[]);
+        for source in &mut report.data_manifest.sources {
+            source.metadata.remove("replay_semantics_version");
+        }
+
+        let err = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+
+        assert!(err.to_string().contains("rerun it with current semantics"));
+    }
+
+    #[test]
+    fn promotion_rejects_synthetic_execution_models() {
+        let cfg = cfg();
+        for (prefer_maker, use_perfect_fill, expected) in [
+            (true, false, "synthetic maker fill probability"),
+            (false, true, "perfect fill model"),
+        ] {
+            let mut variant = StrategyVariant::baseline();
+            variant.prefer_maker = prefer_maker;
+            variant.use_perfect_fill = use_perfect_fill;
+            let mut report = ExperimentReport::from_harness("execution-model", &cfg, &[]);
+            let mut candidate = VariantReport::from_run(&HarnessRun {
+                variant,
+                results: BacktestResults::default(),
+            });
+            candidate.trades = 30;
+            candidate.wins = 20;
+            candidate.losses = 10;
+            candidate.win_rate = 2.0 / 3.0;
+            candidate.total_pnl = 1.0;
+            candidate.sharpe_like = 1.0;
+            candidate.by_zone = zone_split(15, 15);
+            report.variants = vec![candidate];
+
+            let err =
+                PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap_err();
+            assert!(err.to_string().contains(expected));
+        }
     }
 
     #[test]
@@ -2867,6 +3080,22 @@ mod tests {
                     0.50,
                     0.90,
                 ),
+                robust_variant(
+                    "robust_neighbor_max_price_low",
+                    "robust_neighbor_max_price_low",
+                    8.0,
+                    0.40,
+                    0.70,
+                    0.85,
+                ),
+                robust_variant(
+                    "robust_neighbor_max_price_high",
+                    "robust_neighbor_max_price_high",
+                    8.0,
+                    0.40,
+                    0.70,
+                    0.99,
+                ),
             ];
             reports.push(report);
         }
@@ -2912,7 +3141,9 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("robust")
         );
-        assert_eq!(diagnostics.selected.neighbor_count, 2);
+        assert_eq!(diagnostics.selected.neighbor_count, 4);
+        assert_eq!(diagnostics.selected.max_price_neighbor_count, 2);
+        assert_eq!(diagnostics.selected.max_price_neighbor_positive_rate, 1.0);
         assert_eq!(diagnostics.selected.worst_window_pnl, 10.0);
         assert_eq!(
             artifact
@@ -3038,6 +3269,9 @@ mod tests {
             neighbor_count: 3,
             neighbor_observations: 9,
             neighbor_positive_rate: 0.80,
+            max_price_neighbor_count: 3,
+            max_price_neighbor_observations: 9,
+            max_price_neighbor_positive_rate: 0.80,
             fill_rate: 0.70,
             max_stressed_drawdown_pct: 0.05,
             dominant_zone: Some("early".to_string()),

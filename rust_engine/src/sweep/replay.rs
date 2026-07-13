@@ -97,6 +97,7 @@ impl EvaluationRow {
             open_price: self.open_price,
             z_score: self.z_score,
             reversion_count: 0,
+            directional_impulse_10s_bps: None,
         }
     }
 }

@@ -11,6 +11,32 @@ pub struct MicrostructureConfig {
     pub max_spread: f64,
     pub min_book_depth: f64,
     pub min_book_pressure: f64,
+    #[serde(
+        default = "default_recent_mid_lookback_seconds",
+        skip_serializing_if = "is_default_recent_mid_lookback_seconds"
+    )]
+    pub recent_mid_lookback_seconds: f64,
+    #[serde(
+        default = "default_max_recent_mid_runup",
+        skip_serializing_if = "is_default_max_recent_mid_runup"
+    )]
+    pub max_recent_mid_runup: f64,
+}
+
+fn default_recent_mid_lookback_seconds() -> f64 {
+    15.0
+}
+
+fn is_default_recent_mid_lookback_seconds(value: &f64) -> bool {
+    (*value - default_recent_mid_lookback_seconds()).abs() <= f64::EPSILON
+}
+
+fn default_max_recent_mid_runup() -> f64 {
+    1.0
+}
+
+fn is_default_max_recent_mid_runup(value: &f64) -> bool {
+    (*value - default_max_recent_mid_runup()).abs() <= f64::EPSILON
 }
 
 impl Default for MicrostructureConfig {
@@ -19,6 +45,8 @@ impl Default for MicrostructureConfig {
             max_spread: 1.0,
             min_book_depth: 0.0,
             min_book_pressure: -1.0,
+            recent_mid_lookback_seconds: default_recent_mid_lookback_seconds(),
+            max_recent_mid_runup: default_max_recent_mid_runup(),
         }
     }
 }
@@ -29,7 +57,43 @@ impl MicrostructureConfig {
     }
 
     pub fn is_active(&self) -> bool {
-        self.max_spread < 1.0 || self.min_book_depth > 0.0 || self.min_book_pressure > -1.0
+        self.max_spread < 1.0
+            || self.min_book_depth > 0.0
+            || self.min_book_pressure > -1.0
+            || self.is_path_active()
+    }
+
+    pub fn is_path_active(&self) -> bool {
+        self.recent_mid_lookback_seconds.is_finite()
+            && self.recent_mid_lookback_seconds > 0.0
+            && self.max_recent_mid_runup.is_finite()
+            && (0.0..1.0).contains(&self.max_recent_mid_runup)
+    }
+
+    pub fn check_recent_mid_path(
+        &self,
+        recent_mid_runup: Option<f64>,
+    ) -> Result<(), MicrostructureSkip> {
+        if !self.is_path_active() {
+            return Ok(());
+        }
+        let Some(runup) = recent_mid_runup.filter(|value| value.is_finite() && *value >= 0.0)
+        else {
+            return Err(MicrostructureSkip {
+                reason: "microstructure_path_unavailable".to_string(),
+                detail: format!(
+                    "need {:.1}s of causal midpoint history",
+                    self.recent_mid_lookback_seconds
+                ),
+            });
+        };
+        if runup > self.max_recent_mid_runup {
+            return Err(MicrostructureSkip {
+                reason: "microstructure_recent_runup".to_string(),
+                detail: format!("{runup:.4} > {:.4}", self.max_recent_mid_runup),
+            });
+        }
+        Ok(())
     }
 
     pub fn apply_safety_floor(
@@ -62,6 +126,73 @@ impl MicrostructureConfig {
         }
         changed
     }
+}
+
+pub fn recent_mid_runup<'a, H>(history: H, now_ts: f64, lookback_seconds: f64) -> Option<f64>
+where
+    H: IntoIterator<Item = &'a (f64, f64)>,
+    H::IntoIter: DoubleEndedIterator,
+{
+    if !now_ts.is_finite() || !lookback_seconds.is_finite() || lookback_seconds <= 0.0 {
+        return None;
+    }
+    let cutoff = now_ts - lookback_seconds;
+    let mut first_ts: Option<f64> = None;
+    let mut latest: Option<(f64, f64)> = None;
+    let mut min_mid = f64::INFINITY;
+    for &(ts, mid) in history.into_iter().rev() {
+        if ts < cutoff {
+            break;
+        }
+        if !ts.is_finite() || !mid.is_finite() || mid <= 0.0 || ts > now_ts {
+            continue;
+        }
+        first_ts = Some(ts);
+        if latest.is_none() {
+            latest = Some((ts, mid));
+        }
+        min_mid = min_mid.min(mid);
+    }
+    let first_ts = first_ts?;
+    let (latest_ts, current_mid) = latest?;
+    if latest_ts - first_ts < lookback_seconds * 0.80 {
+        return None;
+    }
+    Some((current_mid - min_mid).max(0.0))
+}
+
+pub fn bookwalk_buy_slippage(asks: &[BookLevelView], size: f64, _tick_size: f64) -> Option<f64> {
+    if size <= 0.0 || !size.is_finite() || asks.is_empty() {
+        return None;
+    }
+    let touch = asks.first()?.price;
+    if touch <= 0.0 || !touch.is_finite() {
+        return None;
+    }
+
+    let mut remaining = size;
+    let mut total_cost = 0.0;
+    for level in asks {
+        if remaining <= 0.0 {
+            break;
+        }
+        if level.price <= 0.0
+            || level.size <= 0.0
+            || !level.price.is_finite()
+            || !level.size.is_finite()
+        {
+            continue;
+        }
+        let take = remaining.min(level.size);
+        total_cost += take * level.price;
+        remaining -= take;
+    }
+    if remaining > 1e-9 {
+        return None;
+    }
+
+    let vwap = total_cost / size;
+    Some((vwap - touch).max(0.0))
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
@@ -276,5 +407,55 @@ mod tests {
         assert_eq!(cfg.max_spread, 0.02);
         assert_eq!(cfg.min_book_depth, 20.0);
         assert_eq!(cfg.min_book_pressure, 0.10);
+    }
+
+    #[test]
+    fn recent_mid_runup_separates_spike_chase_from_pullback() {
+        let spike = vec![(100.0, 0.70), (105.0, 0.74), (110.0, 0.82), (115.0, 0.84)];
+        let pullback = vec![(100.0, 0.92), (105.0, 0.86), (110.0, 0.82), (115.0, 0.84)];
+
+        assert!((recent_mid_runup(&spike, 115.0, 15.0).unwrap() - 0.14).abs() < 1e-9);
+        assert!((recent_mid_runup(&pullback, 115.0, 15.0).unwrap() - 0.02).abs() < 1e-9);
+
+        let cfg = MicrostructureConfig {
+            recent_mid_lookback_seconds: 15.0,
+            max_recent_mid_runup: 0.08,
+            ..MicrostructureConfig::default()
+        };
+        let err = cfg
+            .check_recent_mid_path(recent_mid_runup(&spike, 115.0, 15.0))
+            .unwrap_err();
+        assert_eq!(err.reason, "microstructure_recent_runup");
+        assert!(cfg
+            .check_recent_mid_path(recent_mid_runup(&pullback, 115.0, 15.0))
+            .is_ok());
+    }
+
+    #[test]
+    fn active_recent_path_guard_fails_closed_without_history() {
+        let cfg = MicrostructureConfig {
+            recent_mid_lookback_seconds: 15.0,
+            max_recent_mid_runup: 0.08,
+            ..MicrostructureConfig::default()
+        };
+        let err = cfg.check_recent_mid_path(None).unwrap_err();
+        assert_eq!(err.reason, "microstructure_path_unavailable");
+    }
+
+    #[test]
+    fn bookwalk_slippage_uses_visible_ask_depth() {
+        let asks = vec![
+            BookLevelView {
+                price: 0.80,
+                size: 5.0,
+            },
+            BookLevelView {
+                price: 0.82,
+                size: 10.0,
+            },
+        ];
+        let slippage = bookwalk_buy_slippage(&asks, 10.0, 0.01).unwrap();
+        assert!((slippage - 0.01).abs() < 1e-9);
+        assert_eq!(bookwalk_buy_slippage(&asks, 20.0, 0.01), None);
     }
 }

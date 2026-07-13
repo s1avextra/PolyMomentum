@@ -13,7 +13,12 @@
 /// Returns 0 when `fee_rate` or `shares` is non-positive. Floors tiny
 /// positive fees to 0.00001 so they remain non-zero in JSONL logs.
 pub fn polymarket_fee(shares: f64, price: f64, fee_rate: f64) -> f64 {
-    if fee_rate <= 0.0 || shares <= 0.0 {
+    if !shares.is_finite()
+        || !price.is_finite()
+        || !fee_rate.is_finite()
+        || fee_rate <= 0.0
+        || shares <= 0.0
+    {
         return 0.0;
     }
     let p = price.clamp(0.0, 1.0);
@@ -50,5 +55,12 @@ mod tests {
     fn fee_floor_for_tiny_positive() {
         let f = polymarket_fee(0.001, 0.5, 0.07);
         assert!(f >= 0.00001);
+    }
+
+    #[test]
+    fn fee_rejects_non_finite_inputs() {
+        assert_eq!(polymarket_fee(f64::NAN, 0.5, 0.07), 0.0);
+        assert_eq!(polymarket_fee(1.0, f64::NAN, 0.07), 0.0);
+        assert_eq!(polymarket_fee(1.0, 0.5, f64::INFINITY), 0.0);
     }
 }

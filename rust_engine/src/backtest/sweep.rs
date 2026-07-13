@@ -419,6 +419,7 @@ impl SweepGrid {
                 max_spread: cell.micro_spread,
                 min_book_depth: cell.micro_depth,
                 min_book_pressure: cell.micro_pressure,
+                ..MicrostructureConfig::default()
             },
             selectivity,
         });

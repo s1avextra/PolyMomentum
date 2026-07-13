@@ -22,17 +22,17 @@ use serde_json::json;
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
-use crate::backtest::fill_model::{resting_limit_price, round_price_to_tick, Side};
+use crate::backtest::fill_model::{ceil_buy_price_to_tick, resting_limit_price, Side};
 use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
 use crate::clob::{create_shared_client, SharedClobClient};
 use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
-use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
+use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
 use crate::data::scanner::{scan_candle_markets, CandleContract};
 use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
-use crate::execution::sizing::shares_from_budget;
+use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::estimate_window_minutes;
@@ -47,9 +47,13 @@ use crate::price_state::PriceState;
 use crate::release::ReleaseManifest;
 use crate::risk::manager::{RiskConfig, RiskManager, TradeRecord};
 use crate::strategy::decision::{
-    decide_candle_trade, DecisionResult, ZoneConfig, DEFAULT_MIN_CONFIDENCE, DEFAULT_MIN_EDGE,
+    decide_candle_trade_with_fee, DecisionResult, ZoneConfig, DEFAULT_MIN_CONFIDENCE,
+    DEFAULT_MIN_EDGE,
 };
-use crate::strategy::microstructure::{BookLevelView, BookMicrostructure, MicrostructureConfig};
+use crate::strategy::microstructure::{
+    bookwalk_buy_slippage, recent_mid_runup, BookLevelView, BookMicrostructure,
+    MicrostructureConfig,
+};
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
@@ -312,6 +316,7 @@ struct RuntimeStrategy {
     degraded_force_taker: bool,
     prefer_maker: bool,
     default_fee_rate: f64,
+    maker_fee_rate: f64,
     microstructure: MicrostructureConfig,
     selectivity: SelectivityFilter,
     source: String,
@@ -395,6 +400,7 @@ impl RuntimeStrategy {
             degraded_force_taker: variant.degraded_force_taker,
             prefer_maker: variant.prefer_maker,
             default_fee_rate: variant.default_fee_rate,
+            maker_fee_rate: variant.maker_fee_rate,
             microstructure: variant.microstructure,
             selectivity: variant.selectivity,
             source,
@@ -424,6 +430,7 @@ impl RuntimeStrategy {
             "degraded_force_taker": false,
             "prefer_maker": settings.candle_prefer_maker,
             "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
+            "maker_fee_rate": DEFAULT_MAKER_FEE_RATE,
             "microstructure": microstructure,
         });
         Self {
@@ -453,6 +460,7 @@ impl RuntimeStrategy {
             degraded_force_taker: false,
             prefer_maker: settings.candle_prefer_maker,
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
+            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure,
             selectivity: SelectivityFilter::default(),
             source: "settings".to_string(),
@@ -1317,6 +1325,7 @@ impl Pipeline {
     async fn scan_loop(self: Arc<Self>) {
         let mut last_btc = 0.0;
         let mut unchanged = 0u32;
+        let mut last_momentum_tick_ts_s = 0.0;
         loop {
             let cycle_start = Instant::now();
             {
@@ -1325,7 +1334,12 @@ impl Pipeline {
             }
 
             let ps = self.price_state.read().await.clone();
-            let btc = ps.mid_price;
+            let btc = if self.settings.candle_settlement_alignment_ready {
+                ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10))
+                    .unwrap_or(0.0)
+            } else {
+                ps.mid_price
+            };
             if btc <= 0.0 {
                 sleep(Duration::from_secs(1)).await;
                 continue;
@@ -1345,8 +1359,13 @@ impl Pipeline {
             }
             last_btc = btc;
 
-            // Tick the BTC momentum detector
-            {
+            // Keep detector sampling aligned with harness/live-replay cadence.
+            let momentum_tick_ts_s = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs_f64())
+                .unwrap_or(0.0);
+            let should_tick_momentum = momentum_tick_ts_s - last_momentum_tick_ts_s >= 1.0;
+            if should_tick_momentum {
                 let mut moms = self.momentum.lock().await;
                 let det = moms.entry("BTC".to_string()).or_insert_with(|| {
                     MomentumDetector::new(
@@ -1357,13 +1376,14 @@ impl Pipeline {
                         },
                     )
                 });
-                det.add_tick(btc, None);
+                det.add_tick(btc, Some(momentum_tick_ts_s));
                 det.set_realized_vol(ps.implied_vol);
+                last_momentum_tick_ts_s = momentum_tick_ts_s;
             }
 
             // Tick alts (ETH/SOL) if cross-asset is enabled — feed their WS
             // prices (`ps.alt_mid`) into per-asset momentum detectors.
-            if self.settings.candle_cross_asset_enabled {
+            if should_tick_momentum && self.settings.candle_cross_asset_enabled {
                 let mut moms = self.momentum.lock().await;
                 for asset in ["ETH", "SOL"] {
                     if let Some(&alt_price) = ps.alt_mid.get(asset) {
@@ -1377,7 +1397,7 @@ impl Pipeline {
                                     },
                                 )
                             });
-                            det.add_tick(alt_price, None);
+                            det.add_tick(alt_price, Some(momentum_tick_ts_s));
                             det.set_realized_vol(ps.implied_vol);
                         }
                     }
@@ -1453,12 +1473,14 @@ impl Pipeline {
                     continue;
                 }
 
-                // Pull real-time best up/down from the WS book if fresh,
-                // otherwise fall back to the scanner snapshot.
-                let (up_price, down_price) = pick_book_prices(c, &books, now_ts);
+                let Some((up_price, down_price)) = pick_book_prices(c, &books, now_ts) else {
+                    self.monitor
+                        .record_signal_skip(&cid, "fresh_outcome_book_unavailable");
+                    continue;
+                };
 
                 // Detect momentum for the contract's own asset
-                let signal = {
+                let (signal, decision_vol) = {
                     let mut moms = self.momentum.lock().await;
                     let det = moms.entry(c.asset.clone()).or_insert_with(|| {
                         MomentumDetector::new(
@@ -1471,7 +1493,14 @@ impl Pipeline {
                     });
                     if det.get_open_price(&cid).is_none() {
                         let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-                        if let Some(open_price) = ps.price_near_seconds(&c.asset, open_ts, 2.0) {
+                        let open_price = if c.asset == "BTC"
+                            && self.settings.candle_settlement_alignment_ready
+                        {
+                            ps.reference_price_near_seconds("chainlink_settlement", open_ts, 2.0)
+                        } else {
+                            ps.price_near_seconds(&c.asset, open_ts, 2.0)
+                        };
+                        if let Some(open_price) = open_price {
                             det.set_window_open(&cid, open_price);
                         }
                     }
@@ -1480,7 +1509,8 @@ impl Pipeline {
                         self.monitor
                             .record_signal_skip(&cid, "open_price_unavailable");
                     }
-                    signal
+                    let decision_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
+                    (signal, decision_vol)
                 };
                 let Some(signal) = signal else { continue };
 
@@ -1492,7 +1522,21 @@ impl Pipeline {
                     breaker_state.losses,
                     breaker_metrics.realized_drawdown_pct,
                 );
-                let decision = decide_candle_trade(
+                let prefer_maker = self.settings.live_allow_maker_orders
+                    && self.runtime_strategy.effective_prefer_maker(
+                        breaker_state.losses,
+                        breaker_metrics.realized_drawdown_pct,
+                    )
+                    && crate::strategy::decision::zone_for(minutes_elapsed / window_minutes)
+                        != "terminal";
+                let entry_fee_rate = if prefer_maker {
+                    c.market
+                        .effective_maker_fee_rate(self.runtime_strategy.maker_fee_rate)
+                } else {
+                    c.market
+                        .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate)
+                };
+                let decision = decide_candle_trade_with_fee(
                     &signal,
                     minutes_elapsed,
                     minutes_left,
@@ -1501,7 +1545,8 @@ impl Pipeline {
                     down_price,
                     asset_price,
                     signal.open_price,
-                    ps.implied_vol,
+                    decision_vol,
+                    entry_fee_rate,
                     self.runtime_strategy.min_confidence,
                     self.runtime_strategy.min_edge,
                     self.runtime_strategy.skip_dead_zone,
@@ -1547,7 +1592,7 @@ impl Pipeline {
                             dir: signal.direction.clone(),
                             vol_fast,
                             vol_slow,
-                            implied_vol: ps.implied_vol,
+                            implied_vol: decision_vol,
                             cross_boost: 0.0,
                             up_price,
                             down_price,
@@ -1565,12 +1610,196 @@ impl Pipeline {
                             skip_detail: Some(skip.detail),
                         });
                     }
-                    DecisionResult::Trade(decision) => {
-                        if let Some(reason) = self
-                            .runtime_strategy
-                            .selectivity
-                            .reject_reason(&decision.regime)
+                    DecisionResult::Trade(mut decision) => {
+                        let traded_token_id = if decision.direction == "up" {
+                            &c.up_token_id
+                        } else {
+                            &c.down_token_id
+                        };
+                        let micro = live_microstructure(traded_token_id, &books, now_ts);
+                        decision.regime.attach_time_inputs(now_ts);
+                        decision.regime.attach_orderbook_inputs(
+                            micro.best_bid,
+                            micro.best_ask,
+                            micro.spread,
+                            micro.bid_depth,
+                            micro.ask_depth,
+                            micro.pressure,
+                            micro.imbalance,
+                        );
+                        let mut estimated_position = self.risk.effective_bankroll().await
+                            * self.runtime_strategy.position_pct;
+                        let max_per_market = self.risk.max_per_market().await;
+                        let available = self
+                            .risk
+                            .available_capital_for_exposure(open_exposure)
+                            .await;
+                        estimated_position = estimated_position.min(max_per_market).min(available);
+                        if let Some(stress_headroom) = breaker_state
+                            .stressed_drawdown_exposure_headroom(
+                                open_exposure,
+                                self.risk.initial_bankroll().await.max(1.0),
+                                self.runtime_strategy.max_projected_stressed_drawdown_pct,
+                            )
                         {
+                            estimated_position = estimated_position.min(stress_headroom);
+                        }
+                        let taker_tick = c.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
+                        let taker_quote = (!prefer_maker && estimated_position >= 1.0)
+                            .then(|| {
+                                live_buy_book_quote(
+                                    traded_token_id,
+                                    &books,
+                                    estimated_position,
+                                    self.settings.live_min_order_size_shares,
+                                    taker_tick,
+                                )
+                            })
+                            .flatten();
+                        let mut execution_quote_skip = None;
+                        if !prefer_maker {
+                            match taker_quote {
+                                Some(quote) => {
+                                    if let Err(skip) = decision.reprice_for_taker_execution(
+                                        quote.vwap,
+                                        quote.worst_price,
+                                        entry_fee_rate,
+                                        self.runtime_strategy.min_edge,
+                                        &effective_zone_config,
+                                    ) {
+                                        execution_quote_skip = Some((skip.reason, skip.detail));
+                                    }
+                                }
+                                None => {
+                                    execution_quote_skip = Some((
+                                        "taker_visible_depth_unavailable".to_string(),
+                                        "budget-aware visible L2 quote unavailable".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        let estimated_sizing_price = if prefer_maker {
+                            resting_limit_price(
+                                Side::Buy,
+                                micro.best_bid,
+                                micro.best_ask,
+                                crate::backtest::fill_model::DEFAULT_TICK,
+                            )
+                        } else {
+                            None
+                        };
+                        let estimated_size = taker_quote.map(|quote| quote.shares).or_else(|| {
+                            estimated_sizing_price
+                                .filter(|price| *price > 0.0 && estimated_position >= 1.0)
+                                .and_then(|price| {
+                                    shares_from_budget(
+                                        estimated_position,
+                                        price,
+                                        self.settings.live_min_order_size_shares,
+                                    )
+                                })
+                        });
+                        decision.regime.attach_orderbook_quality_inputs(
+                            taker_quote
+                                .map(|quote| quote.slippage_per_share)
+                                .or_else(|| {
+                                    estimated_size.and_then(|size| {
+                                        live_bookwalk_buy_slippage(traded_token_id, &books, size)
+                                    })
+                                }),
+                            live_book_age_ms(traded_token_id, &books, now_ts),
+                        );
+                        let recent_runup = live_recent_mid_runup(
+                            traded_token_id,
+                            &books,
+                            now_ts,
+                            self.runtime_strategy
+                                .microstructure
+                                .recent_mid_lookback_seconds,
+                        );
+                        decision.regime.attach_orderbook_path_inputs(recent_runup);
+                        if execution_quote_skip.is_none() {
+                            if let Some(reason) = self
+                                .runtime_strategy
+                                .selectivity
+                                .reject_reason(&decision.regime)
+                            {
+                                let aggregate = format!("{}_{}", reason, decision.zone);
+                                self.monitor.record_signal_skip(&cid, &aggregate);
+                                self.monitor.record_signal_evaluation(&SignalEvaluation {
+                                    ts_ms: eval_ts_ms,
+                                    cid: short_cid(&cid),
+                                    asset: c.asset.clone(),
+                                    open: signal.open_price,
+                                    px: signal.current_price,
+                                    chg: signal.price_change,
+                                    chg_pct: signal.price_change_pct,
+                                    cons: signal.consistency,
+                                    z: signal.z_score,
+                                    conf: signal.confidence,
+                                    reversion_count: signal.reversion_count,
+                                    elapsed_min: signal.minutes_elapsed,
+                                    remaining_min: signal.minutes_remaining,
+                                    dir: signal.direction.clone(),
+                                    vol_fast,
+                                    vol_slow,
+                                    implied_vol: decision_vol,
+                                    cross_boost: 0.0,
+                                    up_price,
+                                    down_price,
+                                    book_spread: signal_micro.spread,
+                                    book_pressure: signal_micro.pressure,
+                                    book_bid_depth: signal_micro.bid_depth,
+                                    book_ask_depth: signal_micro.ask_depth,
+                                    zone: decision.zone.clone(),
+                                    fair: decision.fair_value,
+                                    edge: decision.edge,
+                                    decision_trade: false,
+                                    execution_attempted: false,
+                                    traded: false,
+                                    skip_reason: Some(reason),
+                                    skip_detail: Some(
+                                        "causal selectivity filter rejected the decision"
+                                            .to_string(),
+                                    ),
+                                });
+                                continue;
+                            }
+                        }
+                        let execution_guard_skip = execution_quote_skip
+                            .or_else(|| {
+                                self.runtime_strategy
+                                    .microstructure
+                                    .check_recent_mid_path(recent_runup)
+                                    .err()
+                                    .map(|skip| (skip.reason, skip.detail))
+                            })
+                            .or_else(|| {
+                                micro
+                                    .check_long_entry(&self.runtime_strategy.microstructure)
+                                    .err()
+                                    .map(|skip| (skip.reason, skip.detail))
+                            })
+                            .or_else(|| {
+                                (prefer_maker
+                                    && resting_limit_price(
+                                        Side::Buy,
+                                        micro.best_bid,
+                                        micro.best_ask,
+                                        crate::backtest::fill_model::DEFAULT_TICK,
+                                    )
+                                    .is_none())
+                                .then(|| {
+                                    (
+                                        "maker_invalid_book".to_string(),
+                                        format!(
+                                            "bid={:.4} ask={:.4}",
+                                            micro.best_bid, micro.best_ask
+                                        ),
+                                    )
+                                })
+                            });
+                        if let Some((reason, detail)) = execution_guard_skip {
                             let aggregate = format!("{}_{}", reason, decision.zone);
                             self.monitor.record_signal_skip(&cid, &aggregate);
                             self.monitor.record_signal_evaluation(&SignalEvaluation {
@@ -1590,24 +1819,22 @@ impl Pipeline {
                                 dir: signal.direction.clone(),
                                 vol_fast,
                                 vol_slow,
-                                implied_vol: ps.implied_vol,
+                                implied_vol: decision_vol,
                                 cross_boost: 0.0,
                                 up_price,
                                 down_price,
-                                book_spread: signal_micro.spread,
-                                book_pressure: signal_micro.pressure,
-                                book_bid_depth: signal_micro.bid_depth,
-                                book_ask_depth: signal_micro.ask_depth,
+                                book_spread: micro.spread,
+                                book_pressure: micro.pressure,
+                                book_bid_depth: micro.bid_depth,
+                                book_ask_depth: micro.ask_depth,
                                 zone: decision.zone.clone(),
                                 fair: decision.fair_value,
                                 edge: decision.edge,
-                                decision_trade: false,
+                                decision_trade: true,
                                 execution_attempted: false,
                                 traded: false,
                                 skip_reason: Some(reason),
-                                skip_detail: Some(
-                                    "causal selectivity filter rejected the decision".to_string(),
-                                ),
+                                skip_detail: Some(detail),
                             });
                             continue;
                         }
@@ -1632,7 +1859,7 @@ impl Pipeline {
                                 dir: signal.direction.clone(),
                                 vol_fast,
                                 vol_slow,
-                                implied_vol: ps.implied_vol,
+                                implied_vol: decision_vol,
                                 cross_boost: 0.0,
                                 up_price,
                                 down_price,
@@ -1658,16 +1885,6 @@ impl Pipeline {
                             };
                             let mut position = self.risk.effective_bankroll().await
                                 * self.runtime_strategy.position_pct;
-                            let vol_ratio = if ps.implied_vol > 0.0 {
-                                ps.implied_vol / 0.50
-                            } else {
-                                1.0
-                            };
-                            if vol_ratio > 2.5 {
-                                position *= self.settings.candle_vol_extreme_multiplier;
-                            } else if vol_ratio > 1.5 {
-                                position *= self.settings.candle_vol_high_multiplier;
-                            }
                             let max_per_market = self.risk.max_per_market().await;
                             let avail = self
                                 .risk
@@ -1729,53 +1946,6 @@ impl Pipeline {
                             }
                             continue;
                         }
-                        let traded_token_id = if decision.direction == "up" {
-                            &c.up_token_id
-                        } else {
-                            &c.down_token_id
-                        };
-                        let micro = live_microstructure(traded_token_id, &books, now_ts);
-                        if let Err(skip) =
-                            micro.check_long_entry(&self.runtime_strategy.microstructure)
-                        {
-                            let aggregate = format!("{}_{}", skip.reason, decision.zone);
-                            self.monitor.record_signal_skip(&cid, &aggregate);
-                            self.monitor.record_signal_evaluation(&SignalEvaluation {
-                                ts_ms: eval_ts_ms,
-                                cid: short_cid(&cid),
-                                asset: c.asset.clone(),
-                                open: signal.open_price,
-                                px: signal.current_price,
-                                chg: signal.price_change,
-                                chg_pct: signal.price_change_pct,
-                                cons: signal.consistency,
-                                z: signal.z_score,
-                                conf: signal.confidence,
-                                reversion_count: signal.reversion_count,
-                                elapsed_min: signal.minutes_elapsed,
-                                remaining_min: signal.minutes_remaining,
-                                dir: signal.direction.clone(),
-                                vol_fast,
-                                vol_slow,
-                                implied_vol: ps.implied_vol,
-                                cross_boost: 0.0,
-                                up_price,
-                                down_price,
-                                book_spread: micro.spread,
-                                book_pressure: micro.pressure,
-                                book_bid_depth: micro.bid_depth,
-                                book_ask_depth: micro.ask_depth,
-                                zone: decision.zone.clone(),
-                                fair: decision.fair_value,
-                                edge: decision.edge,
-                                decision_trade: true,
-                                execution_attempted: false,
-                                traded: false,
-                                skip_reason: Some(skip.reason),
-                                skip_detail: Some(skip.detail),
-                            });
-                            continue;
-                        }
                         traded_windows.insert(c.end_date.clone());
                         self.monitor.record_signal_evaluation(&SignalEvaluation {
                             ts_ms: eval_ts_ms,
@@ -1794,7 +1964,7 @@ impl Pipeline {
                             dir: signal.direction.clone(),
                             vol_fast,
                             vol_slow,
-                            implied_vol: ps.implied_vol,
+                            implied_vol: decision_vol,
                             cross_boost: 0.0,
                             up_price,
                             down_price,
@@ -1811,7 +1981,9 @@ impl Pipeline {
                             skip_reason: None,
                             skip_detail: None,
                         });
-                        if let Err(e) = self.execute_trade(c, &signal, &decision, &ps, &micro).await
+                        if let Err(e) = self
+                            .execute_trade(c, &signal, &decision, &micro, taker_quote)
+                            .await
                         {
                             tracing::warn!(error = %e, "execute_trade failed");
                             self.monitor
@@ -1848,23 +2020,11 @@ impl Pipeline {
         contract: &CandleContract,
         signal: &crate::strategy::momentum::MomentumSignal,
         decision: &crate::strategy::decision::CandleDecision,
-        ps: &PriceState,
         micro: &BookMicrostructure,
+        taker_quote: Option<BuyBookQuote>,
     ) -> Result<()> {
         let bankroll = self.risk.effective_bankroll().await;
         let mut position = bankroll * self.runtime_strategy.position_pct;
-
-        // Volatility regime sizing
-        let vol_ratio = if ps.implied_vol > 0.0 {
-            ps.implied_vol / 0.50
-        } else {
-            1.0
-        };
-        if vol_ratio > 2.5 {
-            position *= self.settings.candle_vol_extreme_multiplier;
-        } else if vol_ratio > 1.5 {
-            position *= self.settings.candle_vol_high_multiplier;
-        }
 
         let max_per_market = self.risk.max_per_market().await;
         let open_exposure = self.open_position_exposure().await;
@@ -1876,6 +2036,12 @@ impl Pipeline {
         let breaker_state = *self.breaker.lock().await;
         let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
         let breaker_metrics = breaker_state.metrics(open_exposure, breaker_bankroll);
+        let prefer_maker = self.settings.live_allow_maker_orders
+            && self.runtime_strategy.effective_prefer_maker(
+                breaker_state.losses,
+                breaker_metrics.realized_drawdown_pct,
+            )
+            && decision.zone != "terminal";
         let mut stress_capped = false;
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
@@ -1910,10 +2076,6 @@ impl Pipeline {
                 let taker_fee_rate = contract
                     .market
                     .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
-                let prefer_maker = self.runtime_strategy.effective_prefer_maker(
-                    breaker_state.losses,
-                    breaker_metrics.realized_drawdown_pct,
-                );
                 let cfg = PaperFillCfg {
                     prefer_maker,
                     default_taker_rate: taker_fee_rate,
@@ -2091,14 +2253,8 @@ impl Pipeline {
                     .minimum_tick_size
                     .unwrap_or(0.01)
                     .max(0.0001);
-                let zone = decision.zone.as_str();
-                let prefer_maker = self.settings.live_allow_maker_orders
-                    && self.runtime_strategy.effective_prefer_maker(
-                        breaker_state.losses,
-                        breaker_metrics.realized_drawdown_pct,
-                    )
-                    && zone != "terminal";
-                let limit_price = if prefer_maker {
+                let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
+                let (limit_price, shares) = if prefer_maker {
                     let Some(price) =
                         resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, tick)
                     else {
@@ -2109,19 +2265,32 @@ impl Pipeline {
                         );
                         return Ok(());
                     };
-                    price
+                    let Some(shares) = shares_from_budget(position, price, min_order_size) else {
+                        tracing::warn!(
+                            min_order_size,
+                            limit_price = price,
+                            position,
+                            "live order skipped: below configured minimum order size"
+                        );
+                        return Ok(());
+                    };
+                    (price, shares)
                 } else {
-                    round_price_to_tick(market_price, tick)
-                };
-                let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
-                let Some(shares) = shares_from_budget(position, limit_price, min_order_size) else {
-                    tracing::warn!(
-                        min_order_size,
-                        limit_price,
-                        position,
-                        "live order skipped: below configured minimum order size"
-                    );
-                    return Ok(());
+                    let Some(quote) = taker_quote else {
+                        tracing::warn!("live taker order skipped: visible L2 quote unavailable");
+                        return Ok(());
+                    };
+                    let limit_price = ceil_buy_price_to_tick(quote.worst_price, tick);
+                    if limit_price * quote.shares > position + 1e-8 {
+                        tracing::warn!(
+                            limit_price,
+                            shares = quote.shares,
+                            position,
+                            "live taker order skipped: FOK worst-case cost exceeds risk budget"
+                        );
+                        return Ok(());
+                    }
+                    (limit_price, quote.shares)
                 };
                 let neg_risk = contract.market.neg_risk;
                 let order_signal = Signal::from_candle_decision(
@@ -2907,30 +3076,22 @@ fn pick_book_prices(
     contract: &CandleContract,
     books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
     now_ts: f64,
-) -> (f64, f64) {
-    let up = books
-        .get(&contract.up_token_id)
-        .and_then(|b| {
-            let age = now_ts - b.last_update_us as f64 / 1_000_000.0;
-            if age < 30.0 && b.best_ask > 0.0 {
-                Some(b.best_ask)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(contract.up_price);
-    let down = books
-        .get(&contract.down_token_id)
-        .and_then(|b| {
-            let age = now_ts - b.last_update_us as f64 / 1_000_000.0;
-            if age < 30.0 && b.best_ask > 0.0 {
-                Some(b.best_ask)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(contract.down_price);
-    (up, down)
+) -> Option<(f64, f64)> {
+    let up = books.get(&contract.up_token_id).and_then(|b| {
+        if live_book_age_seconds(now_ts, b.last_update_us).is_some() && b.best_ask > 0.0 {
+            Some(b.best_ask)
+        } else {
+            None
+        }
+    })?;
+    let down = books.get(&contract.down_token_id).and_then(|b| {
+        if live_book_age_seconds(now_ts, b.last_update_us).is_some() && b.best_ask > 0.0 {
+            Some(b.best_ask)
+        } else {
+            None
+        }
+    })?;
+    Some((up, down))
 }
 
 fn live_microstructure(
@@ -2941,8 +3102,7 @@ fn live_microstructure(
     let Some(book) = books.get(token_id) else {
         return BookMicrostructure::default();
     };
-    let age = now_ts - book.last_update_us as f64 / 1_000_000.0;
-    if age >= 30.0 {
+    if live_book_age_seconds(now_ts, book.last_update_us).is_none() {
         return BookMicrostructure::default();
     }
     let bids: Vec<BookLevelView> = book
@@ -2962,6 +3122,64 @@ fn live_microstructure(
         })
         .collect();
     BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
+}
+
+fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
+    let age = now_ts - last_update_us as f64 / 1_000_000.0;
+    (age.is_finite() && (0.0..30.0).contains(&age)).then_some(age)
+}
+
+fn live_book_age_ms(
+    token_id: &str,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    now_ts: f64,
+) -> Option<f64> {
+    books
+        .get(token_id)
+        .and_then(|book| live_book_age_seconds(now_ts, book.last_update_us))
+        .map(|age| age * 1_000.0)
+}
+
+fn live_bookwalk_buy_slippage(
+    token_id: &str,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    size: f64,
+) -> Option<f64> {
+    let asks = books
+        .get(token_id)?
+        .asks
+        .iter()
+        .map(|level| BookLevelView {
+            price: level.price,
+            size: level.size,
+        })
+        .collect::<Vec<_>>();
+    bookwalk_buy_slippage(&asks, size, crate::backtest::fill_model::DEFAULT_TICK)
+}
+
+fn live_buy_book_quote(
+    token_id: &str,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    budget_usd: f64,
+    min_order_size_shares: f64,
+    tick_size: f64,
+) -> Option<BuyBookQuote> {
+    let asks = books
+        .get(token_id)?
+        .asks
+        .iter()
+        .map(|level| (level.price, level.size))
+        .collect::<Vec<_>>();
+    buy_book_quote_from_budget(budget_usd, &asks, min_order_size_shares, tick_size)
+}
+
+fn live_recent_mid_runup(
+    token_id: &str,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    now_ts: f64,
+    lookback_seconds: f64,
+) -> Option<f64> {
+    recent_mid_runup(&books.get(token_id)?.mid_history, now_ts, lookback_seconds)
 }
 
 fn parse_end(s: &str) -> Result<DateTime<Utc>> {
@@ -3054,6 +3272,15 @@ fn spawn_exchange_feeds(state: Arc<RwLock<PriceState>>) {
         tokio::spawn(async move {
             loop {
                 exchange::binance_feed(s.clone()).await;
+                sleep(Duration::from_secs(3)).await;
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        tokio::spawn(async move {
+            loop {
+                exchange::chainlink_settlement_feed(s.clone()).await;
                 sleep(Duration::from_secs(3)).await;
             }
         });
@@ -3178,6 +3405,58 @@ mod tests {
     };
     use chrono::TimeZone;
     use tempfile::TempDir;
+
+    #[test]
+    fn live_book_quality_populates_runtime_selectivity_inputs() {
+        let token_id = "token".to_string();
+        let mut books = HashMap::new();
+        books.insert(
+            token_id.clone(),
+            crate::polymarket_ws::TokenBookState {
+                best_bid: 0.79,
+                best_ask: 0.80,
+                mid: 0.795,
+                asks: vec![
+                    crate::polymarket_ws::BookLevel {
+                        price: 0.80,
+                        size: 5.0,
+                    },
+                    crate::polymarket_ws::BookLevel {
+                        price: 0.82,
+                        size: 10.0,
+                    },
+                ],
+                last_update_us: 99_950_000,
+                mid_history: std::collections::VecDeque::from([
+                    (85.0, 0.78),
+                    (90.0, 0.79),
+                    (95.0, 0.80),
+                    (99.95, 0.795),
+                ]),
+                ..crate::polymarket_ws::TokenBookState::default()
+            },
+        );
+
+        let age = live_book_age_ms(&token_id, &books, 100.0);
+        let slippage = live_bookwalk_buy_slippage(&token_id, &books, 10.0);
+        let runup = live_recent_mid_runup(&token_id, &books, 100.0, 15.0);
+        assert!((age.unwrap() - 50.0).abs() < 1e-9);
+        assert_eq!(live_book_age_ms(&token_id, &books, 99.0), None);
+        assert!((slippage.unwrap() - 0.01).abs() < 1e-9);
+        assert!((runup.unwrap() - 0.015).abs() < 1e-9);
+
+        let mut regime = crate::strategy::decision::DecisionRegime::default();
+        regime.attach_orderbook_quality_inputs(slippage, age);
+        regime.attach_orderbook_path_inputs(runup);
+        let mut filter = SelectivityFilter::default();
+        filter
+            .require_tags
+            .insert("book_age".to_string(), "lte_100ms".to_string());
+        assert!(filter.reject_reason(&regime).is_none());
+        assert!(regime
+            .causal_tags()
+            .contains(&("book_runup".to_string(), "lte_0.02".to_string())));
+    }
 
     fn promotion_for_variant(variant: &StrategyVariant) -> PromotionArtifact {
         let spec =

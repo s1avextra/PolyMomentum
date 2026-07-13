@@ -4,7 +4,7 @@
 //! legacy `polymomentum-legacy`) and the `exchange` module can share it.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PRICE_HISTORY_MAX_AGE_S: f64 = 3_600.0;
 const PRICE_HISTORY_MIN_STEP_S: f64 = 0.05;
@@ -17,10 +17,14 @@ pub struct PriceState {
     pub spread: f64,
     pub implied_vol: f64,
     pub source_timestamps: HashMap<String, Instant>,
+    reference_prices: HashMap<String, f64>,
+    reference_timestamps: HashMap<String, Instant>,
+    reference_observed_at_ms: HashMap<String, i64>,
     pub alt_prices: HashMap<String, HashMap<String, f64>>,
     pub alt_mid: HashMap<String, f64>,
     pub alt_timestamps: HashMap<String, Instant>,
     price_history: VecDeque<(f64, f64)>,
+    reference_history: HashMap<String, VecDeque<(f64, f64)>>,
     alt_history: HashMap<String, VecDeque<(f64, f64)>>,
 }
 
@@ -39,20 +43,86 @@ impl PriceState {
             spread: 0.0,
             implied_vol: 0.50,
             source_timestamps: HashMap::new(),
+            reference_prices: HashMap::new(),
+            reference_timestamps: HashMap::new(),
+            reference_observed_at_ms: HashMap::new(),
             alt_prices: HashMap::new(),
             alt_mid: HashMap::new(),
             alt_timestamps: HashMap::new(),
             price_history: VecDeque::new(),
+            reference_history: HashMap::new(),
             alt_history: HashMap::new(),
         }
     }
 
+    pub fn update_reference_at(&mut self, source: &str, price: f64, observed_at_ms: i64) {
+        if price <= 0.0 || !price.is_finite() {
+            return;
+        }
+        if observed_at_ms <= 0
+            || self
+                .reference_observed_at_ms
+                .get(source)
+                .is_some_and(|previous| observed_at_ms <= *previous)
+        {
+            return;
+        }
+        self.reference_prices.insert(source.to_string(), price);
+        self.reference_timestamps
+            .insert(source.to_string(), Instant::now());
+        self.reference_observed_at_ms
+            .insert(source.to_string(), observed_at_ms);
+        record_history(
+            self.reference_history
+                .entry(source.to_string())
+                .or_default(),
+            observed_at_ms as f64 / 1_000.0,
+            price,
+        );
+    }
+
+    pub fn fresh_source_price(&self, source: &str, max_age: Duration) -> Option<f64> {
+        let updated = self.reference_timestamps.get(source)?;
+        if updated.elapsed() > max_age {
+            return None;
+        }
+        let observed_at_ms = *self.reference_observed_at_ms.get(source)?;
+        let max_age_ms = i64::try_from(max_age.as_millis()).unwrap_or(i64::MAX);
+        let now_ms = now_millis();
+        let observation_age_ms = now_ms.saturating_sub(observed_at_ms);
+        if observation_age_ms > max_age_ms || observed_at_ms > now_ms.saturating_add(max_age_ms) {
+            return None;
+        }
+        self.reference_prices
+            .get(source)
+            .copied()
+            .filter(|price| *price > 0.0)
+    }
+
+    pub fn reference_price_near_seconds(
+        &self,
+        source: &str,
+        target_s: f64,
+        max_distance_s: f64,
+    ) -> Option<f64> {
+        self.reference_history
+            .get(source)?
+            .iter()
+            .filter_map(|(ts, price)| {
+                let distance = (*ts - target_s).abs();
+                (distance <= max_distance_s).then_some((distance, *price))
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, price)| price)
+    }
+
     pub fn update(&mut self, source: &str, price: f64) {
-        if price <= 0.0 {
+        if price <= 0.0 || !price.is_finite() {
             return;
         }
         self.prices.insert(source.to_string(), price);
-        self.source_timestamps.insert(source.to_string(), Instant::now());
+        self.source_timestamps
+            .insert(source.to_string(), Instant::now());
         self.last_update = Instant::now();
 
         let now = Instant::now();
@@ -78,7 +148,7 @@ impl PriceState {
     }
 
     pub fn update_alt(&mut self, asset: &str, source: &str, price: f64) {
-        if price <= 0.0 {
+        if price <= 0.0 || !price.is_finite() {
             return;
         }
         let key = format!("{asset}:{source}");
@@ -128,10 +198,7 @@ impl PriceState {
                 let distance = (*ts - target_s).abs();
                 (distance <= max_distance_s).then_some((distance, *price))
             })
-            .min_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(_, price)| price)
     }
 
@@ -173,6 +240,13 @@ fn now_seconds() -> f64 {
         .unwrap_or(0.0)
 }
 
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +269,61 @@ mod tests {
         record_history(&mut history, PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0);
 
         assert_eq!(history.len(), 1);
-        assert_eq!(history.front().copied(), Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0)));
+        assert_eq!(
+            history.front().copied(),
+            Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0))
+        );
+    }
+
+    #[test]
+    fn settlement_reference_does_not_move_the_execution_aggregate() {
+        let mut ps = PriceState::new();
+        ps.update("binance", 100.0);
+        ps.update_reference_at("chainlink_settlement", 101.0, now_millis());
+        ps.update("bybit", 102.0);
+
+        assert_eq!(ps.mid_price, 101.0);
+        assert_eq!(ps.n_live_sources(), 2);
+        assert_eq!(ps.prices.len(), 2);
+        assert_eq!(
+            ps.fresh_source_price("chainlink_settlement", Duration::from_secs(1)),
+            Some(101.0)
+        );
+        assert_eq!(
+            ps.reference_price_near_seconds("chainlink_settlement", now_seconds(), 1.0),
+            Some(101.0)
+        );
+    }
+
+    #[test]
+    fn settlement_reference_freshness_uses_observation_time() {
+        let mut ps = PriceState::new();
+        ps.update_reference_at("chainlink_settlement", 101.0, now_millis() - 20_000);
+
+        assert_eq!(
+            ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10)),
+            None
+        );
+    }
+
+    #[test]
+    fn out_of_order_settlement_reference_cannot_roll_back_price() {
+        let now_ms = now_millis();
+        let mut ps = PriceState::new();
+        ps.update_reference_at("chainlink_settlement", 101.0, now_ms - 1_000);
+        ps.update_reference_at("chainlink_settlement", 99.0, now_ms - 2_000);
+
+        assert_eq!(
+            ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10)),
+            Some(101.0)
+        );
+        assert_eq!(
+            ps.reference_price_near_seconds(
+                "chainlink_settlement",
+                (now_ms - 1_000) as f64 / 1_000.0,
+                0.1,
+            ),
+            Some(101.0)
+        );
     }
 }

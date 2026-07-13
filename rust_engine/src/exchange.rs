@@ -1,4 +1,5 @@
-//! WebSocket price feeds from 4 exchanges + Deribit IV.
+//! WebSocket price feeds from 3 exchanges, Polymarket's Chainlink settlement
+//! reference, and Deribit IV.
 //!
 //! Connection lifecycle (subscribe, keepalive ping, frame-staleness watchdog,
 //! exponential backoff with reconnect rate cap) is centralized in `run_ws_feed`
@@ -30,13 +31,17 @@ struct Backoff {
 
 impl Backoff {
     fn new() -> Self {
-        Self { history: Vec::new(), next: BACKOFF_INIT }
+        Self {
+            history: Vec::new(),
+            next: BACKOFF_INIT,
+        }
     }
 
     /// Compute delay before next reconnect; records this attempt in history.
     fn delay(&mut self) -> Duration {
         let now = Instant::now();
-        self.history.retain(|t| now.duration_since(*t) < RECONNECT_WINDOW);
+        self.history
+            .retain(|t| now.duration_since(*t) < RECONNECT_WINDOW);
         self.history.push(now);
         let floor = if self.history.len() > RECONNECT_RATE_LIMIT_AFTER {
             RECONNECT_RATE_FLOOR
@@ -58,12 +63,13 @@ struct WsCfg {
     url: &'static str,
     subscribe: Option<&'static str>,
     ping: Option<(Duration, &'static str)>,
+    relevant_stale_after: Duration,
 }
 
 async fn run_ws_feed<F, Fut>(cfg: WsCfg, mut on_text: F)
 where
     F: FnMut(String) -> Fut,
-    Fut: Future<Output = ()>,
+    Fut: Future<Output = bool>,
 {
     let mut backoff = Backoff::new();
     loop {
@@ -73,7 +79,11 @@ where
                 let (mut write, mut read) = ws.split();
 
                 if let Some(sub) = cfg.subscribe {
-                    if write.send(Message::Text(sub.to_string().into())).await.is_err() {
+                    if write
+                        .send(Message::Text(sub.to_string().into()))
+                        .await
+                        .is_err()
+                    {
                         eprintln!("{} subscribe send failed", cfg.name);
                         tokio::time::sleep(backoff.delay()).await;
                         continue;
@@ -83,34 +93,38 @@ where
                 let mut watchdog = tokio::time::interval(WATCHDOG_TICK);
                 watchdog.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 // No-op tick for feeds without app-level ping; just fires unused.
-                let ping_dur = cfg.ping.map(|(d, _)| d).unwrap_or(Duration::from_secs(3600));
+                let ping_dur = cfg
+                    .ping
+                    .map(|(d, _)| d)
+                    .unwrap_or(Duration::from_secs(3600));
                 let mut ping_timer = tokio::time::interval(ping_dur);
                 ping_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                let mut last_frame = Instant::now();
-                let mut got_frame = false;
+                let mut last_relevant_frame = Instant::now();
+                let mut got_relevant_frame = false;
 
                 loop {
                     tokio::select! {
                         msg = read.next() => {
                             match msg {
                                 Some(Ok(m)) => {
-                                    last_frame = Instant::now();
-                                    if !got_frame {
-                                        got_frame = true;
-                                        backoff.reset();
-                                    }
                                     if let Ok(text) = m.into_text() {
-                                        on_text(text.to_string()).await;
+                                        if on_text(text.to_string()).await {
+                                            last_relevant_frame = Instant::now();
+                                            if !got_relevant_frame {
+                                                got_relevant_frame = true;
+                                                backoff.reset();
+                                            }
+                                        }
                                     }
                                 }
                                 _ => break,
                             }
                         }
                         _ = watchdog.tick() => {
-                            if last_frame.elapsed() > STALE_AFTER {
+                            if last_relevant_frame.elapsed() > cfg.relevant_stale_after {
                                 eprintln!(
-                                    "{} stale (no frame in {}s), reconnecting",
-                                    cfg.name, STALE_AFTER.as_secs()
+                                    "{} stale (no relevant price in {}s), reconnecting",
+                                    cfg.name, cfg.relevant_stale_after.as_secs()
                                 );
                                 break;
                             }
@@ -144,6 +158,7 @@ pub async fn binance_feed(state: Arc<RwLock<PriceState>>) {
             subscribe: None,
             // Binance server pings; tungstenite auto-pongs at protocol layer.
             ping: None,
+            relevant_stale_after: STALE_AFTER,
         },
         move |text| {
             let s = state.clone();
@@ -151,8 +166,76 @@ pub async fn binance_feed(state: Arc<RwLock<PriceState>>) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(price) = v["c"].as_str().and_then(|s| s.parse::<f64>().ok()) {
                         s.write().await.update("binance", price);
+                        return true;
                     }
                 }
+                false
+            }
+        },
+    )
+    .await;
+}
+
+pub async fn chainlink_settlement_feed(state: Arc<RwLock<PriceState>>) {
+    run_ws_feed(
+        WsCfg {
+            name: "Polymarket RTDS Chainlink BTC/USD",
+            url: "wss://ws-live-data.polymarket.com",
+            subscribe: Some(
+                r#"{"action":"subscribe","subscriptions":[{"topic":"crypto_prices_chainlink","type":"*","filters":"{\"symbol\":\"btc/usd\"}"}]}"#,
+            ),
+            ping: Some((Duration::from_secs(5), "PING")),
+            relevant_stale_after: Duration::from_secs(20),
+        },
+        move |text| {
+            let state = state.clone();
+            async move {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    return false;
+                };
+                if value.get("topic").and_then(|value| value.as_str())
+                    != Some("crypto_prices_chainlink")
+                    || value
+                        .pointer("/payload/symbol")
+                        .and_then(|value| value.as_str())
+                        .map(|symbol| !symbol.eq_ignore_ascii_case("btc/usd"))
+                        .unwrap_or(true)
+                {
+                    return false;
+                }
+                let price = value
+                    .pointer("/payload/value")
+                    .and_then(|value| {
+                        value
+                            .as_f64()
+                            .or_else(|| value.as_str()?.parse::<f64>().ok())
+                    })
+                    .unwrap_or(0.0);
+                let observed_at_ms = value
+                    .pointer("/payload/timestamp")
+                    .and_then(|value| {
+                        value.as_i64().or_else(|| {
+                            value
+                                .as_u64()
+                                .and_then(|value| i64::try_from(value).ok())
+                        })
+                    })
+                    .or_else(|| {
+                        value
+                            .pointer("/payload/timestamp")?
+                            .as_str()?
+                            .parse::<i64>()
+                            .ok()
+                    })
+                    .unwrap_or(0);
+                if price > 0.0 && price.is_finite() && observed_at_ms > 0 {
+                    state
+                        .write()
+                        .await
+                        .update_reference_at("chainlink_settlement", price, observed_at_ms);
+                    return true;
+                }
+                false
             }
         },
     )
@@ -166,17 +249,21 @@ pub async fn bybit_feed(state: Arc<RwLock<PriceState>>) {
             url: "wss://stream.bybit.com/v5/public/spot",
             subscribe: Some(r#"{"op":"subscribe","args":["tickers.BTCUSDT"]}"#),
             ping: Some((Duration::from_secs(20), r#"{"op":"ping"}"#)),
+            relevant_stale_after: STALE_AFTER,
         },
         move |text| {
             let s = state.clone();
             async move {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(price) =
-                        v["data"]["lastPrice"].as_str().and_then(|s| s.parse::<f64>().ok())
+                    if let Some(price) = v["data"]["lastPrice"]
+                        .as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
                     {
                         s.write().await.update("bybit", price);
+                        return true;
                     }
                 }
+                false
             }
         },
     )
@@ -193,6 +280,7 @@ pub async fn okx_feed(state: Arc<RwLock<PriceState>>) {
             ),
             // OKX V5 expects a raw text frame "ping" (not JSON); server replies "pong".
             ping: Some((Duration::from_secs(20), "ping")),
+            relevant_stale_after: STALE_AFTER,
         },
         move |text| {
             let s = state.clone();
@@ -203,9 +291,11 @@ pub async fn okx_feed(state: Arc<RwLock<PriceState>>) {
                             data["last"].as_str().and_then(|s| s.parse::<f64>().ok())
                         {
                             s.write().await.update("okx", price);
+                            return true;
                         }
                     }
                 }
+                false
             }
         },
     )
@@ -225,13 +315,13 @@ pub async fn binance_alt_feed(state: Arc<RwLock<PriceState>>) {
             url: "wss://stream.binance.com:9443/stream?streams=ethusdt@ticker/solusdt@ticker",
             subscribe: None,
             ping: None,
+            relevant_stale_after: STALE_AFTER,
         },
         move |text| {
             let s = state.clone();
             async move {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(price) =
-                        v["data"]["c"].as_str().and_then(|s| s.parse::<f64>().ok())
+                    if let Some(price) = v["data"]["c"].as_str().and_then(|s| s.parse::<f64>().ok())
                     {
                         let stream = v["stream"].as_str().unwrap_or("");
                         let asset = if stream.starts_with("ethusdt") {
@@ -239,11 +329,13 @@ pub async fn binance_alt_feed(state: Arc<RwLock<PriceState>>) {
                         } else if stream.starts_with("solusdt") {
                             "SOL"
                         } else {
-                            return;
+                            return false;
                         };
                         s.write().await.update_alt(asset, "binance", price);
+                        return true;
                     }
                 }
+                false
             }
         },
     )
@@ -257,6 +349,7 @@ pub async fn bybit_alt_feed(state: Arc<RwLock<PriceState>>) {
             url: "wss://stream.bybit.com/v5/public/spot",
             subscribe: Some(r#"{"op":"subscribe","args":["tickers.ETHUSDT","tickers.SOLUSDT"]}"#),
             ping: Some((Duration::from_secs(20), r#"{"op":"ping"}"#)),
+            relevant_stale_after: STALE_AFTER,
         },
         move |text| {
             let s = state.clone();
@@ -264,18 +357,22 @@ pub async fn bybit_alt_feed(state: Arc<RwLock<PriceState>>) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let (Some(symbol), Some(price)) = (
                         v["data"]["symbol"].as_str(),
-                        v["data"]["lastPrice"].as_str().and_then(|s| s.parse::<f64>().ok()),
+                        v["data"]["lastPrice"]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok()),
                     ) {
                         let asset = if symbol.starts_with("ETH") {
                             "ETH"
                         } else if symbol.starts_with("SOL") {
                             "SOL"
                         } else {
-                            return;
+                            return false;
                         };
                         s.write().await.update_alt(asset, "bybit", price);
+                        return true;
                     }
                 }
+                false
             }
         },
     )
@@ -309,14 +406,20 @@ pub async fn fetch_deribit_iv() -> Option<f64> {
     let mut ivs = Vec::new();
     for opt in results {
         let iv = opt["mark_iv"].as_f64().unwrap_or(0.0);
-        if iv <= 0.0 { continue; }
+        if iv <= 0.0 {
+            continue;
+        }
 
         let name = opt["instrument_name"].as_str().unwrap_or("");
         let parts: Vec<&str> = name.split('-').collect();
-        if parts.len() < 4 { continue; }
+        if parts.len() < 4 {
+            continue;
+        }
 
         let strike: f64 = parts[2].parse().unwrap_or(0.0);
-        if strike <= 0.0 { continue; }
+        if strike <= 0.0 {
+            continue;
+        }
 
         let ratio = strike / btc_price;
         if !(0.95..=1.05).contains(&ratio) {
@@ -326,6 +429,8 @@ pub async fn fetch_deribit_iv() -> Option<f64> {
         ivs.push(iv / 100.0); // Deribit reports as percentage
     }
 
-    if ivs.is_empty() { return None; }
+    if ivs.is_empty() {
+        return None;
+    }
     Some(ivs.iter().sum::<f64>() / ivs.len() as f64)
 }
