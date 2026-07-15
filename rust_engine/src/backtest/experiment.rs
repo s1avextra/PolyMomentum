@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::write_json_atomic;
 use crate::backtest::harness::{HarnessConfig, HarnessRun};
 use crate::backtest::resolver::BacktestDiagnostics;
 use crate::backtest::strategies::StrategyVariant;
@@ -425,7 +426,7 @@ impl ExperimentReport {
         runs: &[HarnessRun],
     ) -> Self {
         let market_catalog = MarketCatalog::from_candle_contracts(&cfg.universe.contracts);
-        let data_manifest = harness_data_manifest(cfg, &market_catalog);
+        let data_manifest = harness_data_manifest(cfg, &market_catalog, runs);
         let start = cfg
             .hours
             .first()
@@ -1560,6 +1561,7 @@ struct VariantKnobs {
     conf: f64,
     z: f64,
     edge: f64,
+    decision_volatility_floor: f64,
     min_price: f64,
     max_price: f64,
     prefer_maker: bool,
@@ -1578,6 +1580,7 @@ impl VariantKnobs {
                 .min(params.zone_config.late_min_z)
                 .min(params.zone_config.terminal_min_z),
             edge: params.min_edge,
+            decision_volatility_floor: params.decision_volatility_floor,
             min_price: params.zone_config.min_price,
             max_price: params.zone_config.max_price,
             prefer_maker: params.prefer_maker,
@@ -1589,6 +1592,7 @@ impl VariantKnobs {
             && (self.conf - other.conf).abs() <= 0.101
             && (self.z - other.z).abs() <= 0.251
             && (self.edge - other.edge).abs() <= 0.051
+            && (self.decision_volatility_floor - other.decision_volatility_floor).abs() <= 0.101
             && (self.min_price - other.min_price).abs() <= 0.051
             && (self.max_price - other.max_price).abs() <= 0.201
     }
@@ -2019,7 +2023,11 @@ fn dominant_zone_share(selected: &VariantReport) -> (Option<String>, Option<f64>
     )
 }
 
-fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataManifest {
+fn harness_data_manifest(
+    cfg: &HarnessConfig,
+    catalog: &MarketCatalog,
+    runs: &[HarnessRun],
+) -> DataManifest {
     let start = cfg.hours.first().map(|h| h.to_rfc3339());
     let end = cfg.hours.last().map(|h| h.to_rfc3339());
 
@@ -2027,8 +2035,13 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
     pmxt.path = Some(cfg.cache_dir.display().to_string());
     pmxt.start = start.clone();
     pmxt.end = end.clone();
-    pmxt.row_count = Some(cfg.hours.len() as u64);
-    pmxt.complete = !cfg.hours.is_empty() && catalog.is_complete();
+    let replay_event_count = runs
+        .iter()
+        .map(|run| run.results.diagnostics.events_seen)
+        .max()
+        .unwrap_or(0);
+    pmxt.row_count = Some(replay_event_count);
+    pmxt.complete = !cfg.hours.is_empty() && catalog.is_complete() && replay_event_count > 0;
     pmxt.metadata
         .insert("hours".to_string(), cfg.hours.len().to_string());
     pmxt.metadata.insert(
@@ -2053,7 +2066,7 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
     );
     pmxt.metadata.insert(
         "decision_volatility".to_string(),
-        "causal_1h_realized".to_string(),
+        "causal_1h_realized_with_optional_variant_floor".to_string(),
     );
     pmxt.metadata.insert(
         "outcome_price_source".to_string(),
@@ -2079,6 +2092,10 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
             shared.display().to_string(),
         );
     }
+    pmxt.metadata.insert(
+        "require_shared_distilled".to_string(),
+        cfg.require_shared_distilled.to_string(),
+    );
 
     let mut btc = DataSourceManifest::new("btc_price_tape", "external_price");
     btc.start = start;
@@ -2089,17 +2106,35 @@ fn harness_data_manifest(cfg: &HarnessConfig, catalog: &MarketCatalog) -> DataMa
         "source_kind".to_string(),
         cfg.btc_history.source_kind().to_string(),
     );
+    btc.metadata
+        .insert("role".to_string(), "causal_signal".to_string());
     if cfg.btc_history.source_kind().starts_with("binance_") {
         btc.metadata
             .insert("symbol".to_string(), "BTCUSDT".to_string());
     }
 
+    let mut settlement_btc = DataSourceManifest::new("btc_settlement_price_tape", "external_price");
+    settlement_btc.start = btc.start.clone();
+    settlement_btc.end = btc.end.clone();
+    settlement_btc.row_count = Some(cfg.settlement_btc_history.n_ticks() as u64);
+    settlement_btc.complete = cfg.settlement_btc_history.n_ticks() >= 50;
+    settlement_btc.metadata.insert(
+        "source_kind".to_string(),
+        cfg.settlement_btc_history.source_kind().to_string(),
+    );
+    settlement_btc
+        .metadata
+        .insert("role".to_string(), "market_resolution".to_string());
+
     let mut notes = Vec::new();
+    if replay_event_count == 0 {
+        notes.push("PMXT replay contained zero target events".to_string());
+    }
     let missing = catalog.missing_required_tokens();
     if !missing.is_empty() {
         notes.push(format!("missing required token ids: {}", missing.join(",")));
     }
-    DataManifest::new(vec![pmxt, btc], notes)
+    DataManifest::new(vec![pmxt, btc, settlement_btc], notes)
 }
 
 pub fn validate_current_replay_semantics(report: &ExperimentReport) -> Result<()> {
@@ -2115,6 +2150,18 @@ pub fn validate_current_replay_semantics(report: &ExperimentReport) -> Result<()
             report.label,
             observed,
             CURRENT_REPLAY_SEMANTICS_VERSION
+        );
+    }
+    if report
+        .variants
+        .iter()
+        .map(|variant| variant.diagnostics.events_seen)
+        .max()
+        == Some(0)
+    {
+        bail!(
+            "evidence report {} contains zero PMXT target events; treat the window as incomplete and rerun it with verified archive coverage",
+            report.label
         );
     }
     Ok(())
@@ -2138,40 +2185,14 @@ pub fn read_promotion(path: impl AsRef<Path>) -> Result<PromotionArtifact> {
 
 pub fn write_report_atomic(path: impl AsRef<Path>, report: &ExperimentReport) -> Result<()> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create report dir {}", parent.display()))?;
-    }
-    let payload = serde_json::to_vec_pretty(report).context("serialize ExperimentReport")?;
-    let tmp = path.with_extension(format!(
-        "{}.tmp.{}",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("json"),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, payload)
-        .with_context(|| format!("write tmp experiment report {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    write_json_atomic(path, report, true)
+        .with_context(|| format!("write experiment report {}", path.display()))
 }
 
 pub fn write_promotion_atomic(path: impl AsRef<Path>, artifact: &PromotionArtifact) -> Result<()> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create promotion dir {}", parent.display()))?;
-    }
-    let payload = serde_json::to_vec_pretty(artifact).context("serialize PromotionArtifact")?;
-    let tmp = path.with_extension(format!(
-        "{}.tmp.{}",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("json"),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, payload)
-        .with_context(|| format!("write tmp promotion artifact {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    write_json_atomic(path, artifact, true)
+        .with_context(|| format!("write promotion artifact {}", path.display()))
 }
 
 pub fn write_zone_concentration_audit_atomic(
@@ -2179,21 +2200,8 @@ pub fn write_zone_concentration_audit_atomic(
     audit: &ZoneConcentrationAudit,
 ) -> Result<()> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create zone audit dir {}", parent.display()))?;
-    }
-    let payload = serde_json::to_vec_pretty(audit).context("serialize ZoneConcentrationAudit")?;
-    let tmp = path.with_extension(format!(
-        "{}.tmp.{}",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("json"),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, payload)
-        .with_context(|| format!("write tmp zone audit {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    write_json_atomic(path, audit, true)
+        .with_context(|| format!("write zone concentration audit {}", path.display()))
 }
 
 #[cfg(test)]
@@ -2265,6 +2273,7 @@ mod tests {
                     asset: "BTC".to_string(),
                 }],
             },
+            settlement_btc_history: std::sync::Arc::new(btc.clone()),
             btc_history: std::sync::Arc::new(btc),
             bankroll_usd: 100.0,
             max_total_exposure_usd: 80.0,
@@ -2274,11 +2283,43 @@ mod tests {
             breaker_cfg: crate::live::breaker::BreakerConfig::default(),
             adaptive_rearm_after_s: None,
             shared_distilled_dir: None,
+            require_shared_distilled: false,
             threads: Some(1),
             checkpoint_dir: None,
             stop_flag: None,
             continuous: false,
+            capture_calibration_opportunities: false,
             delete_downloaded_parquet_after_hour: false,
+        }
+    }
+
+    fn synthetic_complete_report(
+        label: impl Into<String>,
+        cfg: &HarnessConfig,
+    ) -> ExperimentReport {
+        let mut results = BacktestResults::default();
+        results.diagnostics.events_seen = 1;
+        let runs = [HarnessRun {
+            variant: StrategyVariant::baseline(),
+            results,
+            calibration_opportunities: Vec::new(),
+        }];
+        let mut report = ExperimentReport::from_harness(label, cfg, &runs);
+        report.variants.clear();
+        report
+    }
+
+    fn synthetic_diagnostics() -> BacktestDiagnostics {
+        BacktestDiagnostics {
+            events_seen: 1,
+            ..Default::default()
+        }
+    }
+
+    fn synthetic_results() -> BacktestResults {
+        BacktestResults {
+            diagnostics: synthetic_diagnostics(),
+            ..Default::default()
         }
     }
 
@@ -2346,7 +2387,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 22.0 / 30.0,
             total_pnl: pnl,
             avg_pnl: pnl / 30.0,
@@ -2359,9 +2400,12 @@ mod tests {
     #[test]
     fn report_contains_manifest_and_sorted_variant() {
         let cfg = cfg();
+        let mut results = BacktestResults::default();
+        results.diagnostics.events_seen = 1;
         let runs = vec![HarnessRun {
             variant: StrategyVariant::baseline(),
-            results: BacktestResults::default(),
+            results,
+            calibration_opportunities: Vec::new(),
         }];
         let report = ExperimentReport::from_harness("test", &cfg, &runs);
         assert_eq!(report.mode, "backtest");
@@ -2376,9 +2420,38 @@ mod tests {
     }
 
     #[test]
+    fn report_marks_zero_event_pmxt_replay_incomplete() {
+        let cfg = cfg();
+        let runs = vec![HarnessRun {
+            variant: StrategyVariant::baseline(),
+            results: BacktestResults::default(),
+            calibration_opportunities: Vec::new(),
+        }];
+
+        let report = ExperimentReport::from_harness("empty", &cfg, &runs);
+
+        assert!(!report.data_manifest.complete);
+        let pmxt = report
+            .data_manifest
+            .sources
+            .iter()
+            .find(|source| source.name == "pmxt_v2_archive")
+            .unwrap();
+        assert_eq!(pmxt.row_count, Some(0));
+        assert!(!pmxt.complete);
+        assert!(report
+            .data_manifest
+            .notes
+            .iter()
+            .any(|note| note.contains("zero target events")));
+        let err = validate_current_replay_semantics(&report).unwrap_err();
+        assert!(err.to_string().contains("zero PMXT target events"));
+    }
+
+    #[test]
     fn promotion_rejects_legacy_replay_semantics() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("legacy", &cfg, &[]);
+        let mut report = synthetic_complete_report("legacy", &cfg);
         for source in &mut report.data_manifest.sources {
             source.metadata.remove("replay_semantics_version");
         }
@@ -2398,10 +2471,11 @@ mod tests {
             let mut variant = StrategyVariant::baseline();
             variant.prefer_maker = prefer_maker;
             variant.use_perfect_fill = use_perfect_fill;
-            let mut report = ExperimentReport::from_harness("execution-model", &cfg, &[]);
+            let mut report = synthetic_complete_report("execution-model", &cfg);
             let mut candidate = VariantReport::from_run(&HarnessRun {
                 variant,
-                results: BacktestResults::default(),
+                results: synthetic_results(),
+                calibration_opportunities: Vec::new(),
             });
             candidate.trades = 30;
             candidate.wins = 20;
@@ -2423,7 +2497,8 @@ mod tests {
         let cfg = cfg();
         let mut worse = VariantReport::from_run(&HarnessRun {
             variant: StrategyVariant::baseline(),
-            results: BacktestResults::default(),
+            results: synthetic_results(),
+            calibration_opportunities: Vec::new(),
         });
         worse.trades = 30;
         worse.wins = 12;
@@ -2443,7 +2518,7 @@ mod tests {
         overfit.strategy.risk_profile = "overfit".to_string();
         overfit.total_pnl = 3.0;
         overfit.by_zone = zone_split(30, 0);
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants = vec![worse, overfit, better];
 
         let artifact = PromotionArtifact::from_report(&report, PromotionGate::default()).unwrap();
@@ -2461,7 +2536,7 @@ mod tests {
     #[test]
     fn promotion_rejects_incomplete_data() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.data_manifest.complete = false;
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
@@ -2480,7 +2555,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2497,7 +2572,7 @@ mod tests {
     #[test]
     fn promotion_rejects_gate_failures() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2515,7 +2590,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.60,
             total_pnl: 1.0,
             avg_pnl: 0.20,
@@ -2532,7 +2607,7 @@ mod tests {
     #[test]
     fn promotion_rejects_backtest_breaker_trip() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2550,7 +2625,7 @@ mod tests {
             breaker_tripped_at_s: Some(1_700_000_000.0),
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2569,8 +2644,9 @@ mod tests {
     #[test]
     fn promotion_rejects_adaptive_rearm_diagnostics() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         let diagnostics = BacktestDiagnostics {
+            events_seen: 1,
             adaptive_rearms: 1,
             ..Default::default()
         };
@@ -2610,7 +2686,7 @@ mod tests {
     #[test]
     fn promotion_rejects_unresolved_fills_by_default() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2628,7 +2704,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2647,7 +2723,7 @@ mod tests {
     #[test]
     fn promotion_distinguishes_passive_maker_nonfills_from_execution_failures() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2668,7 +2744,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 22.0 / 30.0,
             total_pnl: 10.0,
             avg_pnl: 10.0 / 30.0,
@@ -2697,7 +2773,7 @@ mod tests {
     #[test]
     fn promotion_rejects_non_passive_execution_failures() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2715,7 +2791,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 22.0 / 30.0,
             total_pnl: 10.0,
             avg_pnl: 10.0 / 30.0,
@@ -2734,7 +2810,7 @@ mod tests {
     #[test]
     fn promotion_rejects_zone_concentration() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2752,7 +2828,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.66,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2769,7 +2845,7 @@ mod tests {
     #[test]
     fn zone_concentration_audit_makes_threshold_tradeoff_explicit() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2787,7 +2863,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 0.75,
             total_pnl: 4.0,
             avg_pnl: 0.1,
@@ -2813,7 +2889,7 @@ mod tests {
     #[test]
     fn promotion_rejects_lossless_tiny_sample_by_default() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2831,7 +2907,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 1.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2848,7 +2924,7 @@ mod tests {
     #[test]
     fn promotion_rejects_low_wilson_bound_when_requested() {
         let cfg = cfg();
-        let mut report = ExperimentReport::from_harness("test", &cfg, &[]);
+        let mut report = synthetic_complete_report("test", &cfg);
         report.variants.push(VariantReport {
             strategy: StrategySpec::new("s", "1", "hash", "risk"),
             strategy_params: serde_json::json!({"name": "test"}),
@@ -2866,7 +2942,7 @@ mod tests {
             breaker_tripped_at_s: None,
             breaker_realized_drawdown_pct: 0.0,
             breaker_stressed_drawdown_pct: 0.0,
-            diagnostics: BacktestDiagnostics::default(),
+            diagnostics: synthetic_diagnostics(),
             win_rate: 20.0 / 30.0,
             total_pnl: 1.0,
             avg_pnl: 0.03,
@@ -2892,7 +2968,7 @@ mod tests {
         let cfg = cfg();
         let mut reports = Vec::new();
         for (i, consistent_pnl) in [5.0, 4.0, 3.0].into_iter().enumerate() {
-            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            let mut report = synthetic_complete_report(format!("day{i}"), &cfg);
             report.variants.push(VariantReport {
                 strategy: StrategySpec::new("s", "1", "consistent", "consistent"),
                 strategy_params: serde_json::json!({"name": "consistent"}),
@@ -2910,7 +2986,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
-                diagnostics: BacktestDiagnostics::default(),
+                diagnostics: synthetic_diagnostics(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: consistent_pnl,
                 avg_pnl: consistent_pnl / 30.0,
@@ -2935,7 +3011,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
-                diagnostics: BacktestDiagnostics::default(),
+                diagnostics: synthetic_diagnostics(),
                 win_rate: 20.0 / 30.0,
                 total_pnl: if i == 0 { 100.0 } else { -10.0 },
                 avg_pnl: 0.0,
@@ -2972,7 +3048,7 @@ mod tests {
         let cfg = cfg();
         let mut reports = Vec::new();
         for (fragile_pnl, robust_pnl) in [(100.0, 20.0), (100.0, 20.0), (1.0, 20.0)] {
-            let mut report = ExperimentReport::from_harness("day", &cfg, &[]);
+            let mut report = synthetic_complete_report("day", &cfg);
             report.variants.push(VariantReport {
                 strategy: StrategySpec::new("s", "1", "fragile", "fragile"),
                 strategy_params: serde_json::json!({"name": "fragile"}),
@@ -2990,7 +3066,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
-                diagnostics: BacktestDiagnostics::default(),
+                diagnostics: synthetic_diagnostics(),
                 win_rate: 0.7,
                 total_pnl: fragile_pnl,
                 avg_pnl: fragile_pnl / 40.0,
@@ -3015,7 +3091,7 @@ mod tests {
                 breaker_tripped_at_s: None,
                 breaker_realized_drawdown_pct: 0.0,
                 breaker_stressed_drawdown_pct: 0.0,
-                diagnostics: BacktestDiagnostics::default(),
+                diagnostics: synthetic_diagnostics(),
                 win_rate: 0.7,
                 total_pnl: robust_pnl,
                 avg_pnl: robust_pnl / 40.0,
@@ -3060,7 +3136,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            let mut report = synthetic_complete_report(format!("day{i}"), &cfg);
             report.variants = vec![
                 robust_variant("spike", "spike", spike_pnl, 0.80, 1.50, 0.90),
                 robust_variant("robust", "robust", robust_pnl, 0.40, 0.70, 0.90),
@@ -3198,7 +3274,7 @@ mod tests {
         let cfg = cfg();
         let mut reports = Vec::new();
         for i in 0..3 {
-            let mut report = ExperimentReport::from_harness(format!("day{i}"), &cfg, &[]);
+            let mut report = synthetic_complete_report(format!("day{i}"), &cfg);
             let mut concentrated =
                 robust_variant("concentrated", "concentrated", 10.0, 0.40, 0.70, 0.90);
             concentrated.by_zone = zone_split(21, 9);
@@ -3320,11 +3396,28 @@ mod tests {
     }
 
     #[test]
+    fn neighbor_stability_bounds_volatility_floor_distance() {
+        let base_report = robust_variant("base", "base", 1.0, 0.40, 0.70, 0.90);
+        let base = VariantKnobs::from_variant(&base_report).unwrap();
+        let with_floor = |floor| {
+            let mut report = base_report.clone();
+            let mut variant: StrategyVariant =
+                serde_json::from_value(report.strategy_params.clone()).unwrap();
+            variant.decision_volatility_floor = floor;
+            report.strategy_params = serde_json::to_value(variant).unwrap();
+            VariantKnobs::from_variant(&report).unwrap()
+        };
+
+        assert!(base.is_neighbor(&with_floor(0.10)));
+        assert!(!base.is_neighbor(&with_floor(0.20)));
+    }
+
+    #[test]
     fn neighbor_stability_ignores_silent_neighbor_windows() {
         let cfg = cfg();
         let mut reports = Vec::new();
         for i in 0..3 {
-            let mut report = ExperimentReport::from_harness(format!("fold{i}"), &cfg, &[]);
+            let mut report = synthetic_complete_report(format!("fold{i}"), &cfg);
             let selected = robust_variant("selected", "selected", 5.0, 0.60, 0.80, 0.90);
             let mut neighbor =
                 robust_variant("neighbor_conf", "neighbor_conf", 4.0, 0.70, 0.80, 0.90);

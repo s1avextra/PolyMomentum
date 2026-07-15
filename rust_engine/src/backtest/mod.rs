@@ -9,3 +9,4 @@ pub mod pmxt;
 pub mod resolver;
 pub mod strategies;
 pub mod sweep;
+pub mod variant_io;

@@ -82,6 +82,11 @@ impl ReplayStrategy {
         }
         let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
+        if !variant.exit.is_disabled() {
+            bail!(
+                "promoted strategy enables an exit lifecycle that live-replay does not yet implement"
+            );
+        }
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
             bail!(
@@ -972,10 +977,11 @@ impl Strategy for LiveReplayStrategy {
             &contract.down_token_id
         };
         let signal_micro = self.top_microstructure_for_token(signal_token, timestamp_s);
-        let implied_vol = self
+        let observed_vol = self
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
         let variant = &self.replay_strategy.variant;
+        let implied_vol = variant.decision_volatility(observed_vol);
         let used_exposure = self.open_exposure() + self.submitted_exposure();
         let breaker_metrics = self
             .breaker_state

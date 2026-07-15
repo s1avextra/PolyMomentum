@@ -14,6 +14,8 @@ use chrono::{TimeZone, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::artifact::write_json_atomic;
+
 #[derive(Default)]
 struct Counters {
     order_count: u64,
@@ -536,7 +538,7 @@ impl SessionMonitor {
 
     pub fn save_summary(&self) -> Result<()> {
         let summary = self.get_summary();
-        std::fs::write(&self.summary_path, serde_json::to_string_pretty(&summary)?)?;
+        write_json_atomic(&self.summary_path, &summary, true).context("write session summary")?;
         tracing::info!(session_id = %self.session_id, "session summary saved");
         Ok(())
     }
@@ -780,5 +782,27 @@ mod tests {
         let top = m.top_skip_reasons(2);
         assert_eq!(top[0].0, "low_edge");
         assert_eq!(top[0].1, 2);
+    }
+
+    #[test]
+    fn summary_write_is_atomic() {
+        let tmp = TempDir::new().unwrap();
+        let monitor = SessionMonitor::open(tmp.path()).unwrap();
+
+        monitor.save_summary().unwrap();
+
+        let summary: Value =
+            serde_json::from_slice(&std::fs::read(monitor.summary_path()).unwrap()).unwrap();
+        assert_eq!(summary["session_id"], monitor.session_id());
+        let temp_name = format!(
+            "{}.tmp.{}",
+            monitor
+                .summary_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            std::process::id()
+        );
+        assert!(!tmp.path().join(temp_name).exists());
     }
 }

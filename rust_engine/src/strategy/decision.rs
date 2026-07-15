@@ -937,6 +937,32 @@ pub enum DecisionResult {
     Skip(SkipReason),
 }
 
+/// Full decision evaluation used by offline diagnostics. Live callers consume
+/// only `result`; the optional opportunity is emitted for candidates rejected
+/// by the final EV, stale-edge, or minimum-edge checks. A passing candidate is
+/// already carried by `DecisionResult::Trade` and is not cloned here.
+#[derive(Debug, Clone)]
+pub struct DecisionEvaluation {
+    pub result: DecisionResult,
+    pub opportunity: Option<CandleDecision>,
+}
+
+impl DecisionEvaluation {
+    fn skip(reason: SkipReason) -> Self {
+        Self {
+            result: DecisionResult::Skip(reason),
+            opportunity: None,
+        }
+    }
+
+    fn skip_with_opportunity(reason: SkipReason, opportunity: CandleDecision) -> Self {
+        Self {
+            result: DecisionResult::Skip(reason),
+            opportunity: Some(opportunity),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn decide_candle_trade(
     signal: &MomentumSignal,
@@ -991,6 +1017,85 @@ pub fn decide_candle_trade_with_fee(
     zone_config: &ZoneConfig,
     cross_asset_boost: f64,
 ) -> DecisionResult {
+    evaluate_candle_trade_with_fee_internal(
+        signal,
+        minutes_elapsed,
+        minutes_remaining,
+        window_minutes,
+        up_price,
+        down_price,
+        btc_price,
+        open_btc,
+        implied_vol,
+        entry_fee_rate,
+        min_confidence,
+        min_edge,
+        skip_dead_zone,
+        zone_config,
+        cross_asset_boost,
+        false,
+    )
+    .result
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_candle_trade_with_fee(
+    signal: &MomentumSignal,
+    minutes_elapsed: f64,
+    minutes_remaining: f64,
+    window_minutes: f64,
+    up_price: f64,
+    down_price: f64,
+    btc_price: f64,
+    open_btc: f64,
+    implied_vol: f64,
+    entry_fee_rate: f64,
+    min_confidence: f64,
+    min_edge: f64,
+    skip_dead_zone: bool,
+    zone_config: &ZoneConfig,
+    cross_asset_boost: f64,
+    capture_opportunity: bool,
+) -> DecisionEvaluation {
+    evaluate_candle_trade_with_fee_internal(
+        signal,
+        minutes_elapsed,
+        minutes_remaining,
+        window_minutes,
+        up_price,
+        down_price,
+        btc_price,
+        open_btc,
+        implied_vol,
+        entry_fee_rate,
+        min_confidence,
+        min_edge,
+        skip_dead_zone,
+        zone_config,
+        cross_asset_boost,
+        capture_opportunity,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_candle_trade_with_fee_internal(
+    signal: &MomentumSignal,
+    minutes_elapsed: f64,
+    minutes_remaining: f64,
+    window_minutes: f64,
+    up_price: f64,
+    down_price: f64,
+    btc_price: f64,
+    open_btc: f64,
+    implied_vol: f64,
+    entry_fee_rate: f64,
+    min_confidence: f64,
+    min_edge: f64,
+    skip_dead_zone: bool,
+    zone_config: &ZoneConfig,
+    cross_asset_boost: f64,
+    capture_opportunity: bool,
+) -> DecisionEvaluation {
     let cfg = zone_config;
 
     // 4-zone entry timing
@@ -1023,7 +1128,7 @@ pub fn decide_candle_trade_with_fee(
         || entry_fee_rate < 0.0
         || !matches!(signal.direction.as_str(), "up" | "down")
     {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "invalid_decision_input",
             zone,
             "non-finite or out-of-domain decision input",
@@ -1033,7 +1138,7 @@ pub fn decide_candle_trade_with_fee(
         zone_thresholds(zone, min_confidence, min_edge, cfg);
 
     if minutes_remaining <= cfg.settlement_cutoff_minutes {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "settlement_cutoff",
             zone,
             format!(
@@ -1053,7 +1158,7 @@ pub fn decide_candle_trade_with_fee(
         let required_distance =
             settlement_guard_buffer_usd(cfg, btc_price, implied_vol, minutes_remaining);
         if threshold_distance < required_distance {
-            return DecisionResult::Skip(SkipReason::new(
+            return DecisionEvaluation::skip(SkipReason::new(
                 "settlement_margin",
                 zone,
                 format!("distance={threshold_distance:.2}<required={required_distance:.2}"),
@@ -1067,7 +1172,7 @@ pub fn decide_candle_trade_with_fee(
     }
 
     if u64::from(signal.reversion_count) < cfg.min_reversion_count {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "low_reversion_count",
             zone,
             format!("{} < {}", signal.reversion_count, cfg.min_reversion_count),
@@ -1075,7 +1180,7 @@ pub fn decide_candle_trade_with_fee(
     }
 
     if u64::from(signal.reversion_count) > cfg.max_reversion_count {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "high_reversion_count",
             zone,
             format!("{} > {}", signal.reversion_count, cfg.max_reversion_count),
@@ -1083,7 +1188,7 @@ pub fn decide_candle_trade_with_fee(
     }
 
     if signal.confidence < z_min_conf {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "low_confidence",
             zone,
             format!("{:.2} < {:.2}", signal.confidence, z_min_conf),
@@ -1091,7 +1196,7 @@ pub fn decide_candle_trade_with_fee(
     }
 
     if signal.z_score < z_min_z {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "low_z_score",
             zone,
             format!("{:.2} < {:.2}", signal.z_score, z_min_z),
@@ -1102,7 +1207,7 @@ pub fn decide_candle_trade_with_fee(
         && signal.confidence >= cfg.dead_zone_lo
         && signal.confidence < cfg.dead_zone_hi
     {
-        return DecisionResult::Skip(SkipReason::new("dead_zone_80_90", zone, ""));
+        return DecisionEvaluation::skip(SkipReason::new("dead_zone_80_90", zone, ""));
     }
 
     let market_price = if signal.direction == "up" {
@@ -1112,7 +1217,7 @@ pub fn decide_candle_trade_with_fee(
     };
 
     if market_price < cfg.min_price || market_price > cfg.max_price {
-        return DecisionResult::Skip(SkipReason::new(
+        return DecisionEvaluation::skip(SkipReason::new(
             "price_out_of_range",
             zone,
             format!("{:.2}", market_price),
@@ -1133,57 +1238,70 @@ pub fn decide_candle_trade_with_fee(
     let entry_fee_per_share = entry_fee_rate * market_price * (1.0 - market_price);
     let edge = gross_edge - entry_fee_per_share;
 
+    let build_opportunity = || {
+        let mut regime = DecisionRegime::from_decision_inputs(
+            zone,
+            signal,
+            market_price,
+            edge,
+            implied_vol,
+            minutes_remaining,
+        );
+        regime.attach_outcome_market_inputs(yes_no_vig);
+        CandleDecision {
+            direction: signal.direction.clone(),
+            confidence: signal.confidence,
+            z_score: signal.z_score,
+            zone: zone.to_string(),
+            fair_value,
+            market_price,
+            gross_edge,
+            entry_fee_per_share,
+            edge,
+            minutes_remaining,
+            yes_no_vig,
+            regime,
+        }
+    };
+
     if edge < cfg.min_ev_buffer {
-        return DecisionResult::Skip(SkipReason::new(
+        let reason = SkipReason::new(
             "negative_ev",
             zone,
             format!(
                 "fair={fair_value:.3}<price={market_price:.3}+fee={entry_fee_per_share:.4}+buffer={:.3}",
                 cfg.min_ev_buffer,
             ),
-        ));
+        );
+        return if capture_opportunity {
+            DecisionEvaluation::skip_with_opportunity(reason, build_opportunity())
+        } else {
+            DecisionEvaluation::skip(reason)
+        };
     }
 
     if zone != "terminal" && gross_edge > cfg.edge_cap {
-        return DecisionResult::Skip(SkipReason::new(
-            "edge_too_high_stale",
-            zone,
-            format!("{:.2}", gross_edge),
-        ));
+        let reason = SkipReason::new("edge_too_high_stale", zone, format!("{:.2}", gross_edge));
+        return if capture_opportunity {
+            DecisionEvaluation::skip_with_opportunity(reason, build_opportunity())
+        } else {
+            DecisionEvaluation::skip(reason)
+        };
     }
 
     if edge < z_min_edge {
-        return DecisionResult::Skip(SkipReason::new(
-            "low_edge",
-            zone,
-            format!("{:.3} < {:.3}", edge, z_min_edge),
-        ));
+        let reason = SkipReason::new("low_edge", zone, format!("{:.3} < {:.3}", edge, z_min_edge));
+        return if capture_opportunity {
+            DecisionEvaluation::skip_with_opportunity(reason, build_opportunity())
+        } else {
+            DecisionEvaluation::skip(reason)
+        };
     }
 
-    let mut regime = DecisionRegime::from_decision_inputs(
-        zone,
-        signal,
-        market_price,
-        edge,
-        implied_vol,
-        minutes_remaining,
-    );
-    regime.attach_outcome_market_inputs(yes_no_vig);
-
-    DecisionResult::Trade(CandleDecision {
-        direction: signal.direction.clone(),
-        confidence: signal.confidence,
-        z_score: signal.z_score,
-        zone: zone.to_string(),
-        fair_value,
-        market_price,
-        gross_edge,
-        entry_fee_per_share,
-        edge,
-        minutes_remaining,
-        yes_no_vig,
-        regime,
-    })
+    DecisionEvaluation {
+        result: DecisionResult::Trade(build_opportunity()),
+        opportunity: None,
+    }
 }
 
 #[cfg(test)]
@@ -1221,6 +1339,59 @@ mod tests {
             z_score: z,
             reversion_count: 1,
             directional_impulse_10s_bps: None,
+        }
+    }
+
+    #[test]
+    fn evaluation_exposes_pre_edge_opportunity_without_changing_skip_result() {
+        let cfg = ZoneConfig {
+            settlement_cutoff_minutes: 0.0,
+            settlement_guard_minutes: 0.0,
+            min_ev_buffer: -1.0,
+            edge_cap: 1.0,
+            primary_min_z: 0.1,
+            ..ZoneConfig::default()
+        };
+        let evaluate = |capture_opportunity| {
+            evaluate_candle_trade_with_fee(
+                &mk_signal(0.95, 2.0, "up"),
+                2.0,
+                3.0,
+                5.0,
+                0.50,
+                0.50,
+                70_100.0,
+                70_000.0,
+                0.50,
+                0.07,
+                0.10,
+                1.0,
+                false,
+                &cfg,
+                0.0,
+                capture_opportunity,
+            )
+        };
+        let evaluation = evaluate(true);
+
+        match evaluation.result {
+            DecisionResult::Skip(skip) => assert_eq!(skip.reason, "low_edge"),
+            DecisionResult::Trade(_) => panic!("impossible edge threshold must skip"),
+        }
+        let opportunity = evaluation
+            .opportunity
+            .expect("pre-edge candidate should be observable");
+        assert!(
+            (opportunity.edge - (opportunity.gross_edge - opportunity.entry_fee_per_share)).abs()
+                < 1e-12
+        );
+        assert_eq!(opportunity.market_price, 0.50);
+
+        let evaluation_without_capture = evaluate(false);
+        assert!(evaluation_without_capture.opportunity.is_none());
+        match evaluation_without_capture.result {
+            DecisionResult::Skip(skip) => assert_eq!(skip.reason, "low_edge"),
+            DecisionResult::Trade(_) => panic!("capture flag must not change the decision"),
         }
     }
 

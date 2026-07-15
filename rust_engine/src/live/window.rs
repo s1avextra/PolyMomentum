@@ -7,7 +7,7 @@
 //! Returns 0.0 when we can't parse — the caller treats that as "skip" rather
 //! than guessing a default window length.
 
-use chrono::NaiveTime;
+use chrono::{DateTime, NaiveTime, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -40,6 +40,64 @@ pub fn estimate_window_minutes(description: &str) -> f64 {
         return 60.0;
     }
     0.0
+}
+
+pub fn btc_updown_slug_step_seconds(window_minutes: f64) -> Option<i64> {
+    if (window_minutes - 5.0).abs() <= 1e-6 {
+        Some(5 * 60)
+    } else if (window_minutes - 15.0).abs() <= 1e-6 {
+        Some(15 * 60)
+    } else {
+        None
+    }
+}
+
+pub fn btc_updown_slugs_for_range(
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    step_seconds: i64,
+) -> Vec<String> {
+    let Some(prefix) = btc_updown_slug_prefix(step_seconds) else {
+        return Vec::new();
+    };
+    let start_seconds = start.timestamp();
+    let end_exclusive_seconds = end.timestamp() + 3_600;
+    let mut timestamp = start_seconds - start_seconds.rem_euclid(step_seconds);
+    let mut slugs = Vec::new();
+    while timestamp < end_exclusive_seconds {
+        if timestamp + step_seconds > start_seconds {
+            slugs.push(format!("{prefix}-{timestamp}"));
+        }
+        timestamp += step_seconds;
+    }
+    slugs
+}
+
+pub fn btc_updown_slugs_for_live_horizon(
+    now: DateTime<Utc>,
+    step_seconds: i64,
+    horizon_minutes: i64,
+) -> Vec<String> {
+    let Some(prefix) = btc_updown_slug_prefix(step_seconds) else {
+        return Vec::new();
+    };
+    let now_seconds = now.timestamp();
+    let mut timestamp = (now_seconds - step_seconds).div_euclid(step_seconds) * step_seconds;
+    let end_seconds = now_seconds + horizon_minutes.max(1) * 60 + step_seconds;
+    let mut slugs = Vec::new();
+    while timestamp <= end_seconds {
+        slugs.push(format!("{prefix}-{timestamp}"));
+        timestamp += step_seconds;
+    }
+    slugs
+}
+
+fn btc_updown_slug_prefix(step_seconds: i64) -> Option<&'static str> {
+    match step_seconds {
+        300 => Some("btc-updown-5m"),
+        900 => Some("btc-updown-15m"),
+        _ => None,
+    }
 }
 
 fn parse_clock(s: &str) -> Option<chrono::NaiveDateTime> {
@@ -81,5 +139,19 @@ mod tests {
     #[test]
     fn returns_zero_when_unparseable() {
         assert!(estimate_window_minutes("garbage").abs() < 1e-9);
+    }
+
+    #[test]
+    fn slug_generation_only_accepts_supported_windows() {
+        assert_eq!(btc_updown_slug_step_seconds(5.0), Some(300));
+        assert_eq!(btc_updown_slug_step_seconds(15.0), Some(900));
+        assert_eq!(btc_updown_slug_step_seconds(60.0), None);
+
+        let now = DateTime::from_timestamp(1_779_539_390, 0).unwrap();
+        let slugs = btc_updown_slugs_for_live_horizon(now, 300, 15);
+        assert!(slugs.contains(&"btc-updown-5m-1779538800".to_string()));
+        assert!(slugs.contains(&"btc-updown-5m-1779539100".to_string()));
+        assert!(slugs.len() <= 6);
+        assert!(btc_updown_slugs_for_live_horizon(now, 60, 15).is_empty());
     }
 }

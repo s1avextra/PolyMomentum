@@ -7,7 +7,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -15,13 +14,20 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
+use crate::artifact::{write_json_artifact_atomic, write_jsonl_atomic};
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::resolver::TradePnlDiagnostics;
 use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
 use crate::monitoring::{causality, diagnostics};
 use crate::strategy::spec::stable_json_hash;
+
+mod registry_io;
+
+use registry_io::{
+    archive_evidence_file, merge_unique_strings, read_strategy_registry, safe_path_component,
+    strategy_version_id, write_strategy_registry_atomic,
+};
 
 #[derive(Debug, Clone)]
 pub struct StrategyBuilderPlanInput {
@@ -88,6 +94,131 @@ pub struct StrategyBuilderAudit {
     pub grade: String,
     pub checks: Vec<StrategyBuilderCheck>,
     pub next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryComplementScreenInput {
+    pub opportunity_paths: Vec<String>,
+    pub resolution_manifest_paths: Vec<String>,
+    pub block_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementScreen {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub mechanism_id: String,
+    pub block_id: String,
+    pub status: String,
+    pub ok: bool,
+    pub preregistered_at: String,
+    pub capture_identity: BinaryComplementCaptureIdentity,
+    pub fixed_rule: BinaryComplementFixedRule,
+    pub sources: BinaryComplementSources,
+    pub counts: BinaryComplementCounts,
+    pub rates: BinaryComplementRates,
+    pub gates: Vec<BinaryComplementGate>,
+    pub failure_reasons: Vec<String>,
+    pub aligned_condition_ids: Vec<String>,
+    pub aligned_condition_ids_hash: String,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementCaptureIdentity {
+    pub strategy_name: String,
+    pub params_hash: String,
+    pub baseline_strategy_name: String,
+    pub baseline_params_hash: String,
+    pub baseline_primary_min_edge: f64,
+    pub minimum_latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementFixedRule {
+    pub residual_multiplier: f64,
+    pub expression: String,
+    pub missing_feature_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementSources {
+    pub opportunity_reports: Vec<String>,
+    pub resolution_manifests: Vec<String>,
+    pub report_start: String,
+    pub report_end: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementCounts {
+    pub terminal_settlement_aligned_conditions: usize,
+    pub conditions_with_opportunity_rows: usize,
+    pub baseline_candidates: usize,
+    pub baseline_winners: usize,
+    pub baseline_losses: usize,
+    pub valid_pair_feature_conditions: usize,
+    pub selected_candidates: usize,
+    pub selected_winners: usize,
+    pub selected_losses: usize,
+    pub baseline_winners_retained: usize,
+    pub baseline_losses_removed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementRates {
+    pub valid_pair_feature_coverage: Option<f64>,
+    pub candidate_retention: Option<f64>,
+    pub baseline_winner_retention: Option<f64>,
+    pub baseline_loss_removal: Option<f64>,
+    pub selected_win_rate: Option<f64>,
+    pub selected_wilson_95_lower: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementGate {
+    pub name: String,
+    pub passed: bool,
+    pub observed: Option<f64>,
+    pub minimum: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryComplementRepeatAuditInput {
+    pub screen_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatAudit {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub mechanism_id: String,
+    pub status: String,
+    pub ok: bool,
+    pub screens: Vec<BinaryComplementRepeatBlock>,
+    pub checks: Vec<BinaryComplementRepeatCheck>,
+    pub overlapping_condition_ids: Vec<String>,
+    pub failure_reasons: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatBlock {
+    pub path: String,
+    pub artifact_hash: String,
+    pub block_id: String,
+    pub screen_passed: bool,
+    pub report_start: String,
+    pub report_end: String,
+    pub aligned_conditions: usize,
+    pub aligned_condition_ids_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatCheck {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1276,6 +1407,811 @@ fn registry_entry_paths(entry: &StrategyRegistryEntry) -> Vec<(String, String)> 
         }
     }
     paths
+}
+
+const BINARY_COMPLEMENT_MECHANISM_ID: &str = "binary_complement_coherence_v1";
+const BINARY_COMPLEMENT_PREREGISTERED_AT: &str = "2026-07-15T04:49:14Z";
+const BINARY_COMPLEMENT_CAPTURE_NAME: &str = "primary_v6_calibration_capture_edge1000";
+const BINARY_COMPLEMENT_CAPTURE_HASH: &str =
+    "34aa177f7ae8614814208cdd81ed74e09199007b924ee16b6e18dfa62fd49aa9";
+const BINARY_COMPLEMENT_BASELINE_NAME: &str = "primary_v6_volfloor_300";
+const BINARY_COMPLEMENT_BASELINE_HASH: &str =
+    "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5";
+const BINARY_COMPLEMENT_RISK_PROFILE: &str =
+    "position_pct=0.0500;max_per_market_usd=10.00;stress_dd_cap=0.1200;decision_vol_floor=0.3000";
+const BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE: f64 = 0.07;
+const BINARY_COMPLEMENT_MIN_LATENCY_MS: u64 = 202;
+const BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER: f64 = 2.0;
+const BINARY_COMPLEMENT_MIN_CONDITIONS: usize = 100;
+const BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE: f64 = 0.95;
+const BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION: f64 = 0.70;
+const BINARY_COMPLEMENT_MIN_WINNER_RETENTION: f64 = 0.90;
+const BINARY_COMPLEMENT_MIN_LOSS_REMOVAL: f64 = 0.30;
+const BINARY_COMPLEMENT_MIN_WILSON: f64 = 0.70;
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunityReport {
+    mode: String,
+    start: String,
+    end: String,
+    latency_ms: u64,
+    window_minutes: f64,
+    continuous: bool,
+    sampling: String,
+    variant_count: usize,
+    rows: Vec<BinaryComplementOpportunityReportRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunityReportRow {
+    opportunity_index: usize,
+    strategy_name: String,
+    params_hash: String,
+    risk_profile: String,
+    opportunity: BinaryComplementOpportunity,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunity {
+    condition_id: String,
+    decision_timestamp_s: f64,
+    evaluation_result: String,
+    actual_direction: String,
+    won: bool,
+    market_tick_size: f64,
+    complement_mid_sum_residual: Option<f64>,
+    complement_microprice_sum_residual: Option<f64>,
+    decision: BinaryComplementDecision,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementDecision {
+    direction: String,
+    zone: String,
+    edge: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolutionManifest {
+    a_plus_gate: BinaryComplementResolutionGate,
+    markets: Vec<BinaryComplementResolvedMarket>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolutionGate {
+    settlement_alignment_ready: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolvedMarket {
+    condition_id: String,
+    open_ts_s: f64,
+    settlement_aligned: bool,
+    official_source_matches_btc_tape: bool,
+    terminal_direction: String,
+}
+
+#[derive(Debug)]
+struct BinaryComplementScreenRow {
+    decision_timestamp_s: f64,
+    opportunity_index: usize,
+    won: bool,
+    baseline_eligible: bool,
+    pair_features_valid: bool,
+    passes_fixed_rule: bool,
+}
+
+/// Score exactly one unseen block against the frozen binary-complement screen.
+///
+/// The capture identity, baseline edge floor, feature threshold, and all pass
+/// gates are constants by design. This function refuses to reveal partial
+/// metrics before 100 post-registration terminal conditions are available.
+pub fn binary_complement_screen(
+    input: BinaryComplementScreenInput,
+) -> Result<BinaryComplementScreen> {
+    if input.opportunity_paths.is_empty() {
+        bail!("at least one --opportunity report is required");
+    }
+    if input.resolution_manifest_paths.is_empty() {
+        bail!("at least one --resolution-manifest is required");
+    }
+    let block_id = input.block_id.trim();
+    if block_id.is_empty() {
+        bail!("--block-id must not be empty");
+    }
+    if block_id.contains('/') || block_id.contains('\\') {
+        bail!("--block-id must not contain path separators");
+    }
+
+    let preregistered_at = parse_rfc3339(
+        BINARY_COMPLEMENT_PREREGISTERED_AT,
+        "binary-complement preregistration timestamp",
+    )?;
+    let preregistered_ts_s = preregistered_at.timestamp() as f64
+        + f64::from(preregistered_at.timestamp_subsec_nanos()) / 1e9;
+
+    let mut aligned_directions = BTreeMap::<String, String>::new();
+    let mut aligned_open_ts = BTreeMap::<String, f64>::new();
+    for path in &input.resolution_manifest_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read resolution manifest {path}"))?;
+        let manifest: BinaryComplementResolutionManifest = serde_json::from_str(&raw)
+            .with_context(|| format!("parse resolution manifest {path}"))?;
+        if !manifest.a_plus_gate.settlement_alignment_ready {
+            bail!("resolution manifest {path} is not official-source settlement-aligned");
+        }
+        for market in manifest.markets {
+            if market.open_ts_s + 1e-9 < preregistered_ts_s
+                || !market.settlement_aligned
+                || !market.official_source_matches_btc_tape
+            {
+                continue;
+            }
+            if !matches!(market.terminal_direction.as_str(), "up" | "down") {
+                continue;
+            }
+            if let Some(existing) = aligned_directions.insert(
+                market.condition_id.clone(),
+                market.terminal_direction.clone(),
+            ) {
+                if existing != market.terminal_direction {
+                    bail!(
+                        "condition {} has conflicting terminal directions {existing} and {}",
+                        market.condition_id,
+                        market.terminal_direction
+                    );
+                }
+            }
+            if let Some(existing) =
+                aligned_open_ts.insert(market.condition_id.clone(), market.open_ts_s)
+            {
+                if (existing - market.open_ts_s).abs() > 1e-6 {
+                    bail!(
+                        "condition {} has conflicting open timestamps {existing} and {}",
+                        market.condition_id,
+                        market.open_ts_s
+                    );
+                }
+            }
+        }
+    }
+
+    let mut rows_by_condition = BTreeMap::<String, Vec<BinaryComplementScreenRow>>::new();
+    let mut report_start: Option<DateTime<Utc>> = None;
+    let mut report_end: Option<DateTime<Utc>> = None;
+    let mut report_ranges = Vec::<(f64, f64)>::new();
+    for path in &input.opportunity_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read opportunity report {path}"))?;
+        let report: BinaryComplementOpportunityReport = serde_json::from_str(&raw)
+            .with_context(|| format!("parse opportunity report {path}"))?;
+        if report.mode != "harness_sweep_calibration_opportunities"
+            || report.sampling != "first_pre_edge_candidate_per_condition_utc_second"
+            || !report.continuous
+            || report.variant_count != 1
+        {
+            bail!("opportunity report {path} is not the required single-variant continuous calibration capture");
+        }
+        if report.latency_ms < BINARY_COMPLEMENT_MIN_LATENCY_MS {
+            bail!(
+                "opportunity report {path} latency {} ms is below the frozen measured-latency floor {} ms",
+                report.latency_ms,
+                BINARY_COMPLEMENT_MIN_LATENCY_MS
+            );
+        }
+        if !report.window_minutes.is_finite() || (report.window_minutes - 5.0).abs() > 1e-9 {
+            bail!("opportunity report {path} must use five-minute markets");
+        }
+        let start = parse_rfc3339(&report.start, &format!("{path} start"))?;
+        let end = parse_rfc3339(&report.end, &format!("{path} end"))?;
+        if end < start {
+            bail!("opportunity report {path} has end before start");
+        }
+        if start < preregistered_at {
+            bail!(
+                "opportunity report {path} starts before the preregistration boundary {}",
+                BINARY_COMPLEMENT_PREREGISTERED_AT
+            );
+        }
+        report_ranges.push((
+            start.timestamp() as f64,
+            (end + ChronoDuration::hours(1)).timestamp() as f64,
+        ));
+        report_start = Some(report_start.map_or(start, |current| current.min(start)));
+        report_end = Some(report_end.map_or(end, |current| current.max(end)));
+
+        for row in report.rows {
+            if row.strategy_name != BINARY_COMPLEMENT_CAPTURE_NAME
+                || row.params_hash != BINARY_COMPLEMENT_CAPTURE_HASH
+                || row.risk_profile != BINARY_COMPLEMENT_RISK_PROFILE
+            {
+                bail!(
+                    "opportunity report {path} row {} does not match the frozen capture identity",
+                    row.opportunity_index
+                );
+            }
+            let opportunity = row.opportunity;
+            let Some(terminal_direction) = aligned_directions.get(&opportunity.condition_id) else {
+                continue;
+            };
+            if !opportunity.decision_timestamp_s.is_finite()
+                || opportunity.decision_timestamp_s + 1e-9 < preregistered_ts_s
+            {
+                bail!(
+                    "opportunity report {path} contains a non-forward decision for condition {}",
+                    opportunity.condition_id
+                );
+            }
+            if opportunity.actual_direction != *terminal_direction {
+                bail!(
+                    "opportunity report {path} condition {} label {} disagrees with terminal manifest label {terminal_direction}",
+                    opportunity.condition_id,
+                    opportunity.actual_direction
+                );
+            }
+            if !matches!(opportunity.decision.direction.as_str(), "up" | "down") {
+                bail!(
+                    "opportunity report {path} condition {} has invalid decision direction {}",
+                    opportunity.condition_id,
+                    opportunity.decision.direction
+                );
+            }
+            let won = opportunity.decision.direction == *terminal_direction;
+            if opportunity.won != won {
+                bail!(
+                    "opportunity report {path} condition {} has a terminal win-label mismatch",
+                    opportunity.condition_id
+                );
+            }
+
+            let baseline_eligible = opportunity.evaluation_result == "low_edge"
+                && opportunity.decision.zone == "primary"
+                && opportunity.decision.edge.is_finite()
+                && opportunity.decision.edge + 1e-12 >= BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE;
+            let pair_features_valid = opportunity.market_tick_size.is_finite()
+                && opportunity.market_tick_size > 0.0
+                && opportunity.market_tick_size < 1.0
+                && opportunity
+                    .complement_mid_sum_residual
+                    .is_some_and(f64::is_finite)
+                && opportunity
+                    .complement_microprice_sum_residual
+                    .is_some_and(f64::is_finite);
+            let passes_fixed_rule = if pair_features_valid {
+                let max_residual = opportunity
+                    .complement_mid_sum_residual
+                    .expect("validated midpoint residual")
+                    .abs()
+                    .max(
+                        opportunity
+                            .complement_microprice_sum_residual
+                            .expect("validated microprice residual")
+                            .abs(),
+                    );
+                max_residual
+                    <= BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER * opportunity.market_tick_size + 1e-12
+            } else {
+                false
+            };
+            rows_by_condition
+                .entry(opportunity.condition_id)
+                .or_default()
+                .push(BinaryComplementScreenRow {
+                    decision_timestamp_s: opportunity.decision_timestamp_s,
+                    opportunity_index: row.opportunity_index,
+                    won,
+                    baseline_eligible,
+                    pair_features_valid,
+                    passes_fixed_rule,
+                });
+        }
+    }
+
+    aligned_directions.retain(|condition_id, _| {
+        aligned_open_ts.get(condition_id).is_some_and(|open_ts_s| {
+            report_ranges
+                .iter()
+                .any(|(start, end)| *open_ts_s >= *start && *open_ts_s < *end)
+        })
+    });
+    rows_by_condition.retain(|condition_id, _| aligned_directions.contains_key(condition_id));
+    if aligned_directions.len() < BINARY_COMPLEMENT_MIN_CONDITIONS {
+        bail!(
+            "opportunity-report windows contain {} post-registration terminal settlement-aligned conditions; require at least {} before scoring to prevent sequential peeking",
+            aligned_directions.len(),
+            BINARY_COMPLEMENT_MIN_CONDITIONS
+        );
+    }
+
+    let mut baseline_candidates = 0usize;
+    let mut baseline_winners = 0usize;
+    let mut baseline_losses = 0usize;
+    let mut valid_pair_feature_conditions = 0usize;
+    let mut selected_candidates = 0usize;
+    let mut selected_winners = 0usize;
+    let mut selected_losses = 0usize;
+    let mut baseline_winners_retained = 0usize;
+    let mut baseline_losses_removed = 0usize;
+
+    for rows in rows_by_condition.values_mut() {
+        rows.sort_by(|left, right| {
+            left.decision_timestamp_s
+                .partial_cmp(&right.decision_timestamp_s)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.opportunity_index.cmp(&right.opportunity_index))
+        });
+        let eligible: Vec<_> = rows.iter().filter(|row| row.baseline_eligible).collect();
+        let Some(baseline) = eligible.first().copied() else {
+            continue;
+        };
+        baseline_candidates += 1;
+        if baseline.won {
+            baseline_winners += 1;
+        } else {
+            baseline_losses += 1;
+        }
+        if eligible.iter().any(|row| row.pair_features_valid) {
+            valid_pair_feature_conditions += 1;
+        }
+
+        let selected = eligible.into_iter().find(|row| row.passes_fixed_rule);
+        if let Some(selected) = selected {
+            selected_candidates += 1;
+            if selected.won {
+                selected_winners += 1;
+            } else {
+                selected_losses += 1;
+            }
+        }
+        if baseline.won && selected.is_some_and(|row| row.won) {
+            baseline_winners_retained += 1;
+        }
+        if !baseline.won && selected.is_none_or(|row| row.won) {
+            baseline_losses_removed += 1;
+        }
+    }
+
+    let ratio = |numerator: usize, denominator: usize| {
+        (denominator > 0).then_some(numerator as f64 / denominator as f64)
+    };
+    let valid_pair_feature_coverage = ratio(valid_pair_feature_conditions, baseline_candidates);
+    let candidate_retention = ratio(selected_candidates, baseline_candidates);
+    let baseline_winner_retention = ratio(baseline_winners_retained, baseline_winners);
+    let baseline_loss_removal = ratio(baseline_losses_removed, baseline_losses);
+    let selected_win_rate = ratio(selected_winners, selected_candidates);
+    let selected_wilson_95_lower =
+        (selected_candidates > 0).then_some(wilson_lower(selected_winners, selected_candidates));
+
+    let mut gates = vec![BinaryComplementGate {
+        name: "terminal_settlement_aligned_conditions".to_string(),
+        passed: aligned_directions.len() >= BINARY_COMPLEMENT_MIN_CONDITIONS,
+        observed: Some(aligned_directions.len() as f64),
+        minimum: BINARY_COMPLEMENT_MIN_CONDITIONS as f64,
+        unit: "conditions".to_string(),
+    }];
+    for (name, observed, minimum) in [
+        (
+            "valid_pair_feature_coverage",
+            valid_pair_feature_coverage,
+            BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE,
+        ),
+        (
+            "candidate_retention",
+            candidate_retention,
+            BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION,
+        ),
+        (
+            "baseline_winner_retention",
+            baseline_winner_retention,
+            BINARY_COMPLEMENT_MIN_WINNER_RETENTION,
+        ),
+        (
+            "baseline_loss_removal",
+            baseline_loss_removal,
+            BINARY_COMPLEMENT_MIN_LOSS_REMOVAL,
+        ),
+        (
+            "selected_wilson_95_lower",
+            selected_wilson_95_lower,
+            BINARY_COMPLEMENT_MIN_WILSON,
+        ),
+    ] {
+        gates.push(BinaryComplementGate {
+            name: name.to_string(),
+            passed: observed.is_some_and(|value| value + 1e-12 >= minimum),
+            observed,
+            minimum,
+            unit: "ratio".to_string(),
+        });
+    }
+    let failure_reasons: Vec<_> = gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(|gate| format!("gate_failed:{}", gate.name))
+        .collect();
+    let ok = failure_reasons.is_empty();
+    let aligned_condition_ids: Vec<_> = aligned_directions.keys().cloned().collect();
+    let aligned_condition_ids_hash = stable_json_hash(&aligned_condition_ids);
+
+    Ok(BinaryComplementScreen {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        mechanism_id: BINARY_COMPLEMENT_MECHANISM_ID.to_string(),
+        block_id: block_id.to_string(),
+        status: if ok {
+            "BLOCK_PASS_REQUIRES_SECOND_DISJOINT_BLOCK"
+        } else {
+            "REJECT_MECHANISM_FAMILY"
+        }
+        .to_string(),
+        ok,
+        preregistered_at: BINARY_COMPLEMENT_PREREGISTERED_AT.to_string(),
+        capture_identity: BinaryComplementCaptureIdentity {
+            strategy_name: BINARY_COMPLEMENT_CAPTURE_NAME.to_string(),
+            params_hash: BINARY_COMPLEMENT_CAPTURE_HASH.to_string(),
+            baseline_strategy_name: BINARY_COMPLEMENT_BASELINE_NAME.to_string(),
+            baseline_params_hash: BINARY_COMPLEMENT_BASELINE_HASH.to_string(),
+            baseline_primary_min_edge: BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE,
+            minimum_latency_ms: BINARY_COMPLEMENT_MIN_LATENCY_MS,
+        },
+        fixed_rule: BinaryComplementFixedRule {
+            residual_multiplier: BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER,
+            expression: "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size".to_string(),
+            missing_feature_action: "reject_row".to_string(),
+        },
+        sources: BinaryComplementSources {
+            opportunity_reports: input.opportunity_paths,
+            resolution_manifests: input.resolution_manifest_paths,
+            report_start: report_start
+                .expect("at least one opportunity report")
+                .to_rfc3339(),
+            report_end: report_end
+                .expect("at least one opportunity report")
+                .to_rfc3339(),
+        },
+        counts: BinaryComplementCounts {
+            terminal_settlement_aligned_conditions: aligned_directions.len(),
+            conditions_with_opportunity_rows: rows_by_condition.len(),
+            baseline_candidates,
+            baseline_winners,
+            baseline_losses,
+            valid_pair_feature_conditions,
+            selected_candidates,
+            selected_winners,
+            selected_losses,
+            baseline_winners_retained,
+            baseline_losses_removed,
+        },
+        rates: BinaryComplementRates {
+            valid_pair_feature_coverage,
+            candidate_retention,
+            baseline_winner_retention,
+            baseline_loss_removal,
+            selected_win_rate,
+            selected_wilson_95_lower,
+        },
+        gates,
+        failure_reasons,
+        aligned_condition_ids,
+        aligned_condition_ids_hash,
+        notes: vec![
+            "The capture variant is identical to the registered baseline except for its impossible final edge thresholds and name; its hash is enforced before scoring.".to_string(),
+            "Baseline eligibility is reconstructed only from low_edge primary-zone rows with recorded fee-adjusted edge >= 0.07; negative-EV and stale-edge rows remain excluded.".to_string(),
+            "The screen is condition-level and recomputes wins from terminal manifest direction; it is not an executable fill or PnL replay.".to_string(),
+            "A passing block is research evidence only and must be repeated unchanged on a disjoint forward block before one exact runtime replay is allowed.".to_string(),
+        ],
+    })
+}
+
+fn binary_complement_ratio(numerator: usize, denominator: usize) -> Option<f64> {
+    (denominator > 0).then_some(numerator as f64 / denominator as f64)
+}
+
+fn binary_complement_option_close(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => (left - right).abs() <= 1e-12,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn validate_binary_complement_screen_artifact(
+    path: &str,
+    screen: &BinaryComplementScreen,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    if screen.schema_version != 1
+        || screen.mechanism_id != BINARY_COMPLEMENT_MECHANISM_ID
+        || screen.preregistered_at != BINARY_COMPLEMENT_PREREGISTERED_AT
+    {
+        bail!("screen {path} does not match the frozen mechanism contract");
+    }
+    parse_rfc3339(&screen.generated_at, &format!("{path} generated_at"))?;
+    if screen.block_id.trim().is_empty()
+        || screen.block_id.contains('/')
+        || screen.block_id.contains('\\')
+    {
+        bail!("screen {path} has an invalid block_id");
+    }
+    let identity = &screen.capture_identity;
+    if identity.strategy_name != BINARY_COMPLEMENT_CAPTURE_NAME
+        || identity.params_hash != BINARY_COMPLEMENT_CAPTURE_HASH
+        || identity.baseline_strategy_name != BINARY_COMPLEMENT_BASELINE_NAME
+        || identity.baseline_params_hash != BINARY_COMPLEMENT_BASELINE_HASH
+        || (identity.baseline_primary_min_edge - BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE).abs()
+            > 1e-12
+        || identity.minimum_latency_ms != BINARY_COMPLEMENT_MIN_LATENCY_MS
+    {
+        bail!("screen {path} capture or baseline identity drifted");
+    }
+    let rule = &screen.fixed_rule;
+    if (rule.residual_multiplier - BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER).abs() > 1e-12
+        || rule.expression
+            != "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size"
+        || rule.missing_feature_action != "reject_row"
+    {
+        bail!("screen {path} fixed rule drifted");
+    }
+
+    let start = parse_rfc3339(
+        &screen.sources.report_start,
+        &format!("{path} report_start"),
+    )?;
+    let end = parse_rfc3339(&screen.sources.report_end, &format!("{path} report_end"))?;
+    let preregistered_at = parse_rfc3339(
+        BINARY_COMPLEMENT_PREREGISTERED_AT,
+        "binary-complement preregistration timestamp",
+    )?;
+    if start < preregistered_at || end < start {
+        bail!("screen {path} has an invalid forward report window");
+    }
+
+    let ids = &screen.aligned_condition_ids;
+    if ids.len() < BINARY_COMPLEMENT_MIN_CONDITIONS
+        || ids.windows(2).any(|pair| pair[0] >= pair[1])
+        || screen.counts.terminal_settlement_aligned_conditions != ids.len()
+        || stable_json_hash(ids) != screen.aligned_condition_ids_hash
+    {
+        bail!("screen {path} aligned condition set or hash is invalid");
+    }
+    let counts = &screen.counts;
+    if counts.baseline_winners.checked_add(counts.baseline_losses)
+        != Some(counts.baseline_candidates)
+        || counts.selected_winners.checked_add(counts.selected_losses)
+            != Some(counts.selected_candidates)
+        || counts.conditions_with_opportunity_rows > counts.terminal_settlement_aligned_conditions
+        || counts.baseline_candidates > counts.conditions_with_opportunity_rows
+        || counts.valid_pair_feature_conditions > counts.baseline_candidates
+        || counts.selected_candidates > counts.baseline_candidates
+        || counts.baseline_winners_retained > counts.baseline_winners
+        || counts.baseline_losses_removed > counts.baseline_losses
+    {
+        bail!("screen {path} count invariants are invalid");
+    }
+
+    let expected_rates = BinaryComplementRates {
+        valid_pair_feature_coverage: binary_complement_ratio(
+            counts.valid_pair_feature_conditions,
+            counts.baseline_candidates,
+        ),
+        candidate_retention: binary_complement_ratio(
+            counts.selected_candidates,
+            counts.baseline_candidates,
+        ),
+        baseline_winner_retention: binary_complement_ratio(
+            counts.baseline_winners_retained,
+            counts.baseline_winners,
+        ),
+        baseline_loss_removal: binary_complement_ratio(
+            counts.baseline_losses_removed,
+            counts.baseline_losses,
+        ),
+        selected_win_rate: binary_complement_ratio(
+            counts.selected_winners,
+            counts.selected_candidates,
+        ),
+        selected_wilson_95_lower: (counts.selected_candidates > 0).then_some(wilson_lower(
+            counts.selected_winners,
+            counts.selected_candidates,
+        )),
+    };
+    if !binary_complement_option_close(
+        screen.rates.valid_pair_feature_coverage,
+        expected_rates.valid_pair_feature_coverage,
+    ) || !binary_complement_option_close(
+        screen.rates.candidate_retention,
+        expected_rates.candidate_retention,
+    ) || !binary_complement_option_close(
+        screen.rates.baseline_winner_retention,
+        expected_rates.baseline_winner_retention,
+    ) || !binary_complement_option_close(
+        screen.rates.baseline_loss_removal,
+        expected_rates.baseline_loss_removal,
+    ) || !binary_complement_option_close(
+        screen.rates.selected_win_rate,
+        expected_rates.selected_win_rate,
+    ) || !binary_complement_option_close(
+        screen.rates.selected_wilson_95_lower,
+        expected_rates.selected_wilson_95_lower,
+    ) {
+        bail!("screen {path} rates do not match its condition counts");
+    }
+
+    let expected_gates = [
+        (
+            "terminal_settlement_aligned_conditions",
+            Some(counts.terminal_settlement_aligned_conditions as f64),
+            BINARY_COMPLEMENT_MIN_CONDITIONS as f64,
+            "conditions",
+        ),
+        (
+            "valid_pair_feature_coverage",
+            expected_rates.valid_pair_feature_coverage,
+            BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE,
+            "ratio",
+        ),
+        (
+            "candidate_retention",
+            expected_rates.candidate_retention,
+            BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION,
+            "ratio",
+        ),
+        (
+            "baseline_winner_retention",
+            expected_rates.baseline_winner_retention,
+            BINARY_COMPLEMENT_MIN_WINNER_RETENTION,
+            "ratio",
+        ),
+        (
+            "baseline_loss_removal",
+            expected_rates.baseline_loss_removal,
+            BINARY_COMPLEMENT_MIN_LOSS_REMOVAL,
+            "ratio",
+        ),
+        (
+            "selected_wilson_95_lower",
+            expected_rates.selected_wilson_95_lower,
+            BINARY_COMPLEMENT_MIN_WILSON,
+            "ratio",
+        ),
+    ];
+    if screen.gates.len() != expected_gates.len() {
+        bail!("screen {path} has an unexpected gate set");
+    }
+    for (gate, (name, observed, minimum, unit)) in screen.gates.iter().zip(expected_gates) {
+        let passed = observed.is_some_and(|value| value + 1e-12 >= minimum);
+        if gate.name != name
+            || !binary_complement_option_close(gate.observed, observed)
+            || (gate.minimum - minimum).abs() > 1e-12
+            || gate.unit != unit
+            || gate.passed != passed
+        {
+            bail!("screen {path} gate {} is invalid", gate.name);
+        }
+    }
+    let expected_failures: Vec<_> = screen
+        .gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(|gate| format!("gate_failed:{}", gate.name))
+        .collect();
+    let expected_ok = expected_failures.is_empty();
+    let expected_status = if expected_ok {
+        "BLOCK_PASS_REQUIRES_SECOND_DISJOINT_BLOCK"
+    } else {
+        "REJECT_MECHANISM_FAMILY"
+    };
+    if screen.failure_reasons != expected_failures
+        || screen.ok != expected_ok
+        || screen.status != expected_status
+    {
+        bail!("screen {path} verdict is inconsistent with its gates");
+    }
+
+    Ok((start, end))
+}
+
+/// Verify that two frozen forward screens are chronological, disjoint, and
+/// individually passing before permitting one exact runtime replay.
+pub fn binary_complement_repeat_audit(
+    input: BinaryComplementRepeatAuditInput,
+) -> Result<BinaryComplementRepeatAudit> {
+    if input.screen_paths.len() != 2 {
+        bail!("binary-complement repeat audit requires exactly two --screen artifacts");
+    }
+    if input.screen_paths[0] == input.screen_paths[1] {
+        bail!("binary-complement repeat audit requires two different screen paths");
+    }
+
+    let mut screens = Vec::with_capacity(2);
+    let mut windows = Vec::with_capacity(2);
+    for path in &input.screen_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read binary-complement screen {path}"))?;
+        let screen: BinaryComplementScreen = serde_json::from_str(&raw)
+            .with_context(|| format!("parse binary-complement screen {path}"))?;
+        windows.push(validate_binary_complement_screen_artifact(path, &screen)?);
+        screens.push(screen);
+    }
+
+    let first_ids: BTreeSet<_> = screens[0].aligned_condition_ids.iter().cloned().collect();
+    let second_ids: BTreeSet<_> = screens[1].aligned_condition_ids.iter().cloned().collect();
+    let overlapping_condition_ids: Vec<_> = first_ids.intersection(&second_ids).cloned().collect();
+    let first_end_exclusive = windows[0].1 + ChronoDuration::hours(1);
+    let chronological = first_end_exclusive <= windows[1].0;
+
+    let checks = vec![
+        BinaryComplementRepeatCheck {
+            name: "block_ids_distinct".to_string(),
+            passed: screens[0].block_id != screens[1].block_id,
+            detail: format!("{} != {}", screens[0].block_id, screens[1].block_id),
+        },
+        BinaryComplementRepeatCheck {
+            name: "block_1_screen_passed".to_string(),
+            passed: screens[0].ok,
+            detail: screens[0].status.clone(),
+        },
+        BinaryComplementRepeatCheck {
+            name: "block_2_screen_passed".to_string(),
+            passed: screens[1].ok,
+            detail: screens[1].status.clone(),
+        },
+        BinaryComplementRepeatCheck {
+            name: "chronological_non_overlapping_windows".to_string(),
+            passed: chronological,
+            detail: format!(
+                "block_1_end_exclusive={} block_2_start={}",
+                first_end_exclusive.to_rfc3339(),
+                windows[1].0.to_rfc3339()
+            ),
+        },
+        BinaryComplementRepeatCheck {
+            name: "condition_sets_disjoint".to_string(),
+            passed: overlapping_condition_ids.is_empty(),
+            detail: format!("overlap_count={}", overlapping_condition_ids.len()),
+        },
+    ];
+    let failure_reasons: Vec<_> = checks
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| format!("check_failed:{}", check.name))
+        .collect();
+    let ok = failure_reasons.is_empty();
+    let blocks = input
+        .screen_paths
+        .iter()
+        .zip(&screens)
+        .map(|(path, screen)| BinaryComplementRepeatBlock {
+            path: path.clone(),
+            artifact_hash: stable_json_hash(screen),
+            block_id: screen.block_id.clone(),
+            screen_passed: screen.ok,
+            report_start: screen.sources.report_start.clone(),
+            report_end: screen.sources.report_end.clone(),
+            aligned_conditions: screen.counts.terminal_settlement_aligned_conditions,
+            aligned_condition_ids_hash: screen.aligned_condition_ids_hash.clone(),
+        })
+        .collect();
+
+    Ok(BinaryComplementRepeatAudit {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        mechanism_id: BINARY_COMPLEMENT_MECHANISM_ID.to_string(),
+        status: if ok {
+            "TWO_BLOCK_SCREEN_PASS_EXACT_REPLAY_ALLOWED"
+        } else {
+            "REJECT_MECHANISM_FAMILY"
+        }
+        .to_string(),
+        ok,
+        screens: blocks,
+        checks,
+        overlapping_condition_ids,
+        failure_reasons,
+        notes: vec![
+            "Each source screen is revalidated from counts through rates, fixed gates, capture identity, rule, condition-set hash, and verdict before cross-block checks.".to_string(),
+            "Passing this audit authorizes research materialization of exactly one frozen runtime gate and measured-latency replay; it is not live promotion.".to_string(),
+        ],
+    })
 }
 
 pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan> {
@@ -5980,7 +6916,7 @@ fn write_evolution_artifacts(
     }
 
     let ledger_path = input.out_dir.join("trial_ledger.jsonl");
-    write_jsonl_artifact_atomic(&ledger_path, &search.trial_ledger)
+    write_jsonl_atomic(&ledger_path, &search.trial_ledger)
         .with_context(|| format!("write {}", ledger_path.display()))?;
 
     let summary_path = input.out_dir.join("evolution_summary.json");
@@ -6192,51 +7128,6 @@ fn evolution_replay_manifest(
             "Static evolution fitness is not promotion evidence."
         ],
     })
-}
-
-fn write_json_artifact_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create artifact dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = serde_json::to_vec_pretty(value).context("serialize artifact JSON")?;
-    payload.push(b'\n');
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename artifact into {}", path.display()))?;
-    Ok(())
-}
-
-fn write_jsonl_artifact_atomic<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create artifact dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = Vec::new();
-    for row in rows {
-        serde_json::to_writer(&mut payload, row).context("serialize artifact JSONL row")?;
-        payload.push(b'\n');
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact.jsonl");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename artifact into {}", path.display()))?;
-    Ok(())
 }
 
 fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
@@ -7988,169 +8879,6 @@ fn tag_arg((dimension, value): (&String, &String)) -> String {
     format!("{dimension}={value}")
 }
 
-#[derive(Serialize)]
-struct StrategyRegistryFingerprint<'a> {
-    strategy_id: &'a str,
-    parent_id: &'a Option<String>,
-    artifact_path: &'a Option<String>,
-    metrics_path: &'a Option<String>,
-}
-
-fn strategy_version_id(input: &StrategyRegistryMarkInput) -> String {
-    let fingerprint = StrategyRegistryFingerprint {
-        strategy_id: input.strategy_id.trim(),
-        parent_id: &input.parent_id,
-        artifact_path: &input.artifact_path,
-        metrics_path: &input.metrics_path,
-    };
-    let hash = stable_json_hash(&fingerprint);
-    format!("sv_{}", &hash[..16])
-}
-
-fn read_strategy_registry(path: &Path) -> Result<StrategyRegistry> {
-    if !path.exists() {
-        return Ok(StrategyRegistry {
-            schema_version: 1,
-            updated_at: Utc::now().to_rfc3339(),
-            entries: Vec::new(),
-        });
-    }
-    let data = std::fs::read_to_string(path)
-        .with_context(|| format!("read strategy registry {}", path.display()))?;
-    let registry: StrategyRegistry = serde_json::from_str(&data)
-        .with_context(|| format!("parse strategy registry {}", path.display()))?;
-    if registry.schema_version != 1 {
-        bail!(
-            "unsupported strategy registry schema_version {}; expected 1",
-            registry.schema_version
-        );
-    }
-    Ok(registry)
-}
-
-fn write_strategy_registry_atomic(path: &Path, registry: &StrategyRegistry) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create strategy registry dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = serde_json::to_vec_pretty(registry).context("serialize strategy registry")?;
-    payload.push(b'\n');
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("strategy_registry.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write strategy registry temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename strategy registry into {}", path.display()))?;
-    Ok(())
-}
-
-fn archived_evidence_path(strategy_dir: &Path, role: &str, source_path: &str) -> PathBuf {
-    let source = Path::new(source_path);
-    let extension = source
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| format!(".{}", safe_path_component(extension)))
-        .unwrap_or_default();
-    let source_hash = stable_json_hash(&source_path);
-    strategy_dir.join(format!(
-        "{}_{}{}",
-        safe_path_component(role),
-        &source_hash[..16],
-        extension
-    ))
-}
-
-fn archive_evidence_file(
-    source: &Path,
-    out_dir: &Path,
-    strategy_dir: &Path,
-    role: &str,
-    source_path: &str,
-) -> Result<(PathBuf, u64, String)> {
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("create evidence archive dir {}", out_dir.display()))?;
-    let source_canonical = source
-        .canonicalize()
-        .with_context(|| format!("canonicalize evidence source {}", source.display()))?;
-    let out_canonical = out_dir
-        .canonicalize()
-        .with_context(|| format!("canonicalize evidence archive dir {}", out_dir.display()))?;
-    if source_canonical.starts_with(&out_canonical) {
-        let (bytes, sha256) = file_sha256(source)?;
-        return Ok((source.to_path_buf(), bytes, sha256));
-    }
-
-    let archived_path = archived_evidence_path(strategy_dir, role, source_path);
-    let (bytes, sha256) = copy_file_atomic_with_sha256(source, &archived_path)?;
-    Ok((archived_path, bytes, sha256))
-}
-
-fn copy_file_atomic_with_sha256(source: &Path, dest: &Path) -> Result<(u64, String)> {
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create evidence archive dir {}", parent.display()))?;
-    }
-    let payload =
-        std::fs::read(source).with_context(|| format!("read evidence {}", source.display()))?;
-    let sha256 = sha256_bytes(&payload);
-    let file_name = dest
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("evidence");
-    let tmp_path = dest.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    let mut file = std::fs::File::create(&tmp_path)
-        .with_context(|| format!("create evidence temp {}", tmp_path.display()))?;
-    file.write_all(&payload)
-        .with_context(|| format!("write evidence temp {}", tmp_path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("sync evidence temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, dest)
-        .with_context(|| format!("rename evidence archive into {}", dest.display()))?;
-    Ok((payload.len() as u64, sha256))
-}
-
-fn file_sha256(path: &Path) -> Result<(u64, String)> {
-    let payload =
-        std::fs::read(path).with_context(|| format!("read evidence {}", path.display()))?;
-    Ok((payload.len() as u64, sha256_bytes(&payload)))
-}
-
-fn sha256_bytes(payload: &[u8]) -> String {
-    hex::encode(Sha256::digest(payload))
-}
-
-fn safe_path_component(value: &str) -> String {
-    let cleaned = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
-    }
-}
-
-fn merge_unique_strings(target: &mut Vec<String>, source: &[String]) {
-    for value in source {
-        if !target.iter().any(|existing| existing == value) {
-            target.push(value.clone());
-        }
-    }
-}
-
 fn pattern_label(tags: &BTreeMap<String, String>) -> String {
     tags.iter()
         .map(|(dimension, value)| format!("{dimension}={value}"))
@@ -9859,6 +10587,312 @@ fn wilson_lower(wins: usize, trades: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn binary_complement_fixture(
+        tmp: &tempfile::TempDir,
+        report_start: &str,
+        condition_count: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreenInput {
+        binary_complement_fixture_at(
+            tmp,
+            report_start,
+            "2026-07-15T13:00:00Z",
+            "2026-07-15T05:00:00Z",
+            0,
+            condition_count,
+            missing_feature_conditions,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn binary_complement_fixture_at(
+        tmp: &tempfile::TempDir,
+        report_start: &str,
+        report_end: &str,
+        first_open: &str,
+        condition_offset: usize,
+        condition_count: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreenInput {
+        let first_open = parse_rfc3339(first_open, "fixture start")
+            .unwrap()
+            .timestamp() as f64;
+        let mut markets = Vec::new();
+        let mut rows = Vec::new();
+        for index in 0..condition_count {
+            let condition_id = format!("0x{:064x}", condition_offset + index);
+            let baseline_won = index < 90;
+            let terminal_direction = if baseline_won { "up" } else { "down" };
+            let selected = index < 81 || (90..93).contains(&index);
+            let features_missing = index < missing_feature_conditions;
+            let residual = if features_missing {
+                serde_json::Value::Null
+            } else if selected {
+                serde_json::json!(0.01)
+            } else {
+                serde_json::json!(0.03)
+            };
+            markets.push(serde_json::json!({
+                "condition_id": condition_id,
+                "open_ts_s": first_open + index as f64 * 300.0,
+                "settlement_aligned": true,
+                "official_source_matches_btc_tape": true,
+                "terminal_direction": terminal_direction,
+            }));
+            rows.push(serde_json::json!({
+                "opportunity_index": index,
+                "strategy_name": BINARY_COMPLEMENT_CAPTURE_NAME,
+                "params_hash": BINARY_COMPLEMENT_CAPTURE_HASH,
+                "risk_profile": BINARY_COMPLEMENT_RISK_PROFILE,
+                "opportunity": {
+                    "condition_id": condition_id,
+                    "decision_timestamp_s": first_open + index as f64 * 300.0 + 180.0,
+                    "evaluation_result": "low_edge",
+                    "actual_direction": terminal_direction,
+                    "won": baseline_won,
+                    "market_tick_size": 0.01,
+                    "complement_mid_sum_residual": residual,
+                    "complement_microprice_sum_residual": residual,
+                    "decision": {
+                        "direction": "up",
+                        "zone": "primary",
+                        "edge": 0.08,
+                    }
+                }
+            }));
+        }
+
+        let manifest_path = tmp.path().join("resolution_manifest.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "a_plus_gate": {"settlement_alignment_ready": true},
+                "markets": markets,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let opportunity_path = tmp.path().join("opportunities.json");
+        std::fs::write(
+            &opportunity_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "mode": "harness_sweep_calibration_opportunities",
+                "start": report_start,
+                "end": report_end,
+                "latency_ms": 202,
+                "window_minutes": 5.0,
+                "continuous": true,
+                "sampling": "first_pre_edge_candidate_per_condition_utc_second",
+                "variant_count": 1,
+                "rows": rows,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        BinaryComplementScreenInput {
+            opportunity_paths: vec![opportunity_path.display().to_string()],
+            resolution_manifest_paths: vec![manifest_path.display().to_string()],
+            block_id: "fixture-block-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn binary_complement_screen_passes_frozen_forward_gates() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 100, 0);
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(screen.ok);
+        assert_eq!(screen.counts.baseline_candidates, 100);
+        assert_eq!(screen.counts.baseline_winners, 90);
+        assert_eq!(screen.counts.baseline_losses, 10);
+        assert_eq!(screen.counts.selected_candidates, 84);
+        assert_eq!(screen.counts.selected_winners, 81);
+        assert_eq!(screen.counts.baseline_winners_retained, 81);
+        assert_eq!(screen.counts.baseline_losses_removed, 7);
+        assert_eq!(screen.rates.valid_pair_feature_coverage, Some(1.0));
+        assert_eq!(screen.rates.candidate_retention, Some(0.84));
+        assert_eq!(screen.rates.baseline_winner_retention, Some(0.9));
+        assert_eq!(screen.rates.baseline_loss_removal, Some(0.7));
+        assert!(screen.rates.selected_wilson_95_lower.unwrap() > 0.89);
+    }
+
+    #[test]
+    fn binary_complement_capture_artifact_matches_frozen_hash() {
+        let variant: StrategyVariant = serde_json::from_str(include_str!(
+            "../../deploy/promotions/evidence/strategy_registry/20260715_binary_complement_capture_variant.json"
+        ))
+        .unwrap();
+
+        assert_eq!(variant.name, BINARY_COMPLEMENT_CAPTURE_NAME);
+        assert_eq!(stable_json_hash(&variant), BINARY_COMPLEMENT_CAPTURE_HASH);
+        assert_eq!(variant.risk_profile(), BINARY_COMPLEMENT_RISK_PROFILE);
+    }
+
+    fn write_binary_complement_screen(
+        tmp: &tempfile::TempDir,
+        name: &str,
+        screen: &BinaryComplementScreen,
+    ) -> String {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, serde_json::to_vec_pretty(screen).unwrap()).unwrap();
+        path.display().to_string()
+    }
+
+    fn binary_complement_second_block_fixture(
+        tmp: &tempfile::TempDir,
+        condition_offset: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreen {
+        let mut input = binary_complement_fixture_at(
+            tmp,
+            "2026-07-15T14:00:00Z",
+            "2026-07-15T22:00:00Z",
+            "2026-07-15T14:00:00Z",
+            condition_offset,
+            100,
+            missing_feature_conditions,
+        );
+        input.block_id = "fixture-block-2".to_string();
+        binary_complement_screen(input).unwrap()
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_passes_two_disjoint_blocks() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            100,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 100, 0);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(audit.ok);
+        assert_eq!(audit.status, "TWO_BLOCK_SCREEN_PASS_EXACT_REPLAY_ALLOWED");
+        assert!(audit.overlapping_condition_ids.is_empty());
+        assert!(audit.checks.iter().all(|check| check.passed));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_rejects_condition_overlap() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            100,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 0, 0);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(!audit.ok);
+        assert_eq!(audit.overlapping_condition_ids.len(), 100);
+        assert!(audit
+            .failure_reasons
+            .contains(&"check_failed:condition_sets_disjoint".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_rejects_failed_second_block() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            100,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 100, 6);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(!audit.ok);
+        assert!(audit
+            .failure_reasons
+            .contains(&"check_failed:block_2_screen_passed".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_detects_tampered_counts() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            100,
+            0,
+        ))
+        .unwrap();
+        let mut second = binary_complement_second_block_fixture(&second_tmp, 100, 0);
+        second.counts.selected_winners += 1;
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let error = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("count invariants are invalid"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_missing_feature_coverage() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 100, 6);
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(!screen.ok);
+        assert_eq!(screen.rates.valid_pair_feature_coverage, Some(0.94));
+        assert!(screen
+            .failure_reasons
+            .contains(&"gate_failed:valid_pair_feature_coverage".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_screen_refuses_pre_registration_or_partial_blocks() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old = binary_complement_fixture(&tmp, "2026-07-15T04:00:00Z", 100, 0);
+        assert!(binary_complement_screen(old)
+            .unwrap_err()
+            .to_string()
+            .contains("starts before the preregistration boundary"));
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let partial = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 99, 0);
+        assert!(binary_complement_screen(partial)
+            .unwrap_err()
+            .to_string()
+            .contains("require at least 100 before scoring"));
+    }
 
     #[test]
     fn causal_regime_parser_keeps_evolution_quality_dimensions() {

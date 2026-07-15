@@ -401,6 +401,7 @@ impl SweepGrid {
             skip_dead_zone: self.base.skip_dead_zone,
             min_confidence: cell.conf,
             min_edge: cell.edge,
+            decision_volatility_floor: self.base.decision_volatility_floor,
             position_pct: self.base.position_pct,
             max_per_market_usd: self.base.max_per_market_usd,
             max_projected_stressed_drawdown_pct: cell.stress_dd_cap,
@@ -422,6 +423,7 @@ impl SweepGrid {
                 ..MicrostructureConfig::default()
             },
             selectivity,
+            exit: self.base.exit,
         });
     }
 }

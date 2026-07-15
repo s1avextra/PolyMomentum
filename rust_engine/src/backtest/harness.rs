@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
 
+use crate::artifact::write_json_atomic;
 use crate::backtest::btc_history::BTCHistory;
 use crate::backtest::fill_model::{
     resting_limit_price, BookWalkTaker, Maker, Perfect, Side, DEFAULT_TICK,
@@ -33,12 +34,15 @@ use crate::backtest::resolver::{
 };
 use crate::backtest::strategies::StrategyVariant;
 use crate::data::scanner::CandleContract;
-use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
+use crate::execution::sizing::{
+    buy_book_quote_from_budget, sell_book_quote_for_size, shares_from_budget, BuyBookQuote,
+    SellBookQuote,
+};
 use crate::live::breaker::{BreakerConfig, BreakerState};
-use crate::strategy::decision::{decide_candle_trade_with_fee, CandleDecision, DecisionResult};
+use crate::strategy::decision::{evaluate_candle_trade_with_fee, CandleDecision, DecisionResult};
 use crate::strategy::microstructure::{
-    bookwalk_buy_slippage as bookwalk_buy_slippage_from_levels, recent_mid_runup, BookLevelView,
-    BookMicrostructure,
+    binary_complement_microstructure, bookwalk_buy_slippage as bookwalk_buy_slippage_from_levels,
+    recent_mid_logit_change, recent_mid_runup, BookLevelView, BookMicrostructure,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{OrderIntent, Signal, StrategySpec};
@@ -176,6 +180,55 @@ impl CandleRuntimeContract {
     }
 }
 
+/// Deterministic one-Hz calibration sample captured after every non-edge
+/// strategy gate has passed. Repeated rows from the same condition share one
+/// terminal label and must be condition-weighted during model fitting.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CalibrationOpportunity {
+    pub condition_id: String,
+    pub token_id: String,
+    pub decision_timestamp_s: f64,
+    pub sampling_second: i64,
+    pub evaluation_result: String,
+    pub btc_price: f64,
+    pub open_btc: f64,
+    pub observed_volatility: f64,
+    pub decision_volatility: f64,
+    pub entry_fee_rate: f64,
+    pub up_price: f64,
+    pub down_price: f64,
+    pub signal_price_change_pct: f64,
+    pub directional_impulse_10s_bps: Option<f64>,
+    pub token_mid: Option<f64>,
+    #[serde(default)]
+    pub opposite_token_id: String,
+    #[serde(default)]
+    pub market_tick_size: f64,
+    #[serde(default)]
+    pub chosen_microprice: Option<f64>,
+    #[serde(default)]
+    pub opposite_mid: Option<f64>,
+    #[serde(default)]
+    pub opposite_microprice: Option<f64>,
+    #[serde(default)]
+    pub complement_mid_sum_residual: Option<f64>,
+    #[serde(default)]
+    pub complement_microprice_sum_residual: Option<f64>,
+    pub token_logit_change_5s: Option<f64>,
+    pub token_logit_change_30s: Option<f64>,
+    pub token_logit_change_60s: Option<f64>,
+    pub directional_btc_return_bps_5s: Option<f64>,
+    pub directional_btc_return_bps_30s: Option<f64>,
+    pub directional_btc_return_bps_60s: Option<f64>,
+    pub reversion_count: u32,
+    pub actual_direction: String,
+    pub won: bool,
+    pub resolution_source: String,
+    pub settlement_open_btc: f64,
+    pub settlement_close_btc: f64,
+    pub decision: CandleDecision,
+}
+
 /// Strategy adapter: glues the live decision logic onto the L2 backtest engine.
 pub struct CandleBacktestStrategy {
     variant: StrategyVariant,
@@ -186,7 +239,10 @@ pub struct CandleBacktestStrategy {
     bankroll_usd: f64,
     max_total_exposure_usd: f64,
     min_order_size_shares: f64,
+    /// Causal exchange/proxy tape used for momentum and realized volatility.
     btc_history: Arc<BTCHistory>,
+    /// Outcome tape used only for market resolution and realized breaker PnL.
+    settlement_btc_history: Arc<BTCHistory>,
     breaker_cfg: BreakerConfig,
     breaker_state: BreakerState,
     breaker_tripped: bool,
@@ -194,8 +250,13 @@ pub struct CandleBacktestStrategy {
     breaker_tripped_at_s: Option<f64>,
     adaptive_rearm_after_s: Option<f64>,
     submitted_positions: BTreeMap<String, BacktestOpenPosition>,
+    /// Exit intent ID -> entry intent ID for in-flight FOK sell attempts.
+    submitted_exits: BTreeMap<String, String>,
     open_positions: BTreeMap<String, BacktestOpenPosition>,
     pub decisions: Vec<CandleDecision>,
+    capture_calibration_opportunities: bool,
+    pub calibration_opportunities: Vec<CalibrationOpportunity>,
+    last_calibration_second_by_condition: HashMap<String, i64>,
     /// Per-condition_id flag so we only enter once per market.
     traded: HashSet<String>,
     /// Live scans roughly every 100ms, so historical L2 bursts should not
@@ -216,18 +277,28 @@ pub struct CandleBacktestStrategy {
     pub skipped_throttled: u64,
     pub breaker_paused_events: u64,
     pub adaptive_rearms: u64,
+    pub exit_signals: u64,
+    pub exit_fills: u64,
+    pub exit_failures: u64,
     pub skip_reasons: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone)]
 struct BacktestOpenPosition {
+    condition_id: String,
+    token_id: String,
     direction: String,
     open_btc: f64,
+    settlement_open_btc: f64,
     close_ts_s: f64,
     official_direction: Option<String>,
+    entry_timestamp_s: f64,
     entry_price: f64,
     size: f64,
     fee: f64,
+    exit_fee_rate: f64,
+    exit_pending: bool,
+    last_exit_attempt_ts_s: Option<f64>,
 }
 
 impl CandleBacktestStrategy {
@@ -239,6 +310,33 @@ impl CandleBacktestStrategy {
         max_total_exposure_usd: f64,
         min_order_size_shares: f64,
         btc_history: Arc<BTCHistory>,
+        breaker: BacktestBreakerReport,
+        breaker_cfg: BreakerConfig,
+        adaptive_rearm_after_s: Option<f64>,
+    ) -> Self {
+        Self::new_with_breaker_and_settlement_history(
+            variant,
+            universe,
+            bankroll_usd,
+            max_total_exposure_usd,
+            min_order_size_shares,
+            Arc::clone(&btc_history),
+            btc_history,
+            breaker,
+            breaker_cfg,
+            adaptive_rearm_after_s,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_breaker_and_settlement_history(
+        variant: StrategyVariant,
+        universe: &CandleUniverse,
+        bankroll_usd: f64,
+        max_total_exposure_usd: f64,
+        min_order_size_shares: f64,
+        btc_history: Arc<BTCHistory>,
+        settlement_btc_history: Arc<BTCHistory>,
         breaker: BacktestBreakerReport,
         breaker_cfg: BreakerConfig,
         adaptive_rearm_after_s: Option<f64>,
@@ -263,6 +361,7 @@ impl CandleBacktestStrategy {
             max_total_exposure_usd,
             min_order_size_shares,
             btc_history,
+            settlement_btc_history,
             breaker_cfg,
             breaker_state: breaker.state,
             breaker_tripped: breaker.tripped,
@@ -270,8 +369,12 @@ impl CandleBacktestStrategy {
             breaker_tripped_at_s: breaker.tripped_at_s,
             adaptive_rearm_after_s,
             submitted_positions: BTreeMap::new(),
+            submitted_exits: BTreeMap::new(),
             open_positions: BTreeMap::new(),
             decisions: Vec::new(),
+            capture_calibration_opportunities: false,
+            calibration_opportunities: Vec::new(),
+            last_calibration_second_by_condition: HashMap::new(),
             traded: HashSet::new(),
             last_eval_bucket_by_token: HashMap::new(),
             last_tick_ts_s: 0.0,
@@ -285,8 +388,15 @@ impl CandleBacktestStrategy {
             skipped_throttled: 0,
             breaker_paused_events: 0,
             adaptive_rearms: 0,
+            exit_signals: 0,
+            exit_fills: 0,
+            exit_failures: 0,
             skip_reasons: BTreeMap::new(),
         }
+    }
+
+    fn enable_calibration_opportunity_capture(&mut self) {
+        self.capture_calibration_opportunities = true;
     }
 
     fn fresh_ask(&self, token_id: &str, now_ts: f64) -> Option<f64> {
@@ -328,6 +438,91 @@ impl CandleBacktestStrategy {
             .filter(|book| now_ts - book.last_update_ts_s <= 30.0)?
             .ask_levels();
         buy_book_quote_from_budget(budget_usd, &asks, self.min_order_size_shares, DEFAULT_TICK)
+    }
+
+    fn sell_book_quote_for_token(
+        &self,
+        token_id: &str,
+        now_ts: f64,
+        size: f64,
+    ) -> Option<SellBookQuote> {
+        let bids = self
+            .books
+            .get(token_id)
+            .filter(|book| now_ts - book.last_update_ts_s <= 30.0)?
+            .bid_levels();
+        sell_book_quote_for_size(size, &bids, DEFAULT_TICK)
+    }
+
+    fn maybe_exit_orders(
+        &mut self,
+        timestamp_s: f64,
+        token_id: &str,
+        btc: f64,
+    ) -> Vec<BacktestOrder> {
+        let cfg = self.variant.exit;
+        if cfg.is_disabled() || btc <= 0.0 {
+            return Vec::new();
+        }
+
+        let candidate =
+            self.open_positions
+                .iter()
+                .find_map(|(entry_intent_id, pos)| {
+                    if pos.token_id != token_id || pos.exit_pending {
+                        return None;
+                    }
+                    if pos.last_exit_attempt_ts_s.is_some_and(|last| {
+                        timestamp_s - last < cfg.retry_cooldown_seconds.max(0.0)
+                    }) {
+                        return None;
+                    }
+                    let basis_exit = cfg.should_exit(
+                        &pos.direction,
+                        pos.open_btc,
+                        btc,
+                        pos.entry_timestamp_s,
+                        timestamp_s,
+                        pos.close_ts_s,
+                    );
+                    basis_exit.then(|| (entry_intent_id.clone(), pos.clone()))
+                });
+        let Some((entry_intent_id, pos)) = candidate else {
+            return Vec::new();
+        };
+
+        let Some(quote) = self.sell_book_quote_for_token(token_id, timestamp_s, pos.size) else {
+            if let Some(open) = self.open_positions.get_mut(&entry_intent_id) {
+                open.last_exit_attempt_ts_s = Some(timestamp_s);
+            }
+            *self
+                .skip_reasons
+                .entry("exit_visible_bid_depth_unavailable".to_string())
+                .or_insert(0) += 1;
+            return Vec::new();
+        };
+
+        let exit_intent_id = format!("{entry_intent_id}:settlement_basis_exit:{timestamp_s:.6}");
+        if let Some(open) = self.open_positions.get_mut(&entry_intent_id) {
+            open.exit_pending = true;
+            open.last_exit_attempt_ts_s = Some(timestamp_s);
+        }
+        self.submitted_exits
+            .insert(exit_intent_id.clone(), entry_intent_id);
+        self.exit_signals += 1;
+
+        vec![BacktestOrder {
+            intent_id: exit_intent_id,
+            timestamp_s,
+            condition_id: pos.condition_id,
+            token_id: pos.token_id,
+            side: "sell".to_string(),
+            size: quote.shares,
+            order_type: "market".to_string(),
+            limit_price: Some(quote.worst_price),
+            fee_rate: pos.exit_fee_rate,
+            maker_fee_rate: 0.0,
+        }]
     }
 
     fn open_exposure(&self) -> f64 {
@@ -377,12 +572,12 @@ impl CandleBacktestStrategy {
             let Some(pos) = self.open_positions.remove(&intent_id) else {
                 continue;
             };
-            let close_btc = self.btc_history.price_at_seconds(pos.close_ts_s);
-            if close_btc <= 0.0 || pos.open_btc <= 0.0 {
+            let close_btc = self.settlement_btc_history.price_at_seconds(pos.close_ts_s);
+            if close_btc <= 0.0 || pos.settlement_open_btc <= 0.0 {
                 self.open_positions.insert(intent_id, pos);
                 continue;
             }
-            let local_actual = if close_btc >= pos.open_btc {
+            let local_actual = if close_btc >= pos.settlement_open_btc {
                 "up"
             } else {
                 "down"
@@ -431,7 +626,10 @@ impl CandleBacktestStrategy {
         if timestamp_s - tripped_at_s < cooldown_s {
             return;
         }
-        if !self.open_positions.is_empty() || !self.submitted_positions.is_empty() {
+        if !self.open_positions.is_empty()
+            || !self.submitted_positions.is_empty()
+            || !self.submitted_exits.is_empty()
+        {
             return;
         }
 
@@ -469,6 +667,9 @@ impl CandleBacktestStrategy {
             skipped_throttled: self.skipped_throttled,
             breaker_paused_events: self.breaker_paused_events,
             adaptive_rearms: self.adaptive_rearms,
+            exit_signals: self.exit_signals,
+            exit_fills: self.exit_fills,
+            exit_failures: self.exit_failures,
             skip_reasons: self.skip_reasons.clone(),
             ..BacktestDiagnostics::default()
         }
@@ -477,11 +678,35 @@ impl CandleBacktestStrategy {
 
 impl Strategy for CandleBacktestStrategy {
     fn needs_l2_history(&self) -> bool {
-        self.variant.microstructure.is_path_active()
+        self.capture_calibration_opportunities || self.variant.microstructure.is_path_active()
     }
 
     fn on_fills(&mut self, fills: &[crate::backtest::l2_replay::BacktestFill]) {
         for fill in fills {
+            if fill.order.side.eq_ignore_ascii_case("sell") {
+                let Some(entry_intent_id) = self.submitted_exits.remove(&fill.order.intent_id)
+                else {
+                    continue;
+                };
+                if !fill.success {
+                    if let Some(pos) = self.open_positions.get_mut(&entry_intent_id) {
+                        pos.exit_pending = false;
+                    }
+                    self.exit_failures += 1;
+                    continue;
+                }
+                let Some(pos) = self.open_positions.remove(&entry_intent_id) else {
+                    self.exit_failures += 1;
+                    continue;
+                };
+                let pnl =
+                    (fill.fill_price - pos.entry_price) * fill.filled_size - pos.fee - fill.fee;
+                self.breaker_state.record_resolution(pnl > 0.0, pnl);
+                self.exit_fills += 1;
+                self.trip_breaker_if_needed(fill.fill_timestamp_s);
+                continue;
+            }
+
             let Some(mut pos) = self.submitted_positions.remove(&fill.order.intent_id) else {
                 continue;
             };
@@ -491,6 +716,7 @@ impl Strategy for CandleBacktestStrategy {
             pos.entry_price = fill.fill_price;
             pos.size = fill.filled_size;
             pos.fee = fill.fee;
+            pos.entry_timestamp_s = fill.fill_timestamp_s;
             self.open_positions
                 .insert(fill.order.intent_id.clone(), pos);
             self.settle_due_positions(fill.fill_timestamp_s);
@@ -513,6 +739,10 @@ impl Strategy for CandleBacktestStrategy {
         self.books.insert(token_id.to_string(), book.clone());
         self.settle_due_positions(timestamp_s);
         self.maybe_rearm_adaptive_health(timestamp_s);
+        let exit_orders = self.maybe_exit_orders(timestamp_s, token_id, btc);
+        if !exit_orders.is_empty() {
+            return exit_orders;
+        }
         if self.breaker_tripped {
             self.breaker_paused_events += 1;
             return Vec::new();
@@ -590,9 +820,10 @@ impl Strategy for CandleBacktestStrategy {
             return Vec::new();
         };
 
-        let implied_vol = self
+        let observed_vol = self
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
+        let implied_vol = self.variant.decision_volatility(observed_vol);
         let used_exposure = self.open_exposure() + self.submitted_exposure();
         let breaker_metrics = self
             .breaker_state
@@ -616,7 +847,7 @@ impl Strategy for CandleBacktestStrategy {
         } else {
             fee_rate
         };
-        let res = decide_candle_trade_with_fee(
+        let evaluation = evaluate_candle_trade_with_fee(
             &signal,
             minutes_elapsed,
             minutes_remaining,
@@ -632,8 +863,159 @@ impl Strategy for CandleBacktestStrategy {
             self.variant.skip_dead_zone,
             &effective_zone_config,
             0.0,
+            self.capture_calibration_opportunities,
         );
-        let mut decision = match res {
+
+        if self.capture_calibration_opportunities {
+            let sampling_second = timestamp_s.floor() as i64;
+            let already_captured = self
+                .last_calibration_second_by_condition
+                .get(cid)
+                .is_some_and(|last| *last == sampling_second);
+            if !already_captured {
+                let candidate = match &evaluation.result {
+                    DecisionResult::Trade(decision) => Some(decision),
+                    DecisionResult::Skip(_) => evaluation.opportunity.as_ref(),
+                };
+                if let Some(candidate) = candidate {
+                    let mut candidate = candidate.clone();
+                    candidate.regime.attach_time_inputs(timestamp_s);
+                    let candidate_token = if candidate.direction == "up" {
+                        contract.up_token_id.as_str()
+                    } else {
+                        contract.down_token_id.as_str()
+                    };
+                    let opposite_token = if candidate.direction == "up" {
+                        contract.down_token_id.as_str()
+                    } else {
+                        contract.up_token_id.as_str()
+                    };
+                    let candidate_micro =
+                        self.microstructure_for_token(candidate_token, timestamp_s);
+                    let opposite_micro = self.microstructure_for_token(opposite_token, timestamp_s);
+                    let complement =
+                        binary_complement_microstructure(&candidate_micro, &opposite_micro);
+                    candidate.regime.attach_orderbook_inputs(
+                        candidate_micro.best_bid,
+                        candidate_micro.best_ask,
+                        candidate_micro.spread,
+                        candidate_micro.bid_depth,
+                        candidate_micro.ask_depth,
+                        candidate_micro.pressure,
+                        candidate_micro.imbalance,
+                    );
+                    candidate.regime.attach_orderbook_quality_inputs(
+                        None,
+                        self.book_age_ms_for_token(candidate_token, timestamp_s),
+                    );
+                    let recent_runup = history.get(candidate_token).and_then(|points| {
+                        recent_mid_runup(
+                            points,
+                            timestamp_s,
+                            self.variant.microstructure.recent_mid_lookback_seconds,
+                        )
+                    });
+                    candidate.regime.attach_orderbook_path_inputs(recent_runup);
+                    let token_mid = (candidate_micro.best_bid > 0.0
+                        && candidate_micro.best_ask > candidate_micro.best_bid)
+                        .then_some((candidate_micro.best_bid + candidate_micro.best_ask) / 2.0);
+                    let token_logit_change = |lookback_seconds| {
+                        history.get(candidate_token).and_then(|points| {
+                            recent_mid_logit_change(points, timestamp_s, lookback_seconds)
+                        })
+                    };
+                    let directional_btc_return = |lookback_seconds| {
+                        directional_log_return_bps(
+                            btc,
+                            self.btc_history
+                                .price_at_seconds(timestamp_s - lookback_seconds),
+                            &candidate.direction,
+                        )
+                    };
+                    let token_logit_change_5s = token_logit_change(5.0);
+                    let token_logit_change_30s = token_logit_change(30.0);
+                    let token_logit_change_60s = token_logit_change(60.0);
+                    let directional_btc_return_bps_5s = directional_btc_return(5.0);
+                    let directional_btc_return_bps_30s = directional_btc_return(30.0);
+                    let directional_btc_return_bps_60s = directional_btc_return(60.0);
+
+                    let settlement_open_btc = self
+                        .settlement_btc_history
+                        .price_at_seconds(runtime.open_ts_s);
+                    let settlement_close_btc = self
+                        .settlement_btc_history
+                        .price_at_seconds(runtime.close_ts_s);
+                    let resolved = runtime
+                        .official_direction
+                        .as_ref()
+                        .map(|direction| (direction.clone(), "polymarket_terminal".to_string()))
+                        .or_else(|| {
+                            (settlement_open_btc > 0.0 && settlement_close_btc > 0.0).then(|| {
+                                let direction = if settlement_close_btc >= settlement_open_btc {
+                                    "up"
+                                } else {
+                                    "down"
+                                };
+                                (direction.to_string(), "settlement_btc_tape".to_string())
+                            })
+                        });
+                    if let Some((actual_direction, resolution_source)) = resolved {
+                        let evaluation_result = match &evaluation.result {
+                            DecisionResult::Trade(_) => "edge_pass".to_string(),
+                            DecisionResult::Skip(skip) => skip.reason.clone(),
+                        };
+                        self.last_calibration_second_by_condition
+                            .insert(cid.to_string(), sampling_second);
+                        self.calibration_opportunities.push(CalibrationOpportunity {
+                            condition_id: cid.to_string(),
+                            token_id: candidate_token.to_string(),
+                            decision_timestamp_s: timestamp_s,
+                            sampling_second,
+                            evaluation_result,
+                            btc_price: btc,
+                            open_btc: signal.open_price,
+                            observed_volatility: observed_vol,
+                            decision_volatility: implied_vol,
+                            entry_fee_rate,
+                            up_price,
+                            down_price,
+                            signal_price_change_pct: signal.price_change_pct,
+                            directional_impulse_10s_bps: signal.directional_impulse_10s_bps,
+                            token_mid,
+                            opposite_token_id: opposite_token.to_string(),
+                            market_tick_size: contract
+                                .market
+                                .minimum_tick_size
+                                .filter(|tick| tick.is_finite() && *tick > 0.0)
+                                .unwrap_or(DEFAULT_TICK),
+                            chosen_microprice: complement.map(|paired| paired.chosen_microprice),
+                            opposite_mid: complement.map(|paired| paired.opposite_mid),
+                            opposite_microprice: complement
+                                .map(|paired| paired.opposite_microprice),
+                            complement_mid_sum_residual: complement
+                                .map(|paired| paired.mid_sum_residual),
+                            complement_microprice_sum_residual: complement
+                                .map(|paired| paired.microprice_sum_residual),
+                            token_logit_change_5s,
+                            token_logit_change_30s,
+                            token_logit_change_60s,
+                            directional_btc_return_bps_5s,
+                            directional_btc_return_bps_30s,
+                            directional_btc_return_bps_60s,
+                            reversion_count: signal.reversion_count,
+                            won: candidate.direction == actual_direction,
+                            actual_direction,
+                            resolution_source,
+                            settlement_open_btc,
+                            settlement_close_btc,
+                            decision: candidate,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut decision = match evaluation.result {
             DecisionResult::Trade(d) => d,
             DecisionResult::Skip(skip) => {
                 self.skipped_decision += 1;
@@ -813,13 +1195,22 @@ impl Strategy for CandleBacktestStrategy {
         self.submitted_positions.insert(
             intent.intent_id.clone(),
             BacktestOpenPosition {
+                condition_id: cid.to_string(),
+                token_id: traded_token.to_string(),
                 direction: decision.direction.clone(),
                 open_btc: signal.open_price,
+                settlement_open_btc: self
+                    .settlement_btc_history
+                    .price_at_seconds(runtime.open_ts_s),
                 close_ts_s: runtime.close_ts_s,
                 official_direction: runtime.official_direction.clone(),
+                entry_timestamp_s: timestamp_s,
                 entry_price: limit_price.unwrap_or(sizing_price),
                 size,
                 fee: 0.0,
+                exit_fee_rate: fee_rate,
+                exit_pending: false,
+                last_exit_attempt_ts_s: None,
             },
         );
         vec![BacktestOrder {
@@ -851,6 +1242,22 @@ fn backtest_microstructure(book: &TokenBook) -> BookMicrostructure {
     BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
 }
 
+fn directional_log_return_bps(current_price: f64, past_price: f64, direction: &str) -> Option<f64> {
+    if !current_price.is_finite()
+        || !past_price.is_finite()
+        || current_price <= 0.0
+        || past_price <= 0.0
+    {
+        return None;
+    }
+    let direction_sign = match direction {
+        "up" => 1.0,
+        "down" => -1.0,
+        _ => return None,
+    };
+    Some(direction_sign * (current_price / past_price).ln() * 10_000.0)
+}
+
 fn bookwalk_buy_slippage(book: &TokenBook, size: f64) -> Option<f64> {
     let asks = book
         .ask_levels()
@@ -873,12 +1280,14 @@ fn paper_outcome_pnl(won: bool, entry_price: f64, size: f64, fee: f64) -> f64 {
 pub struct HarnessRun {
     pub variant: StrategyVariant,
     pub results: BacktestResults,
+    pub calibration_opportunities: Vec<CalibrationOpportunity>,
 }
 
 pub struct HarnessConfig {
     pub hours: Vec<DateTime<Utc>>,
     pub universe: CandleUniverse,
     pub btc_history: Arc<BTCHistory>,
+    pub settlement_btc_history: Arc<BTCHistory>,
     pub bankroll_usd: f64,
     pub max_total_exposure_usd: f64,
     pub min_order_size_shares: f64,
@@ -896,6 +1305,11 @@ pub struct HarnessConfig {
     /// sidecar and the parquet. The shared-cache writer is `polymomentum-
     /// engine distill`. See cross_bot_distilled_cache_response.md.
     pub shared_distilled_dir: Option<PathBuf>,
+    /// Fail instead of falling back to a sidecar, parquet, or network download
+    /// when the requested shared distilled hour is missing, corrupt, or has no
+    /// events for the selected conditions. Used for exact recorded-capture
+    /// replay; false preserves the shared-cache fallback contract.
+    pub require_shared_distilled: bool,
     /// Variant-fan-out parallelism. `None` → use rayon's global pool
     /// (defaults to `num_cpus`). `Some(1)` → serial (matches the
     /// pre-rayon behavior bit-for-bit). `Some(n>1)` → cap at `n`.
@@ -918,6 +1332,9 @@ pub struct HarnessConfig {
     /// requested hours. This mirrors live/live-replay semantics and avoids
     /// hour-boundary double entries.
     pub continuous: bool,
+    /// Capture one pre-edge calibration opportunity per condition-second.
+    /// Requires continuous mode so sampling state cannot reset at hour edges.
+    pub capture_calibration_opportunities: bool,
     /// Delete an hourly parquet after this process downloaded, loaded, and
     /// replayed it. Pre-existing cached parquets are never removed.
     pub delete_downloaded_parquet_after_hour: bool,
@@ -950,6 +1367,12 @@ pub async fn run_harness(
     cfg: &HarnessConfig,
     variants: &[StrategyVariant],
 ) -> Result<Vec<HarnessRun>> {
+    if cfg.capture_calibration_opportunities && !cfg.continuous {
+        anyhow::bail!("calibration opportunity capture requires continuous harness mode");
+    }
+    if cfg.require_shared_distilled && cfg.shared_distilled_dir.is_none() {
+        anyhow::bail!("required shared distilled replay needs PMXT_DISTILLED_DIR");
+    }
     if cfg.continuous {
         return run_harness_continuous(cfg, variants).await;
     }
@@ -1074,6 +1497,18 @@ pub async fn run_harness(
                 }
             }
         }
+        if events_vec.is_empty() && cfg.require_shared_distilled {
+            let shared_dir = cfg
+                .shared_distilled_dir
+                .as_ref()
+                .expect("validated required shared distilled directory");
+            let path = crate::backtest::distill::shared_cache_path_for_hour(shared_dir, h);
+            anyhow::bail!(
+                "required shared distilled hour {} is missing, unreadable, or has no events for the selected conditions: {}",
+                h,
+                path.display()
+            );
+        }
         if events_vec.is_empty() {
             match loader.load_with_sidecar(h, &hour_filter) {
                 Ok(events) => {
@@ -1127,13 +1562,14 @@ pub async fn run_harness(
         let run = |(idx, v): (usize, &StrategyVariant)| -> BacktestResults {
             let fm = build_fill_model(v);
             let mut engine = L2BacktestEngine::new(fm, cfg.latency);
-            let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            let mut strategy = CandleBacktestStrategy::new_with_breaker_and_settlement_history(
                 v.clone(),
                 &cfg.universe,
                 cfg.bankroll_usd,
                 cfg.max_total_exposure_usd,
                 cfg.min_order_size_shares,
                 Arc::clone(&cfg.btc_history),
+                Arc::clone(&cfg.settlement_btc_history),
                 starting_breakers[idx].clone(),
                 cfg.breaker_cfg,
                 cfg.adaptive_rearm_after_s,
@@ -1160,7 +1596,12 @@ pub async fn run_harness(
             let breaker = strategy.breaker_report();
             let diagnostics = strategy.diagnostics();
             let decisions = strategy.decisions;
-            let mut results = resolve_fills(&engine.fills, &decisions, &windows, &cfg.btc_history);
+            let mut results = resolve_fills(
+                &engine.fills,
+                &decisions,
+                &windows,
+                &cfg.settlement_btc_history,
+            );
             results.breaker = breaker;
             results.diagnostics = diagnostics;
             results
@@ -1227,7 +1668,11 @@ pub async fn run_harness(
         .iter()
         .cloned()
         .zip(variant_state)
-        .map(|(variant, results)| HarnessRun { variant, results })
+        .map(|(variant, results)| HarnessRun {
+            variant,
+            results,
+            calibration_opportunities: Vec::new(),
+        })
         .collect())
 }
 
@@ -1259,17 +1704,21 @@ async fn run_harness_continuous(
         .cloned()
         .map(|variant| {
             let engine = L2BacktestEngine::new(build_fill_model(&variant), cfg.latency);
-            let strategy = CandleBacktestStrategy::new_with_breaker(
+            let mut strategy = CandleBacktestStrategy::new_with_breaker_and_settlement_history(
                 variant.clone(),
                 &cfg.universe,
                 cfg.bankroll_usd,
                 cfg.max_total_exposure_usd,
                 cfg.min_order_size_shares,
                 Arc::clone(&cfg.btc_history),
+                Arc::clone(&cfg.settlement_btc_history),
                 BacktestBreakerReport::default(),
                 cfg.breaker_cfg,
                 cfg.adaptive_rearm_after_s,
             );
+            if cfg.capture_calibration_opportunities {
+                strategy.enable_calibration_opportunity_capture();
+            }
             ContinuousVariantState {
                 variant,
                 engine,
@@ -1318,6 +1767,18 @@ async fn run_harness_continuous(
                     }
                 }
             }
+        }
+        if events_vec.is_empty() && cfg.require_shared_distilled {
+            let shared_dir = cfg
+                .shared_distilled_dir
+                .as_ref()
+                .expect("validated required shared distilled directory");
+            let path = crate::backtest::distill::shared_cache_path_for_hour(shared_dir, h);
+            anyhow::bail!(
+                "required shared distilled hour {} is missing, unreadable, or has no events for the selected conditions: {}",
+                h,
+                path.display()
+            );
         }
         if events_vec.is_empty() {
             match loader.load_with_sidecar(h, &hour_filter) {
@@ -1389,20 +1850,38 @@ async fn run_harness_continuous(
         }
     }
 
+    if cfg.capture_calibration_opportunities {
+        for state in &states {
+            if !state.strategy.traded.is_empty() {
+                anyhow::bail!(
+                    "calibration capture variant {} submitted {} trade(s); use an impossible final edge threshold to avoid truncating later opportunities",
+                    state.variant.name,
+                    state.strategy.traded.len(),
+                );
+            }
+        }
+    }
+
     Ok(states
         .into_iter()
         .map(|mut state| {
             state.strategy.settle_all_positions();
             let breaker = state.strategy.breaker_report();
             let diagnostics = state.strategy.diagnostics();
+            let calibration_opportunities = state.strategy.calibration_opportunities;
             let decisions = state.strategy.decisions;
-            let mut results =
-                resolve_fills(&state.engine.fills, &decisions, &windows, &cfg.btc_history);
+            let mut results = resolve_fills(
+                &state.engine.fills,
+                &decisions,
+                &windows,
+                &cfg.settlement_btc_history,
+            );
             results.breaker = breaker;
             results.diagnostics = diagnostics;
             HarnessRun {
                 variant: state.variant,
                 results,
+                calibration_opportunities,
             }
         })
         .collect())
@@ -1451,18 +1930,9 @@ fn write_hour_checkpoint(
         variant_names: variants.iter().map(|v| v.name.clone()).collect(),
         per_variant: per_variant.to_vec(),
     };
-    let payload = serde_json::to_vec(&envelope).context("serialize HourCheckpoint")?;
     let final_path = dir.join(checkpoint_filename(hour));
-    let tmp_path = dir.join(format!(
-        "{}.tmp.{}",
-        checkpoint_filename(hour),
-        std::process::id()
-    ));
-    std::fs::write(&tmp_path, &payload)
-        .with_context(|| format!("write tmp checkpoint {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("rename {} -> {}", tmp_path.display(), final_path.display()))?;
-    Ok(())
+    write_json_atomic(&final_path, &envelope, false)
+        .with_context(|| format!("write checkpoint {}", final_path.display()))
 }
 
 /// Read every `<hour>.json` in `dir` and merge into a `(hour → per_variant)`
@@ -1641,6 +2111,17 @@ mod tests {
     }
 
     #[test]
+    fn directional_log_return_aligns_with_candidate_direction() {
+        let up = directional_log_return_bps(101.0, 100.0, "up").unwrap();
+        let down = directional_log_return_bps(99.0, 100.0, "down").unwrap();
+
+        assert!(up > 0.0);
+        assert!(down > 0.0);
+        assert_eq!(directional_log_return_bps(101.0, 100.0, "sideways"), None);
+        assert_eq!(directional_log_return_bps(0.0, 100.0, "up"), None);
+    }
+
+    #[test]
     fn historical_gamma_price_is_not_an_l2_fallback() {
         let (cfg, variants) = synthetic_cfg();
         let strategy = CandleBacktestStrategy::new_with_breaker(
@@ -1715,6 +2196,7 @@ mod tests {
             hours: vec![], // empty hours -> the loop is a no-op, but the parallel
             // setup code still runs (pool build, universe prep).
             universe,
+            settlement_btc_history: Arc::new(btc.clone()),
             btc_history: Arc::new(btc),
             bankroll_usd: 100.0,
             max_total_exposure_usd: 80.0,
@@ -1724,10 +2206,12 @@ mod tests {
             breaker_cfg: BreakerConfig::default(),
             adaptive_rearm_after_s: None,
             shared_distilled_dir: None,
+            require_shared_distilled: false,
             threads: None,
             checkpoint_dir: None,
             stop_flag: None,
             continuous: false,
+            capture_calibration_opportunities: false,
             delete_downloaded_parquet_after_hour: false,
         };
         (cfg, variants)
@@ -1743,6 +2227,43 @@ mod tests {
             assert_eq!(run.variant.name, v.name);
             assert_eq!(run.results.n_trades(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn calibration_capture_requires_continuous_mode() {
+        let (mut cfg, variants) = synthetic_cfg();
+        cfg.capture_calibration_opportunities = true;
+
+        let error = run_harness(&cfg, &variants).await.unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("calibration opportunity capture requires continuous"));
+    }
+
+    #[tokio::test]
+    async fn required_shared_distilled_never_falls_back() {
+        let (mut cfg, variants) = synthetic_cfg();
+        let tmp = tempfile::TempDir::new().unwrap();
+        cfg.hours = vec![DateTime::parse_from_rfc3339("2026-04-26T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)];
+        cfg.shared_distilled_dir = Some(tmp.path().to_path_buf());
+        cfg.require_shared_distilled = true;
+
+        let error = run_harness(&cfg, &variants).await.unwrap_err();
+
+        assert!(error.to_string().contains("required shared distilled hour"));
+    }
+
+    #[tokio::test]
+    async fn required_shared_distilled_requires_configured_directory() {
+        let (mut cfg, variants) = synthetic_cfg();
+        cfg.require_shared_distilled = true;
+
+        let error = run_harness(&cfg, &variants).await.unwrap_err();
+
+        assert!(error.to_string().contains("needs PMXT_DISTILLED_DIR"));
     }
 
     #[tokio::test]
@@ -1804,6 +2325,26 @@ mod tests {
     }
 
     #[test]
+    fn calibration_capture_requests_l2_path_history() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            cfg.btc_history,
+            BacktestBreakerReport::default(),
+            BreakerConfig::default(),
+            None,
+        );
+
+        assert!(!strategy.needs_l2_history());
+        strategy.capture_calibration_opportunities = true;
+        assert!(strategy.needs_l2_history());
+    }
+
+    #[test]
     fn position_budget_uses_active_bankroll_after_realized_pnl() {
         let (cfg, mut variants) = synthetic_cfg();
         let mut variant = variants.remove(0);
@@ -1831,6 +2372,81 @@ mod tests {
         let (budget, available) = strategy.position_budget_before_stress(0.0);
         assert!((budget - 4.0).abs() < 1e-9);
         assert!((available - 64.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn settlement_basis_exit_submits_sell_and_realizes_executable_pnl() {
+        let (cfg, mut variants) = synthetic_cfg();
+        let mut variant = variants.remove(0);
+        variant.exit.settlement_basis_enabled = true;
+        let mut strategy = CandleBacktestStrategy::new_with_breaker(
+            variant,
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            cfg.btc_history,
+            BacktestBreakerReport::default(),
+            BreakerConfig::default(),
+            None,
+        );
+        strategy.open_positions.insert(
+            "entry".to_string(),
+            BacktestOpenPosition {
+                condition_id: "0xabc".to_string(),
+                token_id: "1".to_string(),
+                direction: "up".to_string(),
+                open_btc: 100.0,
+                settlement_open_btc: 100.0,
+                close_ts_s: 60.0,
+                official_direction: None,
+                entry_timestamp_s: 0.0,
+                entry_price: 0.80,
+                size: 10.0,
+                fee: 0.05,
+                exit_fee_rate: 0.0,
+                exit_pending: false,
+                last_exit_attempt_ts_s: None,
+            },
+        );
+        strategy.books.insert(
+            "1".to_string(),
+            TokenBook {
+                bids: BTreeMap::from([(400_000_000, 20.0)]),
+                asks: BTreeMap::from([(420_000_000, 20.0)]),
+                best_bid: 0.40,
+                best_ask: 0.42,
+                last_update_ts_s: 30.0,
+            },
+        );
+
+        let orders = strategy.maybe_exit_orders(30.0, "1", 99.0);
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].side, "sell");
+        assert_eq!(orders[0].limit_price, Some(0.40));
+        assert!(strategy.open_positions["entry"].exit_pending);
+
+        strategy.on_fills(&[crate::backtest::l2_replay::BacktestFill {
+            order: orders[0].clone(),
+            fill_timestamp_s: 31.0,
+            fill_price: 0.40,
+            filled_size: 10.0,
+            cost: -4.0,
+            fee: 0.02,
+            slippage: 0.0,
+            book_age_ms: 1_000.0,
+            success: true,
+            reason: "".to_string(),
+        }]);
+
+        assert!(strategy.open_positions.is_empty());
+        assert!(strategy.submitted_exits.is_empty());
+        assert_eq!(strategy.breaker_state.losses, 1);
+        assert!((strategy.breaker_state.realized_pnl + 4.07).abs() < 1e-9);
+        let diagnostics = strategy.diagnostics();
+        assert_eq!(diagnostics.exit_signals, 1);
+        assert_eq!(diagnostics.exit_fills, 1);
+        assert_eq!(diagnostics.exit_failures, 0);
     }
 
     fn mk_test_fill(
@@ -1889,13 +2505,20 @@ mod tests {
             strategy.submitted_positions.insert(
                 intent_id.to_string(),
                 BacktestOpenPosition {
+                    condition_id: "cid".to_string(),
+                    token_id: "token".to_string(),
                     direction: "up".to_string(),
                     open_btc: 100.0,
+                    settlement_open_btc: 100.0,
                     close_ts_s,
                     official_direction: None,
+                    entry_timestamp_s: close_ts_s - 1.0,
                     entry_price: 0.0,
                     size: 0.0,
                     fee: 0.0,
+                    exit_fee_rate: 0.0,
+                    exit_pending: false,
+                    last_exit_attempt_ts_s: None,
                 },
             );
             strategy.on_fills(&[mk_test_fill(intent_id, close_ts_s - 1.0)]);
@@ -1906,6 +2529,54 @@ mod tests {
         assert!(report.tripped);
         assert_eq!(report.reason.as_deref(), Some("win_rate_low"));
         assert_eq!(report.state.losses, 2);
+    }
+
+    #[test]
+    fn breaker_resolution_uses_settlement_tape_not_signal_tape() {
+        let (cfg, variants) = synthetic_cfg();
+        let mut signal_btc = BTCHistory::default();
+        signal_btc.timestamps_ms.extend([0, 20_000]);
+        signal_btc.prices.extend([100.0, 110.0]);
+        let mut settlement_btc = BTCHistory::default();
+        settlement_btc.timestamps_ms.extend([0, 20_000]);
+        settlement_btc.prices.extend([100.0, 90.0]);
+        let mut strategy = CandleBacktestStrategy::new_with_breaker_and_settlement_history(
+            variants[0].clone(),
+            &cfg.universe,
+            100.0,
+            80.0,
+            0.0,
+            Arc::new(signal_btc),
+            Arc::new(settlement_btc),
+            BacktestBreakerReport::default(),
+            BreakerConfig::default(),
+            None,
+        );
+        strategy.open_positions.insert(
+            "down-winner".to_string(),
+            BacktestOpenPosition {
+                condition_id: "cid".to_string(),
+                token_id: "token".to_string(),
+                direction: "down".to_string(),
+                open_btc: 100.0,
+                settlement_open_btc: 100.0,
+                close_ts_s: 20.0,
+                official_direction: None,
+                entry_timestamp_s: 10.0,
+                entry_price: 0.50,
+                size: 10.0,
+                fee: 0.0,
+                exit_fee_rate: 0.0,
+                exit_pending: false,
+                last_exit_attempt_ts_s: None,
+            },
+        );
+
+        strategy.settle_due_positions(20.0);
+
+        let report = strategy.breaker_report();
+        assert_eq!(report.state.wins, 1);
+        assert_eq!(report.state.losses, 0);
     }
 
     #[test]

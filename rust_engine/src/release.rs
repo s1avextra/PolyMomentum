@@ -390,6 +390,12 @@ fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
             ))
         }
     };
+    if !variant.exit.is_disabled() {
+        return Some(
+            "strategy_params enable an exit lifecycle that live runtime does not yet implement"
+                .to_string(),
+        );
+    }
     let params_hash = stable_json_hash(&variant);
     if params_hash != artifact.selected_strategy.params_hash {
         return Some(format!(

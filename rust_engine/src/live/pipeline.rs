@@ -35,7 +35,9 @@ use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
 use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
-use crate::live::window::estimate_window_minutes;
+use crate::live::window::{
+    btc_updown_slug_step_seconds, btc_updown_slugs_for_live_horizon, estimate_window_minutes,
+};
 use crate::monitoring::alerter::Alerter;
 use crate::monitoring::session::{
     OrderFilled, OrderReconciled, OrderTiming, ResolutionTiming, SessionMonitor, SignalEvaluation,
@@ -306,6 +308,7 @@ struct RuntimeStrategy {
     skip_dead_zone: bool,
     min_confidence: f64,
     min_edge: f64,
+    decision_volatility_floor: f64,
     position_pct: f64,
     max_per_market_usd: f64,
     max_projected_stressed_drawdown_pct: f64,
@@ -338,6 +341,9 @@ impl RuntimeStrategy {
         }
         let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
+        if !variant.exit.is_disabled() {
+            bail!("promoted strategy enables an exit lifecycle that live runtime does not yet implement");
+        }
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
             bail!(
@@ -390,6 +396,7 @@ impl RuntimeStrategy {
             skip_dead_zone: variant.skip_dead_zone,
             min_confidence: variant.min_confidence,
             min_edge: variant.min_edge,
+            decision_volatility_floor: variant.decision_volatility_floor,
             position_pct: variant.position_pct,
             max_per_market_usd: variant.max_per_market_usd,
             max_projected_stressed_drawdown_pct: variant.max_projected_stressed_drawdown_pct,
@@ -420,6 +427,7 @@ impl RuntimeStrategy {
             "skip_dead_zone": settings.candle_skip_dead_zone,
             "min_confidence": DEFAULT_MIN_CONFIDENCE,
             "min_edge": DEFAULT_MIN_EDGE,
+            "decision_volatility_floor": 0.0,
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
@@ -449,6 +457,7 @@ impl RuntimeStrategy {
             skip_dead_zone: settings.candle_skip_dead_zone,
             min_confidence: DEFAULT_MIN_CONFIDENCE,
             min_edge: DEFAULT_MIN_EDGE,
+            decision_volatility_floor: 0.0,
             position_pct: settings.candle_position_pct,
             max_per_market_usd: settings.max_position_per_market_usd,
             max_projected_stressed_drawdown_pct: settings
@@ -505,6 +514,13 @@ impl RuntimeStrategy {
         } else {
             self.prefer_maker
         }
+    }
+
+    fn decision_volatility(&self, observed_volatility: f64) -> f64 {
+        crate::backtest::strategies::decision_volatility_with_floor(
+            observed_volatility,
+            self.decision_volatility_floor,
+        )
     }
 }
 
@@ -797,8 +813,13 @@ impl Pipeline {
                 &settings.poly_api_key,
                 &settings.poly_api_secret,
                 &settings.poly_api_passphrase,
-            );
-            client.write().await.set_signing_key(&settings.private_key);
+            )
+            .map_err(anyhow::Error::msg)?;
+            client
+                .write()
+                .await
+                .set_signing_key(&settings.private_key)
+                .map_err(anyhow::Error::msg)?;
             client.write().await.warm_connection().await;
             tracing::info!("CLOB direct order placement ENABLED (live mode)");
             Some(client)
@@ -1302,7 +1323,7 @@ impl Pipeline {
         if !self.settings.candle_cross_asset_enabled {
             if let Some(step_s) = btc_updown_slug_step_seconds(self.settings.candle_window_minutes)
             {
-                let slugs = btc_updown_slugs_for_live_window(Utc::now(), step_s, 45);
+                let slugs = btc_updown_slugs_for_live_horizon(Utc::now(), step_s, 45);
                 tracing::info!(slugs = slugs.len(), step_s, "candle.slug_discovery");
                 return self.gamma.fetch_markets_by_slugs(&slugs, false).await;
             }
@@ -1480,7 +1501,7 @@ impl Pipeline {
                 };
 
                 // Detect momentum for the contract's own asset
-                let (signal, decision_vol) = {
+                let (signal, observed_vol) = {
                     let mut moms = self.momentum.lock().await;
                     let det = moms.entry(c.asset.clone()).or_insert_with(|| {
                         MomentumDetector::new(
@@ -1509,10 +1530,11 @@ impl Pipeline {
                         self.monitor
                             .record_signal_skip(&cid, "open_price_unavailable");
                     }
-                    let decision_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
-                    (signal, decision_vol)
+                    let observed_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
+                    (signal, observed_vol)
                 };
                 let Some(signal) = signal else { continue };
+                let decision_vol = self.runtime_strategy.decision_volatility(observed_vol);
 
                 let open_exposure = self.open_position_exposure().await;
                 let breaker_state = *self.breaker.lock().await;
@@ -3195,37 +3217,6 @@ fn short_cid(s: &str) -> String {
     }
 }
 
-fn btc_updown_slug_step_seconds(window_minutes: f64) -> Option<i64> {
-    if (window_minutes - 5.0).abs() <= 1e-6 {
-        Some(5 * 60)
-    } else if (window_minutes - 15.0).abs() <= 1e-6 {
-        Some(15 * 60)
-    } else {
-        None
-    }
-}
-
-fn btc_updown_slugs_for_live_window(
-    now: DateTime<Utc>,
-    step_s: i64,
-    horizon_minutes: i64,
-) -> Vec<String> {
-    let now_s = now.timestamp();
-    let mut t = (now_s - step_s).div_euclid(step_s) * step_s;
-    let end_s = now_s + horizon_minutes.max(1) * 60 + step_s;
-    let prefix = if step_s == 300 {
-        "btc-updown-5m"
-    } else {
-        "btc-updown-15m"
-    };
-    let mut slugs = Vec::new();
-    while t <= end_s {
-        slugs.push(format!("{prefix}-{t}"));
-        t += step_s;
-    }
-    slugs
-}
-
 fn nonzero_ts_or_now(ts: f64) -> f64 {
     if ts > 0.0 {
         ts
@@ -3403,7 +3394,6 @@ mod tests {
     use crate::backtest::experiment::{
         PromotionArtifact, PromotionGate, CURRENT_INVENTORY_MODEL_VERSION,
     };
-    use chrono::TimeZone;
     use tempfile::TempDir;
 
     #[test]
@@ -3490,7 +3480,8 @@ mod tests {
     fn runtime_strategy_uses_promoted_variant() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("promotion.json");
-        let variant = StrategyVariant::loose_maker();
+        let mut variant = StrategyVariant::loose_maker();
+        variant.decision_volatility_floor = 0.80;
         let artifact = promotion_for_variant(&variant);
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
         let mut settings = Settings::from_env();
@@ -3507,6 +3498,9 @@ mod tests {
         assert_eq!(runtime.min_confidence, variant.min_confidence);
         assert_eq!(runtime.min_edge, variant.min_edge);
         assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
+        assert_eq!(runtime.decision_volatility(0.35), 0.80);
+        assert_eq!(runtime.decision_volatility(0.90), 0.90);
+        assert!(runtime.decision_volatility(f64::NAN).is_nan());
     }
 
     #[test]
@@ -3711,23 +3705,6 @@ mod tests {
         let err = RuntimeStrategy::load(&settings).unwrap_err();
 
         assert!(err.to_string().contains("hash mismatch"));
-    }
-
-    #[test]
-    fn live_btc_slug_window_covers_current_and_near_future_5m_frames() {
-        let now = Utc.with_ymd_and_hms(2026, 5, 23, 12, 23, 10).unwrap();
-        let slugs = btc_updown_slugs_for_live_window(now, 300, 15);
-
-        assert!(slugs.contains(&"btc-updown-5m-1779538800".to_string()));
-        assert!(slugs.contains(&"btc-updown-5m-1779539100".to_string()));
-        assert!(slugs.len() <= 6);
-    }
-
-    #[test]
-    fn live_slug_discovery_only_targets_supported_btc_windows() {
-        assert_eq!(btc_updown_slug_step_seconds(5.0), Some(300));
-        assert_eq!(btc_updown_slug_step_seconds(15.0), Some(900));
-        assert_eq!(btc_updown_slug_step_seconds(60.0), None);
     }
 
     #[test]

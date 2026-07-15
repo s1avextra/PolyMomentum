@@ -359,27 +359,51 @@ impl Settings {
     }
 }
 
-pub(crate) fn load_dotenv_best_effort(path: &str) -> std::io::Result<()> {
+/// Load environment variables from `path` without overwriting existing values.
+pub fn load_dotenv_best_effort(path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(path)?;
     for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            let k = k.trim();
-            let v = v.trim().trim_matches('"').trim_matches('\'');
-            if env::var(k).is_err() {
-                env::set_var(k, v);
+        if let Some((key, value)) = parse_dotenv_assignment(line) {
+            if env::var_os(key).is_none() {
+                env::set_var(key, value);
             }
         }
     }
     Ok(())
 }
 
+fn parse_dotenv_assignment(line: &str) -> Option<(&str, &str)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    let mut chars = key.chars();
+    if !matches!(chars.next(), Some('_' | 'A'..='Z' | 'a'..='z'))
+        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let value = value.trim().trim_matches('"').trim_matches('\'');
+    (!value.contains('\0')).then_some((key, value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dotenv_parser_accepts_safe_assignments_and_rejects_invalid_keys() {
+        assert_eq!(
+            parse_dotenv_assignment(" POLYMOMENTUM_MODE = 'paper' "),
+            Some(("POLYMOMENTUM_MODE", "paper"))
+        );
+        assert_eq!(parse_dotenv_assignment("# comment"), None);
+        assert_eq!(parse_dotenv_assignment("=value"), None);
+        assert_eq!(parse_dotenv_assignment("BAD-KEY=value"), None);
+        assert_eq!(parse_dotenv_assignment("KEY=bad\0value"), None);
+    }
 
     #[test]
     fn defaults_are_sane() {

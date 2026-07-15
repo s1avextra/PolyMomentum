@@ -374,12 +374,19 @@ pub fn classify_btc_source_values(source_values: &BTreeSet<String>) -> &'static 
         "binance_btcusdt_rtds",
         "crypto_prices",
     ];
+    const BINANCE_RTDS_SOURCES: &[&str] = &["binance_btcusdt_rtds", "crypto_prices"];
     if !source_values.is_empty()
         && source_values
             .iter()
             .all(|source| CHAINLINK_SOURCES.contains(&source.as_str()))
     {
         "chainlink_btc_usd_data_stream"
+    } else if !source_values.is_empty()
+        && source_values
+            .iter()
+            .all(|source| BINANCE_RTDS_SOURCES.contains(&source.as_str()))
+    {
+        "binance_btcusdt_rtds"
     } else if !source_values.is_empty()
         && source_values
             .iter()
@@ -483,6 +490,19 @@ mod tests {
         h.load_csv(f.path()).unwrap();
 
         assert_eq!(h.source_kind(), "chainlink_btc_usd_data_stream");
+    }
+
+    #[test]
+    fn collector_tick_csv_preserves_binance_rtds_provenance() {
+        let f = write_csv(&[
+            "timestamp_ms,source,price",
+            "1700000000000,binance_btcusdt_rtds,70000",
+            "1700000001000,binance_btcusdt_rtds,70010",
+        ]);
+        let mut h = BTCHistory::new();
+        h.load_csv(f.path()).unwrap();
+
+        assert_eq!(h.source_kind(), "binance_btcusdt_rtds");
     }
 
     #[test]

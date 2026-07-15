@@ -686,20 +686,33 @@ const SIDECAR_VERSION: u32 = 1;
 
 fn write_sidecar(path: &Path, events: &[L2Event]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("bin.gz.tmp");
-    let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
-    let mut buf = std::io::BufWriter::new(f);
-    buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
-    buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
-    let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
-    let mut bin = std::io::BufWriter::new(encoder);
-    bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
-    bin.flush()?;
-    let encoder = bin.into_inner().context("flush gz writer")?;
-    let mut buf = encoder.finish().context("finish gz")?;
-    buf.flush()?;
-    drop(buf);
-    std::fs::rename(&tmp, path).context("rename tmp sidecar")?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sidecar.bin.gz");
+    let tmp = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    let write_result = (|| -> Result<()> {
+        let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
+        let mut buf = std::io::BufWriter::new(f);
+        buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
+        buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
+        let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
+        let mut bin = std::io::BufWriter::new(encoder);
+        bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
+        bin.flush()?;
+        let encoder = bin.into_inner().context("flush gz writer")?;
+        let mut buf = encoder.finish().context("finish gz")?;
+        buf.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error).context("rename tmp sidecar");
+    }
     Ok(())
 }
 
@@ -764,5 +777,35 @@ mod tests {
             PMXTv2Loader::url_for_hour(h),
             "https://r2v2.pmxt.dev/polymarket_orderbook_2026-04-26T14.parquet"
         );
+    }
+
+    #[test]
+    fn sidecar_write_is_atomic_and_round_trips() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("sample.events.bin.gz");
+        let events = vec![L2Event {
+            timestamp_s: 1.25,
+            market_id: "market-1".to_string(),
+            body: L2EventBody::BookSnapshot(BookSnapshot {
+                market_id: "market-1".to_string(),
+                token_id: "token-1".to_string(),
+                best_bid: 0.49,
+                best_ask: 0.51,
+                timestamp_s: 1.25,
+                bids: Vec::new(),
+                asks: Vec::new(),
+            }),
+        }];
+
+        write_sidecar(&path, &events).unwrap();
+        let loaded = read_sidecar(&path).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].market_id, "market-1");
+        assert_eq!(loaded[0].timestamp_s, 1.25);
+        assert!(!temp
+            .path()
+            .join(format!("sample.events.bin.gz.tmp.{}", std::process::id()))
+            .exists());
     }
 }

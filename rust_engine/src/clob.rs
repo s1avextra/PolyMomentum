@@ -84,7 +84,12 @@ pub struct OrderResponse {
 }
 
 impl ClobClient {
-    pub fn new(base_url: &str, api_key: &str, api_secret: &str, api_passphrase: &str) -> Self {
+    pub fn new(
+        base_url: &str,
+        api_key: &str,
+        api_secret: &str,
+        api_passphrase: &str,
+    ) -> Result<Self, String> {
         // Build client with connection pooling and HTTP/2
         let client = Client::builder()
             .pool_max_idle_per_host(5)
@@ -94,9 +99,9 @@ impl ClobClient {
             .timeout(Duration::from_secs(10))
             .tcp_nodelay(true)
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|error| format!("build CLOB HTTP client: {error}"))?;
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.to_string(),
             api_key: api_key.to_string(),
@@ -106,19 +111,21 @@ impl ClobClient {
             maker_address: String::new(),
             latencies: Vec::with_capacity(1000),
             warmed: false,
-        }
+        })
     }
 
     /// Set the private key for EIP-712 order signing.
-    pub fn set_signing_key(&mut self, hex_key: &str) {
-        if let Some(key) = signing::parse_private_key(hex_key) {
-            let addr = signing::address_from_key(&key);
-            self.maker_address = format!("0x{}", hex::encode(addr));
-            self.signing_key = Some(key);
-            eprintln!("CLOB signing key set: {}", self.maker_address);
-        } else {
-            eprintln!("CLOB signing key parse failed");
-        }
+    pub fn set_signing_key(&mut self, hex_key: &str) -> Result<(), String> {
+        let Some(key) = signing::parse_private_key(hex_key) else {
+            self.signing_key = None;
+            self.maker_address.clear();
+            return Err("PRIVATE_KEY must be a valid secp256k1 private key".to_string());
+        };
+        let addr = signing::address_from_key(&key);
+        self.maker_address = format!("0x{}", hex::encode(addr));
+        self.signing_key = Some(key);
+        eprintln!("CLOB signing key set: {}", self.maker_address);
+        Ok(())
     }
 
     /// Pre-warm the connection pool by sending a lightweight request.
@@ -138,23 +145,28 @@ impl ClobClient {
     }
 
     /// Build HMAC-SHA256 authenticated headers for a request.
-    fn auth_headers(&self, method: &str, path: &str, body: &str) -> Vec<(String, String)> {
+    fn auth_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<Vec<(String, String)>, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|error| format!("system clock is before Unix epoch: {error}"))?
             .as_secs()
             .to_string();
 
         let signature =
-            signing::hmac_sign_request(&self.api_secret, &timestamp, method, path, body);
+            signing::hmac_sign_request(&self.api_secret, &timestamp, method, path, body)?;
 
-        vec![
+        Ok(vec![
             ("POLY_ADDRESS".into(), self.maker_address.clone()),
             ("POLY_SIGNATURE".into(), signature),
             ("POLY_TIMESTAMP".into(), timestamp),
             ("POLY_API_KEY".into(), self.api_key.clone()),
             ("POLY_PASSPHRASE".into(), self.api_passphrase.clone()),
-        ]
+        ])
     }
 
     fn require_l2_auth(&self) -> Result<(), String> {
@@ -204,7 +216,7 @@ impl ClobClient {
         self.require_l2_auth()?;
         let path_with_query = path_with_query(path, params);
         let url = format!("{}{}", self.base_url, path_with_query);
-        let headers = self.auth_headers("GET", &path_with_query, "");
+        let headers = self.auth_headers("GET", &path_with_query, "")?;
         let mut req = self.client.get(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
@@ -224,7 +236,7 @@ impl ClobClient {
     async fn post_private_json(&self, path: &str, body: &str) -> Result<Value, String> {
         self.require_l2_auth()?;
         let url = format!("{}{}", self.base_url, path);
-        let headers = self.auth_headers("POST", path, body);
+        let headers = self.auth_headers("POST", path, body)?;
         let mut req = self.client.post(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
@@ -373,8 +385,10 @@ impl ClobClient {
 
         // Build and sign the CLOB V2 order. Fees are protocol/operator-set at
         // match time in V2 and are not part of the signed EIP-712 struct.
-        let order = signing::build_order(key, token_id, price, size, side, neg_risk, tick_size);
-        let signed = signing::sign_order(&order, key, neg_risk);
+        let order = signing::build_order(key, token_id, price, size, side, tick_size)
+            .map_err(|error| format!("Build order: {error}"))?;
+        let signed = signing::sign_order(&order, key, neg_risk)
+            .map_err(|error| format!("Sign order: {error}"))?;
 
         let sign_us = t0.elapsed().as_micros();
 
@@ -404,7 +418,7 @@ impl ClobClient {
         let body = serde_json::to_string(&payload).map_err(|e| format!("Serialize: {}", e))?;
 
         // Build auth headers
-        let headers = self.auth_headers("POST", "/order", &body);
+        let headers = self.auth_headers("POST", "/order", &body)?;
 
         let url = format!("{}/order", self.base_url);
         let mut req = self.client.post(&url);
@@ -494,13 +508,13 @@ pub fn create_shared_client(
     api_key: &str,
     api_secret: &str,
     api_passphrase: &str,
-) -> SharedClobClient {
-    Arc::new(RwLock::new(ClobClient::new(
+) -> Result<SharedClobClient, String> {
+    Ok(Arc::new(RwLock::new(ClobClient::new(
         base_url,
         api_key,
         api_secret,
         api_passphrase,
-    )))
+    )?)))
 }
 
 #[cfg(test)]
@@ -509,9 +523,10 @@ mod tests {
 
     #[test]
     fn private_auth_uses_current_poly_header_names() {
-        let mut client = ClobClient::new("https://clob.polymarket.com", "key", "secret", "pass");
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "c2VjcmV0", "pass").unwrap();
         client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
-        let headers = client.auth_headers("GET", "/data/orders", "");
+        let headers = client.auth_headers("GET", "/data/orders", "").unwrap();
         let names: Vec<_> = headers.into_iter().map(|(name, _)| name).collect();
 
         assert_eq!(
@@ -537,11 +552,25 @@ mod tests {
     #[test]
     fn l2_auth_rejects_malformed_api_secret() {
         let mut client =
-            ClobClient::new("https://clob.polymarket.com", "key", "not base64!", "pass");
+            ClobClient::new("https://clob.polymarket.com", "key", "not base64!", "pass").unwrap();
         client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
 
         let err = client.require_l2_auth().unwrap_err();
         assert!(err.contains("POLY_API_SECRET"));
+    }
+
+    #[test]
+    fn invalid_private_key_clears_stale_signing_identity() {
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "c2VjcmV0", "pass").unwrap();
+        client
+            .set_signing_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+            .unwrap();
+        assert!(client.signing_key.is_some());
+
+        assert!(client.set_signing_key("invalid").is_err());
+        assert!(client.signing_key.is_none());
+        assert!(client.maker_address.is_empty());
     }
 
     #[test]

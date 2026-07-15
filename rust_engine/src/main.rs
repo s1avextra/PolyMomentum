@@ -1,37 +1,21 @@
 //! polymomentum-engine: unified Rust binary.
 //!
-//! Subcommands:
-//!   live                              — main runtime (paper/live)
-//!   scan                              — Gamma + scanner smoke test
-//!   wallet                            — print wallet balances
-//!   ctf <condition_id>                — read on-chain CTF resolution
-//!   validate-replay <session.jsonl>   — replay-validator (parity check vs decision function)
+//! The binary owns CLI parsing and command orchestration. Run with `--help` for
+//! the authoritative command list; trading, replay, research, diagnostics, and
+//! data-capture implementations live in the library modules.
 //!
 //! Environment-driven configuration. See `src/config.rs` for the full list of
 //! variables; the runtime reads `.env` from the working directory if present.
 
-mod backtest;
-mod clob;
-mod clob_user_ws;
-mod config;
-mod data;
-mod exchange;
-mod execution;
-mod fair_value;
-mod live;
-mod monitoring;
-mod polymarket_ws;
-mod price_state;
-mod release;
-mod risk;
-mod signing;
-mod strategy;
-mod strategy_builder;
-mod sweep;
+#![forbid(unsafe_code)]
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use config::RuntimeMode;
+use polymomentum_engine::config::RuntimeMode;
+use polymomentum_engine::{
+    artifact, backtest, clob, config, data, live, monitoring, release, strategy, strategy_builder,
+    sweep,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -338,11 +322,20 @@ enum Command {
         bankroll: f64,
         #[arg(long)]
         cache_dir: Option<String>,
-        /// Replay exactly one serialized StrategyVariant instead of expanding the parameter grid.
+        /// Require every replay hour to come from PMXT_DISTILLED_DIR; never fall back
+        /// to a sidecar, parquet, or network download.
+        #[arg(long, default_value_t = false)]
+        require_shared_distilled: bool,
+        /// Replay serialized StrategyVariant JSON instead of expanding the parameter grid.
+        /// The file may contain one variant or an array of variants.
         #[arg(long)]
         variant_json: Option<String>,
         #[arg(long)]
         btc_csv: Option<String>,
+        /// Optional official settlement tape. When set, --btc-csv remains the causal
+        /// signal/volatility feed and this tape alone resolves market outcomes.
+        #[arg(long)]
+        settlement_btc_csv: Option<String>,
         #[arg(long, default_value_t = 50)]
         latency_ms: u64,
         /// Comma-separated confidence thresholds.
@@ -458,6 +451,10 @@ enum Command {
         /// Write compact per-trade causal features for every sweep variant to this path.
         #[arg(long)]
         trade_features_json: Option<String>,
+        /// Write one labeled pre-edge calibration opportunity per condition-second.
+        /// Requires --continuous and a capture variant that produces zero trades.
+        #[arg(long)]
+        calibration_opportunities_json: Option<String>,
         /// Require causal decision tags before order creation, e.g. direction=down. Repeat or comma-separate.
         #[arg(long)]
         require_causal_tag: Vec<String>,
@@ -1114,6 +1111,30 @@ enum StrategyBuilderCommand {
         /// Minimum shadow resolutions per replay/paper session required for A+.
         #[arg(long, default_value_t = 50)]
         a_plus_min_shadow_resolutions: u64,
+    },
+    /// Score the frozen binary-complement gate on one post-registration forward block.
+    BinaryComplementScreen {
+        /// Opportunity JSON emitted by harness-sweep --calibration-opportunities-json.
+        #[arg(long, required = true, num_args = 1..)]
+        opportunity: Vec<String>,
+        /// Terminal official-source resolution manifest. Repeat for segmented captures.
+        #[arg(long = "resolution-manifest", required = true, num_args = 1..)]
+        resolution_manifest: Vec<String>,
+        /// Stable identifier for this forward block.
+        #[arg(long)]
+        block_id: String,
+        /// Write the immutable JSON screen artifact to this path.
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Verify two passing binary-complement screens are chronological and disjoint.
+    BinaryComplementRepeatAudit {
+        /// Block screen JSON in chronological order. Provide exactly two.
+        #[arg(long, required = true, num_args = 1..)]
+        screen: Vec<String>,
+        /// Write the immutable two-block audit artifact to this path.
+        #[arg(long)]
+        output: Option<String>,
     },
     /// Search causal/regime bucket selectivity rules with feed-forward OOS scoring.
     SelectivitySearch {
@@ -2266,8 +2287,10 @@ async fn main() {
             end,
             bankroll,
             cache_dir,
+            require_shared_distilled,
             variant_json,
             btc_csv,
+            settlement_btc_csv,
             latency_ms,
             conf,
             z,
@@ -2304,6 +2327,7 @@ async fn main() {
             report_json,
             trades_json,
             trade_features_json,
+            calibration_opportunities_json,
             require_causal_tag,
             deny_causal_tag,
             window_minutes,
@@ -2341,8 +2365,10 @@ async fn main() {
                 end.as_deref(),
                 bankroll,
                 cache_dir.as_deref(),
+                require_shared_distilled,
                 variant_json.as_deref(),
                 btc_csv.as_deref(),
+                settlement_btc_csv.as_deref(),
                 latency_ms,
                 conf,
                 zs,
@@ -2379,6 +2405,7 @@ async fn main() {
                 report_json.as_deref(),
                 trades_json.as_deref(),
                 trade_features_json.as_deref(),
+                calibration_opportunities_json.as_deref(),
                 require_causal_tag,
                 deny_causal_tag,
                 window_minutes,
@@ -2447,6 +2474,27 @@ fn apply_stale_research_override(settings: &mut config::Settings, allow: bool) {
     if allow {
         settings.allow_stale_research_artifact = true;
     }
+}
+
+fn strategy_builder_json<T: serde::Serialize>(
+    command: &str,
+    output: Option<&str>,
+    value: &T,
+) -> String {
+    let json = match serde_json::to_string_pretty(value) {
+        Ok(json) => json,
+        Err(error) => {
+            eprintln!("strategy-builder {command} serialization failed: {error:#}");
+            std::process::exit(2);
+        }
+    };
+    if let Some(path) = output {
+        if let Err(error) = artifact::write_json_artifact_atomic(path, value) {
+            eprintln!("strategy-builder {command} output write failed: {error:#}");
+            std::process::exit(2);
+        }
+    }
+    json
 }
 
 async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
@@ -2529,6 +2577,53 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 std::process::exit(2);
             }
         }
+        StrategyBuilderCommand::BinaryComplementScreen {
+            opportunity,
+            resolution_manifest,
+            block_id,
+            output,
+        } => {
+            let screen = match strategy_builder::binary_complement_screen(
+                strategy_builder::BinaryComplementScreenInput {
+                    opportunity_paths: opportunity,
+                    resolution_manifest_paths: resolution_manifest,
+                    block_id,
+                },
+            ) {
+                Ok(screen) => screen,
+                Err(e) => {
+                    eprintln!("strategy-builder binary-complement-screen failed: {e:#}");
+                    std::process::exit(2);
+                }
+            };
+            let ok = screen.ok;
+            let json =
+                strategy_builder_json("binary-complement-screen", output.as_deref(), &screen);
+            println!("{json}");
+            if !ok {
+                std::process::exit(1);
+            }
+        }
+        StrategyBuilderCommand::BinaryComplementRepeatAudit { screen, output } => {
+            let audit = match strategy_builder::binary_complement_repeat_audit(
+                strategy_builder::BinaryComplementRepeatAuditInput {
+                    screen_paths: screen,
+                },
+            ) {
+                Ok(audit) => audit,
+                Err(e) => {
+                    eprintln!("strategy-builder binary-complement-repeat-audit failed: {e:#}");
+                    std::process::exit(2);
+                }
+            };
+            let ok = audit.ok;
+            let json =
+                strategy_builder_json("binary-complement-repeat-audit", output.as_deref(), &audit);
+            println!("{json}");
+            if !ok {
+                std::process::exit(1);
+            }
+        }
         StrategyBuilderCommand::SelectivitySearch {
             report,
             output,
@@ -2560,35 +2655,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search)
-                .expect("serialize strategy-builder selectivity search");
-            if let Some(output) = output {
-                let path = std::path::PathBuf::from(output);
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            eprintln!(
-                                "strategy-builder selectivity-search output mkdir failed: {e:#}"
-                            );
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "selectivity_search.json".to_string());
-                let tmp_path =
-                    path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-                if let Err(e) = std::fs::write(&tmp_path, format!("{json}\n")) {
-                    eprintln!("strategy-builder selectivity-search output write failed: {e:#}");
-                    std::process::exit(2);
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    eprintln!("strategy-builder selectivity-search output rename failed: {e:#}");
-                    std::process::exit(2);
-                }
-            }
+            let json = strategy_builder_json("selectivity-search", output.as_deref(), &search);
             println!("{json}");
         }
         StrategyBuilderCommand::CausalPolicySearch {
@@ -2670,35 +2737,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search)
-                .expect("serialize strategy-builder causal policy search");
-            if let Some(output) = output {
-                let path = std::path::PathBuf::from(output);
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            eprintln!(
-                                "strategy-builder causal-policy-search output mkdir failed: {e:#}"
-                            );
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "causal_policy_search.json".to_string());
-                let tmp_path =
-                    path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-                if let Err(e) = std::fs::write(&tmp_path, format!("{json}\n")) {
-                    eprintln!("strategy-builder causal-policy-search output write failed: {e:#}");
-                    std::process::exit(2);
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    eprintln!("strategy-builder causal-policy-search output rename failed: {e:#}");
-                    std::process::exit(2);
-                }
-            }
+            let json = strategy_builder_json("causal-policy-search", output.as_deref(), &search);
             println!("{json}");
         }
         StrategyBuilderCommand::EvolveSearch {
@@ -2811,8 +2850,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search)
-                .expect("serialize strategy-builder evolve search");
+            let json = strategy_builder_json("evolve-search", None, &search);
             println!("{json}");
         }
         StrategyBuilderCommand::MaterializePolicyVariant {
@@ -3156,34 +3194,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search).expect("serialize multi-guard search");
-            if let Some(output) = output {
-                let path = std::path::PathBuf::from(output);
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            eprintln!(
-                                "strategy-builder multi-guard-search output mkdir failed: {e:#}"
-                            );
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "multi_guard_search.json".to_string());
-                let tmp_path =
-                    path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-                if let Err(e) = std::fs::write(&tmp_path, format!("{json}\n")) {
-                    eprintln!("strategy-builder multi-guard-search output write failed: {e:#}");
-                    std::process::exit(2);
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    eprintln!("strategy-builder multi-guard-search output rename failed: {e:#}");
-                    std::process::exit(2);
-                }
-            }
+            let json = strategy_builder_json("multi-guard-search", output.as_deref(), &search);
             println!("{json}");
         }
         StrategyBuilderCommand::AdaptiveDirectionSearch {
@@ -3225,39 +3236,8 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search)
-                .expect("serialize strategy-builder adaptive direction search");
-            if let Some(output) = output {
-                let path = std::path::PathBuf::from(output);
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            eprintln!(
-                                "strategy-builder adaptive-direction-search output mkdir failed: {e:#}"
-                            );
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "adaptive_direction_search.json".to_string());
-                let tmp_path =
-                    path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-                if let Err(e) = std::fs::write(&tmp_path, format!("{json}\n")) {
-                    eprintln!(
-                        "strategy-builder adaptive-direction-search output write failed: {e:#}"
-                    );
-                    std::process::exit(2);
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    eprintln!(
-                        "strategy-builder adaptive-direction-search output rename failed: {e:#}"
-                    );
-                    std::process::exit(2);
-                }
-            }
+            let json =
+                strategy_builder_json("adaptive-direction-search", output.as_deref(), &search);
             println!("{json}");
         }
         StrategyBuilderCommand::AdaptiveModeSearch {
@@ -3313,35 +3293,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     std::process::exit(2);
                 }
             };
-            let json = serde_json::to_string_pretty(&search)
-                .expect("serialize strategy-builder adaptive mode search");
-            if let Some(output) = output {
-                let path = std::path::PathBuf::from(output);
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            eprintln!(
-                                "strategy-builder adaptive-mode-search output mkdir failed: {e:#}"
-                            );
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "adaptive_mode_search.json".to_string());
-                let tmp_path =
-                    path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-                if let Err(e) = std::fs::write(&tmp_path, format!("{json}\n")) {
-                    eprintln!("strategy-builder adaptive-mode-search output write failed: {e:#}");
-                    std::process::exit(2);
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    eprintln!("strategy-builder adaptive-mode-search output rename failed: {e:#}");
-                    std::process::exit(2);
-                }
-            }
+            let json = strategy_builder_json("adaptive-mode-search", output.as_deref(), &search);
             println!("{json}");
         }
         StrategyBuilderCommand::RollingHistory {
@@ -4977,24 +4929,7 @@ fn write_json_atomic<T: serde::Serialize>(
     value: &T,
     pretty: bool,
 ) -> std::io::Result<()> {
-    let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let payload = if pretty {
-        serde_json::to_vec_pretty(value)
-    } else {
-        serde_json::to_vec(value)
-    }
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("payload.json");
-    let tmp = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp, payload)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    artifact::write_json_atomic(path, value, pretty).map_err(std::io::Error::other)
 }
 
 async fn run_startup_preflight(
@@ -5933,7 +5868,7 @@ async fn cmd_record_btc_books(
     if windows == 0 {
         bail!("--windows must be greater than zero");
     }
-    let step_s = btc_updown_slug_step_seconds(Some(window_minutes))
+    let step_s = live::window::btc_updown_slug_step_seconds(window_minutes)
         .context("--window-minutes must be 5 or 15 for BTC slug recording")?;
     let anchor = if let Some(raw) = start {
         chrono::DateTime::parse_from_rfc3339(raw)
@@ -7370,7 +7305,10 @@ fn cmd_convert_recorded_btc_books(input_dir: &str, output_dir: &str) -> anyhow::
             "output_dir": output_dir.display().to_string(),
             "manifest": manifest_path.display().to_string(),
             "distilled_schema": backtest::distill::SCHEMA_VERSION,
-            "harness_flag": "--shared-distilled-dir",
+            "harness_env": {
+                "PMXT_DISTILLED_DIR": output_dir.display().to_string(),
+            },
+            "exact_replay_flag": "--require-shared-distilled",
         },
         "stats": stats,
         "hours": hours,
@@ -8235,14 +8173,23 @@ async fn cmd_wallet(s: &config::Settings, json: bool) {
 }
 
 async fn cmd_clob(s: &config::Settings, command: ClobCommand) {
-    let mut client = clob::ClobClient::new(
+    let mut client = match clob::ClobClient::new(
         &s.poly_base_url,
         &s.poly_api_key,
         &s.poly_api_secret,
         &s.poly_api_passphrase,
-    );
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("CLOB client initialization failed: {error}");
+            std::process::exit(2);
+        }
+    };
     if !s.private_key.is_empty() {
-        client.set_signing_key(&s.private_key);
+        if let Err(error) = client.set_signing_key(&s.private_key) {
+            eprintln!("CLOB signing key configuration failed: {error}");
+            std::process::exit(2);
+        }
     }
     let result = match command {
         ClobCommand::Ok => client.get_ok().await,
@@ -9336,204 +9283,21 @@ async fn cmd_ctf(s: &config::Settings, condition_id: &str) {
 }
 
 async fn cmd_validate_replay(path: &str) {
-    use std::io::BufRead;
-    let f = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("open {path}: {e}");
+    match monitoring::replay_validation::validate_replay(path) {
+        Ok(summary) => {
+            println!(
+                "validate-replay: total={} mismatches={} ({:.2}%)",
+                summary.total, summary.mismatches, summary.mismatch_pct
+            );
+            if summary.mismatches > 0 {
+                std::process::exit(1);
+            }
+        }
+        Err(error) => {
+            eprintln!("validate-replay failed: {error:#}");
             std::process::exit(1);
         }
-    };
-    let reader = std::io::BufReader::new(f);
-    let mut total = 0u64;
-    let mut mismatches = 0u64;
-    let mut validation_cfg = ReplayValidationConfig::default();
-    for line in reader.lines().map_while(|l| l.ok()) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if v.get("cat").and_then(|x| x.as_str()) == Some("system")
-            && v.get("type").and_then(|x| x.as_str()) == Some("runtime_strategy")
-        {
-            validation_cfg.apply_runtime_strategy_event(&v);
-            continue;
-        }
-        if v.get("cat").and_then(|x| x.as_str()) != Some("signal") {
-            continue;
-        }
-        if v.get("type").and_then(|x| x.as_str()) != Some("evaluation") {
-            continue;
-        }
-        total += 1;
-
-        // Build inputs
-        let signal = strategy::momentum::MomentumSignal {
-            direction: v
-                .get("dir")
-                .and_then(|x| x.as_str())
-                .unwrap_or("up")
-                .to_string(),
-            confidence: f64opt(&v, "conf").unwrap_or(0.0),
-            price_change: f64opt(&v, "chg").unwrap_or(0.0),
-            price_change_pct: f64opt(&v, "chg_pct").unwrap_or(0.0),
-            consistency: f64opt(&v, "cons").unwrap_or(0.0),
-            minutes_elapsed: f64opt(&v, "elapsed_min").unwrap_or(0.0),
-            minutes_remaining: f64opt(&v, "remaining_min").unwrap_or(0.0),
-            current_price: f64opt(&v, "px").unwrap_or(0.0),
-            open_price: f64opt(&v, "open").unwrap_or(0.0),
-            z_score: f64opt(&v, "z").unwrap_or(0.0),
-            reversion_count: u32opt(&v, "reversion_count").unwrap_or(0),
-            directional_impulse_10s_bps: f64opt(&v, "directional_impulse_10s_bps"),
-        };
-        let res = strategy::decision::decide_candle_trade(
-            &signal,
-            signal.minutes_elapsed,
-            signal.minutes_remaining,
-            signal.minutes_elapsed + signal.minutes_remaining,
-            f64opt(&v, "up_price").unwrap_or(0.5),
-            f64opt(&v, "down_price").unwrap_or(0.5),
-            signal.current_price,
-            signal.open_price,
-            f64opt(&v, "implied_vol").unwrap_or(0.5),
-            validation_cfg.min_confidence,
-            validation_cfg.min_edge,
-            validation_cfg.skip_dead_zone,
-            &validation_cfg.zone_config,
-            f64opt(&v, "cross_boost").unwrap_or(0.0),
-        );
-        let traded = match res {
-            strategy::decision::DecisionResult::Trade(decision) => validation_cfg
-                .selectivity
-                .reject_reason(&decision.regime)
-                .is_none(),
-            strategy::decision::DecisionResult::Skip(_) => false,
-        };
-        let expected_logged_decision_trade = traded && validation_cfg.settlement_alignment_ready;
-        let logged_decision_trade = v
-            .get("decision_trade")
-            .and_then(|x| x.as_bool())
-            .or_else(|| v.get("traded").and_then(|x| x.as_bool()))
-            .unwrap_or(false);
-        if expected_logged_decision_trade != logged_decision_trade {
-            mismatches += 1;
-        }
     }
-    let mismatch_pct = if total > 0 {
-        100.0 * mismatches as f64 / total as f64
-    } else {
-        0.0
-    };
-    println!("validate-replay: total={total} mismatches={mismatches} ({mismatch_pct:.2}%)");
-    if mismatches > 0 {
-        std::process::exit(1);
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ReplayValidationConfig {
-    zone_config: strategy::decision::ZoneConfig,
-    min_confidence: f64,
-    min_edge: f64,
-    skip_dead_zone: bool,
-    selectivity: backtest::strategies::SelectivityFilter,
-    settlement_alignment_ready: bool,
-}
-
-impl Default for ReplayValidationConfig {
-    fn default() -> Self {
-        Self {
-            zone_config: strategy::decision::ZoneConfig::default(),
-            min_confidence: strategy::decision::DEFAULT_MIN_CONFIDENCE,
-            min_edge: strategy::decision::DEFAULT_MIN_EDGE,
-            skip_dead_zone: true,
-            selectivity: backtest::strategies::SelectivityFilter::default(),
-            settlement_alignment_ready: true,
-        }
-    }
-}
-
-impl ReplayValidationConfig {
-    fn apply_runtime_strategy_event(&mut self, v: &serde_json::Value) {
-        if let Some(source) = v.get("source").and_then(|x| x.as_str()) {
-            if let Some(path) = promotion_path_from_runtime_source(source) {
-                if let Some(variant) = load_promotion_variant_for_replay(path) {
-                    self.apply_variant(variant);
-                }
-            }
-        }
-        if let Some(zone_config) = v.get("zone_config") {
-            if let Ok(cfg) =
-                serde_json::from_value::<strategy::decision::ZoneConfig>(zone_config.clone())
-            {
-                self.zone_config = cfg;
-            }
-        }
-        if let Some(vv) = f64opt(v, "settlement_cutoff_minutes") {
-            self.zone_config.settlement_cutoff_minutes = vv;
-        }
-        if let Some(vv) = f64opt(v, "settlement_guard_minutes") {
-            self.zone_config.settlement_guard_minutes = vv;
-        }
-        if let Some(vv) = f64opt(v, "settlement_min_abs_move_usd") {
-            self.zone_config.settlement_min_abs_move_usd = vv;
-        }
-        if let Some(vv) = f64opt(v, "settlement_sigma_buffer") {
-            self.zone_config.settlement_sigma_buffer = vv;
-        }
-        if let Some(vv) = f64opt(v, "min_confidence") {
-            self.min_confidence = vv;
-        }
-        if let Some(vv) = f64opt(v, "min_edge") {
-            self.min_edge = vv;
-        }
-        if let Some(vv) = v.get("skip_dead_zone").and_then(|x| x.as_bool()) {
-            self.skip_dead_zone = vv;
-        }
-        if let Some(selectivity) = v.get("selectivity") {
-            if let Ok(filter) = serde_json::from_value::<backtest::strategies::SelectivityFilter>(
-                selectivity.clone(),
-            ) {
-                self.selectivity = filter;
-            }
-        }
-        if let Some(vv) = v
-            .get("settlement_alignment_ready")
-            .and_then(|x| x.as_bool())
-        {
-            self.settlement_alignment_ready = vv;
-        }
-    }
-
-    fn apply_variant(&mut self, variant: backtest::strategies::StrategyVariant) {
-        self.zone_config = variant.zone_config;
-        self.min_confidence = variant.min_confidence;
-        self.min_edge = variant.min_edge;
-        self.skip_dead_zone = variant.skip_dead_zone;
-        self.selectivity = variant.selectivity;
-    }
-}
-
-fn promotion_path_from_runtime_source(source: &str) -> Option<&str> {
-    let rest = source.strip_prefix("promotion:")?;
-    Some(rest.split('+').next().unwrap_or(rest))
-}
-
-fn load_promotion_variant_for_replay(path: &str) -> Option<backtest::strategies::StrategyVariant> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let artifact: backtest::experiment::PromotionArtifact = serde_json::from_str(&text).ok()?;
-    serde_json::from_value(artifact.strategy_params).ok()
-}
-
-fn load_strategy_variant_json(path: &str) -> anyhow::Result<backtest::strategies::StrategyVariant> {
-    use anyhow::Context;
-
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
-    let variant = serde_json::from_str::<backtest::strategies::StrategyVariant>(&text)
-        .with_context(|| format!("parse StrategyVariant JSON from {path}"))?;
-    if variant.name.trim().is_empty() {
-        anyhow::bail!("StrategyVariant name must not be empty");
-    }
-    Ok(variant)
 }
 
 async fn cmd_distill(
@@ -9704,14 +9468,53 @@ async fn cmd_pmxt_info(hour: &str, cache_dir: Option<&str>, sample: usize) {
 }
 
 fn parse_csv_floats(s: &str) -> Vec<f64> {
-    s.split(',')
-        .filter_map(|p| p.trim().parse::<f64>().ok())
-        .collect()
+    match try_parse_csv_floats(s) {
+        Ok(values) => values,
+        Err(error) => {
+            eprintln!("invalid floating-point list `{s}`: {error}");
+            std::process::exit(2);
+        }
+    }
 }
 
 fn parse_csv_u64s(s: &str) -> Vec<u64> {
+    match try_parse_csv_u64s(s) {
+        Ok(values) => values,
+        Err(error) => {
+            eprintln!("invalid unsigned-integer list `{s}`: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn try_parse_csv_floats(s: &str) -> anyhow::Result<Vec<f64>> {
     s.split(',')
-        .filter_map(|p| p.trim().parse::<u64>().ok())
+        .map(|part| {
+            let raw = part.trim();
+            if raw.is_empty() {
+                anyhow::bail!("empty value");
+            }
+            let value = raw
+                .parse::<f64>()
+                .with_context(|| format!("`{raw}` is not a number"))?;
+            if !value.is_finite() {
+                anyhow::bail!("`{raw}` must be finite");
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn try_parse_csv_u64s(s: &str) -> anyhow::Result<Vec<u64>> {
+    s.split(',')
+        .map(|part| {
+            let raw = part.trim();
+            if raw.is_empty() {
+                anyhow::bail!("empty value");
+            }
+            raw.parse::<u64>()
+                .with_context(|| format!("`{raw}` is not an unsigned integer"))
+        })
         .collect()
 }
 
@@ -9776,8 +9579,7 @@ fn btc_required_range_ms(
     fallback_start_ms: i64,
     fallback_end_ms: i64,
 ) -> (i64, i64) {
-    let mut start_ms = fallback_start_ms;
-    let mut end_ms = fallback_end_ms;
+    let mut range: Option<(i64, i64)> = None;
     for contract in &universe.contracts {
         let Ok(close) = chrono::DateTime::parse_from_rfc3339(&contract.end_date) else {
             continue;
@@ -9786,10 +9588,32 @@ fn btc_required_range_ms(
         let minutes = if minutes > 0.0 { minutes } else { 60.0 };
         let close_ms = close.timestamp_millis();
         let open_ms = close_ms - (minutes * 60_000.0).round() as i64;
-        start_ms = start_ms.min(open_ms);
-        end_ms = end_ms.max(close_ms);
+        range = Some(match range {
+            Some((start_ms, end_ms)) => (start_ms.min(open_ms), end_ms.max(close_ms)),
+            None => (open_ms, close_ms),
+        });
     }
-    (start_ms, end_ms)
+    range.unwrap_or((fallback_start_ms, fallback_end_ms))
+}
+
+fn ensure_settlement_btc_history_covers_universe(
+    label: &str,
+    btc: &backtest::btc_history::BTCHistory,
+    universe: &backtest::harness::CandleUniverse,
+) {
+    for contract in &universe.contracts {
+        let Ok(close) = chrono::DateTime::parse_from_rfc3339(&contract.end_date) else {
+            continue;
+        };
+        let minutes = live::window::estimate_window_minutes(&contract.window_description);
+        let minutes = if minutes > 0.0 { minutes } else { 60.0 };
+        let close_ms = close.timestamp_millis();
+        let open_ms = close_ms - (minutes * 60_000.0).round() as i64;
+        if let Some(message) = btc_history_coverage_error(label, btc, open_ms, close_ms) {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn ensure_btc_history_covers(
@@ -9852,40 +9676,6 @@ fn fmt_utc_ms(ts_ms: i64) -> String {
         .unwrap_or_else(|| ts_ms.to_string())
 }
 
-fn btc_updown_slug_step_seconds(window_minutes: Option<f64>) -> Option<i64> {
-    let target = window_minutes?;
-    if (target - 5.0).abs() <= 1e-6 {
-        Some(5 * 60)
-    } else if (target - 15.0).abs() <= 1e-6 {
-        Some(15 * 60)
-    } else {
-        None
-    }
-}
-
-fn btc_updown_slugs_for_window(
-    start: chrono::DateTime<chrono::Utc>,
-    end: chrono::DateTime<chrono::Utc>,
-    step_s: i64,
-) -> Vec<String> {
-    let start_s = start.timestamp();
-    let end_exclusive_s = end.timestamp() + 3_600;
-    let mut t = start_s - start_s.rem_euclid(step_s);
-    let mut slugs = Vec::new();
-    while t < end_exclusive_s {
-        if t + step_s > start_s {
-            let prefix = if step_s == 300 {
-                "btc-updown-5m"
-            } else {
-                "btc-updown-15m"
-            };
-            slugs.push(format!("{prefix}-{t}"));
-        }
-        t += step_s;
-    }
-    slugs
-}
-
 async fn fetch_gamma_historical_markets_for_window(
     gamma: &data::gamma::GammaClient,
     start: chrono::DateTime<chrono::Utc>,
@@ -9893,8 +9683,8 @@ async fn fetch_gamma_historical_markets_for_window(
     window_minutes: Option<f64>,
     label: &str,
 ) -> anyhow::Result<Vec<data::models::Market>> {
-    if let Some(step_s) = btc_updown_slug_step_seconds(window_minutes) {
-        let slugs = btc_updown_slugs_for_window(start, end, step_s);
+    if let Some(step_s) = window_minutes.and_then(live::window::btc_updown_slug_step_seconds) {
+        let slugs = live::window::btc_updown_slugs_for_range(start, end, step_s);
         eprintln!("{label}: fetching {} BTC candle slug(s)", slugs.len());
         let markets = gamma.fetch_markets_by_slugs(&slugs, true).await?;
         if !markets.is_empty() {
@@ -9917,8 +9707,10 @@ async fn cmd_harness_sweep(
     end: Option<&str>,
     bankroll: f64,
     cache_dir: Option<&str>,
+    require_shared_distilled: bool,
     variant_json: Option<&str>,
     btc_csv: Option<&str>,
+    settlement_btc_csv: Option<&str>,
     latency_ms: u64,
     conf: Vec<f64>,
     z: Vec<f64>,
@@ -9955,6 +9747,7 @@ async fn cmd_harness_sweep(
     report_json: Option<&str>,
     trades_json: Option<&str>,
     trade_features_json: Option<&str>,
+    calibration_opportunities_json: Option<&str>,
     require_causal_tag: Vec<String>,
     deny_causal_tag: Vec<String>,
     window_minutes: Option<f64>,
@@ -9971,6 +9764,10 @@ async fn cmd_harness_sweep(
             std::process::exit(2);
         }
     };
+    if calibration_opportunities_json.is_some() && !continuous {
+        eprintln!("--calibration-opportunities-json requires --continuous");
+        std::process::exit(2);
+    }
     let end_dt = match end {
         Some(e) => match DateTime::parse_from_rfc3339(e) {
             Ok(d) => d.with_timezone(&Utc),
@@ -10075,8 +9872,8 @@ async fn cmd_harness_sweep(
             );
             std::process::exit(2);
         }
-        match load_strategy_variant_json(path) {
-            Ok(variant) => vec![variant],
+        match backtest::variant_io::read_variants(path) {
+            Ok(variants) => variants,
             Err(e) => {
                 eprintln!("load --variant-json {path}: {e:#}");
                 std::process::exit(2);
@@ -10197,13 +9994,16 @@ async fn cmd_harness_sweep(
         contracts = universe.contracts.len(),
         "harness universe loaded"
     );
-    let (btc_required_start_ms, btc_required_end_ms) = btc_required_range_ms(
+    let (settlement_required_start_ms, settlement_required_end_ms) = btc_required_range_ms(
         &universe,
         start_dt.timestamp_millis(),
         end_dt.timestamp_millis() + 3_600_000,
     );
+    let signal_required_start_ms = settlement_required_start_ms - 3_600_000;
+    let signal_required_end_ms = settlement_required_end_ms;
 
-    // BTC tape
+    // The signal tape needs a full causal hour before the first selected candle
+    // so realized volatility cannot silently fall back to its sparse-data default.
     let mut btc = backtest::btc_history::BTCHistory::new();
     if let Some(p) = btc_csv {
         if let Err(e) = btc.load_csv(p) {
@@ -10211,9 +10011,8 @@ async fn cmd_harness_sweep(
             std::process::exit(1);
         }
     } else {
-        let pad_ms = 3_600_000;
-        let start_ms = btc_required_start_ms - pad_ms;
-        let end_ms = btc_required_end_ms + pad_ms;
+        let start_ms = signal_required_start_ms;
+        let end_ms = signal_required_end_ms;
         match btc
             .load_from_binance(start_ms, end_ms, "BTCUSDT", "1s")
             .await
@@ -10232,11 +10031,27 @@ async fn cmd_harness_sweep(
         }
     }
     ensure_btc_history_covers(
-        "harness-sweep",
+        "harness-sweep signal",
         &btc,
-        btc_required_start_ms,
-        btc_required_end_ms,
+        signal_required_start_ms,
+        signal_required_end_ms,
     );
+
+    let mut settlement_btc = btc.clone();
+    if let Some(path) = settlement_btc_csv {
+        settlement_btc = backtest::btc_history::BTCHistory::new();
+        if let Err(e) = settlement_btc.load_csv(path) {
+            eprintln!("settlement BTC CSV load failed: {e}");
+            std::process::exit(1);
+        }
+    }
+    ensure_settlement_btc_history_covers_universe(
+        "harness-sweep settlement",
+        &settlement_btc,
+        &universe,
+    );
+    let btc = std::sync::Arc::new(btc);
+    let settlement_btc = std::sync::Arc::new(settlement_btc);
 
     let shared_dir = std::env::var("PMXT_DISTILLED_DIR")
         .ok()
@@ -10302,7 +10117,8 @@ async fn cmd_harness_sweep(
     let cfg = backtest::harness::HarnessConfig {
         hours,
         universe,
-        btc_history: std::sync::Arc::new(btc),
+        btc_history: btc,
+        settlement_btc_history: settlement_btc,
         bankroll_usd: bankroll,
         max_total_exposure_usd,
         min_order_size_shares: settings.live_min_order_size_shares,
@@ -10313,10 +10129,12 @@ async fn cmd_harness_sweep(
         breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
         adaptive_rearm_after_s,
         shared_distilled_dir: shared_dir,
+        require_shared_distilled,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag.clone()),
         continuous,
+        capture_calibration_opportunities: calibration_opportunities_json.is_some(),
         delete_downloaded_parquet_after_hour: atomic_parquet,
     };
 
@@ -10488,6 +10306,69 @@ async fn cmd_harness_sweep(
                     std::process::exit(1);
                 }
                 println!("Trade feature report: {path}");
+            }
+            if let Some(path) = calibration_opportunities_json {
+                let mut rows = Vec::new();
+                let mut condition_ids = std::collections::BTreeSet::new();
+                for (variant_index, run) in runs.iter().enumerate() {
+                    let params_hash = strategy::spec::stable_json_hash(&run.variant);
+                    for (opportunity_index, opportunity) in
+                        run.calibration_opportunities.iter().enumerate()
+                    {
+                        condition_ids.insert(opportunity.condition_id.clone());
+                        rows.push(serde_json::json!({
+                            "variant_index": variant_index,
+                            "opportunity_index": opportunity_index,
+                            "strategy_name": &run.variant.name,
+                            "params_hash": &params_hash,
+                            "risk_profile": run.variant.risk_profile(),
+                            "opportunity": opportunity,
+                        }));
+                    }
+                }
+                if rows.is_empty() {
+                    eprintln!(
+                        "write calibration opportunity report {path}: no pre-edge opportunities were captured"
+                    );
+                    std::process::exit(1);
+                }
+                let experiment = backtest::experiment::ExperimentReport::from_harness(
+                    "harness_sweep_calibration_opportunities",
+                    &cfg,
+                    &runs,
+                );
+                let report = serde_json::json!({
+                    "schema_version": 1,
+                    "generated_at": chrono::Utc::now().to_rfc3339(),
+                    "mode": "harness_sweep_calibration_opportunities",
+                    "start": start_dt.to_rfc3339(),
+                    "end": end_dt.to_rfc3339(),
+                    "bankroll_usd": cfg.bankroll_usd,
+                    "max_total_exposure_usd": cfg.max_total_exposure_usd,
+                    "latency_ms": cfg.latency.insert_ms,
+                    "window_minutes": window_minutes,
+                    "continuous": continuous,
+                    "sampling": "first_pre_edge_candidate_per_condition_utc_second",
+                    "row_count": rows.len(),
+                    "condition_count": condition_ids.len(),
+                    "variant_count": runs.len(),
+                    "data_manifest": experiment.data_manifest,
+                    "notes": [
+                        "Rows are captured only after all non-edge strategy gates pass and before the final EV, stale-edge, and minimum-edge checks.",
+                        "The capture run fails if its variant submits any trade, preventing first-trade state from truncating later counterfactual opportunities.",
+                        "Repeated seconds from one condition share one terminal label and must be condition-weighted during fitting and scoring.",
+                        "Chosen-token logit changes require a midpoint no more than two seconds old and at least 80 percent causal coverage of the requested 5, 30, or 60 second horizon; invalid probabilities are not clamped.",
+                        "BTC returns are direction-aligned log returns in basis points over the same fixed horizons; missing path features must fail closed and must not be imputed.",
+                        "Binary-complement residuals use the simultaneous causal state of both outcome books: chosen midpoint plus opposite midpoint minus one, and the corresponding three-level depth-weighted microprice sum minus one. Missing or invalid paired books are null and must fail closed.",
+                        "Fold boundaries are chronological; never shuffle rows or fit on the scored fold."
+                    ],
+                    "rows": rows,
+                });
+                if let Err(e) = write_json_atomic(path, &report, false) {
+                    eprintln!("write calibration opportunity report {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("Calibration opportunity report: {path}");
             }
             // Sort by PnL descending; trim to top N.
             let mut sorted = runs;
@@ -10873,6 +10754,7 @@ async fn cmd_harness(
     let cfg = backtest::harness::HarnessConfig {
         hours,
         universe,
+        settlement_btc_history: std::sync::Arc::new(btc.clone()),
         btc_history: std::sync::Arc::new(btc),
         bankroll_usd: bankroll,
         max_total_exposure_usd,
@@ -10884,10 +10766,12 @@ async fn cmd_harness(
         breaker_cfg: live::breaker::BreakerConfig::from_settings(settings),
         adaptive_rearm_after_s,
         shared_distilled_dir: shared_dir,
+        require_shared_distilled: false,
         threads: if threads == 0 { None } else { Some(threads) },
         checkpoint_dir: checkpoint_dir.clone(),
         stop_flag: Some(stop_flag),
         continuous,
+        capture_calibration_opportunities: false,
         delete_downloaded_parquet_after_hour: atomic_parquet,
     };
 
@@ -11237,19 +11121,46 @@ async fn cmd_eval_cache(
     }
 }
 
-fn f64opt(v: &serde_json::Value, key: &str) -> Option<f64> {
-    v.get(key).and_then(|x| x.as_f64())
-}
-
-fn u32opt(v: &serde_json::Value, key: &str) -> Option<u32> {
-    v.get(key)
-        .and_then(|x| x.as_u64())
-        .and_then(|x| u32::try_from(x).ok())
-}
-
 #[cfg(test)]
 mod replay_validation_tests {
     use super::*;
+
+    #[test]
+    fn numeric_list_parsers_reject_invalid_and_non_finite_values() {
+        assert_eq!(try_parse_csv_floats("0.1, 0.2").unwrap(), vec![0.1, 0.2]);
+        assert_eq!(try_parse_csv_u64s("1, 2").unwrap(), vec![1, 2]);
+        assert!(try_parse_csv_floats("0.1,,0.2").is_err());
+        assert!(try_parse_csv_floats("NaN").is_err());
+        assert!(try_parse_csv_floats("inf").is_err());
+        assert!(try_parse_csv_u64s("-1").is_err());
+        assert!(try_parse_csv_u64s("2.5").is_err());
+    }
+
+    #[test]
+    fn btc_required_range_uses_selected_contracts_not_whole_clock_hours() {
+        let close = chrono::DateTime::parse_from_rfc3339("2026-07-14T16:30:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let universe = backtest::harness::CandleUniverse {
+            contracts: vec![data::scanner::CandleContract {
+                market: data::models::Market::default(),
+                up_token_id: "up".to_string(),
+                down_token_id: "down".to_string(),
+                up_price: 0.5,
+                down_price: 0.5,
+                end_date: "2026-07-14T16:30:00Z".to_string(),
+                hours_left: 0.0,
+                volume: 0.0,
+                liquidity: 0.0,
+                window_description: "July 14, 12:25PM-12:30PM ET".to_string(),
+                asset: "BTC".to_string(),
+            }],
+        };
+
+        let range = btc_required_range_ms(&universe, close - 9_000_000, close + 9_000_000);
+
+        assert_eq!(range, (close - 300_000, close));
+    }
 
     #[test]
     fn rtds_btc_parser_separates_official_chainlink_and_binance_proxy() {
@@ -11805,6 +11716,66 @@ mod replay_validation_tests {
     }
 
     #[test]
+    fn recorded_book_converter_manifest_uses_exact_replay_contract() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let raw_dir = tmp.path().join("raw");
+        let output_dir = tmp.path().join("converted");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let market = data::models::Market {
+            condition_id: "0xabc".to_string(),
+            slug: "btc-updown-5m-test".to_string(),
+            outcomes: vec![
+                data::models::Outcome {
+                    token_id: "up-token".to_string(),
+                    name: "Up".to_string(),
+                    price: 0.5,
+                },
+                data::models::Outcome {
+                    token_id: "down-token".to_string(),
+                    name: "Down".to_string(),
+                    price: 0.5,
+                },
+            ],
+            ..Default::default()
+        };
+        write_json_atomic(
+            raw_dir.join("gamma_market_cache.json"),
+            &std::collections::BTreeMap::from([("0xabc".to_string(), market)]),
+            true,
+        )
+        .unwrap();
+        let raw_message = serde_json::json!({
+            "event_type": "book",
+            "market": "0xabc",
+            "asset_id": "up-token",
+            "timestamp": "1782898923000",
+            "bids": [{"price": "0.41", "size": "10"}],
+            "asks": [{"price": "0.43", "size": "8"}],
+        });
+        let frame = serde_json::json!({
+            "ts_received_ms": 1782898923001_i64,
+            "raw": serde_json::to_string(&raw_message).unwrap(),
+        });
+        std::fs::write(raw_dir.join("market_ws_frames.jsonl"), format!("{frame}\n")).unwrap();
+
+        cmd_convert_recorded_btc_books(raw_dir.to_str().unwrap(), output_dir.to_str().unwrap())
+            .unwrap();
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output_dir.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest["output"]["harness_env"]["PMXT_DISTILLED_DIR"].as_str(),
+            output_dir.to_str()
+        );
+        assert_eq!(
+            manifest["output"]["exact_replay_flag"].as_str(),
+            Some("--require-shared-distilled")
+        );
+        assert!(manifest["output"].get("harness_flag").is_none());
+    }
+
+    #[test]
     fn terminal_direction_requires_closed_terminal_market() {
         let mut market = data::models::Market {
             condition_id: "0xabc".into(),
@@ -11956,43 +11927,6 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn runtime_event_updates_validation_config_from_inline_strategy() {
-        let zone = strategy::decision::ZoneConfig {
-            min_ev_buffer: 0.12,
-            settlement_min_abs_move_usd: 25.0,
-            ..strategy::decision::ZoneConfig::default()
-        };
-        let event = serde_json::json!({
-            "cat": "system",
-            "type": "runtime_strategy",
-            "zone_config": zone,
-            "min_confidence": 0.42,
-            "min_edge": 0.03,
-            "skip_dead_zone": false,
-            "settlement_alignment_ready": false
-        });
-        let mut cfg = ReplayValidationConfig::default();
-
-        cfg.apply_runtime_strategy_event(&event);
-
-        assert_eq!(cfg.zone_config.min_ev_buffer, 0.12);
-        assert_eq!(cfg.zone_config.settlement_min_abs_move_usd, 25.0);
-        assert_eq!(cfg.min_confidence, 0.42);
-        assert_eq!(cfg.min_edge, 0.03);
-        assert!(!cfg.skip_dead_zone);
-        assert!(!cfg.settlement_alignment_ready);
-    }
-
-    #[test]
-    fn promotion_source_path_ignores_suffix_flags() {
-        assert_eq!(
-            promotion_path_from_runtime_source("promotion:/tmp/promotion.json+settlement_floor"),
-            Some("/tmp/promotion.json")
-        );
-        assert_eq!(promotion_path_from_runtime_source("settings"), None);
-    }
-
-    #[test]
     fn selectivity_parser_allows_multi_value_dimensions() {
         let filter = parse_selectivity_filter(
             &["direction=up".to_string()],
@@ -12011,18 +11945,6 @@ mod replay_validation_tests {
         assert!(regimes.contains("zone=early|dir=up"));
         assert!(regimes.contains("zone=primary|dir=up"));
         assert!(!filter.deny_tags.contains_key("regime"));
-    }
-
-    #[test]
-    fn replay_validation_reads_logged_reversion_count_as_u32() {
-        let event = serde_json::json!({ "reversion_count": 3 });
-        assert_eq!(u32opt(&event, "reversion_count"), Some(3));
-
-        let too_large = serde_json::json!({ "reversion_count": u64::from(u32::MAX) + 1 });
-        assert_eq!(u32opt(&too_large, "reversion_count"), None);
-
-        let missing = serde_json::json!({});
-        assert_eq!(u32opt(&missing, "reversion_count"), None);
     }
 
     fn wallet_balances(
