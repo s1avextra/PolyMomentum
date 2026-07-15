@@ -9,6 +9,9 @@ tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "native-tls"] }
+# Measurement artifact builds must not depend on a host Linux OpenSSL sysroot.
+# Feature unification keeps native-tls while compiling the same OpenSSL crate.
+openssl = { version = "0.10", features = ["vendored"] }
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 # EIP-712 order signing (k256 + sha3 + keccak)
