@@ -1,0 +1,12 @@
+[Unit]
+Description=Run a bounded PolyMomentum strategy research cycle every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=5min
+Persistent=true
+Unit=polymomentum-strategy-research.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,7 @@
 #!/bin/bash
 # PolyMomentum healthcheck — invoked by polymomentum-healthcheck.timer.
-# Checks: service up, kill switch, breaker, last-trade staleness, disk pressure.
+# Checks: service up, kill switch, breaker, last-trade staleness, disk pressure,
+# forward-capture research progress.
 set -uo pipefail
 
 APP_DIR="${POLYMOMENTUM_DIR:-/opt/polymomentum}"
@@ -103,6 +104,28 @@ if [ -f "$STATE_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
         if [ "$AGE" -gt "$MAX_AGE" ]; then
             HOURS=$((AGE / 3600))
             alert "no_trades" "no trades for ${HOURS}h (limit ${INACTIVE_HOURS}h)"
+        fi
+    fi
+fi
+
+# 4. Forward-capture research progress. The binary-complement collector has
+# silently stalled twice (disk watermark in July, latency-gate exit in August);
+# alert when a COLLECTING block stops producing artifacts or its unit failed.
+FLOOR_DIR="${FLOOR_DIR:-$APP_DIR/logs/forward-captures/binary-complement-block1-floor}"
+FLOOR_STATUS="$FLOOR_DIR/floor_collection_status.json"
+RESEARCH_STALL_HOURS="${RESEARCH_STALL_HOURS:-12}"
+if systemctl list-units --state=failed --plain --no-legend 'polymomentum-binary-complement-*' 2>/dev/null | grep -q .; then
+    alert "research_collector_failed" "binary-complement collector unit is in failed state — restart required"
+fi
+if [ -f "$FLOOR_STATUS" ] && command -v jq >/dev/null 2>&1; then
+    FLOOR_STATE=$(jq -r '.state // empty' "$FLOOR_STATUS" 2>/dev/null)
+    if [ "$FLOOR_STATE" = "COLLECTING" ]; then
+        NEWEST_TS=$(find "$FLOOR_DIR" -mindepth 1 -maxdepth 2 -printf '%T@\n' 2>/dev/null | sort -nr | head -1 | cut -d. -f1)
+        [ -n "$NEWEST_TS" ] || NEWEST_TS=$(stat -c %Y "$FLOOR_STATUS" 2>/dev/null || echo "$now")
+        AGE_H=$(( (now - NEWEST_TS) / 3600 ))
+        if [ "$AGE_H" -ge "$RESEARCH_STALL_HOURS" ]; then
+            SUPPORT=$(jq -r '"\(.unique_ready_terminal_conditions)/\(.target_terminal_conditions)"' "$FLOOR_STATUS" 2>/dev/null || echo "?")
+            alert "research_stalled" "binary-complement collection is COLLECTING but produced no new artifact for ${AGE_H}h (limit ${RESEARCH_STALL_HOURS}h) — support ${SUPPORT}"
         fi
     fi
 fi

@@ -1,0 +1,25 @@
+[Unit]
+Description=PolyMomentum bounded strategy research cycle (dev box only)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/polymomentum-dev/deploy/strategy-research-loop.json
+
+[Service]
+Type=oneshot
+User=polymomentum
+Group=polymomentum
+WorkingDirectory=/opt/polymomentum-dev
+ExecStart=/usr/bin/python3 /opt/polymomentum-dev/scripts/strategy_research_loop.py --config /opt/polymomentum-dev/deploy/strategy-research-loop.json --once
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=10
+MemoryHigh=6G
+MemoryMax=8G
+TasksMax=256
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/polymomentum-dev/logs/strategy-research
+

@@ -92,7 +92,7 @@ else
     (cd "$ROOT_DIR/rust_engine" && \
         POLYMOMENTUM_GIT_SHA="$GIT_SHA" \
         POLYMOMENTUM_BUILD_TIMESTAMP="$BUILD_TS" \
-        cargo build --release --bin polymomentum-engine)
+        cargo build --release --locked --bin polymomentum-engine)
 
     BIN="$ROOT_DIR/rust_engine/target/release/polymomentum-engine"
     if [ ! -f "$BIN" ]; then
