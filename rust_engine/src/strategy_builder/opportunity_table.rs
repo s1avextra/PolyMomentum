@@ -26,7 +26,10 @@ use crate::execution::fees::polymarket_fee;
 use crate::strategy::spec::stable_json_hash;
 
 pub const OPPORTUNITY_TABLE_SCHEMA_VERSION: &str = "opportunity_table_v1";
-pub const CAUSAL_FEATURE_SEMANTICS_VERSION: &str = "late_window_causal_features_v1";
+// v2 (2026-08-17): adds partial_twap_approx / partial_twap_lead_usd /
+// twap_locked_fraction for the TWAP resolution era. v1 seals stay valid;
+// dataset-seal refuses to mix semantics versions.
+pub const CAUSAL_FEATURE_SEMANTICS_VERSION: &str = "late_window_causal_features_v2";
 
 #[derive(Debug, Clone)]
 pub struct OpportunityTableInput {
@@ -138,6 +141,16 @@ pub struct OpportunityRow {
     pub fee_aware_net_win_usd: Option<f64>,
     pub fee_aware_max_loss_usd: Option<f64>,
     pub loss_recovery_wins: Option<f64>,
+    /// Checkpoint step-function partial TWAP of `[window_start, observed_at)`
+    /// (open + 60s checkpoints). TWAP-era feature: at observed_at the final
+    /// window TWAP is already `twap_locked_fraction` determined by this
+    /// value. None when a required checkpoint is missing (fail closed).
+    pub partial_twap_approx: Option<f64>,
+    /// `partial_twap_approx - btc_open` — the causally locked TWAP lead.
+    pub partial_twap_lead_usd: Option<f64>,
+    /// `elapsed / (elapsed + remaining)` — the weight of the window average
+    /// already fixed by observed prices.
+    pub twap_locked_fraction: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -476,6 +489,23 @@ fn build_row(
         direction,
     );
     let signed_distance = signal.raw.btc_observed - signal.raw.strike_price;
+    let partial_twap_approx = checkpoint_partial_twap(
+        signal.raw.btc_open,
+        &[
+            signal.raw.btc_60s,
+            signal.raw.btc_120s,
+            signal.raw.btc_180s,
+            signal.raw.btc_240s,
+        ],
+        elapsed_seconds,
+    );
+    let partial_twap_lead_usd = partial_twap_approx.map(|twap| twap - signal.raw.btc_open);
+    let window_seconds = elapsed_seconds + remaining_seconds;
+    let twap_locked_fraction = if window_seconds > 0.0 {
+        (elapsed_seconds / window_seconds).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let opportunity_id = stable_json_hash(&serde_json::json!({
         "schema_version": OPPORTUNITY_TABLE_SCHEMA_VERSION,
         "condition_id": &signal.raw.condition_id,
@@ -528,6 +558,9 @@ fn build_row(
         executable_shares: book_metrics.executable_shares,
         average_entry_price: book_metrics.average_entry_price,
         taker_fee_usd: book_metrics.taker_fee,
+        partial_twap_approx,
+        partial_twap_lead_usd,
+        twap_locked_fraction,
         fee_aware_break_even_probability: book_metrics.break_even_probability,
         fee_aware_net_win_usd: book_metrics.net_win,
         fee_aware_max_loss_usd: book_metrics.max_loss,
@@ -658,6 +691,36 @@ fn measure_book(
     }
 }
 
+/// Step-function partial TWAP over `[0, elapsed_seconds)` from the window
+/// open plus 60-second checkpoints: price on `[60i, 60(i+1))` is the
+/// checkpoint observed at `60i`. Fail-closed: any REQUIRED checkpoint
+/// (strictly inside the elapsed span) missing returns None rather than a
+/// silently coarser average.
+fn checkpoint_partial_twap(
+    open: f64,
+    checkpoints: &[Option<f64>],
+    elapsed_seconds: f64,
+) -> Option<f64> {
+    if elapsed_seconds <= 0.0 {
+        return None;
+    }
+    let mut integral = 0.0_f64;
+    let mut cur_price = open;
+    let mut cur_t = 0.0_f64;
+    for (index, checkpoint) in checkpoints.iter().enumerate() {
+        let t = 60.0 * (index as f64 + 1.0);
+        if t >= elapsed_seconds {
+            break;
+        }
+        let price = (*checkpoint)?;
+        integral += cur_price * (t - cur_t);
+        cur_price = price;
+        cur_t = t;
+    }
+    integral += cur_price * (elapsed_seconds - cur_t);
+    Some(integral / elapsed_seconds)
+}
+
 fn write_parquet_atomic(path: &Path, rows: &[OpportunityRow]) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -743,6 +806,9 @@ fn opportunity_schema() -> Arc<Schema> {
         Field::new("fee_aware_net_win_usd", DataType::Float64, true),
         Field::new("fee_aware_max_loss_usd", DataType::Float64, true),
         Field::new("loss_recovery_wins", DataType::Float64, true),
+        Field::new("partial_twap_approx", DataType::Float64, true),
+        Field::new("partial_twap_lead_usd", DataType::Float64, true),
+        Field::new("twap_locked_fraction", DataType::Float64, false),
     ];
     Arc::new(Schema::new(fields))
 }
@@ -828,6 +894,9 @@ fn opportunity_batch(schema: Arc<Schema>, rows: &[OpportunityRow]) -> Result<Rec
             optional_floats(|r| r.fee_aware_net_win_usd),
             optional_floats(|r| r.fee_aware_max_loss_usd),
             optional_floats(|r| r.loss_recovery_wins),
+            optional_floats(|r| r.partial_twap_approx),
+            optional_floats(|r| r.partial_twap_lead_usd),
+            floats(|r| r.twap_locked_fraction),
         ],
     )
     .context("build opportunity-table record batch")
@@ -1030,5 +1099,25 @@ mod tests {
             1
         );
         assert_eq!(rows[0].opportunity_id.len(), 64);
+    }
+
+    #[test]
+    fn checkpoint_partial_twap_weights_segments_and_fails_closed() {
+        // 240s elapsed: [0,60)=100, [60,120)=110, [120,180)=120, [180,240)=130
+        // -> (100+110+120+130)/4 = 115. btc_240s is NOT required (t=240 not < 240).
+        let twap = checkpoint_partial_twap(
+            100.0,
+            &[Some(110.0), Some(120.0), Some(130.0), None],
+            240.0,
+        )
+        .unwrap();
+        assert!((twap - 115.0).abs() < 1e-9, "got {twap}");
+        // 180s elapsed uses open + 60s + 120s checkpoints only.
+        let twap_180 =
+            checkpoint_partial_twap(100.0, &[Some(110.0), Some(120.0), None, None], 180.0).unwrap();
+        assert!((twap_180 - 110.0).abs() < 1e-9, "got {twap_180}");
+        // A required checkpoint missing fails closed.
+        assert!(checkpoint_partial_twap(100.0, &[None, Some(120.0), None, None], 180.0).is_none());
+        assert!(checkpoint_partial_twap(100.0, &[], 0.0).is_none());
     }
 }
