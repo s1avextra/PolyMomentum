@@ -158,6 +158,24 @@ ssh "$VPS" "sudo install -o polymomentum -g polymomentum -m 0755 /tmp/polymoment
     rm -f /tmp/polymomentum-healthcheck.sh /tmp/polymomentum-soak-report.sh /tmp/polymomentum-healthcheck.service /tmp/polymomentum-healthcheck.timer /tmp/polymomentum-soak-report.service /tmp/polymomentum-soak-report.timer"
 
 echo "=== Updating systemd unit (mode=$MODE) ==="
+if [ "$MODE" = "live" ]; then
+    # Blocking registry gate: a live deploy requires the registry audit to
+    # pass AND to report exactly one promoted, live-ready strategy. This is
+    # the enforcement half of the audit trail — do not bypass with manual
+    # unit edits.
+    echo "=== Registry audit (live gate) ==="
+    AUDIT_TMP="$(mktemp)"
+    "$ROOT_DIR/rust_engine/target/release/polymomentum-engine" strategy-builder registry-audit \
+        --registry "$ROOT_DIR/docs/strategy_registry.json" \
+        --output "$AUDIT_TMP"
+    AUDIT_OK="$(python3 -c "import json;print(json.load(open('$AUDIT_TMP'))['ok'])")"
+    AUDIT_LIVE_READY="$(python3 -c "import json;print(json.load(open('$AUDIT_TMP'))['live_ready'])")"
+    rm -f "$AUDIT_TMP"
+    if [ "$AUDIT_OK" != "True" ] || [ "$AUDIT_LIVE_READY" != "True" ]; then
+        echo "live deploy blocked: registry-audit ok=$AUDIT_OK live_ready=$AUDIT_LIVE_READY" >&2
+        exit 3
+    fi
+fi
 SERVICE_TMP="$(mktemp)"
 sed "s|--mode paper|--mode $MODE|" "$ROOT_DIR/deploy/polymomentum-engine.service" > "$SERVICE_TMP"
 if [ "$MODE" = "live" ]; then

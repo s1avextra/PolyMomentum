@@ -55,6 +55,14 @@ jobs:
         working-directory: rust_engine
         run: cargo build --release --locked --bin polymomentum-engine
 
+      - name: Registry audit (blocking)
+        run: |
+          ./rust_engine/target/release/polymomentum-engine strategy-builder registry-audit \
+            --output /tmp/registry_audit.json
+          ok=$(python3 -c "import json; print(json.load(open('/tmp/registry_audit.json'))['ok'])")
+          echo "registry-audit ok=$ok"
+          test "$ok" = "True"
+
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 10
