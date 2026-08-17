@@ -1378,7 +1378,8 @@ enum StrategyBuilderCommand {
         /// Sealed causal opportunity dataset JSON.
         #[arg(long)]
         dataset_seal: String,
-        /// Strict label-only JSONL or JSONL.GZ source.
+        /// close_vs_open: strict label-only JSONL(.GZ). twap_vs_open: a
+        /// settlement tape CSV the window TWAP is computed from.
         #[arg(long)]
         label_source: String,
         /// Output label Parquet keyed only by opportunity_id.
@@ -1387,6 +1388,10 @@ enum StrategyBuilderCommand {
         /// Output label provenance manifest JSON.
         #[arg(long)]
         manifest: String,
+        /// close_vs_open (pre-2026-08-08 markets) or twap_vs_open
+        /// (post-change markets). Each mode refuses the other era's windows.
+        #[arg(long, default_value = "close_vs_open")]
+        resolution_rule: String,
     },
     /// Search a bounded policy grid in one pass and collapse exact-replay traces.
     OpportunityPolicySearch {
@@ -3474,6 +3479,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             label_source,
             output,
             manifest,
+            resolution_rule,
         } => {
             let result = strategy_builder::opportunity_dataset::create_labels(
                 strategy_builder::opportunity_dataset::OpportunityLabelsInput {
@@ -3481,6 +3487,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     label_source_path: std::path::PathBuf::from(label_source),
                     output_path: std::path::PathBuf::from(output),
                     manifest_path: std::path::PathBuf::from(manifest),
+                    resolution_rule,
                 },
             );
             match result {

@@ -62,6 +62,44 @@ pub struct OpportunityLabelsInput {
     pub label_source_path: PathBuf,
     pub output_path: PathBuf,
     pub manifest_path: PathBuf,
+    /// "close_vs_open" (pre-2026-08-08 markets: terminal price vs open) or
+    /// "twap_vs_open" (post-change markets: window TWAP vs open, ties UP per
+    /// the official rule text). Each mode refuses windows from the other
+    /// era — silent regime mixing is what froze the canary.
+    pub resolution_rule: String,
+}
+
+/// Polymarket switched candle resolution from terminal-vs-open to
+/// Chainlink-TWAP-vs-open inside this window (dated by per-session
+/// SETTLEMENT_DISAGREEMENT counts; see
+/// docs/twap_resolution_rule_change_2026-08-17.md). Windows starting inside
+/// the ambiguous band are excluded from labeling under EITHER rule.
+pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS: i64 = 1_786_888_800_000; // 2026-08-08T14:00:00Z
+pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS: i64 = 1_786_896_000_000; // 2026-08-08T16:00:00Z
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolutionRule {
+    CloseVsOpen,
+    TwapVsOpen,
+}
+
+impl ResolutionRule {
+    fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "close_vs_open" => Ok(Self::CloseVsOpen),
+            "twap_vs_open" => Ok(Self::TwapVsOpen),
+            other => bail!("unknown resolution rule {other:?}; use close_vs_open or twap_vs_open"),
+        }
+    }
+
+    /// Era check: does a window starting at `window_start_ms` belong to this
+    /// rule's era? Ambiguous-band windows belong to neither.
+    fn owns_window(self, window_start_ms: i64) -> bool {
+        match self {
+            Self::CloseVsOpen => window_start_ms < RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS,
+            Self::TwapVsOpen => window_start_ms >= RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,6 +118,18 @@ pub struct OpportunityLabelsManifest {
     pub fresh_holdout_labels_present: bool,
     pub join_key: String,
     pub resolution_semantics: String,
+    /// Which era rule produced these labels. Empty in pre-2026-08-17
+    /// manifests, which were all close_vs_open.
+    #[serde(default)]
+    pub resolution_rule: String,
+    /// Rows excluded because their window belongs to the other resolution
+    /// era (or the ambiguous 2026-08-08 14:00-16:00Z band).
+    #[serde(default)]
+    pub wrong_era_rows_excluded: usize,
+    /// TWAP mode only: the settlement tape's median tick interval over the
+    /// labeled span — makes the TWAP evaluator's granularity visible.
+    #[serde(default)]
+    pub settlement_tape_median_interval_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,12 +298,30 @@ pub fn create_labels(input: OpportunityLabelsInput) -> Result<OpportunityLabelsM
     {
         bail!("label outputs must not replace inputs or each other");
     }
+    let rule = ResolutionRule::parse(&input.resolution_rule)?;
     let seal_sha256 = sha256_file(&input.dataset_seal_path)?;
     let (seal, opportunities) = load_sealed_opportunities(&input.dataset_seal_path)?;
     let source_sha256 = sha256_file(&input.label_source_path)?;
-    let labels_by_window = read_window_labels(&input.label_source_path)?;
-    let (mut labels, tie_rows, missing_label_rows, fresh_holdout_rows_excluded) =
-        join_discovery_labels(&opportunities, &labels_by_window);
+    let (mut labels, join_stats, tape_median_interval_ms) = match rule {
+        ResolutionRule::CloseVsOpen => {
+            let labels_by_window = read_window_labels(&input.label_source_path)?;
+            let (labels, stats) = join_discovery_labels(&opportunities, &labels_by_window, rule);
+            (labels, stats, None)
+        }
+        ResolutionRule::TwapVsOpen => {
+            let mut tape = crate::backtest::btc_history::BTCHistory::new();
+            let rows = tape
+                .load_csv(&input.label_source_path)
+                .with_context(|| "load settlement tape for TWAP labels")?;
+            if rows == 0 {
+                bail!("settlement tape is empty");
+            }
+            let median = tape
+                .median_interval_ms(tape.first_timestamp_ms(), tape.last_timestamp_ms());
+            let (labels, stats) = join_twap_labels(&opportunities, &tape, rule);
+            (labels, stats, median)
+        }
+    };
     labels.sort_by(|left, right| left.opportunity_id.cmp(&right.opportunity_id));
     write_labels_parquet_atomic(&input.output_path, &labels)?;
     let manifest = OpportunityLabelsManifest {
@@ -274,36 +342,58 @@ pub fn create_labels(input: OpportunityLabelsInput) -> Result<OpportunityLabelsM
         },
         total_opportunities: opportunities.len(),
         labeled_rows: labels.len(),
-        tie_rows,
-        missing_label_rows,
-        fresh_holdout_rows_excluded,
+        tie_rows: join_stats.tie_rows,
+        missing_label_rows: join_stats.missing_label_rows,
+        fresh_holdout_rows_excluded: join_stats.fresh_holdout_rows_excluded,
         fresh_holdout_labels_present: false,
         join_key: "opportunity_id".to_string(),
-        resolution_semantics: "Binance one-minute window terminal close proxy; official settlement parity remains a later gate".to_string(),
+        resolution_semantics: match rule {
+            ResolutionRule::CloseVsOpen => "pre-2026-08-08 era: terminal price vs open (Binance \
+                one-minute terminal close proxy); official settlement parity remains a later gate"
+                .to_string(),
+            ResolutionRule::TwapVsOpen => "post-2026-08-08 era: window TWAP vs open per the \
+                official rule text (TWAP >= open resolves Up, ties Up); TWAP computed \
+                step-function over the supplied settlement tape"
+                .to_string(),
+        },
+        resolution_rule: input.resolution_rule.clone(),
+        wrong_era_rows_excluded: join_stats.wrong_era_rows_excluded,
+        settlement_tape_median_interval_ms: tape_median_interval_ms,
     };
     write_json_artifact_atomic(&input.manifest_path, &manifest)?;
     Ok(manifest)
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct LabelJoinStats {
+    tie_rows: usize,
+    missing_label_rows: usize,
+    fresh_holdout_rows_excluded: usize,
+    wrong_era_rows_excluded: usize,
+}
+
 fn join_discovery_labels(
     opportunities: &[CausalOpportunity],
     labels_by_window: &HashMap<i64, f64>,
-) -> (Vec<OpportunityLabel>, usize, usize, usize) {
+    rule: ResolutionRule,
+) -> (Vec<OpportunityLabel>, LabelJoinStats) {
     let mut labels = Vec::with_capacity(opportunities.len());
-    let mut tie_rows = 0usize;
-    let mut missing_label_rows = 0usize;
-    let mut fresh_holdout_rows_excluded = 0usize;
+    let mut stats = LabelJoinStats::default();
     for opportunity in opportunities {
         // Discovery labels are physically incapable of exposing the fresh
         // holdout. A separately locked post-selection command must own any
         // eventual fresh scoring step.
         if opportunity.chronological_window == "fresh_holdout" {
-            fresh_holdout_rows_excluded += 1;
+            stats.fresh_holdout_rows_excluded += 1;
+            continue;
+        }
+        if !rule.owns_window(opportunity.window_start_ms) {
+            stats.wrong_era_rows_excluded += 1;
             continue;
         }
         let window_start = opportunity.window_start_ms / 1_000;
         let Some(terminal_btc) = labels_by_window.get(&window_start).copied() else {
-            missing_label_rows += 1;
+            stats.missing_label_rows += 1;
             continue;
         };
         let (terminal_direction, won) = if terminal_btc > opportunity.btc_open {
@@ -311,7 +401,7 @@ fn join_discovery_labels(
         } else if terminal_btc < opportunity.btc_open {
             ("down", Some(opportunity.signal_direction == "down"))
         } else {
-            tie_rows += 1;
+            stats.tie_rows += 1;
             ("tie", None)
         };
         labels.push(OpportunityLabel {
@@ -321,12 +411,49 @@ fn join_discovery_labels(
             won,
         });
     }
-    (
-        labels,
-        tie_rows,
-        missing_label_rows,
-        fresh_holdout_rows_excluded,
-    )
+    (labels, stats)
+}
+
+/// TWAP-era labels: the resolving quantity is the step-function TWAP of the
+/// settlement tape over the full window, and the official rule text resolves
+/// TWAP >= open as Up — exact ties are Up, not excluded. `terminal_btc`
+/// carries the TWAP value (column name kept for schema compatibility).
+fn join_twap_labels(
+    opportunities: &[CausalOpportunity],
+    tape: &crate::backtest::btc_history::BTCHistory,
+    rule: ResolutionRule,
+) -> (Vec<OpportunityLabel>, LabelJoinStats) {
+    let mut labels = Vec::with_capacity(opportunities.len());
+    let mut stats = LabelJoinStats::default();
+    for opportunity in opportunities {
+        if opportunity.chronological_window == "fresh_holdout" {
+            stats.fresh_holdout_rows_excluded += 1;
+            continue;
+        }
+        if !rule.owns_window(opportunity.window_start_ms) {
+            stats.wrong_era_rows_excluded += 1;
+            continue;
+        }
+        let window_seconds = opportunity.elapsed_seconds + opportunity.remaining_seconds;
+        let close_ms = opportunity.window_start_ms + (window_seconds * 1000.0).round() as i64;
+        let Some(twap) = tape.twap_between(opportunity.window_start_ms, close_ms) else {
+            stats.missing_label_rows += 1;
+            continue;
+        };
+        if twap == opportunity.btc_open {
+            // Visible in the manifest, but still labeled: official ties go Up.
+            stats.tie_rows += 1;
+        }
+        let terminal_direction = if twap >= opportunity.btc_open { "up" } else { "down" };
+        let won = Some(opportunity.signal_direction == terminal_direction);
+        labels.push(OpportunityLabel {
+            opportunity_id: opportunity.opportunity_id.clone(),
+            terminal_btc: twap,
+            terminal_direction: terminal_direction.to_string(),
+            won,
+        });
+    }
+    (labels, stats)
 }
 
 pub(crate) fn load_sealed_opportunities(
@@ -707,12 +834,67 @@ mod tests {
             opportunity("fresh", "fresh_holdout", 2_000),
         ];
         let labels_by_window = HashMap::from([(1, 101.0), (2, 1_000_000.0)]);
-        let (labels, ties, missing, fresh_excluded) =
-            join_discovery_labels(&opportunities, &labels_by_window);
+        let (labels, stats) =
+            join_discovery_labels(&opportunities, &labels_by_window, ResolutionRule::CloseVsOpen);
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].opportunity_id, "older");
-        assert_eq!(ties, 0);
-        assert_eq!(missing, 0);
-        assert_eq!(fresh_excluded, 1);
+        assert_eq!(stats.tie_rows, 0);
+        assert_eq!(stats.missing_label_rows, 0);
+        assert_eq!(stats.fresh_holdout_rows_excluded, 1);
+        assert_eq!(stats.wrong_era_rows_excluded, 0);
+    }
+
+    #[test]
+    fn close_vs_open_refuses_twap_era_windows() {
+        let opportunities = vec![
+            opportunity("old_era", "older", 1_000),
+            opportunity("twap_era", "older", RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS + 60_000),
+            opportunity(
+                "ambiguous",
+                "older",
+                RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS + 60_000,
+            ),
+        ];
+        let mut labels_by_window = HashMap::from([(1, 101.0)]);
+        labels_by_window.insert((RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS + 60_000) / 1_000, 101.0);
+        labels_by_window
+            .insert((RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS + 60_000) / 1_000, 101.0);
+        let (labels, stats) =
+            join_discovery_labels(&opportunities, &labels_by_window, ResolutionRule::CloseVsOpen);
+        assert_eq!(labels.len(), 1, "only the pre-change window may be labeled");
+        assert_eq!(labels[0].opportunity_id, "old_era");
+        assert_eq!(stats.wrong_era_rows_excluded, 2);
+    }
+
+    #[test]
+    fn twap_labels_follow_official_tie_up_rule_and_era_guard() {
+        use crate::backtest::btc_history::BTCHistory;
+        let start = RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS + 3_600_000;
+        let mut opp_up_tie = opportunity("tie_up", "older", start);
+        // opportunity() helper sets btc_open; align the tape so the TWAP
+        // equals the open exactly -> official rule resolves Up.
+        opp_up_tie.signal_direction = "up".to_string();
+        opp_up_tie.elapsed_seconds = 120.0;
+        opp_up_tie.remaining_seconds = 180.0;
+        let open = opp_up_tie.btc_open;
+        let mut tape = BTCHistory::default();
+        tape.timestamps_ms.push(start);
+        tape.prices.push(open);
+        tape.timestamps_ms.push(start + 300_000);
+        tape.prices.push(open);
+        let mut opp_pre_change = opportunity("pre_change", "older", 1_000);
+        opp_pre_change.elapsed_seconds = 120.0;
+        opp_pre_change.remaining_seconds = 180.0;
+        let (labels, stats) = join_twap_labels(
+            &[opp_up_tie, opp_pre_change],
+            &tape,
+            ResolutionRule::TwapVsOpen,
+        );
+        assert_eq!(labels.len(), 1, "pre-change window must be era-excluded");
+        assert_eq!(labels[0].opportunity_id, "tie_up");
+        assert_eq!(labels[0].terminal_direction, "up", "exact tie resolves Up");
+        assert_eq!(labels[0].won, Some(true));
+        assert_eq!(stats.tie_rows, 1);
+        assert_eq!(stats.wrong_era_rows_excluded, 1);
     }
 }

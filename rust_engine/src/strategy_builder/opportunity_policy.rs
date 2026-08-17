@@ -998,6 +998,9 @@ mod tests {
             fresh_holdout_labels_present: true,
             join_key: "opportunity_id".to_string(),
             resolution_semantics: "test".to_string(),
+            resolution_rule: "close_vs_open".to_string(),
+            wrong_era_rows_excluded: 0,
+            settlement_tape_median_interval_ms: None,
         };
         let error = validate_labels_manifest(&manifest, "dataset-hash", "seal-hash").unwrap_err();
         assert!(error.to_string().contains("fresh-holdout outcomes"));
