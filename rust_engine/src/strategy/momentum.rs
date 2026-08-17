@@ -299,8 +299,14 @@ impl MomentumDetector {
         let total_window = minutes_elapsed + minutes_remaining;
         let current_vol = self.realized_vol();
         let mut sigma_window = open_price * current_vol * (total_window / 525_600.0).sqrt();
-        if sigma_window < 1.0 {
-            sigma_window = 1.0;
+        // Asset-relative sigma floor: 1e-5 of the open price. On BTC at
+        // ~$100k this is ~$1 — the value the historical absolute floor was
+        // tuned around — while on SOL/ETH price scales the old flat $1.0
+        // floor inflated sigma and muted z-scores ~4x, silently disabling
+        // every non-BTC signal. Floor also guards div-by-zero on a dead tape.
+        let sigma_floor = (open_price.abs() * 1e-5).max(f64::MIN_POSITIVE);
+        if sigma_window < sigma_floor {
+            sigma_window = sigma_floor;
         }
         let z_score = price_change.abs() / sigma_window;
 
@@ -450,6 +456,36 @@ mod tests {
         assert_eq!(sig.direction, "up");
         assert!(sig.consistency > 0.5);
         assert!(sig.confidence > 0.0);
+    }
+
+    #[test]
+    fn z_score_is_scale_invariant_across_asset_price_levels() {
+        // The same relative move with the same relative tick pattern must
+        // produce (nearly) the same z-score whether the asset trades at
+        // BTC scale ($115k), ETH scale ($4k), or SOL scale ($230). The old
+        // absolute $1.00 sigma floor broke this: on SOL a realistic sigma
+        // (~$0.23) was floored to $1, crushing z ~4x and silently muting
+        // every non-BTC signal.
+        let mut z_scores = Vec::new();
+        for open in [115_000.0_f64, 4_000.0, 230.0] {
+            let mut det = MomentumDetector::new(Some(0.5), MomentumConfig::default());
+            let t0 = 1_700_000_000.0;
+            for i in 0..60 {
+                // 0.5% total drift across the window, same shape per asset.
+                let px = open * (1.0 + 0.005 * i as f64 / 60.0);
+                det.add_tick(px, Some(t0 + i as f64 * 5.0));
+            }
+            det.set_window_open("c", open);
+            let sig = det
+                .detect("c", 5.0, 0.5, open * 1.005, Some(t0 + 300.0))
+                .expect("signal at this price scale");
+            z_scores.push(sig.z_score);
+        }
+        let (btc, eth, sol) = (z_scores[0], z_scores[1], z_scores[2]);
+        assert!(btc > 0.0);
+        // Relative spread across scales must be small (was ~4x before).
+        assert!((eth / btc - 1.0).abs() < 0.05, "eth z {eth} vs btc z {btc}");
+        assert!((sol / btc - 1.0).abs() < 0.05, "sol z {sol} vs btc z {btc}");
     }
 
     #[test]
