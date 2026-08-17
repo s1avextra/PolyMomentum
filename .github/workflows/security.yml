@@ -1,0 +1,33 @@
+name: Dependency security
+
+on:
+  pull_request:
+    paths:
+      - rust_engine/Cargo.toml
+      - rust_engine/Cargo.lock
+  push:
+    paths:
+      - rust_engine/Cargo.toml
+      - rust_engine/Cargo.lock
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rust_engine
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit locked dependencies
+        run: cargo audit

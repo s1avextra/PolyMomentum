@@ -18,10 +18,13 @@ concurrency:
 jobs:
   linux-x86-64:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -29,7 +32,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -39,11 +42,11 @@ jobs:
 
       - name: Format
         working-directory: rust_engine
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         working-directory: rust_engine
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Test
         working-directory: rust_engine
@@ -63,7 +66,7 @@ jobs:
           sha256sum dist/polymomentum-engine-linux-x86_64 > dist/polymomentum-engine-linux-x86_64.sha256
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: polymomentum-engine-linux-x86_64-${{ github.sha }}
           path: |
