@@ -340,6 +340,64 @@ impl BTCHistory {
         (age_ms <= max_age_ms).then_some((self.prices[idx], age_ms))
     }
 
+    /// Time-weighted average price over `[start_ms, end_ms]`, the resolution
+    /// quantity of post-2026-08-08 Polymarket candle markets ("TWAP of the
+    /// time range vs the price at the beginning of that range").
+    ///
+    /// Each observed tick's price is weighted by the time it remained the
+    /// latest observation inside the window (step-function integral). The
+    /// price in force at `start_ms` comes from the causal `price_at` lookup
+    /// (latest tick at-or-before start). Fail-closed: returns `None` when the
+    /// window is empty/inverted, when no price exists at the window start, or
+    /// when the tape ends before `end_ms` (a partial tape must not
+    /// silently produce a full-window TWAP).
+    pub fn twap_between(&self, start_ms: i64, end_ms: i64) -> Option<f64> {
+        if end_ms <= start_ms || self.timestamps_ms.is_empty() {
+            return None;
+        }
+        if *self.timestamps_ms.last().unwrap() < end_ms {
+            return None;
+        }
+        self.partial_twap(start_ms, end_ms, end_ms)
+    }
+
+    /// Causal partial TWAP: the time-weighted average of `[start_ms, as_of_ms]`
+    /// for a window ending at `end_ms`, using only ticks observable at
+    /// `as_of_ms`. This is the strategy-side feature: at `as_of_ms` the final
+    /// window TWAP is already `(as_of - start) / (end - start)` determined by
+    /// this value. Returns `None` if no price exists at the window start or
+    /// `as_of_ms <= start_ms`.
+    pub fn partial_twap(&self, start_ms: i64, as_of_ms: i64, end_ms: i64) -> Option<f64> {
+        if as_of_ms <= start_ms || end_ms < as_of_ms {
+            return None;
+        }
+        // Price in force at window start (causal: latest tick <= start).
+        let start_idx = match self.timestamps_ms.binary_search(&start_ms) {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+        let mut integral = 0.0_f64;
+        let mut cur_price = self.prices[start_idx];
+        let mut cur_ts = start_ms;
+        for i in (start_idx + 1)..self.timestamps_ms.len() {
+            let ts = self.timestamps_ms[i];
+            if ts >= as_of_ms {
+                break;
+            }
+            if ts <= start_ms {
+                // Duplicate-at-start ticks: latest one wins, no elapsed time.
+                cur_price = self.prices[i];
+                continue;
+            }
+            integral += cur_price * (ts - cur_ts) as f64;
+            cur_price = self.prices[i];
+            cur_ts = ts;
+        }
+        integral += cur_price * (as_of_ms - cur_ts) as f64;
+        Some(integral / (as_of_ms - start_ms) as f64)
+    }
+
     /// (open, high, low, close) over `[start_ms, end_ms]`. Returns zeros if
     /// the window has no ticks.
     #[cfg(test)]
@@ -440,6 +498,64 @@ mod tests {
             writeln!(f, "{}", r).unwrap();
         }
         f
+    }
+
+    fn tape(points: &[(i64, f64)]) -> BTCHistory {
+        let mut h = BTCHistory::default();
+        for (ts, px) in points {
+            h.timestamps_ms.push(*ts);
+            h.prices.push(*px);
+        }
+        h
+    }
+
+    #[test]
+    fn twap_weights_prices_by_time_in_force() {
+        // Price 100 for 60s, then 200 for 240s of a 300s window:
+        // TWAP = (100*60 + 200*240) / 300 = 180.
+        let h = tape(&[(0, 100.0), (60_000, 200.0)]);
+        // Tape must extend to end for the full-window TWAP.
+        let h_full = tape(&[(0, 100.0), (60_000, 200.0), (300_000, 200.0)]);
+        assert!(h.twap_between(0, 300_000).is_none(), "tape ends early: fail closed");
+        let twap = h_full.twap_between(0, 300_000).unwrap();
+        assert!((twap - 180.0).abs() < 1e-9, "got {twap}");
+    }
+
+    #[test]
+    fn twap_fail_closed_without_price_at_window_start() {
+        let h = tape(&[(120_000, 100.0), (300_000, 100.0)]);
+        assert!(h.twap_between(0, 300_000).is_none());
+    }
+
+    #[test]
+    fn partial_twap_uses_only_observable_ticks() {
+        // Ticks at 0(100) and 240s(400). Partial at 240s must NOT see the
+        // 240s tick's future duration: window [0,240) is all at 100 except
+        // nothing — the 240s tick arrives exactly at as_of and is excluded.
+        let h = tape(&[(0, 100.0), (240_000, 400.0), (300_000, 400.0)]);
+        let partial = h.partial_twap(0, 240_000, 300_000).unwrap();
+        assert!((partial - 100.0).abs() < 1e-9, "got {partial}");
+        // The final TWAP blends the last minute at 400:
+        // (100*240 + 400*60)/300 = 160.
+        let full = h.twap_between(0, 300_000).unwrap();
+        assert!((full - 160.0).abs() < 1e-9, "got {full}");
+        // Determinism bound: |full - partial * t/T| <= remaining weight * max move.
+        let locked = partial * 240.0 / 300.0; // 80
+        assert!(full >= locked, "final TWAP can never fall below the locked component");
+    }
+
+    #[test]
+    fn twap_vs_close_disagree_on_asymmetric_cross() {
+        // Path: open 100, jumps to 110 after 1s, stays 269s, crashes to 90
+        // for the last 30s. Close(90) < open(100) => close-vs-open says DOWN.
+        // TWAP = (100*1 + 110*269 + 90*30)/300 ≈ 107.97 > 100 => TWAP says UP.
+        // This is exactly the disagreement class that stalled the canary.
+        let h = tape(&[(0, 100.0), (1_000, 110.0), (270_000, 90.0), (300_000, 90.0)]);
+        let twap = h.twap_between(0, 300_000).unwrap();
+        let close = h.price_at(300_000);
+        let open = h.price_at(0);
+        assert!(twap >= open, "TWAP rule: up ({twap} vs {open})");
+        assert!(close < open, "close rule: down ({close} vs {open})");
     }
 
     #[test]
