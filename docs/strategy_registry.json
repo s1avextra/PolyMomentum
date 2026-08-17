@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-17T13:38:14.405518+00:00",
+  "updated_at": "2026-08-17T17:30:35.450047+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -409,6 +409,38 @@
           "notes": [
             "Use meta_label diagnostics as a research lens, not as live/paper promotion evidence.",
             "Next A+ loop should add orderbook causal buckets before trying meta-label promotion again."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "partial_twap_lock_v1",
+      "version_id": "sv_7c554001d9413c1a",
+      "parent_id": null,
+      "status": "questionable",
+      "reason": "First TWAP-era family ran the full funnel end-to-end (12 sealed hours, 370 rows, 232 TWAP labels, frozen 54-policy screen) and terminated insufficient_support_data_blocked: max recent support of any policy = 1 vs the 100-fill gate. Root cause is data supply, not the mechanism: August realized vol ~8.8% makes lock-strength>=1 events cover only 8% of rows, and the PMXT archive stopped publishing at 2026-08-10T00 leaving ~32 TWAP-era hours total. Budget not spent; fresh outcomes never opened.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260818_partial_twap_lock_v1_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260817_partial_twap_lock_v1_preregistration.md"
+      ],
+      "notes": [
+        "Successor v2 may recalibrate lock-strength floors to the observed distribution (e.g. 0.25/0.5/1.0) as a NEW registration - this one never opened fresh outcomes so the redesign is not tuning-on-outcomes. Blocking prerequisite for any TWAP-era family: resume fresh book capture (VPS) since the archive outage makes it the only source."
+      ],
+      "first_seen_at": "2026-08-17T17:30:35.450047+00:00",
+      "updated_at": "2026-08-17T17:30:35.450047+00:00",
+      "events": [
+        {
+          "at": "2026-08-17T17:30:35.450047+00:00",
+          "status": "questionable",
+          "reason": "First TWAP-era family ran the full funnel end-to-end (12 sealed hours, 370 rows, 232 TWAP labels, frozen 54-policy screen) and terminated insufficient_support_data_blocked: max recent support of any policy = 1 vs the 100-fill gate. Root cause is data supply, not the mechanism: August realized vol ~8.8% makes lock-strength>=1 events cover only 8% of rows, and the PMXT archive stopped publishing at 2026-08-10T00 leaving ~32 TWAP-era hours total. Budget not spent; fresh outcomes never opened.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260818_partial_twap_lock_v1_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260817_partial_twap_lock_v1_preregistration.md"
+          ],
+          "notes": [
+            "Successor v2 may recalibrate lock-strength floors to the observed distribution (e.g. 0.25/0.5/1.0) as a NEW registration - this one never opened fresh outcomes so the redesign is not tuning-on-outcomes. Blocking prerequisite for any TWAP-era family: resume fresh book capture (VPS) since the archive outage makes it the only source."
           ]
         }
       ]

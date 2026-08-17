@@ -46,6 +46,28 @@ stake, 128 ms latency, current fee metadata. 3×3×3×2 = 54 policies.
   minus 2 days, fresh_holdout = newest fully resolved day, selected by
   calendar rule before any label is joined.
 
+### Outcome-blind data-plan amendment — 2026-08-17T13:55Z
+
+Probing the archive (before any label or book was opened) showed PMXT
+publication STOPS at 2026-08-10T00 — the original calendar plan is
+infeasible. Amended fixed plan within actual coverage, still declared
+before any label exists:
+
+- 12 sealed hours by fixed rule: older = Aug 8 17/19/21/23Z;
+  recent_discovery = Aug 9 03/07/11/15Z; fresh_holdout = Aug 9 18/20/22Z +
+  Aug 10 00Z.
+- Era tags for the causal-windows file by fixed boundaries:
+  `< Aug 9 00:00Z → older`, `< Aug 9 17:00Z → recent_discovery`, else
+  `fresh_holdout` (volatility lookback rows before Aug 8 16:00Z feed only
+  the volatility feature — BTC price data has no resolution era).
+- Support risk accepted: ~1.5 days total span is far thinner than the
+  declared ≥100-fill target; if discovery support lands short, the family
+  reports `insufficient_support_data_blocked` (NOT a strategy rejection)
+  and waits for the successor capture campaign — the budget is not spent
+  by a data shortage.
+- The archive outage (7 days, ongoing) makes VPS capture the only fresh
+  source; a successor capture campaign is required for any future family.
+
 ## Budgets and gates
 
 - Discovery-hour budget: ≤ 40 hours total, expandable ONCE by a
