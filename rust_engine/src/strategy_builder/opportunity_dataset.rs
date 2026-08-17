@@ -74,8 +74,8 @@ pub struct OpportunityLabelsInput {
 /// SETTLEMENT_DISAGREEMENT counts; see
 /// docs/twap_resolution_rule_change_2026-08-17.md). Windows starting inside
 /// the ambiguous band are excluded from labeling under EITHER rule.
-pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS: i64 = 1_786_888_800_000; // 2026-08-08T14:00:00Z
-pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS: i64 = 1_786_896_000_000; // 2026-08-08T16:00:00Z
+pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_START_MS: i64 = 1_786_197_600_000; // 2026-08-08T14:00:00Z
+pub const RESOLUTION_RULE_CHANGE_AMBIGUOUS_END_MS: i64 = 1_786_204_800_000; // 2026-08-08T16:00:00Z
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolutionRule {
