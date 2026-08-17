@@ -1,0 +1,33 @@
+{
+ "schema_version": 1,
+ "registration": "binary_complement_rule_change_block_20260817",
+ "mechanism_id": "binary_complement_coherence_v1",
+ "decision": "FROZEN_BY_EXTERNAL_RULE_CHANGE",
+ "decided_at": "2026-08-17T13:45:00Z",
+ "frozen_support": {
+  "unique_ready_terminal_conditions": 448,
+  "target_terminal_conditions": 750,
+  "new_segments_completed": 43,
+  "maximum_new_segments": 96,
+  "strategy_metrics_disclosed": false
+ },
+ "rule_change": {
+  "what": "Polymarket candle markets now resolve on the Chainlink TWAP of the full window vs the opening price; the preregistered scorer and settlement-alignment model assume terminal price vs open",
+  "dated_by": "per-session SETTLEMENT_DISAGREEMENT counts in binary-complement-block1-floor session summaries: zero through session 025 (2026-08-08T13:15Z first window), 3/6 disagreeing groups in session 026 (2026-08-08T16:20Z), persistent 15-40% rate in every later session",
+  "estimated_change_window_utc": "2026-08-08T14:00Z to 2026-08-08T16:00Z",
+  "live_confirmation": "gamma btc-updown-5m-1786975200 description fetched 2026-08-17 states time-weighted average price (TWAP) resolution",
+  "documentation": "docs/twap_resolution_rule_change_2026-08-17.md"
+ },
+ "contamination_boundary": "conditions collected after 2026-08-08T14:00Z resolve under TWAP; the frozen 448-condition support contains pre-change conditions plus post-change conditions whose alignment verdicts already failed fail-closed - no mixed-rule condition was ever counted as ready under a wrong model",
+ "outcome_isolation": "strategy metrics remain undisclosed; no forward outcome or rate was inspected in making this decision - the freeze is triggered by an external venue contract change, not by results",
+ "successor": {
+  "planned_registration": "binary_complement_twap_v2",
+  "requirements": [
+   "TWAP-aware settlement alignment and label evaluator over the Chainlink settlement tape",
+   "fresh 750-condition floor collected entirely under the post-change rule",
+   "blinded power amendment carried over from the 2026-07-18 registration",
+   "two-stage advancement gate per wilson_gate_power_analysis_2026-08-17"
+  ]
+ },
+ "operator_authorization": "explicit operator instruction 'freeze and go on', 2026-08-17"
+}

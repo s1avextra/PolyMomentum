@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-11T19:26:25.187198+00:00",
+  "updated_at": "2026-08-17T13:38:14.405518+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -96,6 +96,38 @@
           ],
           "notes": [
             "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "binary_complement_coherence_v1",
+      "version_id": "sv_63f999ed69af47db",
+      "parent_id": null,
+      "status": "dead_end",
+      "reason": "Frozen at 448/750 by an external venue rule change: Polymarket switched candle resolution to Chainlink TWAP-vs-open around 2026-08-08T14:00-16:00Z (dated by per-session SETTLEMENT_DISAGREEMENT counts: zero through session 025, persistent 15-40% after). The preregistered scorer models terminal-vs-open; continuing would mix resolution regimes. No forward outcome or strategy rate was inspected. Successor: binary_complement_twap_v2 with TWAP-aware alignment and a fresh 750-condition floor.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260817_binary_complement_rule_change_block.json",
+        "docs/twap_resolution_rule_change_2026-08-17.md"
+      ],
+      "notes": [
+        "Raw capture frames remain rule-agnostic and valid; only alignment verdicts fail under the old model. Watchdog and restart-on-failure added 2026-08-17 remain in place for the successor collection."
+      ],
+      "first_seen_at": "2026-08-17T13:38:14.405518+00:00",
+      "updated_at": "2026-08-17T13:38:14.405518+00:00",
+      "events": [
+        {
+          "at": "2026-08-17T13:38:14.405518+00:00",
+          "status": "dead_end",
+          "reason": "Frozen at 448/750 by an external venue rule change: Polymarket switched candle resolution to Chainlink TWAP-vs-open around 2026-08-08T14:00-16:00Z (dated by per-session SETTLEMENT_DISAGREEMENT counts: zero through session 025, persistent 15-40% after). The preregistered scorer models terminal-vs-open; continuing would mix resolution regimes. No forward outcome or strategy rate was inspected. Successor: binary_complement_twap_v2 with TWAP-aware alignment and a fresh 750-condition floor.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260817_binary_complement_rule_change_block.json",
+            "docs/twap_resolution_rule_change_2026-08-17.md"
+          ],
+          "notes": [
+            "Raw capture frames remain rule-agnostic and valid; only alignment verdicts fail under the old model. Watchdog and restart-on-failure added 2026-08-17 remain in place for the successor collection."
           ]
         }
       ]
