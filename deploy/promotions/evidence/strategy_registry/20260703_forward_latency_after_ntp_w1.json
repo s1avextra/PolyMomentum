@@ -1,0 +1,102 @@
+{
+  "a_plus_latency_gate": {
+    "backtest_latency_assumption_ready": false,
+    "coverage_ready": true,
+    "ready": false,
+    "recommended_retest_latency_ms": 325,
+    "strategy_retest_required": true,
+    "stream_latency_ready": true,
+    "timestamp_ready": true,
+    "token_gap_ready": true,
+    "verdict": "MEASURED_LATENCY_RETEST_REQUIRED"
+  },
+  "delay_ms": {
+    "avg": 57.63057993132392,
+    "max": 564.0,
+    "min": 44.0,
+    "p50": 46.0,
+    "p95": 117.0,
+    "p99": 325.0
+  },
+  "generated_at": "2026-07-03T10:44:51.243612+00:00",
+  "output": "deploy/promotions/evidence/strategy_registry/20260703_forward_latency_after_ntp_w1.json",
+  "schema_version": 1,
+  "source": {
+    "frames_jsonl": "/private/tmp/polymomentum_latency_remeasure_20260703T_after_ntp_w1/market_ws_frames.jsonl",
+    "input_dir": "/private/tmp/polymomentum_latency_remeasure_20260703T_after_ntp_w1"
+  },
+  "stats": {
+    "binary_frames": 0,
+    "book_events": 142,
+    "change_events": 10342,
+    "clob_events": 10484,
+    "delay_samples": 10484,
+    "json_messages": 10546,
+    "malformed_lines": 0,
+    "malformed_raw": 0,
+    "missing_event_timestamp": 0,
+    "missing_event_timestamp_rate": 0.0,
+    "missing_received_timestamp": 0,
+    "negative_delay_rate": 0.0,
+    "negative_delay_samples": 0,
+    "other_messages": 62,
+    "raw_frames": 10545,
+    "timestamped_events": 10484
+  },
+  "thresholds": {
+    "assumed_backtest_latency_ms": 50.0,
+    "max_missing_timestamp_rate": 0.0,
+    "max_p99_delay_ms": 500.0,
+    "max_token_gap_ms": 2000.0,
+    "min_gap_gate_events": 100
+  },
+  "token_coverage": {
+    "expected_count": 2,
+    "expected_token_ids": [
+      "26795499088817631704859214926789120765614395136541216812544156293524508322687",
+      "63330123904876976128359986882222011570488495646341081129653251387210341428167"
+    ],
+    "gap_gate_token_ids": [
+      "26795499088817631704859214926789120765614395136541216812544156293524508322687",
+      "63330123904876976128359986882222011570488495646341081129653251387210341428167"
+    ],
+    "max_gap_gate_ms": 513.0,
+    "max_observed_gap_ms": 513.0,
+    "missing_token_ids": [],
+    "observed_count": 2,
+    "observed_token_ids": [
+      "26795499088817631704859214926789120765614395136541216812544156293524508322687",
+      "63330123904876976128359986882222011570488495646341081129653251387210341428167"
+    ],
+    "per_token": {
+      "26795499088817631704859214926789120765614395136541216812544156293524508322687": {
+        "book_events": 71,
+        "change_events": 10342,
+        "events": 10413,
+        "first_received_ms": 1783075426678,
+        "last_received_ms": 1783075486471,
+        "max_gap_ms": 513
+      },
+      "63330123904876976128359986882222011570488495646341081129653251387210341428167": {
+        "book_events": 71,
+        "change_events": 10342,
+        "events": 10413,
+        "first_received_ms": 1783075426678,
+        "last_received_ms": 1783075486471,
+        "max_gap_ms": 513
+      }
+    },
+    "token_outcomes": {
+      "26795499088817631704859214926789120765614395136541216812544156293524508322687": {
+        "condition_id": "0x2348a8fdbb29d0b9971886d8fb7dc899781f96d38041963f0aef0945b7bb99de",
+        "outcome": "Down",
+        "slug": "btc-updown-5m-1783075200"
+      },
+      "63330123904876976128359986882222011570488495646341081129653251387210341428167": {
+        "condition_id": "0x2348a8fdbb29d0b9971886d8fb7dc899781f96d38041963f0aef0945b7bb99de",
+        "outcome": "Up",
+        "slug": "btc-updown-5m-1783075200"
+      }
+    }
+  }
+}

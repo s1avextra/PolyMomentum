@@ -1,0 +1,510 @@
+{
+  "schema_version": 1,
+  "status": "PUBLIC_PROXY_CALIBRATION_REJECTED_NO_RETUNING",
+  "mechanism_id": "fast_volatility_max_v1",
+  "authority": {
+    "preregistration_path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_preregistration.json",
+    "preregistration_sha256": "d41f645f30947ea7b3f262f0a32db054cb1f039a98d27bcf3903eedbd22205c9",
+    "archive_directory": "/private/tmp/polymomentum-fast-volatility-max-20260721/binance_1s",
+    "archive_manifest": [
+      {
+        "archive": "BTCUSDT-1s-2026-06-10.zip",
+        "archive_sha256": "ddaa4fe45e76d0a85c51bf339b6a67d20a9addeeece9ecb598741b13a245dcd9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-10.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "c697a510596ed9dd5329a1325023d00e2970a98db42c0db4b6830c1e982794c9",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-10.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-11.zip",
+        "archive_sha256": "ce66d598ead33471a6fbbfa12c6b92ef00d7338763dc26767056b9f8f33062e9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-11.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "fa5f0aca6677bfda9a9c213e3ae282f31469cb56c9a45062fa04b0c6a7ec929b",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-11.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-12.zip",
+        "archive_sha256": "3cdc921f42ec466d9c4b492ac2e419c62c2da07b5080592f842e4cf333b1fa70",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-12.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "2d5215279d7288984eccc4b450cb3b50f0d7b7ae7da6d109899c092e78ac0fbb",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-12.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-13.zip",
+        "archive_sha256": "4fcc4efb74956ed1e0d8a148b9c14b8c605146780b7e692643f6573c91501226",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-13.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "0549649cd74e834e86f57ca9da9d4dcadac56990e2e7be09184fd648add6b1f9",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-13.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-14.zip",
+        "archive_sha256": "42ed65788d333128d89b88d46c4749bc6ecefe306096171d2d72cce2ed4db5d0",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-14.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "2b366e965d229f6ed090f253a95dad9127129feabc81ad00bf8faac21e3af078",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-14.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-15.zip",
+        "archive_sha256": "cc87b079d0f2d58bbff122f45069d9ee15da9189138a117c8b9e6b141549d6ad",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-15.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "bafb3d1dd7c4d1b556c214f53ac3872b22b7751b4119297110b662e7a94c9ef6",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-15.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-16.zip",
+        "archive_sha256": "6a296c0e42ed1dcc74e314ac4e7a7d92773d06cc19834cfddefb76f9ad559d9b",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-16.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "953aee6026e038a9a6271b3f9eb2647b6c134735aba7de6746ee1439f1b75e4a",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-16.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-17.zip",
+        "archive_sha256": "dd4b3d280c1ec7d4e8fbb2eb00dbabd7de32e808b2afbe62a234c825f5d223ef",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-17.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "e877c28e2c25a72f605321e43d91b0bb56bb4534afe593784a42223934416dfb",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-17.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-18.zip",
+        "archive_sha256": "6f32b4b6b2ac51d689f8484379890f346f1e5400ed30dabde7e4ea6af51086c9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-18.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "5a70bb524fbedd307bbbf674a4765e9fcfd2ebe61d2667d570d2398edc4af625",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-18.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-19.zip",
+        "archive_sha256": "744262afd726b20432f030b0f0cec03124b2fe10b6a4b74e9dbc385f970f3b3e",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-19.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "5b933bd0c33d1848bcdb38a14d6d75b1483c485efaf63a532d5449b8419bdfd3",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-19.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-20.zip",
+        "archive_sha256": "a638936ca941ed6f7beadc7e27f5e390ced52096e6aeb6fc1c5c549b46ca6a35",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-20.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "535c744b7cf5a593ad80348a691ae1d1c9671fcc9a70865ac9f3bab9578bdfbf",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-20.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-21.zip",
+        "archive_sha256": "5a1cae9a88a2534969ebd633319aaa8593ba7c296ee7a1ff5e8ced438f76da19",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-21.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "98284c5b3635fc0df0ddc08199667a4ee788e10c2177fb133423bf4a5c009c1c",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-21.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-22.zip",
+        "archive_sha256": "ad89d72cb18a20e9acde3cbf90ad1a43b1593fd7a2fb12ada3256f68f4b28850",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-22.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "4984874e663b21db13caa4f3cb191f54b9cafbf8cea4fa0c6d9c4add81917128",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-22.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-23.zip",
+        "archive_sha256": "36da369739e8e61b9c593097b4461cc683083656463e03a44ac707894ac144e4",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-23.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "2eb950b02897f8387663d6e0cd3686838aa425b41393b4103ae9dde384f4e517",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-23.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-24.zip",
+        "archive_sha256": "c531b7e122cd69fa6001c334c881bdc1e4973c3233407d13fd812e4927530121",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-24.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "8ac9f3aa749c004f01d8bb2d8d951a50e18e64968367e0bfad973cec0fe8ba89",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-24.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-25.zip",
+        "archive_sha256": "692d6bfc40f486abe5b30d6eb66382ad946f5b59b7ffc14d08a06fbc451c3727",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-25.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "a10fcf19386ec7b2fcdd54d69f3f7628c1bc89bcdef68eeaca693ceee3ce25b7",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-25.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-26.zip",
+        "archive_sha256": "3717326f3fac76f90e2deb52daa23db5be8b1d7394878b63fb9b2065261b89c3",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-26.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "6cd4f07ecf29a50655190400463599bfc9fdda717e42cf5fbded416d30b67435",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-26.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-27.zip",
+        "archive_sha256": "3f52223e0b586b29393f39e5d1b044a892a250c97f642182ff2e58517d008c04",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-27.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "7b05ddf46fb0cbf0ce5a8c48d48a1b9b4ae5438670e3e371386a0cd14f928c0c",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-27.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-28.zip",
+        "archive_sha256": "c527ce38fc4c3a24a4d9c1e77ed356beb5325fcb6a518db7d2455728f67c58c5",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-28.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "4a7a513e01054446f7e9135e7f75db4f9bc18f7eaf3d9807d7ac13016423d1d6",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-28.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-29.zip",
+        "archive_sha256": "c2223a07edc7910d5a86751df84eb5abc88bbeb92359b40f2270c75c0cf8b7e7",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-29.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "ef6e27e0cfc80ce0b11cb2522e7f01f7d732e756c3805ef0ff7d1a2ef3f50480",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-29.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-06-30.zip",
+        "archive_sha256": "45afcfda408cb6e5bd5529d9c05c8e15424bdfecbf50afc7ce500851efdf49ff",
+        "adjacent_checksum": "BTCUSDT-1s-2026-06-30.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "ca6dea4cb89bd21b1460f68cf408f6413c9d5143a519b7345a6bced6a0943ccf",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-06-30.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-01.zip",
+        "archive_sha256": "92932e9213f48c32e2c33adad7c53a39778167f8aaa5c50fdc41d4153923eacd",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-01.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "6f8e2e7b7d47013db83f7bd84e1cbf8bc5186ae085eb9da6facdc4339e368338",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-01.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-02.zip",
+        "archive_sha256": "30fce64659bb5e53422ee776805b92aea477d988b20c51d911c397758c49beac",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-02.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "e891322382a8d37dda5b1b43bb17d90e5d953d244abe454dcaef1f94d7e47548",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-02.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-03.zip",
+        "archive_sha256": "742f91a4b5a277eabaebcaafeb87f59cf8a73f15c28dcd012bdf5435f0c148a0",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-03.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "acc2f3f9e5144253bda41f916a1ae182fea5ad6438370251ff730ee06d82527f",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-03.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-04.zip",
+        "archive_sha256": "453cc99750f4b42c3da206643baa13a2b45337d9eb85e6f0ab5b3f3a29e52e2e",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-04.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "356d4c8ca45d50e484048a6a4b253ee59f084acc28fd81a0e4c7c578f3f75c1d",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-04.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-05.zip",
+        "archive_sha256": "02edca99b5d6d171fd172bb4f51aac34d8e3f928349338bfc1e2f490b970cf28",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-05.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "ef36fc4fdb818370f21d1a84d873e5d77c9921105e22224a63ba6050dff5720b",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-05.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-06.zip",
+        "archive_sha256": "7a9c2cc7b61269cf0f0589366cb57c03742e0470b18e3d851d3a121d78417f6a",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-06.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "5bccd1816d18201efb6d2dac17fcfc6825ca5166011d744314d90bf7770a3a0a",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-06.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-07.zip",
+        "archive_sha256": "3e6489c43814093988c6cb6b33272add948ab9b6fc80fc647ec1efbb2ece8e16",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-07.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "02ff1f78600de783ba6827f604f678912ad28135514fcd2e7b40855356982602",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-07.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-08.zip",
+        "archive_sha256": "e8ab0e2defe916a42f6f04170a129699031f070d0cfe5b0870a51504e04115d0",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-08.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "696603da456f3da440150536cb120e56314cf4df5c5404d7f21d125fb6f4ecaa",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-08.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-09.zip",
+        "archive_sha256": "ea29b86080d699c8379f32b3d1f9d963ebe4efbf500c3f2b3b0799f3a98921d0",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-09.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "b95dea938664e9e9e6e493e54f04370959a649ef090aa168b7a1e3ad1851de48",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-09.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-10.zip",
+        "archive_sha256": "6f8d4e2a010349ef8bf6b5537aa090e9feeb197265f32dec6e8d4ee62c4370db",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-10.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "cc2fba19c52b651d0a27e20c386f21e22c04323fe020b7fbc3089ae5bc27201d",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-10.zip"
+      }
+    ],
+    "forecast_snapshot": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_fast_volatility_max_forecasts.jsonl.gz",
+      "rows": 25899,
+      "sha256": "618aa9a8cc18c9647fd447bcfed1cea161b4f2d8d876c185f25b2fc3f102953d",
+      "uncompressed_sha256": "915023aa72f89fa8bea79e40f93d404285129ee6d8a64dd7a88bb6bf278b81b0",
+      "compressed_bytes": 2389814,
+      "uncompressed_bytes": 17897348
+    }
+  },
+  "source_data_quality": {
+    "archives": 31,
+    "rows": 2678400,
+    "schema_widths": [
+      12
+    ],
+    "rows_per_archive_minimum": 86400,
+    "rows_per_archive_maximum": 86400,
+    "timestamp_unit": "microseconds",
+    "timestamp_duplicates": 0,
+    "timestamp_regressions": 0,
+    "one_second_gap_violations": 0,
+    "maximum_gap_seconds": 1.0,
+    "invalid_close_durations": 0,
+    "invalid_prices": 0,
+    "checksum_failures": 0
+  },
+  "forecast_data_quality": {
+    "expected_conditions": 8640,
+    "retained_conditions": 8633,
+    "terminal_tie_conditions": 7,
+    "expected_registered_forecasts": 25920,
+    "retained_registered_forecasts": 25899,
+    "complete_registered_forecasts_fraction": 0.9991898148148148,
+    "duplicate_condition_offsets": 0,
+    "invalid_probabilities": 0,
+    "forecasts_per_condition_values": [
+      3
+    ],
+    "conditions_by_chronological_window": {
+      "fresh_holdout": 4316,
+      "older": 4317
+    }
+  },
+  "results": {
+    "overall": {
+      "forecasts": 25899,
+      "conditions": 8633,
+      "baseline": {
+        "brier": 0.17026408927051565,
+        "log_loss": 0.5107948549718239,
+        "mean_probability": 0.49415227050620153
+      },
+      "candidate": {
+        "brier": 0.17008704046131914,
+        "log_loss": 0.5097544041381015,
+        "mean_probability": 0.49424378571207284
+      },
+      "outcome_rate": 0.5034171203521371,
+      "brier_improvement": 0.00017704880919652607,
+      "log_loss_improvement": 0.0010404508337223364,
+      "mean_absolute_probability_displacement": 0.002330863309266606,
+      "candidate_volatility_active_fraction": 0.1864164639561373,
+      "candidate_more_confident_fraction": 0.0005791729410401946,
+      "maximum_absolute_confidence_increase": 4.6722093762774364e-05
+    },
+    "chronological_windows": {
+      "fresh_holdout": {
+        "forecasts": 12948,
+        "conditions": 4316,
+        "baseline": {
+          "brier": 0.1696616368593219,
+          "log_loss": 0.5094493062909516,
+          "mean_probability": 0.49254261094993
+        },
+        "candidate": {
+          "brier": 0.16953479230824228,
+          "log_loss": 0.5085701797994839,
+          "mean_probability": 0.49269866857470623
+        },
+        "outcome_rate": 0.5053290083410565,
+        "brier_improvement": 0.00012684455107961378,
+        "log_loss_improvement": 0.0008791264914677118,
+        "mean_absolute_probability_displacement": 0.002506780369390642,
+        "candidate_volatility_active_fraction": 0.20088044485634848,
+        "candidate_more_confident_fraction": 0.0006178560395427865,
+        "maximum_absolute_confidence_increase": 4.484685051531212e-05
+      },
+      "older": {
+        "forecasts": 12951,
+        "conditions": 4317,
+        "baseline": {
+          "brier": 0.17086640212822066,
+          "log_loss": 0.5121400919666453,
+          "mean_probability": 0.4957615571971599
+        },
+        "candidate": {
+          "brier": 0.17063916069033924,
+          "log_loss": 0.5109383541602173,
+          "mean_probability": 0.4957885449348836
+        },
+        "outcome_rate": 0.5015056752374334,
+        "brier_improvement": 0.0002272414378813983,
+        "log_loss_improvement": 0.0012017378064281413,
+        "mean_absolute_probability_displacement": 0.0021549869989827657,
+        "candidate_volatility_active_fraction": 0.17195583352636862,
+        "candidate_more_confident_fraction": 0.0005404988031812216,
+        "maximum_absolute_confidence_increase": 4.6722093762774364e-05
+      }
+    },
+    "decision_offsets": {
+      "120": {
+        "forecasts": 8633,
+        "conditions": 8633,
+        "baseline": {
+          "brier": 0.18828349895523733,
+          "log_loss": 0.5552649842310128,
+          "mean_probability": 0.49375258717377557
+        },
+        "candidate": {
+          "brier": 0.18803815451725855,
+          "log_loss": 0.5540815628132187,
+          "mean_probability": 0.4939255224193929
+        },
+        "outcome_rate": 0.5034171203521371,
+        "brier_improvement": 0.0002453444379787816,
+        "log_loss_improvement": 0.0011834214177940325,
+        "mean_absolute_probability_displacement": 0.0025037477579698307,
+        "candidate_volatility_active_fraction": 0.1848720027800301,
+        "candidate_more_confident_fraction": 0.0005791729410401946,
+        "maximum_absolute_confidence_increase": 3.588794663356154e-05
+      },
+      "150": {
+        "forecasts": 8633,
+        "conditions": 8633,
+        "baseline": {
+          "brier": 0.16917556608706483,
+          "log_loss": 0.5092027122180367,
+          "mean_probability": 0.4943478587091266
+        },
+        "candidate": {
+          "brier": 0.169011409684124,
+          "log_loss": 0.508226709896827,
+          "mean_probability": 0.49441436642060266
+        },
+        "outcome_rate": 0.5034171203521371,
+        "brier_improvement": 0.00016415640294081867,
+        "log_loss_improvement": 0.0009760023212098453,
+        "mean_absolute_probability_displacement": 0.002342565899485881,
+        "candidate_volatility_active_fraction": 0.18730452913239892,
+        "candidate_more_confident_fraction": 0.0008108421174562725,
+        "maximum_absolute_confidence_increase": 4.6722093762774364e-05
+      },
+      "179": {
+        "forecasts": 8633,
+        "conditions": 8633,
+        "baseline": {
+          "brier": 0.1533332027692448,
+          "log_loss": 0.46791686846642205,
+          "mean_probability": 0.49435636563570234
+        },
+        "candidate": {
+          "brier": 0.15321155718257487,
+          "log_loss": 0.46695493970425883,
+          "mean_probability": 0.4943914682962229
+        },
+        "outcome_rate": 0.5034171203521371,
+        "brier_improvement": 0.00012164558666997786,
+        "log_loss_improvement": 0.0009619287621631315,
+        "mean_absolute_probability_displacement": 0.002146276270344106,
+        "candidate_volatility_active_fraction": 0.18707285995598286,
+        "candidate_more_confident_fraction": 0.00034750376462411677,
+        "maximum_absolute_confidence_increase": 2.7079942934660206e-05
+      }
+    },
+    "overconfidence_tail": {
+      "forecasts": 11673,
+      "conditions": 5338,
+      "baseline": {
+        "brier": 0.10411968184744855,
+        "log_loss": 0.3524987483609825,
+        "mean_probability": 0.48837893293992135
+      },
+      "candidate": {
+        "brier": 0.10376373515447532,
+        "log_loss": 0.35027524425675954,
+        "mean_probability": 0.4885497903254822
+      },
+      "outcome_rate": 0.49353208258374026,
+      "brier_improvement": 0.0003559466929732107,
+      "log_loss_improvement": 0.002223504104222887,
+      "mean_absolute_probability_displacement": 0.00365067163750003,
+      "candidate_volatility_active_fraction": 0.24903623747108714,
+      "candidate_more_confident_fraction": 0.0,
+      "maximum_absolute_confidence_increase": 0.0
+    },
+    "bootstrap": {
+      "unit": "UTC day",
+      "days": 30,
+      "resamples": 10000,
+      "seed": 20260721,
+      "brier_improvement_95pct": [
+        9.361693906398474e-05,
+        0.0002684271129953332
+      ],
+      "log_loss_improvement_95pct": [
+        0.000645582189020129,
+        0.001472579068910676
+      ]
+    }
+  },
+  "gate_evaluation": {
+    "checks": {
+      "source_checksum_failures_zero": true,
+      "source_timestamp_duplicates_zero": true,
+      "source_timestamp_regressions_zero": true,
+      "source_gaps_at_most_two_seconds": true,
+      "source_invalid_prices_zero": true,
+      "minimum_conditions_each_half": true,
+      "complete_registered_forecasts_at_least_99pct": true,
+      "overall_brier_improvement_at_least_0_0005": false,
+      "overall_log_loss_improvement_at_least_0_001": true,
+      "brier_bootstrap_lower_bound_positive": true,
+      "log_loss_bootstrap_lower_bound_positive": true,
+      "both_chronological_windows_improve_brier": true,
+      "both_chronological_windows_improve_log_loss": true,
+      "each_decision_offset_brier_nonnegative": true,
+      "each_decision_offset_log_loss_nonnegative": true,
+      "overconfidence_tail_brier_nonnegative": true,
+      "overconfidence_tail_log_loss_nonnegative": true
+    },
+    "passed": false,
+    "failed_checks": [
+      "overall_brier_improvement_at_least_0_0005"
+    ]
+  },
+  "decision": {
+    "public_proxy_calibration_passed": false,
+    "strategy_variant_authorized": false,
+    "exact_strategy_replay_authorized": false,
+    "runtime_change_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false,
+    "next_step": "Reject fast_volatility_max_v1 and do not tune this family on the registered windows."
+  },
+  "limitations": [
+    "Binance terminal direction is a proxy for the official Chainlink settlement source.",
+    "The population contains every complete five-minute Binance window, not the strategy's gated Polymarket opportunities.",
+    "Proper-score improvement cannot establish executable edge, fills, fee-inclusive PnL, breadth, or tail stability.",
+    "The analysis intentionally excludes every known strict-42, July 14, July 15, and active forward-block outcome window."
+  ]
+}

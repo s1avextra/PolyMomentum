@@ -1,0 +1,1777 @@
+{
+  "bootstrap": {
+    "market_minus_calibrated_brier_95pct": [
+      -0.002039189044594095,
+      0.0016996963068833775
+    ],
+    "market_minus_calibrated_log_loss_95pct": [
+      -0.005735544869003813,
+      0.005620249899879944
+    ]
+  },
+  "chronological_halves": {
+    "first": {
+      "calibrated": {
+        "brier": 0.13785749652076867,
+        "log_loss": 0.44503887947097454
+      },
+      "conditions": 246,
+      "market": {
+        "brier": 0.1363619630206016,
+        "log_loss": 0.44162193608673866
+      },
+      "market_minus_calibrated_brier": -0.0014955335001670678,
+      "market_minus_calibrated_log_loss": -0.003416943384235871,
+      "market_minus_raw_fair_brier": -0.008086095276570948,
+      "market_minus_raw_fair_log_loss": -0.021717790837838646,
+      "raw_fair": {
+        "brier": 0.14444805829717255,
+        "log_loss": 0.4633397269245773
+      },
+      "rows": 3797
+    },
+    "second": {
+      "calibrated": {
+        "brier": 0.14777718528508638,
+        "log_loss": 0.4694220046025854
+      },
+      "conditions": 252,
+      "market": {
+        "brier": 0.14895146192606162,
+        "log_loss": 0.4727912872733477
+      },
+      "market_minus_calibrated_brier": 0.001174276640975247,
+      "market_minus_calibrated_log_loss": 0.003369282670762308,
+      "market_minus_raw_fair_brier": -0.00266701143752035,
+      "market_minus_raw_fair_log_loss": -0.013103131637600907,
+      "raw_fair": {
+        "brier": 0.15161847336358197,
+        "log_loss": 0.4858944189109486
+      },
+      "rows": 3977
+    }
+  },
+  "data_quality": {
+    "condition_direction_conflicts": 0,
+    "conditions": 631,
+    "conditions_crossing_folds": 0,
+    "duplicate_condition_seconds": 0,
+    "evaluation_results": {
+      "edge_too_high_stale": 105,
+      "low_edge": 10504
+    },
+    "files": 42,
+    "folds": 42,
+    "incomplete_manifests": 0,
+    "invalid_probabilities": 0,
+    "nonzero_trade_reports": 0,
+    "outcome_mapping_mismatches": 0,
+    "resolution_sources": {
+      "polymarket_terminal": 10609
+    },
+    "rows": 10609,
+    "rows_per_condition": {
+      "max": 60,
+      "median": 11.0,
+      "min": 1
+    },
+    "sampling_floor_mismatches": 0
+  },
+  "fold_decisions": [
+    {
+      "coefficients": [],
+      "conditions": 19,
+      "fold": 9,
+      "model": "identity",
+      "prior_folds": 8,
+      "ridge": 0.0,
+      "validation_folds": [
+        7,
+        8
+      ]
+    },
+    {
+      "coefficients": [
+        0.0011237284624350788,
+        0.004744719312247299
+      ],
+      "conditions": 22,
+      "fold": 10,
+      "model": "fair_shrink",
+      "prior_folds": 9,
+      "ridge": 10.0,
+      "validation_folds": [
+        8,
+        9
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 16,
+      "fold": 11,
+      "model": "identity",
+      "prior_folds": 10,
+      "ridge": 0.0,
+      "validation_folds": [
+        9,
+        10
+      ]
+    },
+    {
+      "coefficients": [
+        0.11978532142269661
+      ],
+      "conditions": 16,
+      "fold": 12,
+      "model": "market_intercept",
+      "prior_folds": 11,
+      "ridge": 0.0,
+      "validation_folds": [
+        10,
+        11
+      ]
+    },
+    {
+      "coefficients": [
+        0.11546798149749969
+      ],
+      "conditions": 13,
+      "fold": 13,
+      "model": "market_intercept",
+      "prior_folds": 12,
+      "ridge": 0.0,
+      "validation_folds": [
+        11,
+        12
+      ]
+    },
+    {
+      "coefficients": [
+        0.14842722634265612
+      ],
+      "conditions": 20,
+      "fold": 14,
+      "model": "market_intercept",
+      "prior_folds": 13,
+      "ridge": 0.0,
+      "validation_folds": [
+        12,
+        13
+      ]
+    },
+    {
+      "coefficients": [
+        0.1825756138517164,
+        0.45380787781054804
+      ],
+      "conditions": 17,
+      "fold": 15,
+      "model": "fair_shrink",
+      "prior_folds": 14,
+      "ridge": 0.0,
+      "validation_folds": [
+        13,
+        14
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 15,
+      "fold": 16,
+      "model": "identity",
+      "prior_folds": 15,
+      "ridge": 0.0,
+      "validation_folds": [
+        14,
+        15
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 18,
+      "fold": 17,
+      "model": "identity",
+      "prior_folds": 16,
+      "ridge": 0.0,
+      "validation_folds": [
+        15,
+        16
+      ]
+    },
+    {
+      "coefficients": [
+        0.15096427532694384,
+        0.4931587654329173
+      ],
+      "conditions": 9,
+      "fold": 18,
+      "model": "fair_shrink",
+      "prior_folds": 17,
+      "ridge": 0.0,
+      "validation_folds": [
+        16,
+        17
+      ]
+    },
+    {
+      "coefficients": [
+        0.11281540478800318,
+        0.43912088182188413
+      ],
+      "conditions": 11,
+      "fold": 19,
+      "model": "fair_shrink",
+      "prior_folds": 18,
+      "ridge": 0.0,
+      "validation_folds": [
+        17,
+        18
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 8,
+      "fold": 20,
+      "model": "identity",
+      "prior_folds": 19,
+      "ridge": 0.0,
+      "validation_folds": [
+        18,
+        19
+      ]
+    },
+    {
+      "coefficients": [
+        0.10015560529054346
+      ],
+      "conditions": 12,
+      "fold": 21,
+      "model": "market_intercept",
+      "prior_folds": 20,
+      "ridge": 0.01,
+      "validation_folds": [
+        19,
+        20
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 11,
+      "fold": 22,
+      "model": "identity",
+      "prior_folds": 21,
+      "ridge": 0.0,
+      "validation_folds": [
+        20,
+        21
+      ]
+    },
+    {
+      "coefficients": [
+        0.013339618690262064
+      ],
+      "conditions": 8,
+      "fold": 23,
+      "model": "market_intercept",
+      "prior_folds": 22,
+      "ridge": 1.0,
+      "validation_folds": [
+        21,
+        22
+      ]
+    },
+    {
+      "coefficients": [
+        0.09722770027739837,
+        0.36423615443814
+      ],
+      "conditions": 11,
+      "fold": 24,
+      "model": "fair_shrink",
+      "prior_folds": 23,
+      "ridge": 0.0,
+      "validation_folds": [
+        22,
+        23
+      ]
+    },
+    {
+      "coefficients": [
+        0.0886312102880251,
+        0.3727257419021441
+      ],
+      "conditions": 20,
+      "fold": 25,
+      "model": "fair_shrink",
+      "prior_folds": 24,
+      "ridge": 0.0,
+      "validation_folds": [
+        23,
+        24
+      ]
+    },
+    {
+      "coefficients": [
+        0.08774531781824865,
+        0.29571307220331816
+      ],
+      "conditions": 13,
+      "fold": 26,
+      "model": "fair_shrink",
+      "prior_folds": 25,
+      "ridge": 0.01,
+      "validation_folds": [
+        24,
+        25
+      ]
+    },
+    {
+      "coefficients": [
+        0.07976081958161538,
+        0.3738040848833246
+      ],
+      "conditions": 2,
+      "fold": 27,
+      "model": "fair_shrink",
+      "prior_folds": 26,
+      "ridge": 0.0,
+      "validation_folds": [
+        25,
+        26
+      ]
+    },
+    {
+      "coefficients": [
+        0.08537029137045381,
+        0.3678850155071854
+      ],
+      "conditions": 5,
+      "fold": 28,
+      "model": "fair_shrink",
+      "prior_folds": 27,
+      "ridge": 0.0,
+      "validation_folds": [
+        26,
+        27
+      ]
+    },
+    {
+      "coefficients": [
+        0.11987391909871761
+      ],
+      "conditions": 18,
+      "fold": 29,
+      "model": "market_intercept",
+      "prior_folds": 28,
+      "ridge": 0.0,
+      "validation_folds": [
+        27,
+        28
+      ]
+    },
+    {
+      "coefficients": [
+        0.09065511273609261,
+        0.3726590830825087
+      ],
+      "conditions": 10,
+      "fold": 30,
+      "model": "fair_shrink",
+      "prior_folds": 29,
+      "ridge": 0.0,
+      "validation_folds": [
+        28,
+        29
+      ]
+    },
+    {
+      "coefficients": [
+        0.01463247161728574,
+        0.01925311777608532
+      ],
+      "conditions": 20,
+      "fold": 31,
+      "model": "fair_shrink",
+      "prior_folds": 30,
+      "ridge": 1.0,
+      "validation_folds": [
+        29,
+        30
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 15,
+      "fold": 32,
+      "model": "identity",
+      "prior_folds": 31,
+      "ridge": 0.0,
+      "validation_folds": [
+        30,
+        31
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 11,
+      "fold": 33,
+      "model": "identity",
+      "prior_folds": 32,
+      "ridge": 0.0,
+      "validation_folds": [
+        31,
+        32
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 19,
+      "fold": 34,
+      "model": "identity",
+      "prior_folds": 33,
+      "ridge": 0.0,
+      "validation_folds": [
+        32,
+        33
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 12,
+      "fold": 35,
+      "model": "identity",
+      "prior_folds": 34,
+      "ridge": 0.0,
+      "validation_folds": [
+        33,
+        34
+      ]
+    },
+    {
+      "coefficients": [
+        -0.00020453285619760142,
+        0.26720185221423043
+      ],
+      "conditions": 27,
+      "fold": 36,
+      "model": "fair_shrink",
+      "prior_folds": 35,
+      "ridge": 0.0,
+      "validation_folds": [
+        34,
+        35
+      ]
+    },
+    {
+      "coefficients": [
+        0.016992837066491292,
+        0.2993456401616438
+      ],
+      "conditions": 18,
+      "fold": 37,
+      "model": "fair_shrink",
+      "prior_folds": 36,
+      "ridge": 0.0,
+      "validation_folds": [
+        35,
+        36
+      ]
+    },
+    {
+      "coefficients": [
+        0.03223514003025309,
+        0.30417126159929064
+      ],
+      "conditions": 17,
+      "fold": 38,
+      "model": "fair_shrink",
+      "prior_folds": 37,
+      "ridge": 0.0,
+      "validation_folds": [
+        36,
+        37
+      ]
+    },
+    {
+      "coefficients": [
+        0.06279204657649431,
+        0.30949500467614643
+      ],
+      "conditions": 20,
+      "fold": 39,
+      "model": "fair_shrink",
+      "prior_folds": 38,
+      "ridge": 0.0,
+      "validation_folds": [
+        37,
+        38
+      ]
+    },
+    {
+      "coefficients": [
+        0.05295676882997986,
+        0.32098541814044945
+      ],
+      "conditions": 22,
+      "fold": 40,
+      "model": "fair_shrink",
+      "prior_folds": 39,
+      "ridge": 0.0,
+      "validation_folds": [
+        38,
+        39
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 17,
+      "fold": 41,
+      "model": "identity",
+      "prior_folds": 40,
+      "ridge": 0.0,
+      "validation_folds": [
+        39,
+        40
+      ]
+    },
+    {
+      "coefficients": [],
+      "conditions": 6,
+      "fold": 42,
+      "model": "identity",
+      "prior_folds": 41,
+      "ridge": 0.0,
+      "validation_folds": [
+        40,
+        41
+      ]
+    }
+  ],
+  "fold_scores": [
+    {
+      "calibrated": {
+        "brier": 0.10668434937064092,
+        "log_loss": 0.376519890848387
+      },
+      "conditions": 19,
+      "fold": 9,
+      "market": {
+        "brier": 0.10668434937064092,
+        "log_loss": 0.376519890848387
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": -0.015281463260310824,
+      "market_minus_raw_fair_log_loss": -0.036955626002510344,
+      "raw_fair": {
+        "brier": 0.12196581263095174,
+        "log_loss": 0.41347551685089734
+      },
+      "rows": 478
+    },
+    {
+      "calibrated": {
+        "brier": 0.14823575396563593,
+        "log_loss": 0.469288769120014
+      },
+      "conditions": 22,
+      "fold": 10,
+      "market": {
+        "brier": 0.1482710613600698,
+        "log_loss": 0.46932679084356493
+      },
+      "market_minus_calibrated_brier": 3.5307394433858885e-05,
+      "market_minus_calibrated_log_loss": 3.802172355094058e-05,
+      "market_minus_raw_fair_brier": -0.01270408259232475,
+      "market_minus_raw_fair_log_loss": -0.0335585310276017,
+      "raw_fair": {
+        "brier": 0.16097514395239454,
+        "log_loss": 0.5028853218711666
+      },
+      "rows": 676
+    },
+    {
+      "calibrated": {
+        "brier": 0.14921359719317873,
+        "log_loss": 0.4693970362698876
+      },
+      "conditions": 16,
+      "fold": 11,
+      "market": {
+        "brier": 0.14921359719317873,
+        "log_loss": 0.4693970362698877
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 1.1102230246251565e-16,
+      "market_minus_raw_fair_brier": -0.012558998624670442,
+      "market_minus_raw_fair_log_loss": -0.036033738823063155,
+      "raw_fair": {
+        "brier": 0.16177259581784917,
+        "log_loss": 0.5054307750929509
+      },
+      "rows": 387
+    },
+    {
+      "calibrated": {
+        "brier": 0.16099343230978935,
+        "log_loss": 0.49430396246923325
+      },
+      "conditions": 16,
+      "fold": 12,
+      "market": {
+        "brier": 0.16040032975798077,
+        "log_loss": 0.4945398206552747
+      },
+      "market_minus_calibrated_brier": -0.0005931025518085831,
+      "market_minus_calibrated_log_loss": 0.0002358581860414377,
+      "market_minus_raw_fair_brier": -0.033652121840584054,
+      "market_minus_raw_fair_log_loss": -0.08863030454465903,
+      "raw_fair": {
+        "brier": 0.19405245159856482,
+        "log_loss": 0.5831701251999337
+      },
+      "rows": 438
+    },
+    {
+      "calibrated": {
+        "brier": 0.07772599346574928,
+        "log_loss": 0.30057365591156254
+      },
+      "conditions": 13,
+      "fold": 13,
+      "market": {
+        "brier": 0.08070956598956602,
+        "log_loss": 0.31119881759756324
+      },
+      "market_minus_calibrated_brier": 0.0029835725238167438,
+      "market_minus_calibrated_log_loss": 0.010625161686000695,
+      "market_minus_raw_fair_brier": -0.003603807829171385,
+      "market_minus_raw_fair_log_loss": -0.009465215866335808,
+      "raw_fair": {
+        "brier": 0.08431337381873741,
+        "log_loss": 0.32066403346389905
+      },
+      "rows": 79
+    },
+    {
+      "calibrated": {
+        "brier": 0.12551190691066738,
+        "log_loss": 0.41449375692732987
+      },
+      "conditions": 20,
+      "fold": 14,
+      "market": {
+        "brier": 0.12637192119667773,
+        "log_loss": 0.4179329368116458
+      },
+      "market_minus_calibrated_brier": 0.0008600142860103466,
+      "market_minus_calibrated_log_loss": 0.0034391798843159127,
+      "market_minus_raw_fair_brier": -0.005467049999865747,
+      "market_minus_raw_fair_log_loss": -0.009867747497645407,
+      "raw_fair": {
+        "brier": 0.13183897119654348,
+        "log_loss": 0.4278006843092912
+      },
+      "rows": 244
+    },
+    {
+      "calibrated": {
+        "brier": 0.182817807663469,
+        "log_loss": 0.5541583519404201
+      },
+      "conditions": 17,
+      "fold": 15,
+      "market": {
+        "brier": 0.1760683032392444,
+        "log_loss": 0.535937123381151
+      },
+      "market_minus_calibrated_brier": -0.006749504424224589,
+      "market_minus_calibrated_log_loss": -0.01822122855926911,
+      "market_minus_raw_fair_brier": -0.006149166286785385,
+      "market_minus_raw_fair_log_loss": -0.02428446693182673,
+      "raw_fair": {
+        "brier": 0.1822174695260298,
+        "log_loss": 0.5602215903129777
+      },
+      "rows": 210
+    },
+    {
+      "calibrated": {
+        "brier": 0.24328074297924301,
+        "log_loss": 0.6975605694296245
+      },
+      "conditions": 15,
+      "fold": 16,
+      "market": {
+        "brier": 0.24328074297924301,
+        "log_loss": 0.6975605694296245
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": 0.004688547044358671,
+      "market_minus_raw_fair_log_loss": 0.016288284629796923,
+      "raw_fair": {
+        "brier": 0.23859219593488434,
+        "log_loss": 0.6812722847998276
+      },
+      "rows": 220
+    },
+    {
+      "calibrated": {
+        "brier": 0.03682837400659769,
+        "log_loss": 0.208360658167209
+      },
+      "conditions": 18,
+      "fold": 17,
+      "market": {
+        "brier": 0.03682837400659769,
+        "log_loss": 0.20836065816720906
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 5.551115123125783e-17,
+      "market_minus_raw_fair_brier": 0.015954200390202324,
+      "market_minus_raw_fair_log_loss": 0.058471496163017,
+      "raw_fair": {
+        "brier": 0.020874173616395368,
+        "log_loss": 0.14988916200419206
+      },
+      "rows": 184
+    },
+    {
+      "calibrated": {
+        "brier": 0.2248382386014244,
+        "log_loss": 0.6400957385326832
+      },
+      "conditions": 9,
+      "fold": 18,
+      "market": {
+        "brier": 0.19995349050663064,
+        "log_loss": 0.5778351979034501
+      },
+      "market_minus_calibrated_brier": -0.024884748094793768,
+      "market_minus_calibrated_log_loss": -0.06226054062923314,
+      "market_minus_raw_fair_brier": -0.029969459312354618,
+      "market_minus_raw_fair_log_loss": -0.08707591370575107,
+      "raw_fair": {
+        "brier": 0.22992294981898526,
+        "log_loss": 0.6649111116092011
+      },
+      "rows": 155
+    },
+    {
+      "calibrated": {
+        "brier": 0.15255249298867044,
+        "log_loss": 0.4892869993746331
+      },
+      "conditions": 11,
+      "fold": 19,
+      "market": {
+        "brier": 0.15123714673027505,
+        "log_loss": 0.4830171835225525
+      },
+      "market_minus_calibrated_brier": -0.0013153462583953834,
+      "market_minus_calibrated_log_loss": -0.006269815852080585,
+      "market_minus_raw_fair_brier": -0.0024284515172303955,
+      "market_minus_raw_fair_log_loss": -0.008908113567392073,
+      "raw_fair": {
+        "brier": 0.15366559824750545,
+        "log_loss": 0.4919252970899446
+      },
+      "rows": 85
+    },
+    {
+      "calibrated": {
+        "brier": 0.11628452878643097,
+        "log_loss": 0.3995642010363951
+      },
+      "conditions": 8,
+      "fold": 20,
+      "market": {
+        "brier": 0.11628452878643097,
+        "log_loss": 0.3995642010363951
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": -0.0014740698166012672,
+      "market_minus_raw_fair_log_loss": -0.007652571499099314,
+      "raw_fair": {
+        "brier": 0.11775859860303224,
+        "log_loss": 0.40721677253549443
+      },
+      "rows": 117
+    },
+    {
+      "calibrated": {
+        "brier": 0.23771963004718963,
+        "log_loss": 0.6874851746748668
+      },
+      "conditions": 12,
+      "fold": 21,
+      "market": {
+        "brier": 0.23271457221314454,
+        "log_loss": 0.6715679148147469
+      },
+      "market_minus_calibrated_brier": -0.00500505783404509,
+      "market_minus_calibrated_log_loss": -0.015917259860119937,
+      "market_minus_raw_fair_brier": -0.03556592441772774,
+      "market_minus_raw_fair_log_loss": -0.1303472422444677,
+      "raw_fair": {
+        "brier": 0.2682804966308723,
+        "log_loss": 0.8019151570592146
+      },
+      "rows": 127
+    },
+    {
+      "calibrated": {
+        "brier": 0.02949181976560026,
+        "log_loss": 0.18598759086992145
+      },
+      "conditions": 11,
+      "fold": 22,
+      "market": {
+        "brier": 0.02949181976560026,
+        "log_loss": 0.1859875908699215
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 5.551115123125783e-17,
+      "market_minus_raw_fair_brier": 0.0026716893774221644,
+      "market_minus_raw_fair_log_loss": 0.01123046818781645,
+      "raw_fair": {
+        "brier": 0.026820130388178095,
+        "log_loss": 0.17475712268210505
+      },
+      "rows": 76
+    },
+    {
+      "calibrated": {
+        "brier": 0.10790067672086813,
+        "log_loss": 0.3723119695332522
+      },
+      "conditions": 8,
+      "fold": 23,
+      "market": {
+        "brier": 0.108005625,
+        "log_loss": 0.37277857577385587
+      },
+      "market_minus_calibrated_brier": 0.000104948279131864,
+      "market_minus_calibrated_log_loss": 0.00046660624060368416,
+      "market_minus_raw_fair_brier": 0.008611915265394565,
+      "market_minus_raw_fair_log_loss": 0.03570131282222999,
+      "raw_fair": {
+        "brier": 0.09939370973460543,
+        "log_loss": 0.3370772629516259
+      },
+      "rows": 34
+    },
+    {
+      "calibrated": {
+        "brier": 0.14656708060344845,
+        "log_loss": 0.46483318798069106
+      },
+      "conditions": 11,
+      "fold": 24,
+      "market": {
+        "brier": 0.14737201535837904,
+        "log_loss": 0.4692412509124607
+      },
+      "market_minus_calibrated_brier": 0.0008049347549305974,
+      "market_minus_calibrated_log_loss": 0.004408062931769652,
+      "market_minus_raw_fair_brier": 0.0032519177556469547,
+      "market_minus_raw_fair_log_loss": 0.016243803403611312,
+      "raw_fair": {
+        "brier": 0.1441200976027321,
+        "log_loss": 0.4529974475088494
+      },
+      "rows": 126
+    },
+    {
+      "calibrated": {
+        "brier": 0.12181775537242859,
+        "log_loss": 0.40116569092542603
+      },
+      "conditions": 20,
+      "fold": 25,
+      "market": {
+        "brier": 0.12123599792038031,
+        "log_loss": 0.4024542069589046
+      },
+      "market_minus_calibrated_brier": -0.000581757452048276,
+      "market_minus_calibrated_log_loss": 0.0012885160334785706,
+      "market_minus_raw_fair_brier": -0.00878873120965501,
+      "market_minus_raw_fair_log_loss": -0.02759236602294035,
+      "raw_fair": {
+        "brier": 0.13002472913003532,
+        "log_loss": 0.43004657298184495
+      },
+      "rows": 161
+    },
+    {
+      "calibrated": {
+        "brier": 0.1822831533070723,
+        "log_loss": 0.5541739957221737
+      },
+      "conditions": 13,
+      "fold": 26,
+      "market": {
+        "brier": 0.18672595359768437,
+        "log_loss": 0.565469564410198
+      },
+      "market_minus_calibrated_brier": 0.004442800290612087,
+      "market_minus_calibrated_log_loss": 0.011295568688024282,
+      "market_minus_raw_fair_brier": 0.013539982493228436,
+      "market_minus_raw_fair_log_loss": 0.03954443347511394,
+      "raw_fair": {
+        "brier": 0.17318597110445594,
+        "log_loss": 0.5259251309350841
+      },
+      "rows": 119
+    },
+    {
+      "calibrated": {
+        "brier": 0.025716082837887518,
+        "log_loss": 0.17470210665237726
+      },
+      "conditions": 2,
+      "fold": 27,
+      "market": {
+        "brier": 0.02327500000000001,
+        "log_loss": 0.16547754390952565
+      },
+      "market_minus_calibrated_brier": -0.0024410828378875066,
+      "market_minus_calibrated_log_loss": -0.009224562742851605,
+      "market_minus_raw_fair_brier": -0.019658502591036,
+      "market_minus_raw_fair_log_loss": -0.06645917474658822,
+      "raw_fair": {
+        "brier": 0.04293350259103601,
+        "log_loss": 0.23193671865611387
+      },
+      "rows": 5
+    },
+    {
+      "calibrated": {
+        "brier": 0.023451052134546565,
+        "log_loss": 0.16508863361230652
+      },
+      "conditions": 5,
+      "fold": 28,
+      "market": {
+        "brier": 0.030490769230769234,
+        "log_loss": 0.1904200276861695
+      },
+      "market_minus_calibrated_brier": 0.00703971709622267,
+      "market_minus_calibrated_log_loss": 0.02533139407386298,
+      "market_minus_raw_fair_brier": 0.006811815581592513,
+      "market_minus_raw_fair_log_loss": 0.02678532535583114,
+      "raw_fair": {
+        "brier": 0.023678953649176722,
+        "log_loss": 0.16363470233033836
+      },
+      "rows": 24
+    },
+    {
+      "calibrated": {
+        "brier": 0.13617118938050837,
+        "log_loss": 0.44059782883288556
+      },
+      "conditions": 18,
+      "fold": 29,
+      "market": {
+        "brier": 0.13591880246421012,
+        "log_loss": 0.44038315441606013
+      },
+      "market_minus_calibrated_brier": -0.00025238691629825283,
+      "market_minus_calibrated_log_loss": -0.0002146744168254333,
+      "market_minus_raw_fair_brier": -0.0017629600666227152,
+      "market_minus_raw_fair_log_loss": -6.530563466200512e-05,
+      "raw_fair": {
+        "brier": 0.13768176253083284,
+        "log_loss": 0.44044846005072213
+      },
+      "rows": 208
+    },
+    {
+      "calibrated": {
+        "brier": 0.1549106993584031,
+        "log_loss": 0.4809048890236569
+      },
+      "conditions": 10,
+      "fold": 30,
+      "market": {
+        "brier": 0.15033046574440057,
+        "log_loss": 0.46945406155234004
+      },
+      "market_minus_calibrated_brier": -0.004580233614002532,
+      "market_minus_calibrated_log_loss": -0.011450827471316871,
+      "market_minus_raw_fair_brier": -0.011390436038454299,
+      "market_minus_raw_fair_log_loss": -0.03507101341195529,
+      "raw_fair": {
+        "brier": 0.16172090178285486,
+        "log_loss": 0.5045250749642953
+      },
+      "rows": 132
+    },
+    {
+      "calibrated": {
+        "brier": 0.2598383953666817,
+        "log_loss": 0.7448458730145957
+      },
+      "conditions": 20,
+      "fold": 31,
+      "market": {
+        "brier": 0.2591449116872045,
+        "log_loss": 0.7423342802981898
+      },
+      "market_minus_calibrated_brier": -0.0006934836794771915,
+      "market_minus_calibrated_log_loss": -0.002511592716405886,
+      "market_minus_raw_fair_brier": -0.004429693815144076,
+      "market_minus_raw_fair_log_loss": -0.013998359409257866,
+      "raw_fair": {
+        "brier": 0.26357460550234857,
+        "log_loss": 0.7563326397074477
+      },
+      "rows": 287
+    },
+    {
+      "calibrated": {
+        "brier": 0.21939397912152636,
+        "log_loss": 0.6291498224330914
+      },
+      "conditions": 15,
+      "fold": 32,
+      "market": {
+        "brier": 0.21939397912152636,
+        "log_loss": 0.6291498224330914
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": -0.03998367177227252,
+      "market_minus_raw_fair_log_loss": -0.12808017274810068,
+      "raw_fair": {
+        "brier": 0.2593776508937989,
+        "log_loss": 0.757229995181192
+      },
+      "rows": 276
+    },
+    {
+      "calibrated": {
+        "brier": 0.19124459410538952,
+        "log_loss": 0.5655829009718631
+      },
+      "conditions": 11,
+      "fold": 33,
+      "market": {
+        "brier": 0.19124459410538952,
+        "log_loss": 0.565582900971863
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": -1.1102230246251565e-16,
+      "market_minus_raw_fair_brier": -0.015628612502217032,
+      "market_minus_raw_fair_log_loss": -0.08623322341225337,
+      "raw_fair": {
+        "brier": 0.20687320660760655,
+        "log_loss": 0.6518161243841164
+      },
+      "rows": 179
+    },
+    {
+      "calibrated": {
+        "brier": 0.12105111167391858,
+        "log_loss": 0.40010002954283497
+      },
+      "conditions": 19,
+      "fold": 34,
+      "market": {
+        "brier": 0.12105111167391858,
+        "log_loss": 0.40010002954283497
+      },
+      "market_minus_calibrated_brier": 0.0,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": -0.007718842893512684,
+      "market_minus_raw_fair_log_loss": -0.01968555957327245,
+      "raw_fair": {
+        "brier": 0.12876995456743126,
+        "log_loss": 0.4197855891161074
+      },
+      "rows": 208
+    },
+    {
+      "calibrated": {
+        "brier": 0.0873963801318824,
+        "log_loss": 0.32911574896990614
+      },
+      "conditions": 12,
+      "fold": 35,
+      "market": {
+        "brier": 0.08739638013188242,
+        "log_loss": 0.32911574896990614
+      },
+      "market_minus_calibrated_brier": 1.3877787807814457e-17,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": 0.010716094048812796,
+      "market_minus_raw_fair_log_loss": 0.04362437435346578,
+      "raw_fair": {
+        "brier": 0.07668028608306962,
+        "log_loss": 0.28549137461644036
+      },
+      "rows": 227
+    },
+    {
+      "calibrated": {
+        "brier": 0.09274017015688155,
+        "log_loss": 0.33360502652872104
+      },
+      "conditions": 27,
+      "fold": 36,
+      "market": {
+        "brier": 0.09642057639411247,
+        "log_loss": 0.3463960506856615
+      },
+      "market_minus_calibrated_brier": 0.0036804062372309265,
+      "market_minus_calibrated_log_loss": 0.012791024156940445,
+      "market_minus_raw_fair_brier": 0.0076527980158652975,
+      "market_minus_raw_fair_log_loss": 0.028797042486173985,
+      "raw_fair": {
+        "brier": 0.08876777837824718,
+        "log_loss": 0.3175990081994875
+      },
+      "rows": 550
+    },
+    {
+      "calibrated": {
+        "brier": 0.1135711458068032,
+        "log_loss": 0.3975185127682559
+      },
+      "conditions": 18,
+      "fold": 37,
+      "market": {
+        "brier": 0.12028434163059165,
+        "log_loss": 0.40920576719684926
+      },
+      "market_minus_calibrated_brier": 0.006713195823788445,
+      "market_minus_calibrated_log_loss": 0.011687254428593363,
+      "market_minus_raw_fair_brier": 0.008755595887556367,
+      "market_minus_raw_fair_log_loss": 0.0029277934141139217,
+      "raw_fair": {
+        "brier": 0.11152874574303528,
+        "log_loss": 0.40627797378273534
+      },
+      "rows": 339
+    },
+    {
+      "calibrated": {
+        "brier": 0.02378363118449894,
+        "log_loss": 0.16617806313568823
+      },
+      "conditions": 17,
+      "fold": 38,
+      "market": {
+        "brier": 0.027717926613660456,
+        "log_loss": 0.18115250854577608
+      },
+      "market_minus_calibrated_brier": 0.003934295429161516,
+      "market_minus_calibrated_log_loss": 0.014974445410087855,
+      "market_minus_raw_fair_brier": 0.006069362383711949,
+      "market_minus_raw_fair_log_loss": 0.02693909811977163,
+      "raw_fair": {
+        "brier": 0.021648564229948507,
+        "log_loss": 0.15421341042600445
+      },
+      "rows": 248
+    },
+    {
+      "calibrated": {
+        "brier": 0.1538675407373349,
+        "log_loss": 0.4831562659002767
+      },
+      "conditions": 20,
+      "fold": 39,
+      "market": {
+        "brier": 0.15469199709769224,
+        "log_loss": 0.48717231872448363
+      },
+      "market_minus_calibrated_brier": 0.0008244563603573285,
+      "market_minus_calibrated_log_loss": 0.004016052824206917,
+      "market_minus_raw_fair_brier": 0.0022585541394825603,
+      "market_minus_raw_fair_log_loss": 0.009719468773579543,
+      "raw_fair": {
+        "brier": 0.15243344295820968,
+        "log_loss": 0.4774528499509041
+      },
+      "rows": 358
+    },
+    {
+      "calibrated": {
+        "brier": 0.1792233791635236,
+        "log_loss": 0.5477110526326778
+      },
+      "conditions": 22,
+      "fold": 40,
+      "market": {
+        "brier": 0.17779061650120914,
+        "log_loss": 0.5418927982390697
+      },
+      "market_minus_calibrated_brier": -0.0014327626623144574,
+      "market_minus_calibrated_log_loss": -0.005818254393608169,
+      "market_minus_raw_fair_brier": -0.0044323024056594496,
+      "market_minus_raw_fair_log_loss": -0.023741864366654042,
+      "raw_fair": {
+        "brier": 0.1822229189068686,
+        "log_loss": 0.5656346626057237
+      },
+      "rows": 492
+    },
+    {
+      "calibrated": {
+        "brier": 0.271501819554229,
+        "log_loss": 0.7798331553707188
+      },
+      "conditions": 17,
+      "fold": 41,
+      "market": {
+        "brier": 0.2715018195542289,
+        "log_loss": 0.7798331553707188
+      },
+      "market_minus_calibrated_brier": -5.551115123125783e-17,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": -0.01766406921925817,
+      "market_minus_raw_fair_log_loss": -0.10034455044559654,
+      "raw_fair": {
+        "brier": 0.2891658887734871,
+        "log_loss": 0.8801777058163154
+      },
+      "rows": 241
+    },
+    {
+      "calibrated": {
+        "brier": 0.028802503284072245,
+        "log_loss": 0.18515527196658416
+      },
+      "conditions": 6,
+      "fold": 42,
+      "market": {
+        "brier": 0.028802503284072252,
+        "log_loss": 0.18515527196658416
+      },
+      "market_minus_calibrated_brier": 6.938893903907228e-18,
+      "market_minus_calibrated_log_loss": 0.0,
+      "market_minus_raw_fair_brier": 0.011056800821311892,
+      "market_minus_raw_fair_log_loss": 0.046780471425115266,
+      "raw_fair": {
+        "brier": 0.01774570246276036,
+        "log_loss": 0.1383748005414689
+      },
+      "rows": 84
+    }
+  ],
+  "generated_at": "2026-07-15T02:10:07.961794+00:00",
+  "methodology": {
+    "bootstrap_seed": 20260715,
+    "minimum_prior_folds": 8,
+    "models": [
+      "identity",
+      "market_intercept",
+      "fair_shrink"
+    ],
+    "ridge_candidates": [
+      0.0,
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "sampling": "first_pre_edge_candidate_per_condition_utc_second",
+    "selection": "model family and ridge selected on final two strictly prior folds",
+    "weighting": "each terminal condition has total weight one"
+  },
+  "overall": {
+    "calibrated": {
+      "brier": 0.14287709806415833,
+      "log_loss": 0.45737732833275346
+    },
+    "conditions": 498,
+    "market": {
+      "brier": 0.14273255282818378,
+      "log_loss": 0.4573943788558661
+    },
+    "market_minus_calibrated_brier": -0.00014454523597454139,
+    "market_minus_calibrated_log_loss": 1.7050523112627225e-05,
+    "market_minus_raw_fair_brier": -0.0053439082736778665,
+    "market_minus_raw_fair_log_loss": -0.017358565700368978,
+    "raw_fair": {
+      "brier": 0.14807646110186165,
+      "log_loss": 0.47475294455623507
+    },
+    "rows": 7774
+  },
+  "promotion_posture": "research_only_live_off",
+  "result": {
+    "bootstrap_ok": false,
+    "calibration_eligible": false,
+    "chronological_halves_ok": false,
+    "market_minus_calibrated_brier": -0.00014454523597454139,
+    "market_minus_calibrated_log_loss": 1.7050523112627225e-05,
+    "overall_ok": false,
+    "scored_conditions": 498,
+    "scored_folds": 34,
+    "selected_model_counts": {
+      "fair_shrink": 16,
+      "identity": 12,
+      "market_intercept": 6
+    },
+    "support_ok": true
+  },
+  "schema_version": 1,
+  "segments": {
+    "direction": [
+      {
+        "calibrated": {
+          "brier": 0.12738232323981782,
+          "log_loss": 0.41993422129947783
+        },
+        "conditions": 296,
+        "market": {
+          "brier": 0.12831902973118317,
+          "log_loss": 0.42309035335373935
+        },
+        "market_minus_calibrated_brier": 0.0009367064913653467,
+        "market_minus_calibrated_log_loss": 0.003156132054261518,
+        "market_minus_raw_fair_brier": -0.00716635784781347,
+        "market_minus_raw_fair_log_loss": -0.02068261590267806,
+        "raw_fair": {
+          "brier": 0.13548538757899664,
+          "log_loss": 0.4437729692564174
+        },
+        "rows": 4840,
+        "value": "down"
+      },
+      {
+        "calibrated": {
+          "brier": 0.1654373961581716,
+          "log_loss": 0.5118942649009295
+        },
+        "conditions": 203,
+        "market": {
+          "brier": 0.1637185549701748,
+          "log_loss": 0.507340831768295
+        },
+        "market_minus_calibrated_brier": -0.0017188411879968113,
+        "market_minus_calibrated_log_loss": -0.004553433132634455,
+        "market_minus_raw_fair_brier": -0.002690432755645844,
+        "market_minus_raw_fair_log_loss": -0.012518768782135758,
+        "raw_fair": {
+          "brier": 0.16640898772582063,
+          "log_loss": 0.5198596005504308
+        },
+        "rows": 2934,
+        "value": "up"
+      }
+    ],
+    "market_price": [
+      {
+        "calibrated": {
+          "brier": 0.21604837936618995,
+          "log_loss": 0.6257099055185167
+        },
+        "conditions": 111,
+        "market": {
+          "brier": 0.21092137181818585,
+          "log_loss": 0.6118749076612666
+        },
+        "market_minus_calibrated_brier": -0.005127007548004103,
+        "market_minus_calibrated_log_loss": -0.013834997857250064,
+        "market_minus_raw_fair_brier": -0.022052548243714026,
+        "market_minus_raw_fair_log_loss": -0.06694635865034004,
+        "raw_fair": {
+          "brier": 0.23297392006189988,
+          "log_loss": 0.6788212663116067
+        },
+        "rows": 1215,
+        "value": "0.60_0.75"
+      },
+      {
+        "calibrated": {
+          "brier": 0.1337087412527344,
+          "log_loss": 0.4364127958855979
+        },
+        "conditions": 477,
+        "market": {
+          "brier": 0.13391516146292565,
+          "log_loss": 0.4375140757937842
+        },
+        "market_minus_calibrated_brier": 0.00020642021019123824,
+        "market_minus_calibrated_log_loss": 0.0011012799081863145,
+        "market_minus_raw_fair_brier": -0.0034417903071615186,
+        "market_minus_raw_fair_log_loss": -0.011575147651690654,
+        "raw_fair": {
+          "brier": 0.13735695177008717,
+          "log_loss": 0.44908922344547486
+        },
+        "rows": 6334,
+        "value": "0.75_0.90"
+      },
+      {
+        "calibrated": {
+          "brier": 0.23421635207637853,
+          "log_loss": 0.6595811184146987
+        },
+        "conditions": 22,
+        "market": {
+          "brier": 0.24483756940788234,
+          "log_loss": 0.6827871492633708
+        },
+        "market_minus_calibrated_brier": 0.010621217331503813,
+        "market_minus_calibrated_log_loss": 0.02320603084867212,
+        "market_minus_raw_fair_brier": -0.014302898339379005,
+        "market_minus_raw_fair_log_loss": -0.052542594373171214,
+        "raw_fair": {
+          "brier": 0.25914046774726135,
+          "log_loss": 0.735329743636542
+        },
+        "rows": 225,
+        "value": "lt_0.60"
+      }
+    ],
+    "minutes_remaining": [
+      {
+        "calibrated": {
+          "brier": 0.14287709806415833,
+          "log_loss": 0.45737732833275346
+        },
+        "conditions": 498,
+        "market": {
+          "brier": 0.14273255282818378,
+          "log_loss": 0.4573943788558661
+        },
+        "market_minus_calibrated_brier": -0.00014454523597454139,
+        "market_minus_calibrated_log_loss": 1.7050523112627225e-05,
+        "market_minus_raw_fair_brier": -0.0053439082736778665,
+        "market_minus_raw_fair_log_loss": -0.017358565700368978,
+        "raw_fair": {
+          "brier": 0.14807646110186165,
+          "log_loss": 0.47475294455623507
+        },
+        "rows": 7774,
+        "value": "2_4"
+      }
+    ],
+    "observed_volatility": [
+      {
+        "calibrated": {
+          "brier": 0.14624069266252782,
+          "log_loss": 0.46667099407657775
+        },
+        "conditions": 190,
+        "market": {
+          "brier": 0.1456130718779182,
+          "log_loss": 0.46523858694712045
+        },
+        "market_minus_calibrated_brier": -0.0006276207846096227,
+        "market_minus_calibrated_log_loss": -0.0014324071294573026,
+        "market_minus_raw_fair_brier": -0.0050966873287854875,
+        "market_minus_raw_fair_log_loss": -0.018031597144994416,
+        "raw_fair": {
+          "brier": 0.15070975920670368,
+          "log_loss": 0.48327018409211486
+        },
+        "rows": 2667,
+        "value": "0.30_0.50"
+      },
+      {
+        "calibrated": {
+          "brier": 0.13742130579394013,
+          "log_loss": 0.44294779419192937
+        },
+        "conditions": 122,
+        "market": {
+          "brier": 0.1374697190188126,
+          "log_loss": 0.44409772537922626
+        },
+        "market_minus_calibrated_brier": 4.84132248724789e-05,
+        "market_minus_calibrated_log_loss": 0.0011499311872968931,
+        "market_minus_raw_fair_brier": -0.005119494547249581,
+        "market_minus_raw_fair_log_loss": -0.02214008202028722,
+        "raw_fair": {
+          "brier": 0.1425892135660622,
+          "log_loss": 0.4662378073995135
+        },
+        "rows": 1178,
+        "value": "gte_0.50"
+      },
+      {
+        "calibrated": {
+          "brier": 0.14305968895580162,
+          "log_loss": 0.45746407802013134
+        },
+        "conditions": 190,
+        "market": {
+          "brier": 0.14327149091489236,
+          "log_loss": 0.4581915320603312
+        },
+        "market_minus_calibrated_brier": 0.00021180195909073496,
+        "market_minus_calibrated_log_loss": 0.0007274540401998597,
+        "market_minus_raw_fair_brier": -0.005735609595332536,
+        "market_minus_raw_fair_log_loss": -0.013590627356662832,
+        "raw_fair": {
+          "brier": 0.1490071005102249,
+          "log_loss": 0.47178215941699403
+        },
+        "rows": 3929,
+        "value": "lt_0.30"
+      }
+    ]
+  },
+  "source_folds": [
+    {
+      "conditions": 12,
+      "fold": 1,
+      "manifest_hash": "542701f04c286f1038e885665d72bf9381159cdc014e81d53de3f0fe23099219",
+      "rows": 243
+    },
+    {
+      "conditions": 21,
+      "fold": 2,
+      "manifest_hash": "6450eb19cc8988dc506b8ed2e414e0c08e36269a94135d4e92ff6a0f7c6a229e",
+      "rows": 306
+    },
+    {
+      "conditions": 24,
+      "fold": 3,
+      "manifest_hash": "66d8c8c6fa93e5d1031586821efa30d2948d66e085be7c0fbe036cb4be88bca9",
+      "rows": 349
+    },
+    {
+      "conditions": 12,
+      "fold": 4,
+      "manifest_hash": "4fb404dea5574d6fb8f998bf97f481d283fab3d662121fd3cf6a47401b90334a",
+      "rows": 241
+    },
+    {
+      "conditions": 17,
+      "fold": 5,
+      "manifest_hash": "f5b78ce92a90d93d19b70e63312531a290cfbc4e3679d0d3e4e1dbbe0fe1fa27",
+      "rows": 444
+    },
+    {
+      "conditions": 16,
+      "fold": 6,
+      "manifest_hash": "20d4ab418e7ff169eff56acb2793b699cef49b664c61418e36a90b2d3e261284",
+      "rows": 284
+    },
+    {
+      "conditions": 18,
+      "fold": 7,
+      "manifest_hash": "d8f366bfd38e75c470f3457bd16f05ba68a2017da0078cc378d1a2f133ba2e3f",
+      "rows": 619
+    },
+    {
+      "conditions": 13,
+      "fold": 8,
+      "manifest_hash": "713a8be3daa16093aa881510230602755d7cb650c4407b1736b44e1fa30768c7",
+      "rows": 349
+    },
+    {
+      "conditions": 19,
+      "fold": 9,
+      "manifest_hash": "9cc5b24d4fdbf031fe374165e210ba36ce1f61dcabc877c3eb8cb583edca7c3f",
+      "rows": 478
+    },
+    {
+      "conditions": 22,
+      "fold": 10,
+      "manifest_hash": "9907d1b34055b843919ded29cd208aee39eb324a80518322520e201ca830fb23",
+      "rows": 676
+    },
+    {
+      "conditions": 16,
+      "fold": 11,
+      "manifest_hash": "784399cebf48382ea3c50a6c40ce88e0de134bbd6319f1bcc05b5793469df60a",
+      "rows": 387
+    },
+    {
+      "conditions": 16,
+      "fold": 12,
+      "manifest_hash": "72783173b4641c134349ae33eecddb5d8929278ca1cb33ec27829e7900aace4e",
+      "rows": 438
+    },
+    {
+      "conditions": 13,
+      "fold": 13,
+      "manifest_hash": "d2ebe5bc05f3d3c0aaa4c12ca3f0ae1627e83d5891023373f7fbcc29fe459b72",
+      "rows": 79
+    },
+    {
+      "conditions": 20,
+      "fold": 14,
+      "manifest_hash": "79f57f4ff16ad3f2bc31098a8239c03136edaaa2365ced63bbf99f82d5ae9731",
+      "rows": 244
+    },
+    {
+      "conditions": 17,
+      "fold": 15,
+      "manifest_hash": "9c38f63c586c4da68ea8b002e20fa8168e67da27c4d93309ce1ea49dfea0bf21",
+      "rows": 210
+    },
+    {
+      "conditions": 15,
+      "fold": 16,
+      "manifest_hash": "61430a09a95aa7c685fb08ed8920f87cf71fb48a2d77b94d8a5339ecd3234e36",
+      "rows": 220
+    },
+    {
+      "conditions": 18,
+      "fold": 17,
+      "manifest_hash": "e6a473d4c1b119f5f7491f2bfe8a007100a97a1f07da44831902c59a5183a547",
+      "rows": 184
+    },
+    {
+      "conditions": 9,
+      "fold": 18,
+      "manifest_hash": "45ca867d1fe79e42a126f11023b64c855bc9573fdeafc6d672097a851c4e7426",
+      "rows": 155
+    },
+    {
+      "conditions": 11,
+      "fold": 19,
+      "manifest_hash": "8104b546c2d1c8cb9f58c3d6a9245d1ac8f6aecd2c02242d81787e76e047fcfa",
+      "rows": 85
+    },
+    {
+      "conditions": 8,
+      "fold": 20,
+      "manifest_hash": "6c4206e8bd6d9242e29a1247360e18b0ec2c8afaa42ef865ea05c9dfce1496e6",
+      "rows": 117
+    },
+    {
+      "conditions": 12,
+      "fold": 21,
+      "manifest_hash": "460d3e42ccaaa8a89fb11047e9e5c026cde146a735866f95b55a8341f50bafc0",
+      "rows": 127
+    },
+    {
+      "conditions": 11,
+      "fold": 22,
+      "manifest_hash": "9d75b06ca8e9b6198b84bccc3e564c419bdb149a8001a56ea9602360dc3bf55d",
+      "rows": 76
+    },
+    {
+      "conditions": 8,
+      "fold": 23,
+      "manifest_hash": "9c8eb5bc601ec013c5dc480a469da55dc0ceead7cd5ac6e835c05a02262728f6",
+      "rows": 34
+    },
+    {
+      "conditions": 11,
+      "fold": 24,
+      "manifest_hash": "73e103ac7a8892323feb1263ebf9476f704ac2f85b348d864cc13db69687355c",
+      "rows": 126
+    },
+    {
+      "conditions": 20,
+      "fold": 25,
+      "manifest_hash": "f3f13d501ef53bc6e3707509d83692bcb92b78b30449379dbcffa951ea76ab27",
+      "rows": 161
+    },
+    {
+      "conditions": 13,
+      "fold": 26,
+      "manifest_hash": "a41e1b73216930f4f6ee276e3ab739b38f16899ae06f0439f2328464b80af76e",
+      "rows": 119
+    },
+    {
+      "conditions": 2,
+      "fold": 27,
+      "manifest_hash": "b54ee6f1eceff56c6072922dabe3797e0021bb6351849b1eb972befe99568fc5",
+      "rows": 5
+    },
+    {
+      "conditions": 5,
+      "fold": 28,
+      "manifest_hash": "c68d71362ee404c46680cc8e7dce7852953fce1421488cacccb8295e6634e7c4",
+      "rows": 24
+    },
+    {
+      "conditions": 18,
+      "fold": 29,
+      "manifest_hash": "901cc50f20aeda7867ed609ec214134584740addd16378ba4c46c23943202cf2",
+      "rows": 208
+    },
+    {
+      "conditions": 10,
+      "fold": 30,
+      "manifest_hash": "0b92be32d2e91b0456ffa53f6a942106bead5d7104a425a857dba7d7ae6c4082",
+      "rows": 132
+    },
+    {
+      "conditions": 20,
+      "fold": 31,
+      "manifest_hash": "a51d7a9d86b1aa43da759b801ac086ca054b702848bb15b84c688e4c95e4472a",
+      "rows": 287
+    },
+    {
+      "conditions": 15,
+      "fold": 32,
+      "manifest_hash": "9fd725419b18189beedf30df7dda9b2f7968e66c429ed9eb589f81b078d80a34",
+      "rows": 276
+    },
+    {
+      "conditions": 11,
+      "fold": 33,
+      "manifest_hash": "b568c47fb53ba814a86958fb7fe102a3a85bb2f258b3e8d3704d691d8940df9f",
+      "rows": 179
+    },
+    {
+      "conditions": 19,
+      "fold": 34,
+      "manifest_hash": "b52ae68e5b38b4916e0234cdf84459b5c6d354afb43e71c7065f4d334231724e",
+      "rows": 208
+    },
+    {
+      "conditions": 12,
+      "fold": 35,
+      "manifest_hash": "cf6e1a6f4f4791502f47fe97063a5af0222b20ad3e39758e2f65e752e00e79c6",
+      "rows": 227
+    },
+    {
+      "conditions": 27,
+      "fold": 36,
+      "manifest_hash": "701e6ff0808dc48393627b1da87c37d289a2f43958def99b8110e8e1b4f1efb1",
+      "rows": 550
+    },
+    {
+      "conditions": 18,
+      "fold": 37,
+      "manifest_hash": "049d739fb6492f3fd8ae3dec6c5407daf8b7399327908e0b960cbac71925ad81",
+      "rows": 339
+    },
+    {
+      "conditions": 17,
+      "fold": 38,
+      "manifest_hash": "90a3ad647e63f7f3e23fa77871d6c93de8463a939f2b23ba954119170176efe6",
+      "rows": 248
+    },
+    {
+      "conditions": 20,
+      "fold": 39,
+      "manifest_hash": "3729e08ad807f34c3dffc8c5f0d46c539a40750640c4e15ff3093afb53598b57",
+      "rows": 358
+    },
+    {
+      "conditions": 22,
+      "fold": 40,
+      "manifest_hash": "d6c08688a789501e4b4cd5b46b478e13d84f4c08e3a0a17239b7f039a4e2aeec",
+      "rows": 492
+    },
+    {
+      "conditions": 17,
+      "fold": 41,
+      "manifest_hash": "9b0057b3ecbfe2eb8e66b4681f0ead9df4c313d18c8f6e608472de92d1a48cab",
+      "rows": 241
+    },
+    {
+      "conditions": 6,
+      "fold": 42,
+      "manifest_hash": "6bd9cd3e9c150535bfa300656898e8841026345a1db3aecee44c3491401ad25f",
+      "rows": 84
+    }
+  ]
+}

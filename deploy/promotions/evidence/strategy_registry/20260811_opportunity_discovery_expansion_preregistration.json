@@ -1,0 +1,39 @@
+{
+  "schema_version": "opportunity_discovery_expansion_preregistration_v1",
+  "sealed_at": "2026-08-11T09:38:20Z",
+  "purpose": "Add independent recent-discovery support for the two research-only traces selected by opportunity_policy_search_v2 without reading terminal outcomes during hour selection.",
+  "causal_snapshot": {
+    "path": "logs/strategy-research/public_snapshots/binance_spot_1m_causal_current.jsonl.gz",
+    "sha256": "d9f2aa98746ad3cf7e4c2792c7ce8492ce2f77b82d73458c989471f160d504be"
+  },
+  "selection_rule": "Eight distinct UTC days immediately before the existing July 25 discovery day; hour advances by three hours per day (02,05,08,11,14,17,20,23). This calendar rule was fixed before Gamma identity lookup, PMXT inspection, label access, or outcome scoring.",
+  "selected_hours": [
+    "2026-07-17T02:00:00Z",
+    "2026-07-18T05:00:00Z",
+    "2026-07-19T08:00:00Z",
+    "2026-07-20T11:00:00Z",
+    "2026-07-21T14:00:00Z",
+    "2026-07-22T17:00:00Z",
+    "2026-07-23T20:00:00Z",
+    "2026-07-24T23:00:00Z"
+  ],
+  "preselection_checks": {
+    "causal_rows_per_hour": 12,
+    "chronological_window": "recent_discovery",
+    "distinct_days": 8,
+    "terminal_fields_read": false,
+    "gamma_identity_read": false,
+    "pmxt_content_read": false,
+    "labels_read": false
+  },
+  "bounded_decision": {
+    "maximum_additional_hours": 8,
+    "maximum_exact_replay_traces": 2,
+    "latency_ms": 128,
+    "stake_usd": 5.0,
+    "fee_rate": 0.07,
+    "fresh_holdout_remains_sealed": true,
+    "advance_condition": "After resealing and replay, a trace may open the already sealed fresh gate only if its replayed Wilson edge exceeds the fixed 0.02 safety margin and total fee-aware PnL remains positive.",
+    "reject_condition": "Reject a trace if expanded exact replay has non-positive point edge, non-positive fee-aware PnL, or fails the Wilson advancement gate after the bounded expansion. Do not add more parameter variants in response."
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T03:58:01Z",
+  "status": "KEEP_REPLAY_RESEARCH",
+  "live_ready": false,
+  "question": "Do causally lagged Binance USD-M futures flow or positioning variables add stable predictive value beyond the executable Polymarket price?",
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "latency_ms": 202,
+    "opportunity_rows": 10609,
+    "resolved_conditions": 631,
+    "folds": 42,
+    "exact_trades": 102
+  },
+  "source": {
+    "provider": "Binance public data",
+    "market": "USD-M futures",
+    "symbol": "BTCUSDT",
+    "date_range": ["2026-05-28", "2026-06-10"],
+    "kline_url_pattern": "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-<date>.zip",
+    "metrics_url_pattern": "https://data.binance.vision/data/futures/um/daily/metrics/BTCUSDT/BTCUSDT-metrics-<date>.zip",
+    "daily_kline_archives": 14,
+    "daily_metrics_archives": 14,
+    "checksum_contract": "Every archive was verified against its adjacent Binance .CHECKSUM file.",
+    "local_source_data_committed": false
+  },
+  "shared_method": {
+    "model": "ridge-regularized logistic meta-label with logit(executable market price) as offset",
+    "features": "fixed before scoring; no feature subset or threshold search",
+    "feed_forward": "begin after eight prior folds; select ridge on the final two strictly prior folds; refit on all prior folds; score the next fold once",
+    "ridge_candidates": [0.01, 0.1, 1.0, 10.0],
+    "condition_weighting": "each resolved condition has total weight one",
+    "pass_gates": [
+      "positive Brier and log-loss improvement overall",
+      "positive Brier and log-loss improvement in both chronological halves",
+      "positive lower bounds for both 95% condition-bootstrap intervals",
+      "mean probability correction on exact known losses is non-positive"
+    ],
+    "scored_folds": 34,
+    "scored_conditions": 498
+  },
+  "screens": [
+    {
+      "name": "prior_closed_minute_taker_flow",
+      "status": "reject",
+      "features": [
+        "direction-aligned one-minute taker quote-volume imbalance",
+        "direction-aligned five-minute taker quote-volume imbalance"
+      ],
+      "causal_cutoff": "use only fully closed one-minute futures klines before the decision minute",
+      "coverage": {
+        "source_minutes": 20160,
+        "opportunity_rows": 10609,
+        "complete_rows": 10609,
+        "complete_conditions": 631,
+        "complete_fraction": 1.0,
+        "timestamp_violations": 0
+      },
+      "overall": {
+        "market_brier": 0.142733,
+        "meta_brier": 0.143518,
+        "market_minus_meta_brier": -0.000785,
+        "market_log_loss": 0.457394,
+        "meta_log_loss": 0.459492,
+        "market_minus_meta_log_loss": -0.002098
+      },
+      "chronological_halves": {
+        "first_market_minus_meta_brier": -0.001339,
+        "first_market_minus_meta_log_loss": -0.003455,
+        "second_market_minus_meta_brier": -0.000244,
+        "second_market_minus_meta_log_loss": -0.000773
+      },
+      "condition_bootstrap_95pct": {
+        "market_minus_meta_brier": [-0.002469, 0.000761],
+        "market_minus_meta_log_loss": [-0.007689, 0.003023]
+      },
+      "exact_trade_diagnostic": {
+        "scored_trades": 86,
+        "wins": 66,
+        "losses": 20,
+        "mean_probability_correction_wins": 0.014969,
+        "mean_probability_correction_losses": 0.018879
+      },
+      "reason": "The feature worsened both proper scores in both halves and increased probability more on known losses than winners."
+    },
+    {
+      "name": "lagged_position_crowding",
+      "status": "reject_historical_integration_keep_forward_diagnostic",
+      "features": [
+        "direction-aligned log top-trader position long-short ratio",
+        "15-minute log open-interest change"
+      ],
+      "causal_cutoff": "latest metrics snapshot must be at least one full five-minute bucket old",
+      "coverage": {
+        "source_snapshots": 4032,
+        "opportunity_rows": 10609,
+        "complete_rows": 10555,
+        "complete_conditions": 629,
+        "complete_fraction": 0.99491,
+        "timestamp_violations": 0
+      },
+      "overall": {
+        "market_brier": 0.142733,
+        "meta_brier": 0.141032,
+        "market_minus_meta_brier": 0.0017,
+        "market_log_loss": 0.457394,
+        "meta_log_loss": 0.45142,
+        "market_minus_meta_log_loss": 0.005975
+      },
+      "chronological_halves": {
+        "first_market_minus_meta_brier": 0.004247,
+        "first_market_minus_meta_log_loss": 0.014755,
+        "second_market_minus_meta_brier": -0.000786,
+        "second_market_minus_meta_log_loss": -0.002597
+      },
+      "condition_bootstrap_95pct": {
+        "market_minus_meta_brier": [-0.001088, 0.004398],
+        "market_minus_meta_log_loss": [-0.00215, 0.013746]
+      },
+      "exact_trade_diagnostic": {
+        "matched_trades": 101,
+        "scored_trades": 86,
+        "wins": 66,
+        "losses": 20,
+        "mean_probability_correction_wins": 0.020004,
+        "mean_probability_correction_losses": 0.001683
+      },
+      "condition_weighted_separation": {
+        "directional_top_position_crowding_win_mean": -0.076981,
+        "directional_top_position_crowding_loss_mean": 0.007404,
+        "open_interest_log_change_15m_win_mean": 0.000122,
+        "open_interest_log_change_15m_loss_mean": -0.000051
+      },
+      "reason": "Aggregate improvement is concentrated in the first half; the second half is negative, both bootstrap intervals cross zero, and the known-loss correction remains positive.",
+      "frozen_forward_model": {
+        "authorization": "prospective diagnostic scoring only",
+        "training_folds": 42,
+        "ridge_selection_validation_folds": [41, 42],
+        "ridge": 10.0,
+        "feature_means": {
+          "directional_top_position_crowding": -0.067771,
+          "open_interest_log_change_15m": 0.00004454
+        },
+        "feature_scales": {
+          "directional_top_position_crowding": 0.276184,
+          "open_interest_log_change_15m": 0.00207357
+        },
+        "intercept": 0.073136,
+        "standardized_coefficients": {
+          "directional_top_position_crowding": -0.003717,
+          "open_interest_log_change_15m": 0.00127
+        },
+        "interpretation": "Final validation selects strong shrinkage; the positioning coefficients are nearly zero and do not justify strategy integration."
+      }
+    }
+  ],
+  "freshness_audit": {
+    "checked_at": "2026-07-15T04:04:29Z",
+    "mode": "read-only VPS inspection",
+    "shared_distilled_files": 0,
+    "shared_raw_parquet_files": 0,
+    "polymomentum_private_fresh_distilled_hours": [
+      "2026-07-14T14",
+      "2026-07-14T15",
+      "2026-07-14T16"
+    ],
+    "minimum_forward_conditions": 100,
+    "status": "insufficient_fresh_data_for_frozen_forward_score",
+    "note": "No sweep, parquet scan, or CPU-intensive task was run on the VPS."
+  },
+  "verdict": {
+    "grade": "A- research system; strategy remains below A+",
+    "strategy_adjustment": "none",
+    "reason": "Taker flow is decisively negative and positioning is chronologically unstable. Neither passes the predeclared causal screen, so exact profitability replay is not authorized.",
+    "promotion_posture": "KEEP_REPLAY_RESEARCH / LIVE_TRADING_OFF",
+    "next_step": "Score the frozen, strongly regularized positioning diagnostic only on a genuinely new fully resolved block; require fresh proper-score and known-loss guards before reconsidering exact strategy replay."
+  }
+}

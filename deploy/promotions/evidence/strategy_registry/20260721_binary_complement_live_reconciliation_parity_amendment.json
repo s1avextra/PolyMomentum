@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T04:18:00Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_LIVE_USER_RECONCILIATION_PARITY_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Can a future promoted V2 runtime keep authenticated fill receipt, fee accounting, and position economics aligned with the frozen fee-aware replay contract?",
+  "defects": {
+    "fee_source": "The live reconciler priced a fill only from the legacy top-level fee_rate_bps field. Current V2 fees are market parameters applied at match time, and the canonical user-channel trade shape does not guarantee that field, so a taker fill could be recorded with zero fee.",
+    "gamma_schema": "Current Gamma markets publish orderPriceMinTickSize and nested feeSchedule.rate, but the parser recognized only older tick and fee aliases.",
+    "maker_fill_economics": "A managed maker order was filled with the aggregate taker size and price instead of its own maker_orders matched_amount and price leg.",
+    "heartbeat": "The authenticated user channel sent an empty JSON object although the documented heartbeat is the literal PING message.",
+    "trade_lifecycle": "MATCHED, MINED, and CONFIRMED reuse one trade id. Booking at MATCHED and deduplicating only by id made a later FAILED transition invisible.",
+    "severity": "promotion_blocking_live_replay_and_pnl_parity",
+    "forward_strategy_metrics_inspected": false,
+    "forward_trade_or_screen_metrics_disclosed": false,
+    "active_capture_data_invalidated": false
+  },
+  "repair_contract": {
+    "fee_schedule": "Parse the current Gamma feeSchedule.rate field, snapshot the effective maker or taker rate with each pending managed order, compute the official five-decimal fee from the confirmed fill economics, and trip the breaker rather than booking an invalid or schedule-less fill.",
+    "tick_metadata": "Parse orderPriceMinTickSize in addition to the existing Gamma aliases.",
+    "maker_leg": "Reconcile a managed maker order from its own maker_orders matched_amount and price; retain aggregate trade economics only for the taker order id.",
+    "heartbeat": "Send literal PING every ten seconds on the authenticated user channel.",
+    "terminality": "Keep MATCHED and MINED as pending exposure and book financial state only at terminal CONFIRMED; process terminal FAILED before id deduplication can hide it.",
+    "production_source_behavior_changed": true,
+    "production_binary_replaced_or_restarted": false,
+    "active_measurement_v5_capture_restarted": false,
+    "capture_format_changed": false,
+    "scorer_rule_schema_gate_or_threshold_changed": false,
+    "recollection_required": false
+  },
+  "implementation": {
+    "user_channel_file": "rust_engine/src/clob_user_ws.rs",
+    "user_channel_sha256": "573905c6cc536face016ba67d62253128f6f05b0e12ed39ad4f5d52afe3cbf1d",
+    "gamma_file": "rust_engine/src/data/gamma.rs",
+    "gamma_sha256": "72ccdf27b5c0f90cb212d8c4078ede91948943ef0b34c9481011d342692009c6",
+    "live_pipeline_file": "rust_engine/src/live/pipeline.rs",
+    "live_pipeline_sha256": "5811475a32d60392b5f62df3a536b4986bc0ba90004e2dc6e81276ac3f2da3d3",
+    "fee_file": "rust_engine/src/execution/fees.rs",
+    "fee_sha256": "bfcfbd5d77acda12b38e0a2d86878898e262f3797fb83d7366e5e5625a9956d6",
+    "scorer_sha256_unchanged": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "tests_added": [
+      "maker_candidate_uses_its_matched_leg_economics",
+      "user_channel_heartbeat_matches_documented_protocol",
+      "parses_current_gamma_tick_and_fee_schedule_fields",
+      "pending_live_position_prices_current_taker_fee_and_validates_fill"
+    ]
+  },
+  "deployed_measurement_v9": {
+    "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v9",
+    "sha256": "bdf301f5ea28cdd28c42be3f1b9288ecd71b91f05af18d986f211b3e0efa2511",
+    "linux_x86_64_linkage_verified": true,
+    "strategy_builder_help_verified": true,
+    "production_binary_replaced": false,
+    "production_service_restarted": false,
+    "active_v5_capture_interrupted": false,
+    "active_v5_capture_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_v5_capture_main_pid": 240334,
+    "active_v5_capture_restarts": 0,
+    "active_recorder_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "scoring_requirement": "v9 retains the schema-4 reproduction-hardened scorer and may score the sealed block only after the fixed 750-condition floor.",
+    "promotion_requirement": "Any future production runtime must retain the v9 reconciliation contract or a later hash-pinned equivalent and add automated authenticated REST recovery before live promotion."
+  },
+  "vps_observation": {
+    "observed_at": "2026-07-21T04:17:18Z",
+    "production_engine_active": true,
+    "telegram_monitor_active": true,
+    "health_timer_active": true,
+    "soak_timer_active": true,
+    "failed_units": 0,
+    "canary_active": true,
+    "canary_main_pid": 240334,
+    "canary_restarts": 0,
+    "unique_ready_terminal_conditions": 290,
+    "target_terminal_conditions": 750,
+    "new_segments_completed": 15,
+    "strategy_metrics_disclosed": false,
+    "active_recorder_session": "binary-complement-block1-floor-017"
+  },
+  "validation": {
+    "cargo_test": "PASS: 510 passed (459 library + 51 binary), 0 failed; doc-tests 0",
+    "cargo_clippy": "PASS: all targets with warnings denied after allowing the two documented pre-existing unrelated lints",
+    "cargo_fmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "linux_binary_hash_match": true,
+    "forward_scores_disclosed": 0
+  },
+  "known_remaining_boundary": {
+    "automated_rest_recovery_implemented": false,
+    "impact": "A disconnect or an event that arrives before the venue order id is acknowledged can still require authenticated REST order/trade recovery. The client exposes read-only order and trade endpoints, but the live pipeline does not yet run that recovery loop.",
+    "promotion_effect": "live promotion remains blocked until reconnect/startup recovery is implemented and tested; paper-only operation and the measurement canary are unaffected"
+  },
+  "external_sources": [
+    {
+      "title": "Polymarket User Channel",
+      "url": "https://docs.polymarket.com/market-data/websocket/user-channel",
+      "use": "Defines PING heartbeat behavior, maker leg fields, and the MATCHED to MINED to CONFIRMED lifecycle with FAILED transitions."
+    },
+    {
+      "title": "Polymarket Fees",
+      "url": "https://docs.polymarket.com/trading/fees",
+      "use": "Defines market-time taker-only fee parameters, the binary fee formula, and five-decimal rounding."
+    },
+    {
+      "title": "Polymarket Public Client Methods",
+      "url": "https://docs.polymarket.com/trading/clients/public",
+      "use": "Defines current fd rate/exponent/taker-only parameters and token-addressed tick and fee queries."
+    }
+  ],
+  "decision": {
+    "safe_to_continue_sealed_collection": true,
+    "safe_to_score_below_750": false,
+    "fixed_strategy_rule_or_gate_changed": false,
+    "live_runtime_parity_contract_changed": true,
+    "safe_for_live_promotion_now": false,
+    "current_grade": "A-",
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue sealed collection to 750 and score exactly once. In parallel, implement and test authenticated REST startup/reconnect recovery before any production live promotion; do not replace the paper-only production binary from this amendment."
+  }
+}

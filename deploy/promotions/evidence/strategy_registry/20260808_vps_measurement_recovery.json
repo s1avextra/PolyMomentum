@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08T09:03:00Z",
+  "scope": "PolyMomentum-owned files and measurement services only",
+  "disk_recovery": {
+    "free_before_gib": 4.9,
+    "free_after_gib": 16,
+    "filesystem_use_after_percent": 77,
+    "durable_archive_root": "/Users/ttoomm/Library/Application Support/PolyMomentumVPSArchives/20260808",
+    "durable_archive_size_gib_rounded": 11,
+    "files": [
+      {
+        "remote_path": "/opt/polymomentum/logs/forward-captures/fresh-block-canary/segment_001/raw/market_ws_frames.jsonl",
+        "archive_path": "fresh-block-canary/market_ws_frames.jsonl",
+        "sha256": "92646e53ffa3bed0b91c4a8065b0a9054910fb9c455adedaf936b4ee3e7bd067",
+        "remote_original_removed_after_hash_match": true
+      },
+      {
+        "remote_path": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z/market_ws_frames.jsonl",
+        "archive_path": "vps_joint_rtds_fresh/market_ws_frames.jsonl",
+        "sha256": "e6db751364eeeb0a1998285ea8858fec9f67bc7075574898e6793fe9a061206b",
+        "remote_original_removed_after_hash_match": true
+      },
+      {
+        "remote_path": "/opt/polymomentum/logs/latency/vps_dublin_strategy_a_plus_rotating_20260714T122300Z/market_ws_frames.jsonl",
+        "archive_path": "vps_strategy_a_plus/market_ws_frames.jsonl",
+        "sha256": "b347a8083acefb3bd829213bbbfaad52ec16cfdf45f790f43d5e254565f9d277",
+        "remote_original_removed_after_hash_match": true
+      },
+      {
+        "remote_path": "/opt/polymomentum/logs/sessions/session_20260624_121601.jsonl",
+        "archive_path": "sessions/session_20260624_121601.jsonl",
+        "sha256": "11a396d6b87004aa812d6b6e3db39765f0e8b5b5ed69a67cd3284307cbe719e8",
+        "remote_original_removed_after_hash_match": true
+      }
+    ]
+  },
+  "measurement_runtime": {
+    "binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "binary_sha256": "13db9884e6a1ee5d6b21bac640f62bc40124e8b4bbe01de342cc7dcbf10e6b5a",
+    "collector_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "collector_invocation_id": "a0607328b2174a9bbb78891599380102",
+    "collector_state": "active",
+    "active_session": "binary-complement-block1-floor-024",
+    "support_only_progress": {
+      "unique_ready_terminal_conditions": 352,
+      "target_terminal_conditions": 750,
+      "strategy_metrics_disclosed": false
+    }
+  },
+  "service_state": {
+    "polymomentum_healthcheck_timer": "active",
+    "polymomentum_soak_report_timer": "active",
+    "polymomentum_telegram_monitor": "active",
+    "polymomentum_engine": "inactive_disabled",
+    "polymomentum_rust": "inactive",
+    "kill_switch": "present",
+    "failed_units": 0
+  },
+  "safety_note": "The stale paper-mode engine was found active from 08:56:04Z to 09:02:25Z, was stopped, and was disabled from boot. Its unit was explicitly configured with --mode paper; no live strategy was enabled. The separate measurement-only collector remained isolated from the trading runtime."
+}

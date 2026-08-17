@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T10:07:12Z",
+  "status": "HISTORICAL_MECHANISM_DIAGNOSTIC_NOT_PROMOTION_EVIDENCE",
+  "live_ready": false,
+  "live_trading": "OFF",
+  "purpose": "Run one exact, no-tuning historical fold to verify the frozen complete-set mechanism, baseline parity, and stateful policy interactions while the fresh forward block records.",
+  "window": {
+    "fold": "fold_001_20260528T000000Z_20260528T070000Z",
+    "start": "2026-05-28T00:00:00Z",
+    "end": "2026-05-28T07:00:00Z",
+    "hours": 8,
+    "five_minute_markets": 96,
+    "pmxt_events": 32600323,
+    "latency_ms": 202,
+    "continuous": true,
+    "atomic_parquet": true,
+    "parquet_retention": "each downloaded hour was deleted immediately after its filtered replay"
+  },
+  "frozen_inputs": {
+    "variant_pair": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_pair.json",
+    "baseline_params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "candidate_params_hash": "c25aa94ad592b6274150e48be7765ace8fa3beba85595e48225906ca01c01363",
+    "parameter_search": false,
+    "neighbor_search": false,
+    "replay_binary_sha256": "db429ca4b3f1ebf44bdea9f8e618c34095cfc5d5fc2c4c187eeded0c898397bf",
+    "data_manifest_hash": "73a3419e2be541023028675b385a7480775a3a78630d50d745fdfb7f13c0ecfd"
+  },
+  "reproducible_command": "./rust_engine/target/release/polymomentum-engine harness-sweep --start 2026-05-28T00:00:00Z --end 2026-05-28T07:00:00Z --cache-dir <cache> --variant-json deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_pair.json --latency-ms 202 --threads 8 --top 2 --continuous --atomic-parquet --window-minutes 5 --report-json <sweep.json> --trades-json <trades.json>",
+  "baseline_parity": {
+    "status": "PASS",
+    "historical_strict42_source": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+    "expected_fold_loss_pnl_usd": -5.10996,
+    "observed_fold_pnl_usd": -5.109960000000001,
+    "absolute_difference_usd": 1e-15,
+    "trades": 1,
+    "wins": 0,
+    "losses": 1
+  },
+  "full_policy_comparison": {
+    "baseline": {
+      "trades": 1,
+      "wins": 0,
+      "losses": 1,
+      "fee_inclusive_pnl_usd": -5.109960000000001,
+      "fees_usd": 0.11196,
+      "execution_attempts": 1,
+      "fills": 1
+    },
+    "candidate": {
+      "trades": 2,
+      "wins": 1,
+      "losses": 1,
+      "fee_inclusive_pnl_usd": -3.839780000000001,
+      "fees_usd": 0.23258,
+      "execution_attempts": 3,
+      "fills": 3,
+      "exit_signals": 1,
+      "exit_fills": 1,
+      "exit_failures": 0,
+      "breaker_tripped": false
+    },
+    "candidate_minus_baseline_pnl_usd": 1.27018,
+    "candidate_remained_profitable": false
+  },
+  "mechanism_decomposition": {
+    "common_entry": {
+      "condition_id": "0x3aa49fd756f335b47e3ed9f1e217abec1d0043e75da0ca35c73eaf124e6ea34d",
+      "direction": "up",
+      "terminal_direction": "down",
+      "baseline_terminal_hold_pnl_usd": -5.109960000000001,
+      "candidate_lock_hold_seconds": 15.203999996185303,
+      "candidate_lock_fill_price": 0.14,
+      "candidate_lock_pnl_usd": 1.1490899999999993,
+      "lock_minus_terminal_hold_pnl_usd": 6.25905,
+      "locked_profit_floor_usd": 0.1,
+      "floor_pass": true
+    },
+    "candidate_only_entry": {
+      "condition_id": "0x3719f7497571f09da551bc0c6bfe2de9e9d283eb6e66c59636b31c1144672504",
+      "direction": "down",
+      "terminal_direction": "up",
+      "fee_inclusive_pnl_usd": -4.98887,
+      "reason_for_cohort_drift": "the profitable lock avoided the baseline's realized-loss-triggered degraded max-price gate, so the candidate later admitted an 0.83 entry that the baseline skipped"
+    },
+    "visible_opposite_ask_depth_unavailable_observations": 78,
+    "interpretation": "The complete-set execution itself worked and converted a terminal loser into guaranteed profit, but the full policy also changed subsequent entry membership. The fold-level uplift therefore cannot be attributed entirely to the lock without disclosing state feedback."
+  },
+  "measurement_correction_before_fresh_scoring": {
+    "preregistration_cutoff_advanced_to": "2026-07-18T10:07:12Z",
+    "first_fresh_window_open": "2026-07-18T10:40:00Z",
+    "parameters_or_candidate_hash_changed": false,
+    "new_pass_fail_gate": false,
+    "required_future_disclosure": [
+      "common entries and their PnL under both policies",
+      "baseline-only entries and PnL",
+      "candidate-only entries and PnL",
+      "complete-set lock delta versus terminal hold"
+    ],
+    "runner_change": "paired replay now keeps per-trade rows sealed with reports and publishes both only after the 100-candidate-trade disclosure floor",
+    "runner_sha256": "879380f58baafbe53e2055b7c39608bc5142ba8e1ed4cf7d4c00c67241033a62",
+    "runner_tests": "PASS"
+  },
+  "artifact_hashes": {
+    "ephemeral_full_sweep_sha256": "3fb421d9af6e888687f21599387771e6c324a6b574c85506d484597d0d73bc4e",
+    "ephemeral_trade_rows_sha256": "f5edf1df05be9d315b9f50fd75bc81ad3c67bfb1675409f9591d4986bef26238"
+  },
+  "limitations": [
+    "One historical fold is an implementation and causal-decomposition diagnostic, not an estimate of generalization.",
+    "The historical harness used Binance klines for both the signal and terminal tape; promotion requires the independently captured Binance signal and Chainlink settlement tapes.",
+    "No historical result earns credit toward either preregistered 100-trade fresh block.",
+    "The candidate remains loss-making on this fold despite improving PnL versus baseline."
+  ],
+  "verdict": {
+    "mechanism_execution": "PASS",
+    "baseline_parity": "PASS",
+    "full_policy_profitability": "FAIL",
+    "promotion_credit": "NONE",
+    "strategy_grade": "A- RESEARCH ONLY",
+    "next_step": "finish the bounded fresh capture, preserve state-feedback trade rows, and do not disclose a candidate score below the registered floors"
+  }
+}

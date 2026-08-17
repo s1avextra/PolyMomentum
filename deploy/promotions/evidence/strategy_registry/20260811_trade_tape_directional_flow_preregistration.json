@@ -1,0 +1,77 @@
+{
+  "schema_version": "trade_tape_directional_flow_preregistration_v1",
+  "generated_at": "2026-08-11T15:56:00Z",
+  "family_id": "trade_tape_directional_flow_v1",
+  "hypothesis": "Recent aggressor-side trade notional across complementary Up/Down tokens contains directional information: Up buys and Down sells support Up, while Up sells and Down buys support Down.",
+  "inputs": {
+    "dataset_seal": {
+      "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375"
+    },
+    "labels_manifest": {
+      "path": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "sha256": "32d071e7d2f64a50eacd5db5e28664889cf4b55e8bd30375f5addfd75efc7a6e"
+    },
+    "feature_store": {
+      "path": "logs/strategy-research/opportunity-flow/trade_flow_features_20260811.manifest.json",
+      "sha256": "ea25e4edc595dbe6c9005775c2a160c7919855860be741a2bb2a80cbdc61175e"
+    }
+  },
+  "selection_contract": {
+    "direction": "sign((up_buy_notional + down_sell_notional) - (up_sell_notional + down_buy_notional))",
+    "normalization": "absolute directional notional difference divided by total complementary-token trade notional",
+    "maximum_pair_spread": 0.02,
+    "maximum_selected_ask": 0.99,
+    "allowed_inputs": [
+      "decision_seconds",
+      "fixed 15-second or 30-second causal trade window",
+      "unique PMXT trade prints deduplicated by transaction hash",
+      "trade side, price, and size on both complementary tokens",
+      "latest causal Up/Down best bid and ask only for fixed execution bounds"
+    ],
+    "forbidden_inputs": [
+      "BTC path, displacement, strike distance, or volatility",
+      "external model probability or model edge",
+      "top-book depth pressure",
+      "outcome, score, retention, or PnL"
+    ]
+  },
+  "outcome_free_grid_rationale": {
+    "evidence_read_before_preregistration": "feature-store coverage and trade-count/absolute-imbalance distributions only; labels were not read",
+    "complete_pair_rows": 704,
+    "older_rows": 144,
+    "recent_discovery_rows": 427,
+    "fresh_holdout_rows": 133,
+    "minimum_trade_prints_basis": "25, 75, and 150 span the observed causal trade-count distribution and leave multiple rules above the fixed older/recent support floors; the original 1, 2, and 4 candidates were outcome-free but non-discriminating"
+  },
+  "policy_grid": {
+    "decision_seconds": [120, 180, 240],
+    "lookback_seconds": [15, 30],
+    "minimum_pair_trade_prints": [25, 75, 150],
+    "minimum_absolute_trade_imbalance": [0.25, 0.5, 0.75]
+  },
+  "policy_grid_sha256": "e92fa9c26d82e60a678f774883676ba76a4e03c2ba855ea063f2abf7ab048093",
+  "integrity_correction": "The initially recorded derived hash 54ecfcc512cddf8363ade4976fa29453f8344639d0a9e7bbbdffafcc6f252feb hashed jq pretty JSON. It was mechanically corrected to the compact serde_json hash above. No policy field, threshold, gate, input, or budget changed.",
+  "policies_evaluated": 54,
+  "cheap_screen": {
+    "minimum_calibration_support": 12,
+    "minimum_policy_support": 20,
+    "safety_margin": 0.02,
+    "older_gate": "positive point edge above top-quote fee-aware break-even",
+    "recent_gate": "point edge above 0.02 and positive top-quote fee-aware payoff proxy"
+  },
+  "exact_replay_budget": {
+    "maximum_unique_traces": 2,
+    "latency_ms": 128,
+    "stake_usd": 5.0,
+    "fee_rate": 0.07,
+    "additional_discovery_hours": 0,
+    "additional_parameter_variants": 0
+  },
+  "advancement_gate": {
+    "minimum_exact_replay_wilson_edge": 0.02,
+    "require_positive_exact_replay_pnl": true
+  },
+  "fresh_holdout_policy": "Fresh outcomes remain physically unavailable unless a frozen exact-replay trace clears the advancement gate.",
+  "terminal_rule": "After at most two unique exact replays, advance once to the fresh gate or reject the family. Positive point PnL cannot authorize more hours, variants, or replay traces."
+}

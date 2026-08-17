@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T10:32:03Z",
+  "status": "POST_SCORE_WORDING_CORRECTION_FORMULA_AND_GATES_UNCHANGED",
+  "mechanism_id": "fast_volatility_max_v1",
+  "timing": {
+    "public_window_labels_seen_before_preregistration": false,
+    "public_window_results_seen_before_this_amendment": true,
+    "amendment_may_change_candidate_or_gate": false
+  },
+  "correction": {
+    "original_preregistration_phrase": "Taking the maximum can only retain or widen the remaining-price distribution; it never makes the model more confident than the current volatility input.",
+    "precise_statement": "Taking the maximum retains or increases volatility. It usually moves the binary probability toward 0.5, but the Black-Scholes -sigma-squared-T-over-two term can move an exactly or nearly at-the-money probability slightly farther below 0.5.",
+    "observed_scope": {
+      "registered_forecasts": 25899,
+      "candidate_volatility_active_fraction": 0.1864164639561373,
+      "candidate_more_confident_forecasts": 15,
+      "candidate_more_confident_fraction": 0.0005791729410401946,
+      "maximum_absolute_confidence_increase": 0.000046722093762774364
+    },
+    "decision_impact": "None. The candidate fails the preregistered minimum Brier-improvement gate and is rejected without retuning."
+  },
+  "implementation_precision": {
+    "initial_calculation": "Used the standard-library error function for the normal CDF.",
+    "final_calculation": "Recomputed with an exact vectorization of the engine's Abramowitz-Stegun 7.1.26 implementation.",
+    "initial_brier_improvement": 0.0001770487996085688,
+    "final_brier_improvement": 0.00017704880919652607,
+    "initial_log_loss_improvement": 0.0010404504730130817,
+    "final_log_loss_improvement": 0.0010404508337223364,
+    "gate_result_changed": false
+  },
+  "reproducibility_correction": {
+    "issue": "The first evidence write embedded the invocation-specific absolute or relative path used for repository-owned artifacts.",
+    "resolution": "Repository-owned paths are now serialized relative to the repository root, while the external archive directory remains explicit.",
+    "analysis_changed": false,
+    "data_changed": false,
+    "gate_result_changed": false,
+    "cli_and_notebook_outputs_byte_identical": true
+  },
+  "frozen_contract": {
+    "formula_changed": false,
+    "half_life_changed": false,
+    "volatility_floor_changed": false,
+    "date_windows_changed": false,
+    "decision_offsets_changed": false,
+    "score_thresholds_changed": false,
+    "bootstrap_changed": false,
+    "failure_action_changed": false
+  },
+  "source_pins": {
+    "preregistration": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_preregistration.json",
+      "sha256": "d41f645f30947ea7b3f262f0a32db054cb1f039a98d27bcf3903eedbd22205c9"
+    },
+    "analysis_script": {
+      "path": "scripts/analyze_fast_volatility_max.py",
+      "sha256": "d7814f8cb03ba1275261a340e8eb5cc60ed8e17ba16653eeca6ff72d88a42c41"
+    },
+    "final_evidence": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json",
+      "sha256": "4673836c3e0086dda271eb9f12817c216a63cf0e3e4ec0a28297ed7bf9c5474d"
+    },
+    "forecast_snapshot": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_fast_volatility_max_forecasts.jsonl.gz",
+      "sha256": "618aa9a8cc18c9647fd447bcfed1cea161b4f2d8d876c185f25b2fc3f102953d"
+    }
+  },
+  "decision": {
+    "candidate_rejected": true,
+    "retuning_authorized": false,
+    "strategy_variant_authorized": false,
+    "runtime_change_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false
+  }
+}

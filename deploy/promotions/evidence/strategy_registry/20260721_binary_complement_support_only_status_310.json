@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T08:18:26Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "SEALED_SUPPORT_310_OF_750_SESSION_019_COLLECTING_NO_STRATEGY_DISCLOSURE",
+  "source_snapshots": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721T080525Z_binary_complement_floor_collection_status.json",
+      "sha256": "bf41b63b084ecb7348945701191b0c3f4d71aef0e2d8f43b9fa45c2151042740"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_binary_complement_block1_floor_018_session_summary.json",
+      "sha256": "4f3f395b61b664eee01e16e40ab430b3f433d95bcec48737179170c2bc743a7e"
+    }
+  ],
+  "floor": {
+    "previous_unique_ready_terminal_conditions": 290,
+    "unique_ready_terminal_conditions": 310,
+    "support_added_by_session_018": 20,
+    "target_terminal_conditions": 750,
+    "remaining_terminal_conditions": 440,
+    "completion_fraction": 0.41333333333333333,
+    "new_segments_completed": 16,
+    "maximum_new_segments": 96,
+    "state": "COLLECTING"
+  },
+  "session_018": {
+    "first_window_start": "2026-07-21T06:00:00Z",
+    "captured_conditions": 24,
+    "admissible_conditions": 20,
+    "excluded_conditions": 4,
+    "capture_verified": true,
+    "full_segment_signal_coverage": true,
+    "resolution_ready": true,
+    "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+    "session_owned_frames_deleted": true,
+    "recommended_replay_latency_ms": 108,
+    "registered_minimum_replay_latency_ms_unchanged": 202
+  },
+  "operator_observation": {
+    "observed_at": "2026-07-21T08:18:26Z",
+    "active_session": "binary-complement-block1-floor-019",
+    "active_process_verified": true,
+    "available_disk_gib_rounded": 12,
+    "failed_systemd_units": 0
+  },
+  "blindness": {
+    "strategy_metrics_disclosed": false,
+    "strategy_score_emitted": false,
+    "strategy_candidates_inspected": false,
+    "strategy_outcomes_inspected": false,
+    "strategy_rates_or_economics_inspected": false,
+    "support_and_operational_health_only": true
+  },
+  "decision": {
+    "continue_bounded_collection": true,
+    "score_below_750": false,
+    "change_rule_or_threshold": false,
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "paper_or_live_trading_authorized": false
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "opportunity_labels_v1",
+  "generated_at": "2026-08-10T15:38:54Z",
+  "dataset_seal": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/dataset.seal.json",
+    "sha256": "b21c1131b0b11010fce385e2ac2ae040083179a2eb9505b86d317174a0631aff"
+  },
+  "dataset_sha256": "29016932ba246d82273c74b1153b20f3e32c3373322380200544ca1e05c782f9",
+  "label_source": {
+    "path": "logs/strategy-research/public_snapshots/binance_spot_1m_labels_current.jsonl.gz",
+    "sha256": "884c1ab4887884950aac1c6e8028c93da198904e1be91cce66e32786ab389ac9"
+  },
+  "output": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/discovery-labels.parquet",
+    "sha256": "f7f21e66af921612674779c6171b08580f806e55a542b1c8d2958e0bac3b7f5f"
+  },
+  "total_opportunities": 36,
+  "labeled_rows": 36,
+  "tie_rows": 0,
+  "missing_label_rows": 0,
+  "fresh_holdout_rows_excluded": 0,
+  "fresh_holdout_labels_present": false,
+  "join_key": "opportunity_id",
+  "resolution_semantics": "Binance one-minute window terminal close proxy; official settlement parity remains a later gate"
+}

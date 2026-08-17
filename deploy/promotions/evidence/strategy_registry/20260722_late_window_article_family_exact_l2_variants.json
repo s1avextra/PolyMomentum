@@ -1,0 +1,138 @@
+[
+  {
+    "name": "late_window_path_3m_literal_taker",
+    "zone_config": {
+      "early_min_confidence": 0.0,
+      "early_min_z": 0.0,
+      "early_min_edge": -1.0,
+      "primary_min_z": 0.0,
+      "late_min_confidence": 0.0,
+      "late_min_z": 0.0,
+      "late_min_edge": -1.0,
+      "terminal_min_confidence": 0.0,
+      "terminal_min_z": 0.0,
+      "terminal_min_edge": -1.0,
+      "dead_zone_lo": 0.8,
+      "dead_zone_hi": 0.9,
+      "min_price": 0.01,
+      "max_price": 1.0,
+      "edge_cap": 2.0,
+      "min_ev_buffer": -1.0,
+      "settlement_cutoff_minutes": 0.0,
+      "settlement_guard_minutes": 0.0,
+      "settlement_min_abs_move_usd": 0.0,
+      "settlement_sigma_buffer": 0.0,
+      "min_reversion_count": 0,
+      "max_reversion_count": 18446744073709551615
+    },
+    "skip_dead_zone": false,
+    "min_confidence": 0.0,
+    "min_edge": -1.0,
+    "decision_volatility_floor": 0.3,
+    "position_pct": 0.05,
+    "max_per_market_usd": 10.0,
+    "max_projected_stressed_drawdown_pct": 0.12,
+    "degraded_after_losses": 0,
+    "degraded_after_drawdown_pct": 0.0,
+    "degraded_min_z": 0.0,
+    "degraded_max_price": 0.0,
+    "degraded_force_taker": false,
+    "prefer_maker": false,
+    "maker_fill_prob": 0.65,
+    "maker_seed": 42,
+    "use_perfect_fill": false,
+    "default_fee_rate": 0.07,
+    "maker_fee_rate": 0.0,
+    "microstructure": {
+      "max_spread": 1.0,
+      "min_book_depth": 0.0,
+      "min_book_pressure": -1.0
+    },
+    "selectivity": {
+      "require_tags": {
+        "article_path_3m": "aligned"
+      }
+    },
+    "exit": {
+      "settlement_basis_enabled": false,
+      "complete_set_lock_enabled": false,
+      "complete_set_min_profit_usd": 0.1,
+      "complete_set_arm_profit_usd": 0.0,
+      "min_hold_seconds": 15.0,
+      "basis_buffer_usd": 0.0,
+      "min_seconds_before_close": 5.0,
+      "retry_cooldown_seconds": 1.0
+    }
+  },
+  {
+    "name": "late_window_path_3m_and_move_2m_100_literal_taker",
+    "zone_config": {
+      "early_min_confidence": 0.0,
+      "early_min_z": 0.0,
+      "early_min_edge": -1.0,
+      "primary_min_z": 0.0,
+      "late_min_confidence": 0.0,
+      "late_min_z": 0.0,
+      "late_min_edge": -1.0,
+      "terminal_min_confidence": 0.0,
+      "terminal_min_z": 0.0,
+      "terminal_min_edge": -1.0,
+      "dead_zone_lo": 0.8,
+      "dead_zone_hi": 0.9,
+      "min_price": 0.01,
+      "max_price": 1.0,
+      "edge_cap": 2.0,
+      "min_ev_buffer": -1.0,
+      "settlement_cutoff_minutes": 0.0,
+      "settlement_guard_minutes": 0.0,
+      "settlement_min_abs_move_usd": 0.0,
+      "settlement_sigma_buffer": 0.0,
+      "min_reversion_count": 0,
+      "max_reversion_count": 18446744073709551615
+    },
+    "skip_dead_zone": false,
+    "min_confidence": 0.0,
+    "min_edge": -1.0,
+    "decision_volatility_floor": 0.3,
+    "position_pct": 0.05,
+    "max_per_market_usd": 10.0,
+    "max_projected_stressed_drawdown_pct": 0.12,
+    "degraded_after_losses": 0,
+    "degraded_after_drawdown_pct": 0.0,
+    "degraded_min_z": 0.0,
+    "degraded_max_price": 0.0,
+    "degraded_force_taker": false,
+    "prefer_maker": false,
+    "maker_fill_prob": 0.65,
+    "maker_seed": 42,
+    "use_perfect_fill": false,
+    "default_fee_rate": 0.07,
+    "maker_fee_rate": 0.0,
+    "microstructure": {
+      "max_spread": 1.0,
+      "min_book_depth": 0.0,
+      "min_book_pressure": -1.0
+    },
+    "selectivity": {
+      "require_tags": {
+        "article_path_3m": "aligned"
+      },
+      "require_tag_values": {
+        "article_move_2m": [
+          "aligned_100_200",
+          "aligned_ge_200"
+        ]
+      }
+    },
+    "exit": {
+      "settlement_basis_enabled": false,
+      "complete_set_lock_enabled": false,
+      "complete_set_min_profit_usd": 0.1,
+      "complete_set_arm_profit_usd": 0.0,
+      "min_hold_seconds": 15.0,
+      "basis_buffer_usd": 0.0,
+      "min_seconds_before_close": 5.0,
+      "retry_cooldown_seconds": 1.0
+    }
+  }
+]

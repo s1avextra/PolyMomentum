@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T10:55:13Z",
+  "status": "PREREGISTERED_BEFORE_DVOL_OR_EVALUATION_LABEL_DOWNLOAD",
+  "mechanism_id": "dvol_volatility_max_v1",
+  "decision_question": "Does a causal forward-looking BTC options volatility floor correct enough of the retained model's short-horizon overconfidence to warrant an independent Polymarket opportunity-level screen?",
+  "motivation": {
+    "measured_failure": "The retained strategy's internal probability is more overconfident and less calibrated than the executable market. A causal 15-minute realized-volatility maximum improved public-proxy scores broadly but failed its fixed Brier-magnitude gate.",
+    "distinct_mechanism": "Deribit DVOL is a 30-day annualized forward-looking volatility expectation derived from BTC option prices across the smile. It is exogenous to the one-hour backward-looking Binance realized-volatility estimate and is not another half-life, threshold, calibration, or lifecycle variant.",
+    "why_maximum": "The candidate is uncertainty-only: it may retain or increase the baseline volatility but never lower it. This directly tests whether options-implied uncertainty can veto overconfident fair values without manufacturing more confidence.",
+    "hypothesis_budget": "One formula, one DVOL source, one staleness bound, one pair of disjoint evaluation windows, and no coefficient or threshold grid."
+  },
+  "frozen_formula": {
+    "baseline_annualized_volatility": "max(0.30, causal rolling-one-hour Binance BTCUSDT close-to-close realized volatility)",
+    "candidate_annualized_volatility": "max(baseline_annualized_volatility, causal_deribit_btcdvol_usdc / 100)",
+    "dvol_sample": "last Deribit btcdvol_usdc index-chart observation with timestamp less than or equal to the forecast decision timestamp",
+    "dvol_maximum_age_seconds": 7200,
+    "missing_or_stale_dvol": "forecast is ineligible; no fallback or imputation",
+    "probability": "clamp(N((ln(spot/strike) + (0.05 - 0.5 * sigma^2) * years_remaining) / (sigma * sqrt(years_remaining))), 0.01, 0.99)",
+    "normal_cdf": "exact vectorization of rust_engine/src/fair_value.rs Abramowitz-Stegun 7.1.26 implementation",
+    "risk_free_rate": 0.05,
+    "volatility_floor": 0.30,
+    "coefficient_or_threshold_grid": false,
+    "alternate_dvol_aggregations": 0,
+    "alternate_staleness_bounds": 0,
+    "alternate_combination_operators": 0
+  },
+  "public_data_contract": {
+    "binance_source": "Official Binance public BTCUSDT spot one-second kline daily archives and adjacent SHA-256 checksum files",
+    "binance_base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/",
+    "deribit_source": "Deribit public/get_index_chart_data for index_name=btcdvol_usdc and range=1y",
+    "deribit_endpoint": "https://www.deribit.com/api/v2/public/get_index_chart_data?index_name=btcdvol_usdc&range=1y",
+    "deribit_documentation": "https://docs.deribit.com/api-reference/market-data/public-get_index_chart_data",
+    "dvol_methodology": "https://insights.deribit.com/exchange-updates/dvol-deribit-implied-volatility-index/",
+    "download_after_registration": true,
+    "older_window_utc": "2026-04-16T00:00:00Z through 2026-05-16T00:00:00Z",
+    "fresh_holdout_window_utc": "2026-07-16T00:00:00Z through 2026-07-21T00:00:00Z",
+    "binance_preroll_dates": [
+      "2026-04-15",
+      "2026-07-15"
+    ],
+    "excluded_known_strategy_or_proxy_windows": [
+      "2026-05-28T00:00:00Z through 2026-06-11T00:00:00Z strict-42 population",
+      "2026-06-11T00:00:00Z through 2026-07-11T00:00:00Z fast-volatility screen",
+      "2026-07-14T15:00:00Z through 2026-07-15T08:50:00Z retained fresh and settlement-anchor captures",
+      "all active or sealed forward-block conditions"
+    ],
+    "five_minute_window_alignment": "UTC Unix timestamps divisible by 300 seconds",
+    "decision_offsets_seconds": [120, 150, 179],
+    "strike": "open price of the first one-second Binance kline in the five-minute window",
+    "causal_spot": "close price of the one-second kline ending at or before the registered decision offset",
+    "terminal_label": "last one-second close before the five-minute boundary is greater than the registered strike; exact ties are excluded",
+    "minimum_binance_causal_preroll_seconds": 3600,
+    "maximum_binance_internal_gap_seconds": 2,
+    "binance_checksum_required": true,
+    "raw_deribit_response_snapshot_required": true,
+    "labels_or_dvol_values_inspected_before_registration": false
+  },
+  "frozen_estimands": {
+    "primary_grain": "one forecast per five-minute condition and registered decision offset with fresh causal DVOL",
+    "primary_metrics": [
+      "condition-offset-weighted Brier score",
+      "condition-offset-weighted log loss"
+    ],
+    "secondary_metrics": [
+      "DVOL coverage and age distribution",
+      "candidate-active fraction",
+      "calibration-in-the-large",
+      "mean absolute probability displacement",
+      "Brier and log loss for baseline probabilities at least 0.75 or at most 0.25"
+    ],
+    "uncertainty": "Paired block bootstrap by UTC day with 10000 deterministic resamples and seed 20260721",
+    "comparison_sign": "positive baseline-minus-candidate proper-score deltas favor the candidate"
+  },
+  "fixed_pass_gates": {
+    "data_quality": {
+      "binance_checksum_failures": 0,
+      "binance_timestamp_duplicates": 0,
+      "binance_timestamp_regressions": 0,
+      "binance_invalid_prices": 0,
+      "deribit_timestamp_duplicates": 0,
+      "deribit_timestamp_regressions": 0,
+      "deribit_invalid_values": 0,
+      "minimum_retained_conditions_older": 8000,
+      "minimum_retained_conditions_fresh_holdout": 1300,
+      "minimum_complete_registered_forecasts_fraction": 0.99,
+      "minimum_fresh_dvol_forecast_fraction": 0.99,
+      "minimum_candidate_active_fraction": 0.10
+    },
+    "overall": {
+      "minimum_brier_improvement": 0.0005,
+      "minimum_log_loss_improvement": 0.001,
+      "brier_bootstrap_lower_bound_strictly_positive": true,
+      "log_loss_bootstrap_lower_bound_strictly_positive": true
+    },
+    "stability": {
+      "older_window_brier_improvement_strictly_positive": true,
+      "older_window_log_loss_improvement_strictly_positive": true,
+      "fresh_holdout_brier_improvement_strictly_positive": true,
+      "fresh_holdout_log_loss_improvement_strictly_positive": true,
+      "each_registered_decision_offset_brier_improvement_nonnegative": true,
+      "each_registered_decision_offset_log_loss_improvement_nonnegative": true
+    },
+    "overconfidence_tail": {
+      "brier_improvement_nonnegative": true,
+      "log_loss_improvement_nonnegative": true
+    }
+  },
+  "decision_rules": {
+    "pass": "Register one default-off opportunity-capture field and require an independent Polymarket opportunity-level screen before exact strategy replay or runtime implementation.",
+    "fail": "Reject dvol_volatility_max_v1 and do not tune the source, staleness, maximum operator, floor, dates, decision offsets, or score thresholds on these windows.",
+    "inconclusive": "Treat missing, stale, mutable, or invalid public source data as a failed research screen; do not substitute the active forward block or lower a gate.",
+    "promotion_credit": false,
+    "profitability_claim_permitted": false,
+    "a_plus_claim_permitted": false
+  },
+  "integrity": {
+    "preregistered_before_source_download": true,
+    "preregistered_before_evaluation_labels": true,
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "strategy_or_runtime_changed": false
+  },
+  "source_pins_before_evaluation": {
+    "fair_value_rs": {
+      "path": "rust_engine/src/fair_value.rs",
+      "sha256": "660a91f43c3b77e26c16cb370cf887c93c1d0e562e26156a865c0310f6356585"
+    },
+    "momentum_rs": {
+      "path": "rust_engine/src/strategy/momentum.rs",
+      "sha256": "4459cfa840f486c5763731d983d8c1bbe931d348b7648ee2cb78d208b6bf49ea"
+    },
+    "decision_rs": {
+      "path": "rust_engine/src/strategy/decision.rs",
+      "sha256": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0"
+    },
+    "fast_volatility_evidence": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json",
+      "sha256": "4673836c3e0086dda271eb9f12817c216a63cf0e3e4ec0a28297ed7bf9c5474d"
+    },
+    "fast_volatility_integrity_amendment": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_integrity_amendment.json",
+      "sha256": "8a5a1df18449e8758a4f59a78e84567c51dbd265cc6b2c105295eeb94b006f02"
+    }
+  }
+}

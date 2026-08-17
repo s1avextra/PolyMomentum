@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T18:05:51Z",
+  "updated_at": "2026-07-18T18:37:07Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_DESCRIPTIVE_DIAGNOSTICS_REGISTERED_SCHEMA_3_SUPERSEDED",
+  "superseded_by": {
+    "screen_schema_version": 4,
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_unit_economics_amendment.json",
+    "reason": "The descriptive fields remain unchanged and non-gating; schema 4 additionally rejects classification passes that fail the existing A+ fee-aware unit profit-factor or payoff floors."
+  },
+  "decision": {
+    "forward_opportunity_reports_seen": 0,
+    "forward_screen_artifacts_seen": 0,
+    "forward_strategy_metrics_seen": false,
+    "current_terminal_support_disclosed": 12,
+    "required_terminal_support_per_block": 750,
+    "strategy_rule_changed": false,
+    "screen_rate_or_threshold_changed": false,
+    "screen_verdict_changed": false,
+    "second_block_requirement_changed": false,
+    "exact_replay_requirement_changed": false,
+    "screen_schema_version_before": 2,
+    "screen_schema_version_after": 3
+  },
+  "diagnosed_risk": {
+    "name": "late_selection_payoff_confound",
+    "cause": "The registered screen selects the first baseline-eligible row that also passes paired-book coherence, which can occur later than the first baseline-eligible row and can choose the opposite direction.",
+    "evidence_risk": "A terminal classification screen can look strong because a later row is closer to resolution even when its chosen top ask leaves poor fee-inclusive payoff geometry.",
+    "why_not_change_the_rule": "The chronological selection behavior is explicitly preregistered and is causal. No forward outcomes have been scored, but changing it would redefine the strategy rather than merely harden measurement.",
+    "existing_control": "Two disjoint screen passes still authorize only one exact measured-latency runtime replay, where fills, fees, payoff, chronological halves, breadth, and tails remain mandatory."
+  },
+  "diagnostics": {
+    "gating_use": "descriptive_only_non_gating",
+    "distribution_method": "min, linearly interpolated p10/p50/p90, max, and arithmetic mean",
+    "baseline_decision_ask": "Fresh top ask for the first baseline-eligible row's chosen direction.",
+    "selected_decision_ask": "Fresh top ask for the first baseline-eligible row that also passes the fixed paired-book rule.",
+    "selection_delay_seconds": "Selected decision timestamp minus baseline decision timestamp.",
+    "selected_seconds_to_close": "Five-minute market close timestamp minus selected decision timestamp.",
+    "same_direction_decision_ask_change": "Selected ask minus baseline ask for selections that preserve direction.",
+    "selected_in_final_60_seconds": "Count and selected-candidate rate at or inside the final 60 seconds.",
+    "selected_direction_changes": "Count and selected-candidate rate whose selected direction differs from baseline.",
+    "decision_ask_limit": "The ask is a decision-time executable-price proxy before measured latency, depth traversal, fill simulation, and fees; it is not PnL evidence."
+  },
+  "integrity": {
+    "opportunity_up_and_down_asks_required_finite_in_zero_one_interval": true,
+    "repeat_audit_validates_diagnostic_counts_rates_bounds_and_ordering": true,
+    "diagnostics_can_change_gate_pass": false,
+    "diagnostics_can_authorize_replay_or_trading": false,
+    "preregistration_sha256_before_this_amendment": "c45472ca6ef470196e76383829ca96db09550f888f339f8bde74b021e2a5f229",
+    "schema_3_scorer_source_sha256_after_instrumentation": "8fd22a50aab78d33b3abb855a78557798ada853917284209afadc24bdd0765b0"
+  },
+  "interpretation_policy": [
+    "Publish every diagnostic with the first and second block screens.",
+    "Do not tune the two-tick rule, selection timing, or any gate from these summaries.",
+    "Do not use a favorable diagnostic to bypass the second disjoint block or exact replay.",
+    "Do not use an unfavorable diagnostic to claim a new optimized strategy; the frozen family remains governed by its registered pass/fail gates and mandatory exact replay."
+  ]
+}

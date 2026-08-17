@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T14:19:40Z",
+  "mechanism_id": "trailing_complete_set_lock_v2",
+  "status": "PRE_REGISTERED_REPLAY_ONLY_NOT_SCORED",
+  "live_ready": false,
+  "live_trading": "OFF",
+  "score_not_before": "2026-07-18T14:19:40Z",
+  "score_not_before_epoch_s": 1784384380,
+  "selection_disclosure": {
+    "observed_before_design": "The exact v1 folds 29-42 diagnostic showed that immediate complete-set locks converted terminal losers but capped many more terminal winners, leaving v1 at -$8.15098 with a 0.055696 payoff ratio.",
+    "design_response": "Use a trailing state: arm only after material executable complete-set profit, preserve upside above the arm, then lock only on a retreat that still guarantees the fixed minimum profit.",
+    "selection_bias_control": "All folds 29-42 are ineligible for v2 promotion credit. The integrated v2 historical replay is a one-shot mechanism diagnostic only. No threshold or neighbor search is permitted, and promotion requires two post-registration disjoint fresh blocks."
+  },
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "measured_latency_ms": 202
+  },
+  "candidate": {
+    "strategy": "primary_v6_volfloor_300_trailing_complete_set_lock_v2",
+    "variant_path": "deploy/promotions/evidence/strategy_registry/20260718_trailing_complete_set_lock_v2_variant.json",
+    "comparison_pair_path": "deploy/promotions/evidence/strategy_registry/20260718_trailing_complete_set_lock_v2_pair.json",
+    "params_hash": "8554587b2e8bca78c504f3fbb8840737fee1d384567b173ba8efe8d909a4bb11",
+    "only_parameter_changes_from_baseline": {
+      "complete_set_lock_enabled": true,
+      "complete_set_min_profit_usd": 0.1,
+      "complete_set_arm_profit_usd": 0.5,
+      "min_hold_seconds": 15.0,
+      "min_seconds_before_close": 5.0,
+      "retry_cooldown_seconds": 1.0
+    }
+  },
+  "parameter_provenance": {
+    "source": "deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json",
+    "source_generated_at": "2026-07-15T03:27:09Z",
+    "arm_profit_usd": 0.5,
+    "retreat_floor_profit_usd": 0.1,
+    "order_latency_ms": 202,
+    "retry_cooldown_seconds": 1.0,
+    "fee_rate": 0.07,
+    "reason": "These exact arm and floor values were fixed three days before the v1 integrated tail run. They are reused without search; folds 29-42 did not select their numerical values."
+  },
+  "state_machine_contract": {
+    "position_state": "one filled directional binary-outcome position",
+    "unarmed_below_arm": "wait",
+    "unarmed_at_or_above_arm": "set armed=true and submit no order",
+    "armed_at_or_above_arm": "wait and preserve directional upside",
+    "armed_below_arm_and_at_or_above_floor": "buy exactly the held share quantity of the opposite outcome with the existing fee-inclusive taker-FOK ceiling guarantee",
+    "armed_below_floor": "submit no order; retain the directional position",
+    "gap_through_floor": "fail closed without manufacturing a lock",
+    "successful_lock": "hold both equal legs and all capital to terminal close; no immediate merge or early collateral reuse is assumed",
+    "failed_or_partial_fill": "retain the original position; a reconciliation mismatch trips the breaker and blocks promotion"
+  },
+  "economic_contract": {
+    "payout_usd": "one matched Yes plus No share pays exactly $1 at terminal settlement or can be merged into $1 collateral",
+    "fee_inclusive_locked_profit_usd": "shares - entry_fill_cost - entry_fee - opposite_fill_cost - opposite_fee",
+    "signal_cost_bound": "all missing-leg shares are costed at the submitted FOK ceiling and the fee is bounded at min(ceiling, 0.50)",
+    "arm_profit_usd": 0.5,
+    "minimum_locked_profit_usd": 0.1,
+    "order_style": "missing-leg taker FOK at measured 202 ms latency",
+    "available_cash": "maximum hedge spend and fee must fit uncommitted bankroll",
+    "collateral_release": "terminal close only"
+  },
+  "evaluation_contract": {
+    "historical_folds_29_42": {
+      "purpose": "one-shot integrated mechanism and accounting diagnostic",
+      "promotion_credit": "NONE",
+      "parameter_search": "FORBIDDEN",
+      "neighbor_search": "FORBIDDEN",
+      "failure_action": "reject v2; do not rescue it with threshold changes"
+    },
+    "fresh_block_1": "first chronological post-registration block with at least 100 admissible terminal exact-replay candidate trades",
+    "fresh_block_2": "second chronological, disjoint post-registration block with at least 100 admissible terminal exact-replay candidate trades and unchanged code, hash, parameters, and gates",
+    "required_properties_each_scored_block": [
+      "every successful lock has realized fee-inclusive PnL of at least $0.10",
+      "no order is submitted before the position arms at executable guaranteed profit of at least $0.50",
+      "the full stateful candidate policy has higher fee-inclusive PnL than the full stateful baseline",
+      "candidate fee-inclusive total PnL is positive",
+      "candidate fee-inclusive PnL is positive in both chronological halves",
+      "candidate 95% Wilson win-rate lower bound is at least 0.70",
+      "candidate profit factor exceeds 1.0",
+      "candidate payoff ratio is at least 0.30",
+      "five-report loss burst is at most 2",
+      "20% left-tail fold CVaR is at least -$8.00",
+      "execution attempts, fills, both fees, state transitions, and unresolved exposure reconcile exactly"
+    ],
+    "state_feedback_reporting": [
+      "common-entry count and PnL by policy",
+      "baseline-only entry count and PnL",
+      "candidate-only entry count and PnL",
+      "armed-position count",
+      "successful-lock count",
+      "terminal-winner and terminal-loser lock counts",
+      "lock PnL delta versus terminal hold"
+    ]
+  },
+  "promotion_boundary": {
+    "historical_diagnostic_pass": "research only",
+    "two_fresh_blocks_pass": "eligible for exact live-runtime parity implementation and bounded paper preflight only",
+    "live_requirements": [
+      "live runtime implements the same arm state and missing-leg lifecycle",
+      "market fee parameters and tick size match replay",
+      "venue FOK acknowledgements and fills prove exact hedge quantity",
+      "terminal redemption or merge operations are verified",
+      "fresh promotion artifact passes release preflight"
+    ]
+  },
+  "forbidden_actions": [
+    "search arm-profit neighbors",
+    "search guarantee-floor neighbors",
+    "change entry thresholds based on v2 results",
+    "pool historical folds with fresh blocks for a promotion score",
+    "emit a v2 strategy score below the registered fresh support floor",
+    "install this replay-only exit in the production trading binary"
+  ]
+}

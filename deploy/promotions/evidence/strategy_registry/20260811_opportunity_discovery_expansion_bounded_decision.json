@@ -1,0 +1,87 @@
+{
+  "schema_version": "opportunity_discovery_expansion_bounded_decision_v1",
+  "decided_at": "2026-08-11T10:10:15Z",
+  "decision": "reject_both_traces_keep_fresh_holdout_sealed",
+  "reason": "Both traces retained positive point edge and fee-aware PnL after the preregistered eight-hour expansion, but neither replayed Wilson edge exceeded the fixed 0.02 safety margin. The preregistered reject condition therefore applies.",
+  "inputs": {
+    "preregistration": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_preregistration.json",
+      "sha256": "9f007025cc787030d9d88e09ffdeb6b2801a12fc7f82211088a6d029eb8755d6"
+    },
+    "dataset_seal": {
+      "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375",
+      "total_rows": 704,
+      "unique_opportunity_ids": 704,
+      "outcome_columns_present": false
+    },
+    "labels_manifest": {
+      "path": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "sha256": "32d071e7d2f64a50eacd5db5e28664889cf4b55e8bd30375f5addfd75efc7a6e",
+      "labeled_rows": 571,
+      "fresh_holdout_rows_excluded": 133,
+      "fresh_holdout_labels_present": false
+    },
+    "policy_search_report": {
+      "path": "logs/strategy-research/opportunity-policy-search/chronological_expanded_20260811.v2.report.json",
+      "sha256": "9905955d6d34aa836a179f8e2ef30aa49a15e2f12e20cc4ec8220b844ac1725d"
+    },
+    "exact_replay_report": {
+      "path": "logs/strategy-research/opportunity-exact-replay/chronological_expanded_20260811.latency128.report.json",
+      "sha256": "83fb4e2889fb3859cc539305dd180a0cc75a42f79d62ee5b8107fb7745501497",
+      "fresh_holdout_outcomes_accessed": false,
+      "source_pmxt_scans": 12,
+      "duplicate_hour_scans_avoided": 10
+    }
+  },
+  "fixed_gate": {
+    "minimum_wilson_edge": 0.02,
+    "requires_positive_fee_aware_pnl": true,
+    "maximum_additional_hours": 8,
+    "maximum_exact_replay_traces": 2,
+    "latency_ms": 128,
+    "stake_usd": 5.0,
+    "fee_rate": 0.07
+  },
+  "trace_decisions": [
+    {
+      "discovery_trace_sha256": "6d195a620ead163c4cdb3a0745ec2e291f99876d20da8e30571de20ff6289b3b",
+      "representative_policy_id": "7086dd5dff9d215da96e44952a795400896464d27d7eafb5d8f0f23dcb72dab0",
+      "decision_seconds": 180,
+      "maximum_ask": 0.9,
+      "requested_opportunities": 28,
+      "fills": 28,
+      "wins": 23,
+      "losses": 5,
+      "point_estimate_edge": 0.10544141687876285,
+      "wilson_edge": -0.07190140244323806,
+      "total_pnl_usd": 27.5399198130998,
+      "decision": "rejected_failed_wilson_advancement_gate"
+    },
+    {
+      "discovery_trace_sha256": "9c908c9502243d8a3acf5ae95d76b22980685913a0ed978c767b37183971ea04",
+      "representative_policy_id": "2ac57b34b08a57cd45ef80ff3aa4833c938e2585594438700a82e78ad7fec027",
+      "decision_seconds": 120,
+      "maximum_ask": 0.9,
+      "requested_opportunities": 28,
+      "fills": 28,
+      "wins": 20,
+      "losses": 8,
+      "point_estimate_edge": 0.0838972142857144,
+      "wilson_edge": -0.10098138433295711,
+      "total_pnl_usd": 28.137913900946486,
+      "decision": "rejected_failed_wilson_advancement_gate"
+    }
+  ],
+  "fresh_gate": {
+    "opened": false,
+    "outcomes_accessed": false,
+    "reason": "No trace passed the preregistered advancement condition."
+  },
+  "search_budget": {
+    "exhausted": true,
+    "add_more_hours_for_these_traces": false,
+    "add_more_parameter_variants_for_these_traces": false
+  },
+  "next_action": "Retire this late-window directional family from promotion work and begin a new preregistered strategy family with an independent hypothesis and its own cheap causal screen."
+}

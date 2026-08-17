@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T04:53:29Z",
+  "mechanism_id": "four_minute_continuation_v1",
+  "status": "DIRECTIONAL_CLAIM_REPLICATED_PUBLIC_GATE_FAILED_FRESH_SUPPORT_RUNTIME_UNCHANGED",
+  "source_pins": {
+    "preregistration": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_four_minute_continuation_preregistration.json",
+      "sha256": "fcf2763e413400ced44b77c5f932c557e3fd3a3b7c52bc376a279fa77ad37e47"
+    },
+    "analysis_script": {
+      "path": "scripts/analyze_four_minute_continuation.py",
+      "sha256": "9f265d47325995ffd9c4e70c2bd9712a3e3ae86235c983feee5ce77287ad7147"
+    },
+    "public_proxy_evidence": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_four_minute_continuation_public_proxy.json",
+      "sha256": "21aa26600c5b00b7f7b6c6717e7e1451df031a777115a71a1641a43391193bda"
+    },
+    "signal_snapshot": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722_four_minute_continuation_signals.jsonl.gz",
+      "sha256": "3f8e80e3743debf703728ffc9ba18df1172f355b13a3a39d4deeb5bb0b85facc"
+    },
+    "validator": {
+      "path": "scripts/validate_four_minute_continuation.py",
+      "sha256": "65994e45887c98195ae5b4f8d1400c0cf5db0538593e78870949c84258c2225e"
+    }
+  },
+  "public_proxy_result": {
+    "complete_five_minute_conditions": 9504,
+    "eligible_strict_four_minute_signals": 1032,
+    "eligible_signal_fraction": 0.10858585858585859,
+    "continuation_accuracy": 0.9554263565891473,
+    "utc_day_block_bootstrap_accuracy_95pct": [
+      0.9390713010393862,
+      0.9690522243713733
+    ],
+    "strict_up_accuracy": 0.9522058823529411,
+    "strict_down_accuracy": 0.9590163934426229,
+    "older_eligible_signals": 934,
+    "fresh_pre_forward_eligible_signals": 98,
+    "preregistered_fresh_support_floor": 100,
+    "failed_checks": [
+      "minimum_eligible_signals_fresh"
+    ]
+  },
+  "mechanism_decomposition": {
+    "true_fifth_minute_continuation_rate": 0.45058139534883723,
+    "contract_wins_despite_fifth_minute_reversal_or_tie": 521,
+    "fraction_of_contract_wins_despite_fifth_minute_reversal_or_tie": 0.5283975659229209,
+    "contract_accuracy_when_fifth_minute_reverses_or_ties": 0.9188712522045855,
+    "median_directional_buffer_at_decision_usd": 77.67000000000553,
+    "interpretation": "The high terminal hit rate primarily measures persistence of the accumulated first-four-minute distance from the five-minute open. It does not establish that the fifth-minute return continues in the same direction."
+  },
+  "economic_interpretation": {
+    "fixed_51_02_percent_breakeven_rejected": true,
+    "correct_taker_break_even_per_share": "executable_fill_price + exact fee per share",
+    "polymarket_entry_prices_observed": false,
+    "fills_or_queue_position_observed": false,
+    "bookwalk_slippage_observed": false,
+    "fee_inclusive_pnl_observed": false,
+    "profitability_established": false
+  },
+  "decision": {
+    "article_directional_claim_broadly_replicated": true,
+    "preregistered_public_proxy_gate_passed": false,
+    "lower_fresh_support_floor_after_observation": false,
+    "retune_checkpoint_or_magnitude_thresholds": false,
+    "add_default_off_runtime_feature": false,
+    "run_exact_polymarket_screen_under_this_registration": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false,
+    "future_distinct_hypothesis": "After the protected forward floor, a separately preregistered late_window_buffer_mispricing_v1 study may test whether executable token asks underprice the probability implied by the causal BTC-to-strike buffer. It must use disjoint data and is not a retune of this rule."
+  },
+  "integrity": {
+    "official_binance_archives_checksum_verified": 33,
+    "july_14_or_later_archive_opened": false,
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "production_strategy_changed": false,
+    "paper_strategy_changed": false,
+    "live_strategy_changed": false
+  }
+}

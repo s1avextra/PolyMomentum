@@ -1,0 +1,80 @@
+{
+  "schema_version": "external_causal_probability_dislocation_preregistration_v1",
+  "sealed_at": "2026-08-11T12:34:09Z",
+  "family_id": "external_causal_probability_dislocation_v1",
+  "hypothesis": "A causal binary probability derived from observed BTC spot, strike, remaining time, and realized volatility can identify fee-aware Polymarket contract mispricing without path, move, direction-history, or order-book-pressure rules.",
+  "inputs": {
+    "dataset_seal": {
+      "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375",
+      "total_rows": 704,
+      "outcome_columns_present": false
+    },
+    "labels_manifest": {
+      "path": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "sha256": "32d071e7d2f64a50eacd5db5e28664889cf4b55e8bd30375f5addfd75efc7a6e",
+      "labeled_rows": 571,
+      "fresh_holdout_rows_excluded": 133,
+      "fresh_holdout_labels_present": false
+    }
+  },
+  "model": {
+    "kind": "black_scholes_binary_terminal_probability",
+    "risk_free_rate": 0.0,
+    "up_probability": "N((ln(observed_btc/strike) - 0.5*sigma^2*T)/(sigma*sqrt(T)))",
+    "down_probability": "1 - up_probability",
+    "causal_inputs": [
+      "btc_observed",
+      "strike_price",
+      "remaining_seconds",
+      "causal_annualized_realized_volatility",
+      "signal_direction",
+      "fee_aware_break_even_probability",
+      "best_ask",
+      "stake_fully_executable"
+    ],
+    "forbidden_inputs": [
+      "path_alignment",
+      "move_threshold",
+      "top_book_pressure",
+      "terminal_btc",
+      "outcome",
+      "realized_pnl",
+      "fresh_holdout_label"
+    ]
+  },
+  "fixed_grid": {
+    "decision_seconds": [120, 180, 240],
+    "volatility_scale": [0.75, 1.0, 1.25],
+    "minimum_model_edge": [0.03, 0.05, 0.08],
+    "maximum_ask": [0.85, 0.9],
+    "policy_count": 54
+  },
+  "cheap_screen_gates": {
+    "minimum_older_selected_support": 20,
+    "maximum_older_brier_score": 0.25,
+    "minimum_recent_discovery_support": 20,
+    "minimum_recent_point_edge_over_break_even": 0.02,
+    "require_positive_fee_aware_payoff_proxy": true
+  },
+  "exact_replay_budget": {
+    "maximum_unique_traces": 2,
+    "prefer_distinct_decision_seconds": true,
+    "latency_ms": 128,
+    "stake_usd": 5.0,
+    "fee_rate": 0.07,
+    "additional_discovery_hours": 0,
+    "additional_parameter_variants": 0
+  },
+  "terminal_decision": {
+    "advance_to_fresh": "At least one exact trace has positive fee-aware PnL and replayed Wilson edge greater than 0.02.",
+    "reject": "Reject the family if no cheap-screen policy survives or if every bounded exact trace fails the advancement condition.",
+    "fresh_holdout_remains_sealed_until_advance": true,
+    "more_evidence_required_may_expand_budget": false
+  },
+  "selection_state_at_seal": {
+    "new_family_scores_read": false,
+    "new_family_candidates_read": false,
+    "fresh_outcomes_read": false
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "cross_venue_lead_lag_decision_v1",
+  "generated_at": "2026-08-11T19:24:45Z",
+  "family_id": "cross_venue_lead_lag_residual_v1",
+  "preregistration": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_preregistration.json",
+    "sha256": "04c0467da1f0de77b9cb97f3fb7d19d34be1bdf28459d9dac1c17e3c08c69fc6"
+  },
+  "search_report": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_search.json",
+    "sha256": "6b63218bdd425368af2866adb7910236365cca88a8f8cb762b4deaedb39ccb18"
+  },
+  "exact_replay_report": null,
+  "fixed_advancement_wilson_edge": 0.02,
+  "exact_replays_consumed": 0,
+  "fresh_holdout_outcomes_accessed": false,
+  "trace_decisions": [],
+  "decision": "rejected",
+  "reason": "No preregistered policy met older/recent support and point-edge gates; exact replay and fresh scoring remain closed.",
+  "terminal": true,
+  "search_budget_exhausted": true,
+  "more_evidence_allowed": false,
+  "fresh_gate_opened": false
+}

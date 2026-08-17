@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T02:10:39Z",
+  "ok": false,
+  "promotion_eligible": false,
+  "status": "posthoc_diagnostic_rejected",
+  "source": "20260715_probability_opportunity_calibration_strict42.json",
+  "methodology": [
+    "Add one bounded direction interaction after the primary opportunity-calibration audit showed opposite aggregate signs for UP and DOWN candidates.",
+    "For each scored fold, select model family and ridge on the final two strictly prior folds, refit on all prior folds, and score the next fold once.",
+    "Candidate families are executable-market identity, market intercept, fair shrinkage, and direction-interacted fair shrinkage.",
+    "Each terminal condition has total weight one and folds remain chronological.",
+    "Because direction interaction was selected after inspecting the primary cohort diagnostics, this run can reject the mechanism but cannot supply promotion evidence on the same folds."
+  ],
+  "support": {
+    "scored_folds": 34,
+    "scored_conditions": 498
+  },
+  "selected_model_counts": {
+    "identity": 9,
+    "direction_interaction": 14,
+    "market_intercept": 6,
+    "fair_shrink": 5
+  },
+  "overall": {
+    "market_brier": 0.14273255282818378,
+    "calibrated_brier": 0.14353215099530459,
+    "market_minus_calibrated_brier": -0.0007995981671208019,
+    "market_log_loss": 0.4573943788558661,
+    "calibrated_log_loss": 0.46069086057701153,
+    "market_minus_calibrated_log_loss": -0.003296481721145439
+  },
+  "chronological_halves": {
+    "first": {
+      "market_minus_calibrated_brier": 0.000458247538158818,
+      "market_minus_calibrated_log_loss": 0.002719194533454039
+    },
+    "second": {
+      "market_minus_calibrated_brier": -0.0020274951651318707,
+      "market_minus_calibrated_log_loss": -0.009168927588730613
+    }
+  },
+  "condition_bootstrap_95pct": {
+    "market_minus_calibrated_brier": [
+      -0.0031656154116280664,
+      0.0013279740628367833
+    ],
+    "market_minus_calibrated_log_loss": [
+      -0.011386394038166495,
+      0.003926224005342824
+    ]
+  },
+  "verdict": "Direction interaction worsens both proper scores overall, reverses from positive in the first half to negative in the second half, and has bootstrap intervals crossing zero. Do not integrate or exact-replay this calibration family."
+}

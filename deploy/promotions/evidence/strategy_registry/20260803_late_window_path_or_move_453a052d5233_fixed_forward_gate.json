@@ -1,0 +1,63 @@
+{
+  "candidate_replay_windows": [],
+  "completed_windows": [],
+  "deferred_window_starts": [],
+  "design": {
+    "confidence_alpha": 0.05,
+    "design_version": "fixed_forward_chronological_v1",
+    "maximum_target_fills": 1000,
+    "minimum_checkpoint_fills": 25,
+    "paper_or_live_authorized": false,
+    "payoff_derived_target_fills": 765,
+    "prior_implied_break_even_accuracy": 0.9960885594447723,
+    "prior_maximum_stake_usd": 5.0,
+    "prior_mean_net_win_usd": 0.01963400000000013,
+    "selection_policy": "all causal signal-hour windows strictly after sealed_at, in chronological order, with no terminal-outcome scoring or signal-density ranking",
+    "target_is_feasible": true
+  },
+  "economic_screen_clearance": false,
+  "fresh_holdout_evidence": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/evidence/eligible/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018.json",
+  "fresh_holdout_evidence_sha256": "aefe534fb16cb0e134658ab094a82e8eff225f8347d35e6d4ad9bf2dfd102efd",
+  "generated_at": "2026-08-03T10:31:33+00:00",
+  "hypothesis_fingerprint": "453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018",
+  "live_ready": false,
+  "proposal": {
+    "expected_failure_mode": "The denser lower-displacement sample may admit a terminal reversal whose asymmetric loss overwhelms the thin late-entry wins.",
+    "rationale": "Use the final frozen decision-margin step after the $125 variant preserved independent positive economics but could produce at most four fresh fills.",
+    "rule": {
+      "direction": "both",
+      "maximum_entry_price": 1.0,
+      "minimum_book_pressure": -1.0,
+      "minimum_decision_buffer_usd": 100,
+      "minimum_two_minute_move_usd": 200,
+      "operator": "path_or_move",
+      "path_minutes": 4,
+      "settlement_sigma_buffer": 0.1
+    },
+    "title": "Four-minute path or $200 move with a $100 decision buffer"
+  },
+  "research_only": true,
+  "schema_version": 1,
+  "sealed_at": "2026-08-03T10:31:32+00:00",
+  "status": "blocked_failed_economic_screen",
+  "support_only_windows": [],
+  "variant": {
+    "base_path": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
+    "base_sha256": "29e58bacdf07aa1b3e058d539a97011b800a6c21a713d540ff1fbae753d2e6e0",
+    "execution_filters": {
+      "maximum_entry_price": 1.0,
+      "minimum_book_pressure": -1.0,
+      "minimum_decision_buffer_usd": 100.0,
+      "settlement_guard_minutes": 5.0,
+      "settlement_sigma_buffer": 0.1
+    },
+    "path": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/candidates/late_window_mechanisms/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/variant.json",
+    "selectivity": {
+      "require_tags": {
+        "article_path_4m_or_move_2m_200": "aligned"
+      }
+    },
+    "sha256": "d4688cc7f9aa4052e92a53522b9935a4bb4090321ee7729d28a8a4bf3006b9f5",
+    "strategy_name": "research_late_path_or_move_453a052d5233"
+  }
+}

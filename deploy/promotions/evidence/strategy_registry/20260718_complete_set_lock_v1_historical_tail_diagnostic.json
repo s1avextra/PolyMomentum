@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T14:12:00Z",
+  "mechanism_id": "complete_set_lock_v1",
+  "status": "REJECTED_BY_HISTORICAL_RESEARCH_DIAGNOSTIC",
+  "promotion_credit": "NONE",
+  "scored_forward_block": false,
+  "decision": "Do not promote or retune complete_set_lock_v1. The frozen immediate lock improved the baseline tail by $4.43718 but remained fee-inclusive negative and failed payoff, clustered-loss, support, profit-factor, and chronological-half requirements.",
+  "scope": {
+    "folds": "29-42",
+    "fold_count": 14,
+    "hours_per_fold": 8,
+    "markets_per_fold": 96,
+    "market_windows": 1344,
+    "start": "2026-06-06T08:00:00Z",
+    "end": "2026-06-10T23:00:00Z",
+    "latency_ms": 202,
+    "continuous": true
+  },
+  "variants": {
+    "baseline": {
+      "strategy": "primary_v6_volfloor_300",
+      "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5"
+    },
+    "candidate": {
+      "strategy": "primary_v6_volfloor_300_complete_set_lock_v1",
+      "params_hash": "c25aa94ad592b6274150e48be7765ace8fa3beba85595e48225906ca01c01363",
+      "complete_set_min_profit_usd": 0.1
+    }
+  },
+  "quality": {
+    "status": "PASS",
+    "hydration_manifests_reconciled": 14,
+    "complete_data_manifests": 14,
+    "complete_sources": 42,
+    "market_catalogs_with_96_markets": 14,
+    "trade_summaries_reconciled": 28,
+    "trade_pnl_rows_reconciled": 109,
+    "fee_totals_reconciled": 28,
+    "unresolved_fills": 0,
+    "breaker_trips": 0
+  },
+  "folds": [
+    {"fold": 29, "baseline_pnl": -0.24369, "candidate_pnl": 3.06066, "baseline_trades": 6, "candidate_trades": 9},
+    {"fold": 30, "baseline_pnl": 4.50786, "candidate_pnl": 0.66490, "baseline_trades": 3, "candidate_trades": 3},
+    {"fold": 31, "baseline_pnl": -3.53932, "candidate_pnl": 1.43283, "baseline_trades": 2, "candidate_trades": 6},
+    {"fold": 32, "baseline_pnl": -5.01516, "candidate_pnl": 2.03579, "baseline_trades": 1, "candidate_trades": 8},
+    {"fold": 33, "baseline_pnl": -3.60591, "candidate_pnl": -4.94069, "baseline_trades": 2, "candidate_trades": 2},
+    {"fold": 34, "baseline_pnl": -5.07776, "candidate_pnl": -5.07776, "baseline_trades": 1, "candidate_trades": 1},
+    {"fold": 35, "baseline_pnl": 6.28189, "candidate_pnl": 0.98984, "baseline_trades": 5, "candidate_trades": 5},
+    {"fold": 36, "baseline_pnl": -2.96842, "candidate_pnl": -4.47530, "baseline_trades": 3, "candidate_trades": 3},
+    {"fold": 37, "baseline_pnl": -4.13251, "candidate_pnl": 2.31355, "baseline_trades": 2, "candidate_trades": 10},
+    {"fold": 38, "baseline_pnl": 6.25365, "candidate_pnl": 1.28400, "baseline_trades": 5, "candidate_trades": 5},
+    {"fold": 39, "baseline_pnl": -5.12096, "candidate_pnl": -5.12096, "baseline_trades": 1, "candidate_trades": 1},
+    {"fold": 40, "baseline_pnl": -2.23532, "candidate_pnl": -3.91625, "baseline_trades": 4, "candidate_trades": 4},
+    {"fold": 41, "baseline_pnl": -1.17085, "candidate_pnl": 1.81569, "baseline_trades": 5, "candidate_trades": 6},
+    {"fold": 42, "baseline_pnl": 3.47834, "candidate_pnl": 1.78272, "baseline_trades": 3, "candidate_trades": 3}
+  ],
+  "aggregate": {
+    "baseline": {
+      "trades": 43,
+      "wins": 33,
+      "losses": 10,
+      "total_pnl_usd": -12.58816,
+      "total_fees_usd": 3.17956,
+      "profit_factor": 0.754868,
+      "payoff_ratio": 0.228748,
+      "wilson_95_lower": 0.622555,
+      "profitable_folds": 4,
+      "losing_folds": 10,
+      "tail_cvar_20pct_usd": -5.071293,
+      "max_losses_in_rolling_5_folds": 4,
+      "first_7_folds_pnl_usd": -6.69209,
+      "last_7_folds_pnl_usd": -5.89607
+    },
+    "candidate": {
+      "trades": 66,
+      "wins": 61,
+      "losses": 5,
+      "total_pnl_usd": -8.15098,
+      "candidate_minus_baseline_pnl_usd": 4.43718,
+      "total_fees_usd": 8.48478,
+      "profit_factor": 0.679497,
+      "payoff_ratio": 0.055696,
+      "wilson_95_lower": 0.834608,
+      "profitable_folds": 9,
+      "losing_folds": 5,
+      "tail_cvar_20pct_usd": -5.04647,
+      "max_losses_in_rolling_5_folds": 3,
+      "first_7_folds_pnl_usd": -1.83443,
+      "last_7_folds_pnl_usd": -6.31655,
+      "worst_loss_to_average_positive_trade": 18.165634
+    }
+  },
+  "lock_accounting": {
+    "successful_locks": 59,
+    "terminal_winner_locks": 47,
+    "terminal_loser_locks": 12,
+    "unhedged_terminal_losses": 5,
+    "realized_lock_pnl_usd": 15.42390,
+    "terminal_hold_counterfactual_pnl_usd": 0.70933,
+    "lock_delta_vs_terminal_hold_usd": 14.71457,
+    "terminal_winner_lock_delta_usd": -48.91899,
+    "terminal_loser_lock_delta_usd": 63.63356,
+    "interpretation": "The lock successfully converted terminal losers, but locking 47 terminal winners early surrendered $48.91899 of winner upside and collapsed the payoff ratio. Five unhedged losses remained near -$5 each."
+  },
+  "state_feedback_decomposition": {
+    "common_entries": 43,
+    "baseline_only_entries": 0,
+    "candidate_only_entries": 23,
+    "common_baseline_pnl_usd": -12.58816,
+    "common_candidate_pnl_usd": -13.95331,
+    "common_candidate_delta_usd": -1.36515,
+    "common_baseline_losses": 10,
+    "common_losses_converted_to_positive_lock": 5,
+    "candidate_only_pnl_usd": 5.80233,
+    "candidate_only_fees_usd": 3.45497,
+    "candidate_only_policy_wins": 23,
+    "candidate_only_terminal_winners": 16,
+    "candidate_only_terminal_losers": 7,
+    "candidate_only_terminal_hold_counterfactual_pnl_usd": -10.38712,
+    "interpretation": "The candidate's realized-win feedback avoided degraded execution and admitted 23 later entries. Their positive locked PnL explains the full-policy improvement; on the 43 common entries the candidate was $1.36515 worse."
+  },
+  "research_gate_evaluation": [
+    {"gate": "fee-inclusive PnL", "observed": -8.15098, "required": "> 0", "pass": false},
+    {"gate": "profit factor", "observed": 0.679497, "required": "> 1", "pass": false},
+    {"gate": "minimum trades", "observed": 66, "required": ">= 80", "pass": false},
+    {"gate": "Wilson 95% lower", "observed": 0.834608, "required": ">= 0.70", "pass": true},
+    {"gate": "payoff ratio", "observed": 0.055696, "required": ">= 0.30", "pass": false},
+    {"gate": "tail CVaR", "observed": -5.04647, "required": ">= -8.0", "pass": true},
+    {"gate": "rolling five-fold loss burst", "observed": 3, "required": "<= 2", "pass": false},
+    {"gate": "positive chronological halves", "observed": "-$1.83443 / -$6.31655", "required": "both > 0", "pass": false}
+  ],
+  "provenance": {
+    "preregistration": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_preregistration.json",
+    "comparison_pair": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_pair.json",
+    "reconciliation_script": "scripts/reconcile_complete_set_tail.py",
+    "raw_reports_archive": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_historical_tail_raw_reports.tar.gz",
+    "raw_reports_archive_sha256": "36f4b49398b8796c6a7076965fdd19056a88c31dee97dd0b0b2cd5095b7d0d6b",
+    "archive_members": 42
+  },
+  "limitations": [
+    "This is a historical diagnostic and earns no promotion credit under the preregistration.",
+    "The candidate's state feedback changes later entry membership, so lock-only and full-policy effects are not interchangeable.",
+    "Gas, merge, and redemption operating costs remain excluded consistently with the baseline.",
+    "No v1 parameter or neighbor search was performed."
+  ]
+}

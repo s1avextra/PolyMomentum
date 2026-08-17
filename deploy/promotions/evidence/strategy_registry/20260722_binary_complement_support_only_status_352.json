@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:57:12Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "SEALED_SUPPORT_352_OF_750_SESSION_022_INDEPENDENTLY_VERIFIED_COLLECTION_STOPPED_ON_DISK_WATERMARK_NO_STRATEGY_DISCLOSURE",
+  "source_snapshots": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722T075712Z_binary_complement_floor_collection_status_support_only.json",
+      "sha256": "51d7929bbb3424bf9398a663a5df791d8a2173c05d8c7da137f401d8715b0676"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722T075712Z_binary_complement_block1_floor_022_support_only.json",
+      "sha256": "dc9e2b05635b2f985ad6e6b40600c29cb803e00ae653ee306e5f86b08056895d"
+    }
+  ],
+  "floor": {
+    "previous_verified_support": 345,
+    "unique_ready_terminal_conditions": 352,
+    "support_added_by_session_022": 7,
+    "target_terminal_conditions": 750,
+    "remaining_terminal_conditions": 398,
+    "completion_fraction": 0.4693333333333333,
+    "new_segments_completed": 19,
+    "maximum_new_segments": 96,
+    "state": "STOPPED_ON_DISK_WATERMARK"
+  },
+  "session_022": {
+    "captured_conditions": 24,
+    "admissible_conditions": 7,
+    "excluded_conditions": 17,
+    "admissible_groups": 5,
+    "capture_verified": true,
+    "full_segment_signal_coverage": false,
+    "fail_closed_per_condition_audit_applied": true,
+    "resolution_ready": true,
+    "resolution_total_groups": 5,
+    "resolution_ready_groups": 5,
+    "resolution_manifest_files": 5,
+    "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+    "session_owned_frames_deleted": true
+  },
+  "operator_observation": {
+    "observed_at": "2026-07-22T07:57:12Z",
+    "engine_service_active": false,
+    "engine_failure": "preflight disk watermark: 6.93 GiB free, below the 10 GiB and 15 percent minimums",
+    "collector_service_active": false,
+    "collector_failure": "insufficient disk for another bounded segment while retaining the 5 GiB reserve",
+    "telegram_service_active": true,
+    "health_timer_active": true,
+    "soak_timer_active": true,
+    "available_disk_gib_rounded": 7,
+    "disk_used_percent": 91
+  },
+  "blindness": {
+    "binary_complement_strategy_metrics_disclosed": false,
+    "binary_complement_strategy_score_emitted": false,
+    "active_forward_candidates_inspected": false,
+    "active_forward_outcomes_inspected": false,
+    "active_forward_rates_or_economics_inspected": false,
+    "support_and_operational_health_only": true
+  },
+  "decision": {
+    "continue_bounded_collection_after_disk_recovery": true,
+    "score_below_750": false,
+    "change_rule_or_threshold": false,
+    "restart_without_disk_recovery": false,
+    "paper_or_live_trading_authorized": false
+  }
+}

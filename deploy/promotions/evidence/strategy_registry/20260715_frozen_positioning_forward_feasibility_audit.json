@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T04:28:19Z",
+  "status": "KEEP_REPLAY_RESEARCH",
+  "live_ready": false,
+  "question": "Can the frozen Binance positioning diagnostic ever satisfy its predeclared non-positive correction-on-losses gate, and is the fresh replay source usable?",
+  "answer": "No. The model is algebraically incapable of passing the loss gate, and the first two fresh PMXT hours contained zero target events.",
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "latency_ms": 202,
+    "grade": "A-",
+    "trades": 102,
+    "wins": 79,
+    "losses": 23,
+    "total_pnl_usd": 13.540860000000002,
+    "wilson_lower": 0.6843083691640883,
+    "profitable_reports": 19,
+    "max_loss_burst_5": 4,
+    "last_21_pnl_usd": -4.338480000000002
+  },
+  "frozen_model": {
+    "authorization": "prospective scoring only; historical instability blocks strategy integration",
+    "feature_means": {
+      "directional_top_position_crowding": -0.06777063321756269,
+      "open_interest_log_change_15m": 4.454210473677926e-05
+    },
+    "feature_scales": {
+      "directional_top_position_crowding": 0.27618430757182977,
+      "open_interest_log_change_15m": 0.0020735660129239273
+    },
+    "intercept": 0.07313642333336683,
+    "ridge": 10.0,
+    "ridge_selection_validation_folds": [
+      41,
+      42
+    ],
+    "standardized_coefficients": {
+      "directional_top_position_crowding": -0.0037169933337838465,
+      "open_interest_log_change_15m": 0.0012700961593831732
+    },
+    "status": "frozen_for_future_diagnostic_only",
+    "training_folds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42
+    ]
+  },
+  "feasibility_proof": {
+    "prediction": "sigmoid(logit(executable_market_price) + intercept + sum(beta_j * clip(z_j, -5, 5)))",
+    "feature_clip_abs": 5.0,
+    "intercept_log_odds": 0.07313642333336683,
+    "sum_abs_standardized_coefficients": 0.0049870894931670195,
+    "maximum_abs_feature_contribution_log_odds": 0.0249354474658351,
+    "minimum_possible_logit_correction": 0.04820097586753173,
+    "maximum_possible_logit_correction": 0.09807187079920193,
+    "monotonicity": "sigmoid is strictly increasing, so every admissible feature vector produces p_meta > p_market",
+    "predeclared_loss_gate": "mean probability correction on losses <= 0",
+    "gate_feasible": false,
+    "conclusion": "Every losing condition must receive a positive correction; the frozen model cannot pass regardless of future outcomes or sample size."
+  },
+  "historical_context": {
+    "overall_market_minus_meta_brier": 0.0017,
+    "overall_market_minus_meta_log_loss": 0.005975,
+    "second_half_market_minus_meta_brier": -0.000786,
+    "second_half_market_minus_meta_log_loss": -0.002597,
+    "known_loss_mean_probability_correction": 0.001683,
+    "status": "reject_historical_integration_keep_forward_diagnostic"
+  },
+  "fresh_forward_attempt": {
+    "requested_window_utc": [
+      "2026-07-11T00:00:00Z",
+      "2026-07-13T23:00:00Z"
+    ],
+    "requested_hours": 72,
+    "gamma_requested_slugs": 864,
+    "gamma_markets_cached": 863,
+    "processed_hours_before_fail_closed_stop": 2,
+    "processed_hour_sidecars": [
+      "polymarket_orderbook_2026-07-11T00.66650af40d763112.events.bin.gz",
+      "polymarket_orderbook_2026-07-11T01.1808e3a915e1c5ee.events.bin.gz"
+    ],
+    "expected_overlapping_conditions_per_processed_hour": 12,
+    "pmxt_target_events": 0,
+    "manifest_complete": false,
+    "manifest_notes": [
+      "PMXT replay contained zero target events"
+    ],
+    "report_sha256": "d464169e3b6af9ca21e755a639cdf9c4a698f1af7d25631b7f2f7a099325c4c2",
+    "public_archive_probe": {
+      "url": "https://r2v2.pmxt.dev/polymarket_orderbook_2026-07-11T00.parquet",
+      "head_http_status": 200,
+      "interpretation": "URL existence did not imply target-condition coverage."
+    },
+    "atomic_cleanup": "Both session-downloaded parquets were deleted after their single filtered pass; only two 37-byte session-owned empty sidecars remain in temporary storage.",
+    "outcome": "aborted_no_score",
+    "reason": "The model gate is impossible and the available PMXT target-event cohort is empty."
+  },
+  "forward_collection_capacity": {
+    "vps_available_disk_gb_reported": 26,
+    "deployed_binary_has_record_btc_books": false,
+    "prior_capture_bytes": 2489508456,
+    "prior_capture_duration_seconds": 6300,
+    "estimated_raw_bytes_per_second": 395160.07238095236,
+    "estimated_72_hour_raw_capture_gb": 102.42549076114285,
+    "conclusion": "A monolithic 72-hour raw capture would exceed current free disk; collection must be segmented and converted/compressed before deleting only session-owned raw files."
+  },
+  "decision": {
+    "positioning_family": "closed_rejected",
+    "strategy_code_change": false,
+    "exact_profitability_replay": false,
+    "live_trading": "off",
+    "next_required_run": "Deploy a measurement-capable collector only with explicit authorization, then collect segmented fresh CLOB plus Binance and Chainlink RTDS data, convert each owned segment, and score a genuinely new pre-registered mechanism on at least 100 resolved opportunity conditions."
+  },
+  "source_files": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_binance_futures_exogenous_screens.json",
+      "sha256": "9e2550965839320ec12773ef99daf3841ed4e32a8e8ceb6d48f6adb2c3304a62"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_forward_latency_joint_rtds_fresh.json",
+      "sha256": "b86936d96c8f885eeda96dbd4465dfd94c20bc9ee9ba3f66274dc75a0dca34f2"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "sha256": "a0a2b811af91c25c0c494cc1811f629b368fd3c8855fa7489e488998cc865951"
+    }
+  ]
+}

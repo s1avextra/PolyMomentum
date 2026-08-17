@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:48:49.083695+00:00",
+  "mechanism_id": "late_window_article_family_v1",
+  "phase": "holdout",
+  "status": "EXACT_L2_HOLDOUT_COMPLETE",
+  "authority": {
+    "trade_reports": [
+      {
+        "path": "/private/tmp/late-window-article-fold033-holdout-trades.json",
+        "sha256": "10790d601b07ca751c4ceeaf17554be5b42e4d9a605dbfa9a2436e3ba5ad90b4",
+        "start": "2026-06-07T16:00:00+00:00",
+        "end": "2026-06-07T23:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold034-holdout-trades.json",
+        "sha256": "68e33d61472a8c38c6885cc0a7750d45eabd3655ca041da982f786c631528db0",
+        "start": "2026-06-08T00:00:00+00:00",
+        "end": "2026-06-08T07:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold035-holdout-trades.json",
+        "sha256": "65fdc9f0f936fd45c6842f2a2c0df825ba3410b47b83618332b2b4b77c441cb6",
+        "start": "2026-06-08T08:00:00+00:00",
+        "end": "2026-06-08T15:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold036-holdout-trades.json",
+        "sha256": "7a4e9e762206af91d188c1d1e0645e7384c52f0aa308dc9f4b7d2878e7f51786",
+        "start": "2026-06-08T16:00:00+00:00",
+        "end": "2026-06-08T23:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold037-holdout-trades.json",
+        "sha256": "75aff17ee1019943bdb2527534315eb58ec7f321dbd86d01f8241dfe8d106637",
+        "start": "2026-06-09T00:00:00+00:00",
+        "end": "2026-06-09T07:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold038-holdout-trades.json",
+        "sha256": "c950ba96d65ec60cef121ee204be89c58da263c93bf604ce5c7708c0df35f288",
+        "start": "2026-06-09T08:00:00+00:00",
+        "end": "2026-06-09T15:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold039-holdout-trades.json",
+        "sha256": "2bdc3a1f5edf2015dc6b212b22132af81160cbb4015fd0e24081b28ce1d6be29",
+        "start": "2026-06-09T16:00:00+00:00",
+        "end": "2026-06-09T23:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold040-holdout-trades.json",
+        "sha256": "a62479a9d00d5884cc7242ffaa65a8517421cb9fdbce3cd02f43d3c62063af90",
+        "start": "2026-06-10T00:00:00+00:00",
+        "end": "2026-06-10T07:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold041-holdout-trades.json",
+        "sha256": "865846152bbc65ad8fadd5414b13290539a3512009841f8a4666a78085533599",
+        "start": "2026-06-10T08:00:00+00:00",
+        "end": "2026-06-10T15:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold042-holdout-trades.json",
+        "sha256": "c78e3f20fc744125a2ca1e98fd585204993f8792cafe203db8df5ef3921912aa",
+        "start": "2026-06-10T16:00:00+00:00",
+        "end": "2026-06-10T23:00:00+00:00",
+        "latency_ms": 202
+      }
+    ],
+    "variant_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
+    "variant_sha256": "29e58bacdf07aa1b3e058d539a97011b800a6c21a713d540ff1fbae753d2e6e0"
+  },
+  "execution_contract": {
+    "latency_ms": 202,
+    "order": "taker FOK visible-depth book walk",
+    "fee": "market metadata with engine fallback",
+    "position_pct": 0.05,
+    "maximum_per_market_usd": 10.0,
+    "maximum_projected_stressed_drawdown_fraction": 0.12,
+    "fair_value_or_edge_gate_used": false
+  },
+  "results": {
+    "late_window_path_3m_and_move_2m_100_literal_taker": {
+      "overall": {
+        "execution_attempts": 33,
+        "fills": 33,
+        "fill_failures": 0,
+        "fill_rate": 1.0,
+        "wins": 33,
+        "losses": 0,
+        "win_rate": 1.0,
+        "total_pnl_usd": 4.300910000000003,
+        "mean_pnl_per_trade_usd": 0.13033060606060615,
+        "profit_factor": null,
+        "mean_winner_usd": 0.13033060606060615,
+        "mean_loser_usd": null,
+        "payoff_ratio": null,
+        "total_fees_usd": 0.30819,
+        "fill_price": {
+          "mean": 0.9733030303030303,
+          "median": 0.98,
+          "p90": 0.99,
+          "maximum": 0.999
+        },
+        "bookwalk_slippage": {
+          "mean": 4.0371746350005693e-17,
+          "maximum": 1.1102230246251565e-16
+        },
+        "insertion_latency_ms": {
+          "minimum": 201.99990272521973,
+          "median": 201.99990272521973,
+          "maximum": 201.99990272521973
+        },
+        "maximum_drawdown": {
+          "usd": 0.0,
+          "fraction": 0.0
+        },
+        "unresolved_fills": 0,
+        "resolution_disagreements": 0,
+        "average_full_loss_at_observed_size_usd": 5.013305757575758,
+        "pnl_after_one_additional_average_loss_usd": -0.7123957575757549
+      },
+      "folds": [
+        {
+          "fold": "2026-06-07T16:00:00+00:00__2026-06-07T23:00:00+00:00",
+          "trades": 3,
+          "wins": 3,
+          "losses": 0,
+          "total_pnl_usd": 0.43698999999999927,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-08T00:00:00+00:00__2026-06-08T07:00:00+00:00",
+          "trades": 4,
+          "wins": 4,
+          "losses": 0,
+          "total_pnl_usd": 0.3867799999999998,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-08T08:00:00+00:00__2026-06-08T15:00:00+00:00",
+          "trades": 3,
+          "wins": 3,
+          "losses": 0,
+          "total_pnl_usd": 0.33428999999999975,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-08T16:00:00+00:00__2026-06-08T23:00:00+00:00",
+          "trades": 3,
+          "wins": 3,
+          "losses": 0,
+          "total_pnl_usd": 0.23810000000000137,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-09T00:00:00+00:00__2026-06-09T07:00:00+00:00",
+          "trades": 4,
+          "wins": 4,
+          "losses": 0,
+          "total_pnl_usd": 0.6317600000000005,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-09T08:00:00+00:00__2026-06-09T15:00:00+00:00",
+          "trades": 2,
+          "wins": 2,
+          "losses": 0,
+          "total_pnl_usd": 0.6074800000000006,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-09T16:00:00+00:00__2026-06-09T23:00:00+00:00",
+          "trades": 3,
+          "wins": 3,
+          "losses": 0,
+          "total_pnl_usd": 0.64961,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-10T00:00:00+00:00__2026-06-10T07:00:00+00:00",
+          "trades": 2,
+          "wins": 2,
+          "losses": 0,
+          "total_pnl_usd": 0.05165000000000061,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-10T08:00:00+00:00__2026-06-10T15:00:00+00:00",
+          "trades": 4,
+          "wins": 4,
+          "losses": 0,
+          "total_pnl_usd": 0.2841900000000014,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        },
+        {
+          "fold": "2026-06-10T16:00:00+00:00__2026-06-10T23:00:00+00:00",
+          "trades": 5,
+          "wins": 5,
+          "losses": 0,
+          "total_pnl_usd": 0.6800599999999996,
+          "fill_failures": 0,
+          "unresolved_fills": 0
+        }
+      ],
+      "by_direction": {
+        "down": {
+          "trades": 20,
+          "wins": 20,
+          "losses": 0,
+          "total_pnl_usd": 2.6912100000000025
+        },
+        "up": {
+          "trades": 13,
+          "wins": 13,
+          "losses": 0,
+          "total_pnl_usd": 1.609700000000001
+        }
+      },
+      "positive_pnl_folds": 10,
+      "negative_pnl_folds": 0
+    }
+  },
+  "decision": {
+    "path_3m_rejected": false,
+    "path_3m_and_move_2m_100_progresses": true,
+    "progression_scope": "research decision",
+    "runtime_paper_or_live_change_authorized": false,
+    "profitability_or_a_plus_claim": false
+  },
+  "limitations": [
+    "Each eight-hour fold resets bankroll and strategy state; aggregate drawdown is a stitched diagnostic, not one continuous bankroll replay.",
+    "The selected hybrid has extremely asymmetric payoff near probability one; zero observed losses makes profit factor and payoff ratio unidentified.",
+    "Historical exact-L2 evidence is not forward evidence and does not authorize paper or live trading."
+  ]
+}

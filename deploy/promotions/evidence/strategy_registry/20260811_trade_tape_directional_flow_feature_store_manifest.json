@@ -1,0 +1,49 @@
+{
+  "schema_version": "trade_tape_directional_flow_feature_store_evidence_v1",
+  "generated_at": "2026-08-11T15:54:28Z",
+  "family_id": "trade_tape_directional_flow_v1",
+  "plugin": {
+    "plugin_id": "pmxt_trade_tape_directional_flow",
+    "plugin_version": "v1",
+    "configuration_sha256": "da5bc1870b89cf935d130b3b39a85293ff02821c31ad357b394f5efe39824dce",
+    "causal_windows_ms": [15000, 30000]
+  },
+  "source_artifacts": {
+    "dataset_seal_sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375",
+    "market_catalog_sha256": "055726dbda080ddd7128c93bf960b64c145b1711bd7070099a88aacf7cc4450b",
+    "local_feature_manifest_path": "logs/strategy-research/opportunity-flow/trade_flow_features_20260811.manifest.json",
+    "local_feature_manifest_sha256": "ea25e4edc595dbe6c9005775c2a160c7919855860be741a2bb2a80cbdc61175e",
+    "local_feature_rows_path": "logs/strategy-research/opportunity-flow/trade_flow_features_20260811.jsonl",
+    "local_feature_rows_sha256": "1c8e6158c24d7e27ddb84d8ca98b1de5a303f0d1ad0501eae2d4dd03551394fa"
+  },
+  "coverage": {
+    "source_opportunity_rows": 704,
+    "output_rows": 704,
+    "complete_pair_rows": 704,
+    "source_pmxt_hours": 20,
+    "source_pmxt_scans": 20,
+    "older_rows": 144,
+    "recent_discovery_rows": 427,
+    "fresh_holdout_rows": 133
+  },
+  "outcome_free_distribution_audit": {
+    "prints_15s": {
+      "older_median": 126,
+      "recent_discovery_median": 73,
+      "fresh_holdout_median": 49
+    },
+    "prints_30s": {
+      "older_median": 256,
+      "recent_discovery_median": 163,
+      "fresh_holdout_median": 103
+    },
+    "purpose": "Select non-degenerate fixed support thresholds before any label scoring; no outcome, score, retention, or PnL was read."
+  },
+  "outcome_safety": {
+    "outcome_columns_present": false,
+    "gamma_outcome_prices_influence_output": false,
+    "external_price_or_model_features_influence_output": false,
+    "fresh_holdout_outcomes_accessed": false
+  },
+  "resource_semantics": "One RowFilter scan per PMXT hour in parquet-native order; events stream into bounded per-coordinate accumulators; no multi-hour event buffering and no VPS execution."
+}

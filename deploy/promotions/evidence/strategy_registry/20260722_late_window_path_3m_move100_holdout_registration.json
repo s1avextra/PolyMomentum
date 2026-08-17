@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:45:00Z",
+  "mechanism_id": "late_window_article_family_v1",
+  "candidate_id": "late_window_path_3m_and_move_2m_100_literal_taker",
+  "status": "CHRONOLOGICAL_EXACT_L2_HOLDOUT_FROZEN_BEFORE_RUN",
+  "selection_basis": {
+    "discovery_evidence": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_exact_l2_discovery.json",
+      "sha256": "c924b86a7733ecf47ba1f2c0f859b20d8a16977a36e2b1ff260e1e59da50e59c"
+    },
+    "discovery_result": "14 fills, 14 wins, +1.10373 USD after fees across four positive folds; one average observed-size full loss would reduce cumulative PnL to -3.90243 USD",
+    "plain_path_3m_result": "rejected after -1.43895 USD on 68 exact-L2 fills"
+  },
+  "frozen_candidate": {
+    "decision_offset_seconds": 180,
+    "predicate": "three consecutive strictly aligned one-minute BTC moves and absolute BTC move from P0 to P120 at least 100 USD in the same direction",
+    "order": "taker FOK against visible L2 depth",
+    "latency_ms": 202,
+    "fair_value_or_edge_gate": false,
+    "position_pct": 0.05,
+    "maximum_per_market_usd": 10.0,
+    "maximum_projected_stressed_drawdown_fraction": 0.12,
+    "variant": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
+      "sha256": "29e58bacdf07aa1b3e058d539a97011b800a6c21a713d540ff1fbae753d2e6e0"
+    }
+  },
+  "holdout": {
+    "relationship_to_discovery": "strictly later chronological windows; no candidate-specific result was examined before this registration",
+    "windows_utc": [
+      ["2026-06-07T16:00:00Z", "2026-06-07T23:00:00Z"],
+      ["2026-06-08T00:00:00Z", "2026-06-08T07:00:00Z"],
+      ["2026-06-08T08:00:00Z", "2026-06-08T15:00:00Z"],
+      ["2026-06-08T16:00:00Z", "2026-06-08T23:00:00Z"],
+      ["2026-06-09T00:00:00Z", "2026-06-09T07:00:00Z"],
+      ["2026-06-09T08:00:00Z", "2026-06-09T15:00:00Z"],
+      ["2026-06-09T16:00:00Z", "2026-06-09T23:00:00Z"],
+      ["2026-06-10T00:00:00Z", "2026-06-10T07:00:00Z"],
+      ["2026-06-10T08:00:00Z", "2026-06-10T15:00:00Z"],
+      ["2026-06-10T16:00:00Z", "2026-06-10T23:00:00Z"]
+    ],
+    "market_scope": "all resolved 5-minute BTC Up/Down markets discoverable in each fold",
+    "execution_model": "exact cached PMXT L2 replay with authoritative resolution, fee metadata, 202 ms insertion latency, FOK book walk, and risk controls",
+    "parameter_retuning": "forbidden"
+  },
+  "progression_gate": {
+    "minimum_fills": 20,
+    "minimum_fill_rate": 0.8,
+    "positive_total_net_pnl": true,
+    "positive_mean_net_pnl_per_fill": true,
+    "minimum_fraction_positive_active_folds": 0.5,
+    "direction_rule": "each direction must have positive aggregate PnL when it has at least five fills",
+    "maximum_unresolved_fills": 0,
+    "maximum_resolution_disagreements": 0,
+    "loss_robustness": "aggregate PnL must remain positive after subtracting one average observed-size full loss",
+    "interpretation": "passing permits only a bounded forward measurement design; it does not authorize paper or live trading or an A+ claim"
+  },
+  "frozen_implementation": {
+    "momentum_rs_sha256": "1942ecb32a2db4c2b1004491ff26ec76fb15840dd7278aa8271ebcb531df2682",
+    "decision_rs_sha256": "700406ab904852dae600a5ef0ba0540ea59f7006b232eaf7ce045b0d49207301",
+    "aggregator_sha256": "560d7fdf750d0b4df199f00fdc95b316a07a4e0e4e3dc1a9d174b599c845e7b1"
+  },
+  "separation": {
+    "active_binary_complement_forward_population": "remains sealed and is not read or reused",
+    "july_14_or_later_labels": "excluded",
+    "paper_or_live_runtime_change": false
+  }
+}

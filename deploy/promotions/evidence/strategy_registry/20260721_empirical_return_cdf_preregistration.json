@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T10:58:29Z",
+  "status": "PREREGISTERED_BEFORE_NEW_EVALUATION_LABEL_DOWNLOAD",
+  "mechanism_id": "empirical_standardized_return_cdf_v1",
+  "decision_question": "Does replacing the Gaussian short-horizon return law with a causal empirical standardized-return distribution materially improve binary terminal-probability quality on disjoint older and freshest resolved public BTC windows?",
+  "motivation": {
+    "measured_failure": "The retained Black-Scholes-style probability is materially overconfident relative to realized outcomes and the executable market. Faster realized volatility improved scores too little, while a forward-looking DVOL maximum failed source freshness before labels were downloaded.",
+    "distinct_mechanism": "The candidate preserves the same causal Binance spot, strike, rolling-one-hour realized-volatility scale, 0.30 floor, and decision offsets, but replaces the standard-normal residual law with the empirical distribution of strictly prior same-offset five-minute residuals.",
+    "why_same_offset": "A 120-second decision has a different remaining horizon from 150- and 179-second decisions. Maintaining one residual history per registered offset avoids mixing horizon distributions.",
+    "hypothesis_budget": "One seven-day lookback, one Jeffreys smoothing rule, one standardized residual definition, three fixed offsets, two disjoint evaluation windows, and no coefficient, lookback, smoothing, or threshold grid."
+  },
+  "frozen_formula": {
+    "baseline_annualized_volatility": "max(0.30, causal rolling-one-hour close-to-close realized volatility)",
+    "baseline_probability": "clamp(N((ln(spot/strike) + (0.05 - 0.5 * sigma^2) * years_remaining) / (sigma * sqrt(years_remaining))), 0.01, 0.99)",
+    "historical_residual": "ln(prior_terminal_close / prior_decision_close) / (prior_decision_sigma * sqrt(remaining_seconds / 31557600))",
+    "history_eligibility": "same registered decision offset; prior condition terminal timestamp strictly less than or equal to the current decision timestamp; prior decision timestamp within the trailing seven days; complete one-hour volatility preroll; finite positive prices and volatility",
+    "lookback_seconds": 604800,
+    "minimum_prior_samples_per_forecast": 1800,
+    "current_threshold": "ln(current_strike / current_spot) / (current_sigma * sqrt(remaining_seconds / 31557600))",
+    "candidate_probability": "clamp((count(prior_residual > current_threshold) + 0.5) / (prior_sample_count + 1), 0.01, 0.99)",
+    "tie_rule": "strictly greater terminal price and strictly greater residual threshold; exact terminal ties are excluded from evaluation labels",
+    "smoothing": "Jeffreys one-half success and one-half failure pseudo-count",
+    "alternate_lookbacks": 0,
+    "alternate_smoothing_rules": 0,
+    "alternate_standardizations": 0,
+    "coefficient_or_threshold_grid": false
+  },
+  "public_data_contract": {
+    "source": "Official Binance public BTCUSDT spot one-second kline daily archives and adjacent SHA-256 checksum files",
+    "base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/",
+    "download_after_registration": true,
+    "older_history_and_evaluation_utc": "2026-04-09T00:00:00Z through 2026-05-16T00:00:00Z",
+    "older_evaluation_utc": "2026-04-16T00:00:00Z through 2026-05-16T00:00:00Z",
+    "fresh_history_and_evaluation_utc": "2026-07-09T00:00:00Z through 2026-07-21T00:00:00Z",
+    "fresh_holdout_evaluation_utc": "2026-07-16T00:00:00Z through 2026-07-21T00:00:00Z",
+    "chronological_subwindows": {
+      "older_first": "2026-04-16T00:00:00Z through 2026-05-01T00:00:00Z",
+      "older_second": "2026-05-01T00:00:00Z through 2026-05-16T00:00:00Z",
+      "fresh_holdout": "2026-07-16T00:00:00Z through 2026-07-21T00:00:00Z"
+    },
+    "excluded_evaluation_windows": [
+      "2026-05-28T00:00:00Z through 2026-06-11T00:00:00Z strict-42 population",
+      "2026-06-11T00:00:00Z through 2026-07-11T00:00:00Z fast-volatility screen",
+      "2026-07-14T15:00:00Z through 2026-07-15T08:50:00Z retained fresh and settlement-anchor captures",
+      "all active or sealed forward-block conditions"
+    ],
+    "known_prior_dates_may_enter_history_only": "Strictly prior July 9-15 returns may populate the causal history for July 16-20 forecasts, but no July 9-15 condition is an evaluation label.",
+    "five_minute_window_alignment": "UTC Unix timestamps divisible by 300 seconds",
+    "decision_offsets_seconds": [120, 150, 179],
+    "remaining_seconds_by_offset": {
+      "120": 180,
+      "150": 150,
+      "179": 121
+    },
+    "strike": "open price of the first one-second kline in the five-minute window",
+    "decision_close": "close price of the one-second kline ending at the registered decision offset",
+    "terminal_close": "last one-second close before the five-minute boundary",
+    "minimum_causal_preroll_seconds": 3600,
+    "maximum_internal_gap_seconds": 2,
+    "checksum_required": true,
+    "new_evaluation_labels_inspected_before_registration": false
+  },
+  "frozen_estimands": {
+    "primary_grain": "one forecast per five-minute condition and registered decision offset",
+    "primary_metrics": [
+      "condition-offset-weighted Brier score",
+      "condition-offset-weighted log loss"
+    ],
+    "secondary_metrics": [
+      "prior-sample support distribution",
+      "calibration-in-the-large",
+      "mean absolute probability displacement",
+      "fraction of forecasts moved toward 0.5",
+      "Brier and log loss for baseline probabilities at least 0.75 or at most 0.25"
+    ],
+    "uncertainty": "Paired block bootstrap by UTC day with 10000 deterministic resamples and seed 20260721",
+    "comparison_sign": "positive baseline-minus-candidate proper-score deltas favor the candidate"
+  },
+  "fixed_pass_gates": {
+    "data_quality": {
+      "checksum_failures": 0,
+      "timestamp_duplicates": 0,
+      "timestamp_regressions": 0,
+      "invalid_prices": 0,
+      "minimum_retained_conditions_older": 8000,
+      "minimum_retained_conditions_fresh_holdout": 1300,
+      "minimum_complete_registered_forecasts_fraction": 0.99,
+      "minimum_prior_samples_per_forecast": 1800
+    },
+    "overall": {
+      "minimum_brier_improvement": 0.0005,
+      "minimum_log_loss_improvement": 0.001,
+      "brier_bootstrap_lower_bound_strictly_positive": true,
+      "log_loss_bootstrap_lower_bound_strictly_positive": true
+    },
+    "stability": {
+      "older_first_brier_improvement_strictly_positive": true,
+      "older_first_log_loss_improvement_strictly_positive": true,
+      "older_second_brier_improvement_strictly_positive": true,
+      "older_second_log_loss_improvement_strictly_positive": true,
+      "fresh_holdout_brier_improvement_strictly_positive": true,
+      "fresh_holdout_log_loss_improvement_strictly_positive": true,
+      "each_registered_decision_offset_brier_improvement_nonnegative": true,
+      "each_registered_decision_offset_log_loss_improvement_nonnegative": true
+    },
+    "overconfidence_tail": {
+      "brier_improvement_nonnegative": true,
+      "log_loss_improvement_nonnegative": true
+    }
+  },
+  "decision_rules": {
+    "pass": "Register one default-off opportunity-capture probability field and require an independent Polymarket opportunity-level screen before exact strategy replay or runtime implementation.",
+    "fail": "Reject empirical_standardized_return_cdf_v1 and do not tune its lookback, sample floor, smoothing, residual definition, dates, offsets, or gates on these windows.",
+    "inconclusive": "Treat missing or invalid source data as a failed research screen; do not substitute the active forward block or lower a gate.",
+    "promotion_credit": false,
+    "profitability_claim_permitted": false,
+    "a_plus_claim_permitted": false
+  },
+  "integrity": {
+    "preregistered_before_new_archive_download": true,
+    "preregistered_before_new_evaluation_labels": true,
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "strategy_or_runtime_changed": false
+  },
+  "source_pins_before_evaluation": {
+    "fair_value_rs": {
+      "path": "rust_engine/src/fair_value.rs",
+      "sha256": "660a91f43c3b77e26c16cb370cf887c93c1d0e562e26156a865c0310f6356585"
+    },
+    "momentum_rs": {
+      "path": "rust_engine/src/strategy/momentum.rs",
+      "sha256": "4459cfa840f486c5763731d983d8c1bbe931d348b7648ee2cb78d208b6bf49ea"
+    },
+    "decision_rs": {
+      "path": "rust_engine/src/strategy/decision.rs",
+      "sha256": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0"
+    },
+    "fast_volatility_rejection": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json",
+      "sha256": "4673836c3e0086dda271eb9f12817c216a63cf0e3e4ec0a28297ed7bf9c5474d"
+    },
+    "dvol_source_rejection": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_source_feasibility.json",
+      "sha256": "3f29511a4437fcd70ebb7874060dbc7f8cb60e5fe8ca546708b9f23cf4cb55af"
+    }
+  }
+}

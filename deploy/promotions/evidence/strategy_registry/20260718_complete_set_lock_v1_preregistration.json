@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T10:07:12Z",
+  "accounting_correction": {
+    "corrected_at": "2026-07-18T07:47:52Z",
+    "timing": "before any candidate score",
+    "change": "reserve the maximum binary taker fee at any fill price at or below the FOK ceiling; because the fee curve peaks at 0.50, use min(price_ceiling, 0.50) as the fee-bound price",
+    "parameter_or_hash_change": false
+  },
+  "collateral_correction": {
+    "corrected_at": "2026-07-18T08:08:09Z",
+    "timing": "before any candidate score",
+    "change": "require sufficient uncommitted cash before hedge submission and keep both legs' full fee-inclusive capital committed until market close because immediate merge is not assumed",
+    "parameter_or_hash_change": false
+  },
+  "state_feedback_disclosure": {
+    "recorded_at": "2026-07-18T10:07:12Z",
+    "timing": "before any candidate score and before the first eligible fresh window opened",
+    "finding": "a profitable complete-set lock can change realized-loss-dependent degraded execution and therefore change later entry membership even though the entry rule itself is unchanged",
+    "evaluation_effect": "score the full stateful candidate policy against the full stateful baseline, and retain sealed per-trade evidence so common entries, baseline-only entries, and candidate-only entries can be disclosed separately",
+    "new_pass_fail_threshold": false,
+    "parameter_or_hash_change": false
+  },
+  "mechanism_id": "complete_set_lock_v1",
+  "status": "PRE_REGISTERED_REPLAY_ONLY_NOT_SCORED",
+  "live_ready": false,
+  "live_trading": "OFF",
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "measured_latency_ms": 202,
+    "historical_strict42_grade": "A-",
+    "historical_strict42_fee_inclusive_pnl_usd": 13.54086
+  },
+  "candidate": {
+    "strategy": "primary_v6_volfloor_300_complete_set_lock_v1",
+    "variant_path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_variant.json",
+    "comparison_pair_path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_pair.json",
+    "params_hash": "c25aa94ad592b6274150e48be7765ace8fa3beba85595e48225906ca01c01363",
+    "params_hash_status": "verified by Rust StrategyVariant deserialization and stable_json_hash",
+    "only_parameter_change": "enable the complete-set lock lifecycle with its fixed execution contract"
+  },
+  "economic_contract": {
+    "position_state": "one directional binary-outcome position already filled",
+    "action": "buy exactly the held share quantity of the opposite outcome",
+    "payout": "one matched Yes plus No share pays exactly $1 at terminal settlement or can be merged into $1 collateral",
+    "fee_inclusive_locked_profit_usd": "shares - entry_fill_cost - entry_fee - opposite_fill_cost - opposite_fee",
+    "acceptance_floor_usd": 0.1,
+    "selection_rule": "submit only when the payout minus entry cost, entry fee, maximum hedge spend at the FOK ceiling, and maximum hedge fee at any fill price at or below that ceiling is at least $0.10",
+    "outcome_dependence_after_fill": "none",
+    "pure_two_leg_atomic_arbitrage": false,
+    "reason": "only the missing leg is submitted, avoiding the unhedged first-leg risk of two independently processed orders"
+  },
+  "execution_contract": {
+    "hedge_side": "buy",
+    "order_style": "taker FOK with a fixed worst-visible-ask price ceiling",
+    "hedge_size": "exact entry filled shares; partial visible depth rejects",
+    "book_walk": "all visible opposite asks required in ascending native-book order",
+    "price_increment": "Gamma minimum_tick_size captured with the market; invalid or missing values fall back to the engine venue tick",
+    "signal_cost_bound": "all shares are priced at the submitted FOK ceiling, not signal-time VWAP; hedge fee is bounded at min(price ceiling, 0.50), where the binary fee curve reaches its maximum over all permitted fill prices",
+    "latency_ms": 202,
+    "minimum_hold_seconds": 15.0,
+    "stop_before_close_seconds": 5.0,
+    "retry_cooldown_seconds": 1.0,
+    "taker_fee_rate": 0.07,
+    "fee_rate_validation": "non-finite, negative, or above 1.0 fails closed",
+    "minimum_locked_profit_usd": 0.1,
+    "missing_or_stale_book": "fail closed",
+    "failed_fok": "retain the original position and wait at least one retry interval",
+    "fill_reconciliation_mismatch": "retain the original position, keep the exit pending, trip the backtest breaker, and make promotion fail through unresolved-exposure and breaker gates",
+    "cash_availability": "maximum hedge spend plus its maximum fee must fit uncommitted bankroll after open, submitted, and already locked complete-set capital",
+    "in_flight_reservation": "the maximum hedge spend and fee remain reserved from signal submission through fill or failure so another order cannot reuse that cash during latency",
+    "collateral_release": "both entry and hedge costs plus fees remain committed until the market close; no immediate merge or early capital reuse is modeled",
+    "immediate_merge_required": false
+  },
+  "novelty_boundary": {
+    "new_mechanism": "convert an existing directional position into a fee-inclusive complete-set payout using one executable missing-leg order",
+    "not_equivalent_to": [
+      "loss cutting from terminal BTC basis",
+      "profit locking by selling the chosen token",
+      "two-leg simultaneous arbitrage",
+      "chosen-token order-flow or static microstructure filtering",
+      "probability calibration"
+    ],
+    "historical_outcome_use_for_parameters": "none; the $0.10 floor is a fixed absolute minimum-profit requirement and was frozen before the July 18 forward capture completed",
+    "parameter_search": "forbidden",
+    "neighbor_search_before_two_forward_blocks": "forbidden"
+  },
+  "evaluation_contract": {
+    "historical_strict42": "diagnostic only; earns no promotion credit",
+    "current_forward_capture": "may provide an early execution diagnostic but is never scored below 100 post-registration admissible conditions",
+    "minimum_preflight_terminal_conditions": 100,
+    "minimum_disclosure_trades": 100,
+    "score_not_before": "2026-07-18T10:07:12Z",
+    "score_not_before_epoch_s": 1784369232,
+    "block_1": "first chronological block after all pre-score corrections with at least 100 admissible exact-replay trades",
+    "block_2": "second chronological, non-overlapping block with at least 100 admissible exact-replay trades and unchanged code, parameters, and gates",
+    "required_candidate_properties": [
+      "every successful complete-set lock has fee-inclusive realized PnL of at least $0.10",
+      "failed or partial hedge attempts never replace terminal resolution",
+      "fee-inclusive total PnL exceeds the identical-initial-entry-policy baseline under each policy's own realized-risk state",
+      "positive fee-inclusive PnL in both chronological halves",
+      "95% Wilson win-rate lower bound is at least 0.70",
+      "at least 20 profitable eligible reports",
+      "five-report loss burst is at most 2",
+      "tail CVaR and payoff gates pass",
+      "execution attempts, fills, fees, and unresolved exposure reconcile exactly"
+    ],
+    "failure_action": "reject complete_set_lock_v1 without retuning on the scored blocks",
+    "screen_pass_is_live_promotion": false,
+    "state_feedback_reporting": {
+      "primary_estimand": "full stateful candidate policy PnL minus full stateful baseline policy PnL",
+      "required_disclosure": [
+        "common-entry count and PnL by policy",
+        "baseline-only entry count and PnL",
+        "candidate-only entry count and PnL",
+        "complete-set lock PnL delta versus terminal hold"
+      ],
+      "reason": "lifecycle outcomes feed the already-frozen degraded-loss control; hiding cohort drift would misattribute later entry PnL to the lock itself",
+      "additional_gate": "none; this is a causal decomposition of the preregistered full-policy comparison"
+    }
+  },
+  "promotion_boundary": {
+    "historical_replay_pass": "research only",
+    "two_forward_blocks_pass": "eligible for runtime-parity implementation and bounded paper preflight only",
+    "live_requirements": [
+      "live runtime implements the same missing-leg lifecycle and price-ceiling guarantee",
+      "market-specific fee parameters match replay",
+      "CLOB FOK acknowledgement and fill reconciliation prove the exact hedge quantity",
+      "terminal redemption or merge operational path is verified",
+      "fresh promotion artifact passes release preflight"
+    ],
+    "current_verdict": "KEEP_REPLAY_RESEARCH"
+  },
+  "implementation_evidence": {
+    "rust_tests": "480 passed; 0 failed (432 library, 48 binary)",
+    "local_replay_binary_sha256": "db429ca4b3f1ebf44bdea9f8e618c34095cfc5d5fc2c4c187eeded0c898397bf",
+    "local_replay_binary_platform": "Mach-O arm64 dev-box build; never installed on the Linux VPS",
+    "post_freeze_binary_rebuild_reason": "Measurement-only RTDS watchdog and Rustls transport hardening; strategy parameters, candidate hash, and replay accounting are unchanged. The score cutoff advanced before the first eligible fresh window to add state-feedback disclosure and sealed per-trade retention.",
+    "variant_hash_pinned_by_test": true,
+    "exact_visible_depth_quote": true,
+    "signal_uses_fok_ceiling_cost_bound": true,
+    "signal_uses_maximum_fee_below_fok_ceiling": true,
+    "failed_fok_preserves_terminal_position": true,
+    "hedge_requires_available_cash": true,
+    "in_flight_hedge_reserves_maximum_capital": true,
+    "complete_set_capital_stays_locked_until_close": true,
+    "paired_replay_preflight_requires_100_post_correction_terminal_conditions": true,
+    "paired_replay_deletes_sealed_reports_below_100_candidate_trades": true,
+    "paired_replay_retains_sealed_trade_rows_only_after_disclosure_floor": true,
+    "paired_replay_runner_sha256": "879380f58baafbe53e2055b7c39608bc5142ba8e1ed4cf7d4c00c67241033a62",
+    "grouped_replay_uses_exact_condition_id_allowlists": true,
+    "resolver_counts_both_fees": true,
+    "report_diagnostics": [
+      "successful lock count",
+      "minimum and total fee-inclusive locked PnL",
+      "terminal winner and loser lock counts",
+      "PnL delta versus terminal hold"
+    ],
+    "promotion_guard": "rejects zero observed locks, any minimum realized PnL below the configured floor, or incomplete terminal-outcome reconciliation",
+    "release_guard": "rejects the exit lifecycle until live runtime parity is implemented"
+  },
+  "known_costs_and_risks": [
+    "collateral remains locked until resolution unless an on-chain merge is performed",
+    "gas and redemption or merge operating costs are excluded consistently with the baseline and must be budgeted before live promotion",
+    "a successful lock caps later directional upside even though it guarantees positive terminal PnL",
+    "a successful lock can change realized-loss-dependent degraded execution and admit or suppress later entries; full-policy PnL and entry-cohort decomposition must both be reported",
+    "single-market complete-set opportunities may be rare and shallow",
+    "fee-rate or fee-formula changes invalidate the registered cost bound"
+  ],
+  "research_sources": [
+    {
+      "title": "Polymarket Fees",
+      "url": "https://docs.polymarket.com/trading/fees",
+      "use": "fixed crypto taker-fee formula and current fee-rate contract"
+    },
+    {
+      "title": "Polymarket Merge Positions",
+      "url": "https://docs.polymarket.com/trading/ctf/merge",
+      "use": "equal amounts of complementary outcomes form a complete set redeemable for collateral"
+    },
+    {
+      "title": "Polymarket Post Multiple Orders",
+      "url": "https://docs.polymarket.com/api-reference/trade/post-multiple-orders",
+      "use": "batch orders are processed in parallel but are not documented as an atomic all-or-none pair"
+    },
+    {
+      "title": "Unravelling the Probabilistic Forest: Arbitrage in Prediction Markets",
+      "url": "https://arxiv.org/abs/2605.00864",
+      "use": "external evidence that single-market arbitrage episodes can be brief and depth-constrained; not evidence of PolyMomentum profitability"
+    }
+  ]
+}

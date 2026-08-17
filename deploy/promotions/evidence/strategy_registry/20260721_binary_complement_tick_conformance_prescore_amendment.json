@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T11:32:00Z",
+  "amendment_id": "binary_complement_tick_conformance_prescore_v1",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRESCORE_TICK_CONFORMANCE_HARDENED_ACTIVE_RULE_UNCHANGED",
+  "objective": "Fail closed if a serialized causal market tick and the four paired top-of-book prices disagree before the sealed forward block is scored.",
+  "discovery": {
+    "existing_contract": "The frozen residual threshold is two times the serialized market tick size.",
+    "gap": "The scorer bounded the tick and rejected an unrecorded 0.01-to-0.001 extreme-price transition, but it did not require ordinary paired top prices to lie on that serialized tick grid.",
+    "risk": "A corrupted or miswired larger tick could silently widen the frozen residual threshold even when the paired books themselves imply a finer grid."
+  },
+  "blindness": {
+    "sealed_block_1_strategy_metrics_accessed": false,
+    "sealed_block_1_terminal_outcomes_accessed": false,
+    "opportunity_or_screen_artifacts_generated": false,
+    "sealed_support_at_decision": 310,
+    "active_partial_session": "binary-complement-block1-floor-020",
+    "active_partial_session_inspected_or_counted": false,
+    "registered_before_block_1_scoring": true
+  },
+  "frozen_rule_integrity": {
+    "rule_expression_changed": false,
+    "residual_multiplier": 2.0,
+    "residual_threshold_changed": false,
+    "classification_gates_changed": false,
+    "economic_gates_changed": false,
+    "capture_or_conversion_contract_changed": false,
+    "production_or_paper_strategy_changed": false
+  },
+  "implementation": {
+    "source": "rust_engine/src/strategy_builder.rs",
+    "source_sha256": "ea359154fd03adfb2b0efc2d6e43cc1d43ba09ce1e7574c6cf6e85b0fecbfb5e",
+    "behavior": "For a finite serialized tick strictly between zero and one, require the chosen best bid, chosen best ask, opposite best bid, and opposite best ask to equal an integer tick multiple within absolute tolerance 1e-9; otherwise abort scoring with an integrity error.",
+    "invalid_tick_behavior_unchanged": "A missing, non-finite, zero, negative, or at-least-one tick remains an invalid paired-book feature and cannot enter the frozen residual rule.",
+    "regression_test": "binary_complement_screen_rejects_pair_prices_not_conforming_to_tick",
+    "targeted_test_result": "PASS: 24 binary_complement tests; 0 failed",
+    "full_suite_result": "PASS: 546 tests (490 library + 56 binary); 0 failed"
+  },
+  "source_pins": {
+    "scorer_source_before": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "65459ba41de8c4b62c9bc597e5c198f021e9c6350de5e947841134e1d77f11e4",
+      "registered_by": "20260721_binary_complement_residual_attribution_amendment.json"
+    },
+    "parent_preregistration": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+      "sha256": "517b89add115ca870fc74afa70a60abc19e660d30f72e91f19dabb7dce1c3fa9"
+    },
+    "residual_attribution_amendment": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json",
+      "sha256": "a183f834cfa418afcd9776c809137dd0c7591c70107a7c92f1038fe32341ede4"
+    },
+    "causal_tick_integrity_amendment": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json",
+      "sha256": "548a034c3f2a8c30cc166487f53b972330f83669dad66128833d1ee0a566be51"
+    }
+  },
+  "deployment_boundary": {
+    "active_measurement_binary_changed": false,
+    "active_measurement_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "active_collector_changed_or_restarted": false,
+    "schema_6_linux_scorer_built_or_installed": false,
+    "next_step": "Continue outcome-blind collection to exactly 750 admissible conditions, then build and hash-pin a separate schema-6 Linux scorer from this source before the single authorized scoring pass."
+  },
+  "promotion_effect": {
+    "authorizes_scoring_before_750": false,
+    "authorizes_a_plus_claim": false,
+    "authorizes_profitability_claim": false,
+    "authorizes_live_trading": false
+  }
+}

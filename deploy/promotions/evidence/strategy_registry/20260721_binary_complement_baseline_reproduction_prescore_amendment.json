@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T11:44:00Z",
+  "last_updated_at": "2026-07-21T11:58:50Z",
+  "amendment_id": "binary_complement_baseline_reproduction_prescore_v1",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRESCORE_BASELINE_DECISION_AND_TOKEN_IDENTITY_REPRODUCTION_HARDENED_ACTIVE_RULE_UNCHANGED",
+  "objective": "Independently reproduce every baseline decision input and fee source, capture result, terminal label, and Up/Down outcome-token role before the sealed forward scorer can classify a row as eligible.",
+  "discovery": {
+    "existing_contract": "Baseline eligibility used a frozen capture identity plus serialized evaluation_result=low_edge, zone=primary, and fee-adjusted edge at least 0.07.",
+    "gap": "The scorer did not independently reproduce zone, volatility flooring, fair value, fee-adjusted edge, entry-fee provenance, or the capture evaluation result. The opportunity report also serialized signal-tape BTC inputs but not the exact spot/open pair used when the separate fair-value anchor tape was active. Resolution manifests already carried authoritative Up/Down outcome-token roles, but the scorer ignored them and only required two distinct stable token IDs.",
+    "risk": "A stale, corrupted, or miswired precomputed decision could enter the baseline and selected populations while remaining internally plausible enough to pass the prior source-identity checks, a self-consistent zero-fee report could inflate edge and PnL, a direction could be scored against the wrong outcome book, or a corrupted terminal label could define wins and losses."
+  },
+  "blindness": {
+    "sealed_block_1_strategy_metrics_accessed": false,
+    "sealed_block_1_terminal_outcomes_accessed": false,
+    "opportunity_or_screen_artifacts_generated": false,
+    "sealed_support_at_decision": 310,
+    "active_partial_session": "binary-complement-block1-floor-020",
+    "active_partial_session_inspected_or_counted": false,
+    "registered_before_block_1_scoring": true
+  },
+  "frozen_strategy_integrity": {
+    "baseline_primary_minimum_edge": 0.07,
+    "residual_multiplier": 2.0,
+    "strategy_rule_or_threshold_changed": false,
+    "candidate_sampling_changed": false,
+    "block_membership_policy_changed": true,
+    "block_membership_reason": "The fixed 750-condition collection target can overshoot at the final sealed segment. Before any score, block membership is now the first 750 settlement-aligned conditions by open time and condition ID, so batch overshoot cannot enlarge the analyzed sample.",
+    "classification_gates_changed": false,
+    "economic_gates_changed": false,
+    "live_or_paper_strategy_changed": false
+  },
+  "implementation": {
+    "harness_source": "rust_engine/src/backtest/harness.rs",
+    "harness_source_sha256": "e78b182f2d7dffffff6c7e78b7d0dad21418e9f3b2db44413a4bb3b31a25bcb6",
+    "scorer_source": "rust_engine/src/strategy_builder.rs",
+    "scorer_source_sha256": "c33f4f57f619587eb1142f2b0d1ea833dee3188ce0d570f49450411600d162e3",
+    "opportunity_report_fields_added": [
+      "fair_value_btc",
+      "fair_value_open_btc",
+      "market_fees_enabled",
+      "market_taker_fee_rate",
+      "market_category"
+    ],
+    "reproduced_values": [
+      "decision_volatility from observed_volatility and the frozen 0.30 floor",
+      "zone and minutes_remaining from the settlement-aligned market open and decision timestamp",
+      "directional fair_value from the exact causal fair-value spot/open pair, volatility, remaining time, and fixed 0.05 rate",
+      "market_price from the direction-specific executable ask",
+      "entry_fee_rate from fee-enabled status, explicit market taker rate, category schedule, and the frozen 0.07 fallback in the same precedence order as the engine",
+      "an exact 300-second resolution window from open_ts_s, close_ts_s, and window_seconds before deriving zone or remaining time",
+      "fixed block membership as the first 750 settlement-aligned conditions ordered by open_ts_s and condition_id after all supplied sources pass integrity validation",
+      "gross_edge, entry_fee_per_share, fee-adjusted edge, and yes_no_vig",
+      "capture evaluation result after the frozen cutoff, reversion, confidence, z-score, dead-zone, price, minimum-EV, edge-cap, and impossible-final-edge gates",
+      "chosen and opposite token IDs from the resolution manifest's authoritative Up and Down outcome roles",
+      "terminal direction independently from both official-source BTC open/close prices and terminal Up/Down outcome prices"
+    ],
+    "resolution_manifest_outcome_identity_required": true,
+    "terminal_direction_reproduced_from_btc_and_outcome_prices": true,
+    "entry_fee_rate_reproduced_from_market_metadata": true,
+    "exact_five_minute_resolution_window_required": true,
+    "collector_overshoot_truncated_deterministically": true,
+    "failure_action": "Any non-finite input, decision mismatch, unreachable capture row, or inconsistent evaluation result aborts scoring as an integrity error.",
+    "active_raw_capture_format_changed": false,
+    "shared_distilled_cache_schema_changed": false,
+    "recollection_required": false,
+    "opportunity_reports_must_be_regenerated_with_schema_6_binary": true
+  },
+  "source_pins": {
+    "capture_variant": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_capture_variant.json",
+      "sha256": "1d59b960e2d0742f13d9784f9a4c851e94f42aa13bb9862dc8076daccae4a23e"
+    },
+    "prior_tick_conformance_amendment": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_tick_conformance_prescore_amendment.json",
+      "sha256": "14f5b1442a0f6b3df2208a910b1af3754b2e00368a340098650d8d523c5f1edf"
+    },
+    "scorer_source_before": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "ea359154fd03adfb2b0efc2d6e43cc1d43ba09ce1e7574c6cf6e85b0fecbfb5e",
+      "registered_by": "20260721_binary_complement_tick_conformance_prescore_amendment.json"
+    },
+    "scorer_source_after_baseline_before_token_identity": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "bf929334d5377528cd7fd811894465f19ee059cbb7f9e31505ee831318c1c7eb"
+    },
+    "scorer_source_after_token_identity_before_terminal_reproduction": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "737a8796712e36ac6f879e119be8730fb969ee085e727f51184f5ae9b63d6b04"
+    },
+    "sources_before_fee_provenance": {
+      "harness_sha256": "b3e88eddd3cc29b69ece51bcf9639faec142a55af54dd651013dbcb2dd97b425",
+      "scorer_sha256": "a0db3a80be3655c2d519185d3af8ee3ca993ae2d94fc7e4408c87f4fbdd46bc8"
+    },
+    "scorer_source_before_resolution_window_check": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "2bafe3d18bddbcb17bbbeb2d199fd65ff359fc6f7b7668537e59c1833afb829a"
+    },
+    "scorer_source_before_fixed_block_membership": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "acc6fadc3a73e39766d988fbe82b797215746399509db070ec1cf31af640f471"
+    },
+    "scorer_source_before_fixed_block_note": {
+      "path": "rust_engine/src/strategy_builder.rs",
+      "sha256": "4864ef01d9a29e2f7c4db04fe2c3f5ceb4cf2c3a970fcf07813d2c48f03760ce"
+    }
+  },
+  "validation": {
+    "regression_tests": [
+      "binary_complement_screen_rejects_nonreproducible_baseline_decision",
+      "binary_complement_screen_rejects_swapped_direction_token_identity",
+      "binary_complement_screen_rejects_unreproduced_terminal_direction",
+      "binary_complement_screen_rejects_unreproduced_entry_fee_rate",
+      "binary_complement_screen_rejects_non_five_minute_resolution_window",
+      "binary_complement_screen_truncates_overshoot_to_first_750_conditions"
+    ],
+    "focused_result": "PASS: 30 binary_complement tests; 0 failed",
+    "full_suite_result": "PASS: 552 tests (496 library + 56 binary); 0 failed",
+    "capture_runner_tests": "PASS",
+    "collector_tests": "PASS",
+    "replay_wrapper_tests": "PASS",
+    "clippy": "PASS: all targets with warnings denied after allowing two documented pre-existing unrelated lints"
+  },
+  "deployment_boundary": {
+    "active_measurement_binary_changed": false,
+    "active_collector_changed_or_restarted": false,
+    "schema_6_linux_scorer_built_or_installed": false,
+    "production_binary_changed": false,
+    "next_step": "Continue outcome-blind collection to exactly 750 admissible conditions, then build and hash-pin a separate schema-6 Linux scorer from the pinned harness and scorer sources before the single authorized scoring pass."
+  },
+  "promotion_effect": {
+    "authorizes_scoring_before_750": false,
+    "authorizes_a_plus_claim": false,
+    "authorizes_profitability_claim": false,
+    "authorizes_live_trading": false
+  }
+}

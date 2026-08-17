@@ -1,0 +1,15 @@
+{
+  "capture_verified": true,
+  "captured_conditions": 24,
+  "admissible_conditions": 7,
+  "excluded_conditions": 17,
+  "admissible_groups": 5,
+  "distilled_events": 2134452,
+  "full_segment_signal_coverage": false,
+  "resolution_ready": true,
+  "resolution_total_groups": 5,
+  "resolution_ready_groups": 5,
+  "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+  "resolution_manifest_files": 5,
+  "session_owned_frames_deleted": true
+}

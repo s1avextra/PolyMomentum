@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T08:05:25Z",
+  "segments": [
+    {
+      "schema_version": 1,
+      "generated_at": "2026-07-21T08:05:24Z",
+      "segment": 1,
+      "first_window_start": "2026-07-21T06:00:00Z",
+      "capture_verified": true,
+      "full_segment_signal_coverage": true,
+      "session_owned_frames_deleted": true,
+      "recommended_replay_latency_ms": 108,
+      "captured_conditions": 24,
+      "admissible_conditions": 20,
+      "excluded_conditions": 4,
+      "admissible_groups": 5,
+      "distilled_events": 5872674,
+      "resolution_ready": true,
+      "resolution_total_groups": 5,
+      "resolution_ready_groups": 5,
+      "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY"
+    }
+  ],
+  "capture_verified": true,
+  "resolution_ready_segments": 1
+}

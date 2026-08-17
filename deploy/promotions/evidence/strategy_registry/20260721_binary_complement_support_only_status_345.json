@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T17:34:35Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "SEALED_SUPPORT_345_OF_750_SESSION_020_INDEPENDENTLY_VERIFIED_SESSION_022_COLLECTING_NO_STRATEGY_DISCLOSURE",
+  "source_snapshots": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721T152513Z_binary_complement_floor_collection_status_support_only.json",
+      "sha256": "c5144dc0a3b46988da9b18f8442892bff47875bd41785ccbfd02de1cb08dea98"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721T121518Z_binary_complement_block1_floor_020_support_only.json",
+      "sha256": "8f385369bf9830d19305b44bc02e5198b44eeb83623e0d1902e8e9be9285e411"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721T152512Z_binary_complement_block1_floor_021_support_only.json",
+      "sha256": "c479a2feadf8652451c90bbc2f47371414154c2b1479437a6821bbeadc3affa9"
+    }
+  ],
+  "floor": {
+    "support_before_session_020": 310,
+    "support_after_session_020": 329,
+    "unique_ready_terminal_conditions": 345,
+    "support_added_by_session_020": 19,
+    "support_added_by_session_021": 16,
+    "target_terminal_conditions": 750,
+    "remaining_terminal_conditions": 405,
+    "completion_fraction": 0.46,
+    "new_segments_completed": 18,
+    "maximum_new_segments": 96,
+    "state": "COLLECTING"
+  },
+  "session_020": {
+    "first_window_start": "2026-07-21T10:10:00Z",
+    "captured_conditions": 24,
+    "admissible_conditions": 19,
+    "excluded_conditions": 5,
+    "admissible_groups": 6,
+    "capture_verified": true,
+    "full_segment_signal_coverage": true,
+    "resolution_ready": true,
+    "resolution_total_groups": 6,
+    "resolution_ready_groups": 6,
+    "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+    "session_owned_frames_deleted": true
+  },
+  "session_021": {
+    "first_window_start": "2026-07-21T13:20:00Z",
+    "captured_conditions": 24,
+    "admissible_conditions": 16,
+    "excluded_conditions": 8,
+    "admissible_groups": 5,
+    "capture_verified": true,
+    "full_segment_signal_coverage": false,
+    "fail_closed_per_condition_audit_applied": true,
+    "resolution_ready": true,
+    "resolution_total_groups": 5,
+    "resolution_ready_groups": 5,
+    "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+    "session_owned_frames_deleted": true
+  },
+  "independent_reconciliation": {
+    "observed_at": "2026-07-21T17:34:35Z",
+    "registered_source_roots": 3,
+    "collector_unique_ready_condition_count": 345,
+    "floor_ledger_unique_ready_condition_count": 345,
+    "counts_match": true
+  },
+  "operator_observation": {
+    "observed_at": "2026-07-21T17:34:35Z",
+    "active_session": "binary-complement-block1-floor-022",
+    "collector_service_active": true,
+    "collector_service_restarts": 0,
+    "failed_systemd_units": 0,
+    "available_disk_gib_rounded": 9
+  },
+  "blindness": {
+    "strategy_metrics_disclosed": false,
+    "strategy_score_emitted": false,
+    "strategy_candidates_inspected": false,
+    "strategy_outcomes_inspected": false,
+    "strategy_rates_or_economics_inspected": false,
+    "support_and_operational_health_only": true
+  },
+  "decision": {
+    "continue_bounded_collection": true,
+    "score_below_750": false,
+    "change_rule_or_threshold": false,
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "paper_or_live_trading_authorized": false
+  }
+}

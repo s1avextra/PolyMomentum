@@ -1,0 +1,209 @@
+{
+  "schema_version": "opportunity_pair_features_v1",
+  "generated_at": "2026-08-11T14:52:33Z",
+  "dataset_seal": {
+    "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+    "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375"
+  },
+  "dataset_sha256": "37fe551e2225df08f9869fe7b8ce85501db3d04a5f643af4d392d9f725888d63",
+  "market_catalog": {
+    "path": "logs/strategy-research/public_snapshots/gamma_market_catalog_opportunity_discovery_expansion_20260811.json",
+    "sha256": "055726dbda080ddd7128c93bf960b64c145b1711bd7070099a88aacf7cc4450b"
+  },
+  "output": {
+    "path": "logs/strategy-research/opportunity-liquidity/paired_features_20260811.jsonl",
+    "sha256": "6ad64ef299ae7578ff8604df39c2c68c9a37bcc4074fd421374f1f1b320490fe"
+  },
+  "source_opportunity_rows": 704,
+  "output_rows": 704,
+  "both_books_observable_rows": 685,
+  "both_lookback_books_observable_rows": 690,
+  "source_pmxt_hours": [
+    {
+      "hour": "2026-04-16T01:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-04-16T01.parquet",
+        "sha256": "1ffa29df36d0d871416c175116ed854c3d93817137d1f05688a86f11946bc030"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3599818
+    },
+    {
+      "hour": "2026-04-16T03:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-04-16T03.parquet",
+        "sha256": "eb20addc63e5682f58735dbe757ccdc057917ad302881405ed1a285e89e79573"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 4329502
+    },
+    {
+      "hour": "2026-04-16T05:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-04-16T05.parquet",
+        "sha256": "66a867f38aa7f361f9bfc3ad93e23a6158526c43cdf1651d40792bbe6285858a"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3957215
+    },
+    {
+      "hour": "2026-04-16T12:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-04-16T12.parquet",
+        "sha256": "9ae39c4f8405f77492fdf46abea91d6152a40b836f1ad70627d20f9356cc8e19"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3865513
+    },
+    {
+      "hour": "2026-07-17T02:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-17T02.parquet",
+        "sha256": "63eb650746978accd9aa1dc8ae4d32eeb596dae82cbf743405afb4366b841f59"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 4259245
+    },
+    {
+      "hour": "2026-07-18T05:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-18T05.parquet",
+        "sha256": "7f80c0b4c4c38267352c0bd689ca11432d9ded5f01dc64c870e0b34a1fabade1"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2638782
+    },
+    {
+      "hour": "2026-07-19T08:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-19T08.parquet",
+        "sha256": "5ff0ba02476d44ce2ba4f3078bb85101d0bcb39fa5da8396b63f9ca2fd412c79"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2739731
+    },
+    {
+      "hour": "2026-07-20T11:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-20T11.parquet",
+        "sha256": "264b68574701a393d0db5701bf18da1c77ce7cd5ea6f5c18184417631647a9ab"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3441696
+    },
+    {
+      "hour": "2026-07-21T14:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-21T14.parquet",
+        "sha256": "f27e0ba94bb516ed80f5bfc73ada5747e8b74328d3f6bbe5a02bf77728e25a19"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 4168099
+    },
+    {
+      "hour": "2026-07-22T17:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-22T17.parquet",
+        "sha256": "0fbc247e8534ab8b4e4f508a719f3258e242ef4125177fca747af1f3e6716634"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3745680
+    },
+    {
+      "hour": "2026-07-23T20:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-23T20.parquet",
+        "sha256": "9674396cf05f0a48b1115dcf721884106c0e64e84db8daf07897f9a265fef0cf"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 3456306
+    },
+    {
+      "hour": "2026-07-24T23:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-24T23.parquet",
+        "sha256": "7b59467afdf454d25346318a633b44840faa5816a33319d4a1cc62aa8450fdda"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2563080
+    },
+    {
+      "hour": "2026-07-25T00:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-25T00.parquet",
+        "sha256": "691ce6e4355a5d6f0f4f4952e8848fc85d46966a1b772a6151670a9ee97cc3af"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2527680
+    },
+    {
+      "hour": "2026-07-25T14:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-25T14.parquet",
+        "sha256": "fcaaaa1adc60e2054a5e99b9a0bac13cbb98b15cb901294378da4dc295678a7e"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2835012
+    },
+    {
+      "hour": "2026-07-25T16:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-25T16.parquet",
+        "sha256": "a7dbc141d1c4b45daf1725e49845ae8e696d2f61c9ef055916463ba14db61899"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2713342
+    },
+    {
+      "hour": "2026-07-25T17:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-07-25T17.parquet",
+        "sha256": "af8f34e367c1c89800d5005a46175de2edfb006f60aae5355a4fb140a7363792"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2682600
+    },
+    {
+      "hour": "2026-08-08T03:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-08-08T03.parquet",
+        "sha256": "21be1acb7fdfb7553b486369974b462c7c6f6cfa35e68271c7208758e46279b1"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 1948014
+    },
+    {
+      "hour": "2026-08-08T06:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-08-08T06.parquet",
+        "sha256": "5994018e4f825d1b3387f16f583e7e71f45870365b372f5c0eeda33eb71d9eb5"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 1664807
+    },
+    {
+      "hour": "2026-08-08T13:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-08-08T13.parquet",
+        "sha256": "bc8763bb55a36e2fd97f81a12e564f6d068a855bd8fc348a58f292e91278b17b"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2022361
+    },
+    {
+      "hour": "2026-08-08T22:00:00Z",
+      "pmxt_parquet": {
+        "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-08-08T22.parquet",
+        "sha256": "b2afeb97688a28714dbadd9e2cf64897638fb9dcd941bbb8f9cbceea41a81f95"
+      },
+      "target_condition_count": 12,
+      "decoded_target_events": 2085245
+    }
+  ],
+  "source_pmxt_scans": 20,
+  "lookback_ms": 15000,
+  "outcome_columns_present": false,
+  "gamma_outcome_prices_influence_output": false,
+  "btc_or_model_features_influence_output": false,
+  "feature_semantics": "two complementary L2 books reconstructed causally at observed_at and observed_at-15s; source opportunity rows supply only immutable condition/timestamp/partition coordinates"
+}

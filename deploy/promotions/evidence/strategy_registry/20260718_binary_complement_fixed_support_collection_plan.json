@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T17:46:21Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "DEPLOYED_WAITING_FOR_STABILITY_CANARY",
+  "decision": {
+    "question": "Can block 1 reach the preregistered 750-condition support floor without adapting to or disclosing strategy outcomes and without exhausting VPS storage?",
+    "answer": "The measurement path is deployed with a conservative capacity margin, but support and strategy performance remain unproven until collection completes.",
+    "strategy_rule_changed": false,
+    "rate_gate_changed": false,
+    "strategy_metrics_seen": false,
+    "places_orders": false
+  },
+  "observed_storage_inputs": {
+    "source_segment": "binary-complement-block1-seg003-20260718/segment_001",
+    "captured_conditions": 24,
+    "admissible_conditions": 12,
+    "capture_duration_seconds": 10860,
+    "raw_frame_file_bytes_before_verified_deletion": 2643474538,
+    "admissible_only_converted_file_bytes": 120143852,
+    "raw_bytes_per_second": 243413.86169429097,
+    "converted_bytes_per_admissible_condition": 10011987.666666666
+  },
+  "capacity_model": {
+    "target_unique_ready_terminal_conditions": 750,
+    "maximum_new_segments": 96,
+    "windows_per_segment": 24,
+    "configured_estimated_raw_bytes_per_second": 350000,
+    "raw_rate_safety_multiplier_over_observed": 1.437880314473,
+    "projected_admissible_storage_bytes_at_750": 7508990750,
+    "projected_admissible_storage_gib_at_750": 6.993292598054,
+    "configured_peak_raw_bytes_per_segment": 3801000000,
+    "free_disk_reserve_bytes": 5368709120,
+    "vps_available_bytes_after_verified_cleanup": 21796843520,
+    "conservative_cushion_after_total_750_projection_reserve_and_one_peak_raw_segment_bytes": 5118143650,
+    "conservative_cushion_gib": 4.76664272137,
+    "interpretation": "Using total 750-condition selected storage rather than only the remaining support, plus a full configured-rate raw segment and the 5 GiB reserve, still leaves about 4.77 GiB of modeled headroom."
+  },
+  "verified_cleanup": {
+    "completed_at": "2026-07-18T17:42:26Z",
+    "scope": "two session-owned zero-admissible raw-frame copies only",
+    "local_byte_identical_archives_preserved": true,
+    "vps_available_bytes_before": 17136349184,
+    "vps_available_bytes_after": 21796843520,
+    "reclaimed_bytes": 4660494336,
+    "parquet_files_deleted": 0,
+    "reference_tapes_or_audits_deleted": 0
+  },
+  "support_integrity": {
+    "stopping_rule": "unique officially resolved post-registration condition IDs only",
+    "strategy_outcomes_or_rates_used": false,
+    "required_segment_status": {
+      "capture_verified": true,
+      "resolution_ready": true,
+      "admissible_conditions": "greater than zero",
+      "admissible_groups": "greater than zero",
+      "resolution_total_groups": "equals admissible_groups",
+      "resolution_ready_groups": "equals admissible_groups",
+      "distilled_events": "greater than zero",
+      "resolution_manifest_count": "equals admissible_groups"
+    },
+    "condition_requirements": [
+      "settlement alignment ready",
+      "market settlement aligned",
+      "official source matches the BTC tape",
+      "market opened at or after the preregistration boundary",
+      "terminal direction is up or down"
+    ],
+    "duplicate_condition_ids_count_once": true,
+    "unsealed_or_rejected_segments_count": false
+  },
+  "deployed_runtime": {
+    "deferred_build_unit": "polymomentum-binary-complement-v4-deferred-build-v2-20260718.service",
+    "deferred_build_invocation_id": "3e1f25997acc48deb11d8ef391c5817a",
+    "state_at_generated_at": "active_waiting_for_stability_canary",
+    "measurement_binary_path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v4",
+    "measurement_binary_state": "source_staged_build_not_started",
+    "measurement_main_rs_sha256": "9cc65b08f7430b1040eac42ea156326161b91f21acff9d121ba6e7fc5fa763b6",
+    "capture_runner_sha256": "741fbf4731ec2ae3b3699cab85297ab84ca6482faa09226cae52af608f0c587a",
+    "floor_collector_sha256": "6dbf0c20ab4368f8e1ebedbf30ab7e82ed2accd7fb84f7a7a3d9c56caa2d1af1",
+    "deferred_build_launcher_sha256": "a85c1982e7f02ae847415c54760ed2c91d022769781f644cb117115b20555bf4",
+    "release_build_policy": "nice -n 10 cargo build --release --locked -j 1 after the current stability canary exits and only when no other release build is active",
+    "production_binary_overwritten": false
+  },
+  "runtime_smoke": {
+    "observed_at": "2026-07-18T17:55:19Z",
+    "deployed_support_counter_unique_ready_conditions": 12,
+    "expected_from_sealed_segment_003": 12,
+    "support_counter_matches_expected": true,
+    "stability_canary_unit_state": "active_running",
+    "stability_canary_restart_count": 0,
+    "deferred_build_v2_unit_state": "active_waiting",
+    "deferred_build_v2_restart_count": 0,
+    "release_build_running": false,
+    "vps_available_bytes_during_active_capture": 21695029248,
+    "strategy_metrics_disclosed": false
+  },
+  "limitations": [
+    "The converted-bytes-per-condition estimate comes from one 12-condition selected segment and can drift with message volume and compression.",
+    "The 96-segment cap can expire before 750 unique ready conditions if source admissibility remains low.",
+    "Capacity readiness does not prove opportunity retention, loss removal, Wilson precision, fillability, payoff geometry, or profitability.",
+    "Strategy scoring remains forbidden until at least 750 unique ready terminal conditions are sealed."
+  ]
+}

@@ -1,0 +1,872 @@
+{
+  "data_quality": {
+    "best_price_policy": "price extrema; do not trust REST array position",
+    "condition_id_mismatches": 0,
+    "documented_sort_conflict": "Observed bid/ask arrays did not follow the current documented best-first direction; price extrema were used and array indices were not trusted.",
+    "documented_sort_direction_checks": {
+      "asks_ascending": 10,
+      "bids_descending": 10,
+      "books": 1000
+    },
+    "invalid_reason_counts": {
+      "missing_side": 10
+    },
+    "negative_risk_books": 0,
+    "pair_timestamp_skew_ms": {
+      "count": 490,
+      "max": 2.0,
+      "mean": 0.024489795918367346,
+      "min": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "p99": 1.0
+    },
+    "possible_paired_states": 500,
+    "promotion_or_profitability_eligible": false,
+    "quality_assessment": "READY_WITH_CAVEATS_FOR_LABEL_FREE_CROSS_MARKET_MECHANISM_REPLICATION_ONLY",
+    "states_declared_tick_already_dynamic_without_current_band_cross": 97,
+    "states_dynamic_transition_tightens_declared_tick": 0,
+    "token_coverage_failures": 0,
+    "unique_round_response_hashes": 5,
+    "valid_paired_states": 490
+  },
+  "decision": {
+    "a_plus_claim": false,
+    "live_trading": "OFF",
+    "profitability_claim": false,
+    "research_action": "After the sealed block decision, compare the frozen rule with a paired-top-validity-only ablation on the same disjoint labeled evidence before crediting or retaining residual magnitude.",
+    "strategy_adjustment": "REGISTER_POST_BLOCK_PAIR_VALIDITY_ABLATION; NO_ACTIVE_RULE_OR_PARAMETER_CHANGE"
+  },
+  "decision_question": "Does the registered two-live-tick residual magnitude add observed selectivity beyond valid paired books in an independent current non-candle market sample?",
+  "driver_diagnostic": {
+    "correlations_with_abs_microprice_residual": {
+      "depth_mirror_abs": 0.9624010647810752,
+      "spread_sum": -0.06071974152408427,
+      "timestamp_skew_ms": 0.5241602643088302
+    },
+    "max_depth_mirror_mismatch": 81.85999999999996,
+    "nonzero_microprice_and_depth_mismatch_overlap": 7,
+    "nonzero_microprice_and_timestamp_skew_overlap": 7,
+    "timestamp_skew_zero_states": 481
+  },
+  "generated_at": "2026-07-21T06:39:23.050662+00:00",
+  "limitations": [
+    "This is a five-round snapshot over roughly nine seconds, not a full market lifecycle.",
+    "The 100-market sample is volume-ranked and intentionally excludes crypto/candle and negative-risk markets; it is independent but not representative of every Polymarket market.",
+    "Batch retrieval is not guaranteed atomic; observed per-book timestamp skew is measured but cannot reconstruct a common exchange instant.",
+    "The stricter 0.002 threshold is a robustness check only and is not a searched or proposed live parameter.",
+    "No terminal labels or execution simulation are loaded, so the artifact cannot measure prediction, losses removed, PnL, or profitability."
+  ],
+  "mechanism_assessment": {
+    "active_binary_complement_rule_changed": false,
+    "interpretation": "The current cross-market replication supports the earlier finding that the registered residual magnitude is observationally inert once both binary outcome books have valid tops.",
+    "paired_top_validity": "REQUIRED_PRECONDITION_NOT_AN_OUTCOME_SIGNAL",
+    "registered_residual_magnitude_selectivity": "ZERO_OBSERVED_REJECTIONS_IN_INDEPENDENT_CURRENT_SAMPLE",
+    "why_not_change_now": "The forward BTC block is frozen and sealed; this cross-market sample is label-free and cannot measure economic value."
+  },
+  "mechanism_id": "binary_complement_coherence_v1",
+  "methodology": {
+    "alternate_threshold_search_or_selection": false,
+    "batch_atomicity_assumed": false,
+    "best_price_policy": "price extrema; do not trust REST array position",
+    "book_depth_levels": 3,
+    "pair_timestamp_skew_measured": true,
+    "registered_comparison": "max(abs(midpoint residual), abs(microprice residual)) <= 2 * min(max(pair-declared ticks), causal current-band tick)",
+    "strict_robustness_threshold": 0.002
+  },
+  "population": {
+    "definition": "top 100 active, accepting, non-crypto, non-negative-risk binary CLOB markets by volume24hr after deterministic filtering of the top 500 Gamma rows",
+    "excluded_text_regex": "bitcoin|\\bbtc\\b|ethereum|solana|\\bxrp\\b|doge|crypto|up or down|price of",
+    "markets": 100,
+    "possible_paired_states": 500,
+    "rounds": 5,
+    "selection_order": "volume24hr descending, condition_id ascending tie-break"
+  },
+  "schema_version": 1,
+  "source_authority": {
+    "btc_reference_tapes_loaded": false,
+    "capture_rounds": 5,
+    "captured_at": "2026-07-21T06:34:38.487694+00:00",
+    "eligible_before_rank_limit": 129,
+    "gamma_rows_loaded": 500,
+    "manifest_path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books_manifest.json",
+    "official_docs": {
+      "batch_books": "https://docs.polymarket.com/api-reference/market-data/get-order-books-request-body",
+      "list_markets": "https://docs.polymarket.com/api-reference/markets/list-markets",
+      "orderbook_semantics": "https://docs.polymarket.com/trading/orderbook"
+    },
+    "resolution_labels_loaded": false,
+    "selected_markets": 100,
+    "snapshot_path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books.json.gz",
+    "snapshot_sha256": "5fd25a3e78e1f46c556b1adcb6e05d0939f5fd475d4ddf48136863588fc78811",
+    "snapshot_uncompressed_sha256": "c00bd2b1fb8f92b83005e85c4e72a9e0c4fa478bee9dd87f1bb7315721de5bea",
+    "strategy_outcomes_loaded": false
+  },
+  "status": "DIAGNOSTIC_ONLY_CROSS_MARKET_REPLICATION_ZERO_REGISTERED_RESIDUAL_REJECTIONS_ACTIVE_RULE_UNCHANGED",
+  "structural_results": {
+    "conditions_with_registered_rejection": 0,
+    "cross_touch_error_nonzero_states": 0,
+    "depth_mirror_mismatch_states": 7,
+    "max_abs_residual": {
+      "count": 490,
+      "max": 0.0001179054732232121,
+      "mean": 1.2066478568532794e-06,
+      "min": 0.0,
+      "p50": 0.0,
+      "p90": 2.220446049250313e-16,
+      "p99": 1.3739489307216733e-05
+    },
+    "maximum_registered_threshold_utilization": 0.05895273661160605,
+    "microprice_incremental_rejections_beyond_midpoint": 0,
+    "microprice_residual_nonzero_states": 7,
+    "midpoint_clause_rejections": 0,
+    "midpoint_residual_nonzero_states": 0,
+    "minimum_registered_threshold_headroom": 0.001882094526776788,
+    "per_condition": [
+      {
+        "condition_id": "0x5062a23690144ef266851c95571c63af1f8b06b14607fe859b9d3bc7ed9d2813",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $105 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x60c2c085ee8c16bc8f2419739a94971d4c9d00f637ead10fc0f540afa1be64e8",
+        "fixed_rejections": 0,
+        "max_abs_residual": 8.650418569233764e-07,
+        "question": "Strait of Hormuz traffic returns to normal by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x3285179b99df57b0390e480f8e69d340e5fa38496b263225df90ef389e2958f4",
+        "fixed_rejections": 0,
+        "max_abs_residual": 3.3306690738754696e-16,
+        "question": "Will the US officially declare war on Iran by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x080f9a1940a57f74e1a418810add5ffeed367ba357f5d9e8b40226ed81a4806b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Israel closes its airspace by July 24?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x1a024724af1216bca940f7306569b52b48bead8e27d89e6d89adccfc0d19371c",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Will Mojtaba Khamenei leave Iran by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x23667427b34ca1c7144d50540beba9e7ffb608443a84252c194bb8b40919a0cb",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US-Iran Final Nuclear Deal by September 30, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x48b0b0bca515f68fccf95af4793dbd0edbfec1f8ec6e8df2c0f69ba74f8c4722",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Trump out as President before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5a9395dae6c7643ea06e7a555580a5526e81073aea9c9306363529c5b76a8f8b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US x Iran Effective Ceasefire by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5c9dd25dc61b8ac4977abf14ab3a419ccfe61bff2afca37d3654809a96378bab",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US x China tariff agreement by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5fe50c3617f3a7385aaaa076897b60ca9312dfe67252b0581a688af31b7961ca",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Will the US announce withdrawal from MOU negotiations by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x79b7408f02df2eba4034ca4c06ddf17b8dbeacc5adbe8595969e7573912c4e3b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US-Iran Final Nuclear Deal by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x7d352ec1d718dd1f2d2fdb93d65fd3908cf34755d1aa45a8697a84d2b5ae1e8e",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $95 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x9cb23d04b2ded06147482076688b69b487a8d982c63ebdda2ab3678cf27cf390",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Clarity Act signed into law in 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa5bd4b831f180564aef6a119e1f94a5d574344e25a546b7a1f14aec7cc6e2d83",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Will Iran announce withdrawal from MOU negotiations by July 24?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbcd6e99663f8b2056c91b7a766e084d20cde5bcfd54a97432596633921c02443",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US announces halt in Iran offensive operations by July 21?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbdc0827c873d1c3c538e549ab94c77829f7e40fd3376b25164c0279f744a87bc",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "US x Iran diplomatic meeting by August 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xc1556ecbe613e403dfb9e38bf1b25a8aee2aa1687f2b343bc896dd2c9763ed74",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Israel x Iran ceasefire continues through August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xcfa5b3d9e618d3f7dbda457b95af3b45d23e53d5b90b7474638769d0003a30bf",
+        "fixed_rejections": 0,
+        "max_abs_residual": 2.220446049250313e-16,
+        "question": "Will WTI Crude Oil (WTI) hit (LOW) $60 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x0d3ad3afe0e01075d00e6869a09f1982742fba950b4cae8fff452b282b5a80fc",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Iran leadership change by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x20bef217896f188a907793b3bf890ede4a43f86f4ce9735016472f106488a696",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will Trump meet with Netanyahu by July 24, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x31327c6fbdc70a44d97f8e8973f536b6a748e01b4c0ca5549ed0910c703b1d7b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Bab el-Mandeb Strait effectively closed by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x335f5ef09fa8a90a55afb75b2ccc93854a38de9af172b4c19d8269daba90376a",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $110 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x35737d4e921a4cb088704e21751c78e282a6a2ae3559fbc2455275b0340d1e7f",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Israel x Iran ceasefire continues through July 22?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x3953c85ab5e965cb5b3b4deaa2a5294daa6b1165ff83b586804c04a7abf51a13",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Iran full airspace closure by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x4c63863c9f4449243981ae1748c5ee9d4d8c8f22e25f708a9afd4c86e124f360",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $90 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5813dc7ee3feea004711c97bdf27c407c3e943d876432ef50b49b8399eae9f37",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Israel withdraws from Lebanon by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x659bff8b341ee3f74dfd82b1608bf37dff28501774f25dd48f93076621aa8f8a",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "US-Iran Final Nuclear Deal by August 13, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x6a18969bc603992de4c5c9d53c2881e1378ac193cdad01e7f932afa7fdc4af3e",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will Crude Oil reach a new all-time high by September 30?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x6a9afa1f367fbdbb37ba016d1bc0453c8c21ca018e4542f0bb7f69671872c897",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "US announces halt in Iran offensive operations by July 24?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x7162118722a6abe965c964e8c694ff0f232221d9bb2263bd92e5902633381893",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Kharg Island no longer under Iranian control by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x8240c24b4ac5c954241ee6a10cffc627abf676d88b9d7de5b034c2f7c060b00a",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Bab el-Mandeb Strait effectively closed by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x8b0e301fc552e953579c625ce9adb7409d1852d5bf4879efee849decc1c9dc91",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "US announces end of Iranian blockade by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x95fc6a4ed7f6856d26aa7f21b9f902d05c9cf76b616fd3463de4d147f7a9126b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Bab el-Mandeb Strait effectively closed by September 30?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x968e7d0e59659dc602480ed9ca6fbd933a25912e1667dcec1f43d243cec5e0b0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Iran invades Kuwait by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa4ddc18895cc7b14810283ef8f113939abffd3969c6a0e37f1897110c67e6f73",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Hantavirus pandemic in 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb890ec39d646eba02450865de7b956791b693d52954477ad88b88e6ba9567da0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $115 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xc0aed6d5d893988b4bef5a8242435bbc7c3b45b1e438bcffc9e9bf71d173ae46",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "US-Iran Final Nuclear Deal by August 18, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xc0b7319f73f248310b059c231fb069e64dbd68ca81dd9933728ca192b54c3cc4",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will Trump be in the WC Champions Photo?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xceaabba2b685fab40e6ee1411e4ed06c7a5e517ba211530eda7721c5d05a47a5",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will Oleksandr Syrskyi be out as Ukraine's Commander-in-Chief by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xcfa8fd6341f3489fabeb6c57aa9c14ab22571a31fb9b3198b0ba0463cefc8509",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Trump out as President by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xd9fb1184af0064e5e34b129f5b79afa5a17b7e32f2953ab05efed82315fee6d4",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will China invade Taiwan by end of 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xe6d5e5da83874cd82c9b651a8a5d4fc541a800a295fb62e85124b4f5a04a4b7d",
+        "fixed_rejections": 0,
+        "max_abs_residual": 1.1102230246251565e-16,
+        "question": "Will China invade Taiwan by December 31, 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x21c77725363b6717538157cf5ce5cf9c69571120870d6def4233257566e07db4",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $100 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x271e1d96693db79b42a277dc5f64b61a72bc1a0fad85586fd28c7d89b9b96231",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Russia capture Kostyantynivka by September 30?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x32e869cb0f7316273417ec79aa94c8a139f8c390ebff8a24150a18753d257f8e",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will GameStop acquire eBay?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x385fb3a0c0c020e9f1c6746a95aabb449ce6465c2917cf607759b52c06934e3d",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Iran full airspace closure by July 24?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x3a869359895989c1dee6f920c203f12791f03c206e86ce48353c46626ee743b1",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $85 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x47c12169314c6cf66fe782e244753df3b0e68ee892d893d48022ec6c41cc0170",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Iran full airspace closure by July 21?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x4c80df6f557bb0b9de08c0301ebdce500dd9bdc58400d9269fb8fab1709ed584",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "China x Taiwan military clash before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x514c3dd24cde8101ec8e3982b74fca425c592e3fe7526056a4d80aa269c98808",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Israel x Iran ceasefire continues through July 20?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x518df6d694ad4658fe6c284850c029c6f00c9b3609cf05f7757d1fecba1641f8",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US-Iran 60 day negotiation period extended?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x51f624dbbf14f9edb575fef1be6f7a303751de70783fa144fce27b957452c803",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Zelenskyy out as Ukraine president by end of 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x55dfd168bd0e352e3a976434ca44143a786cd4764b5dc534f7690f762e0de15c",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $130 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x58180f4a69651f67c23ac92845721b2320cc0c76effeb5e79db5288d8d8e6b28",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US x Iran Effective Ceasefire by July 24?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5afb81cbd0ca3356dbebedd49cf667288207766206238b18b34c500b52c88345",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the Houthis successfully target shipping by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5c79dfde05559b79a9cb9f7c4187e4d49632dd042572ae676952f812732591cc",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Strait of Hormuz traffic returns to normal by December 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5db999fad322cea2914535aae5517060c3f80ad6d8c0231cde2124a434d16846",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the U.S. invade Iran before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x5e0190c0160f075a95fd5034b1d97d2245ef0c1ccb725fcbbadfc54db2ac8028",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US announces halt in Iran offensive operations by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x61c2b9e70f7fdf3441fd1cfa2c8fa93308fefe3f5ecc2db87c393efab3a207a3",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US x Iran Effective Ceasefire by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x61dcae8107169382527c8dac1fcd0e214b4b4267b65d0e6fd4872736d373f360",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US-Iran Final Nuclear Deal by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x636f780f794635820e8cafe81924ef2dd67622fc01b6b2e5e64e9cc99593a005",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Iran announce withdrawal from MOU negotiations by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x668373148ae84fcdb7c43f6559e7a02c8a3f36bfcbebddb9d85f61166b342714",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will WTI Crude Oil (WTI) hit (LOW) $65 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x6abe5fe01ca113b7d6040604a8619cadf181d4e4a6d8db3a082542417af806fd",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will SpaceX Starship Flight Test 13 launch by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x6bd56627aa21311850825edb27e53434a0e17a4f782be0086bc07f71eee00d0d",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Putin out as President of Russia by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x73d8a8208d23a74937d114a713d6a56cd4161a1068056c52ac74c8419c99da7c",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Fed Rate Hike by September 2026 Meeting?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x747dc809fb79e1b05be09c42d6179459a58de2ef3e40f02484a4e1260f741f75",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the US confirm that aliens exist before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x75546dcfa25f2cdd0edb5730ed2dc6f4b03940c2b1cb27eaefba47bfe434345d",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Gold (GC) hit (HIGH) $6,000 by end of December?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x7a2c3834179dd8ff73efd60e4cd984a16e16066f5ca20c863ab9ed6d5c53e139",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US announces end of Iranian blockade by July 24, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x7e50b661a2bedc670bcf32fc9ece12616f6fc4fba5dbe8526292bf3447374009",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Russia capture Kostyantynivka by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x7f47df08bd8b390e2d566761feead7cb20507e8e2ac37f7664f7e3a9d12b7f33",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Israel x Iran ceasefire continues through July 18?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x80b3af88cb991980e8da1ce86b9794a0957f96ec98c29319dd7ba65e9744d82b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Fed rate hike in 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x80ebf0a88a44bf737d4047b3accd7108285c69b84257e5c684bdc4c715c81139",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the U.S. invade Cuba in 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x833f0bac240ad7d5c947d58a8acac0f77a74cf03dccd8f9b72a28811836a920f",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US x Iran Effective Ceasefire by August 14?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x8a5c0b5fc339f2dbaf584def66bcf8bff94d91f0250562e452782fed3d18f821",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Crude Oil reach a new all-time high by December 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0x97ebbd5a69b5886d5805dc4a5ba952397b7c89ad6269a066617fc3809af9ffe0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Iran invades Kuwait by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa08a5ce99e14ce0b22767af6f16c08a2ab012249444c20887193a9a3e98e11fc",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Strait of Hormuz traffic returns to normal by September 30?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa466e17524bcc473279c4ca86f4f1fb01932946a8204e68f6ca96628f8bf2b5e",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "China x Japan military clash before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Xi Jinping out before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa488ab1e9bc72914b695c398c0027bd4edc1679d6ff949c1861fa33b2c9ae4d4",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Iran announce withdrawal from MOU negotiations by August 15?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xa6480903e54c68f2ee79cacb7861dfcc9b473e8b07d6dcaf2c9923034a5fb56f",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Israel x Iran ceasefire continues through July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb12f5e328a7d9f7a26e0a074625ea775025104e673c776d575dab422a472ef59",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Israel closes its airspace by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb2140927d199c1f224b3485bcd36400481a8382e6746e16c138e067532e90ad6",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Anthropic's valuation hit (HIGH) $4.0T by December 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb55b2b13aee7a480ab0695912a65cb34a5fe5e84d5da810873d9c3e1182f9fd0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the Iranian regime fall by September 30?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb838caec0354e09985f2c228c54ba190cb284f390beda5ffd58d163ba00648ec",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US x Iran diplomatic meeting by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb8e6d129a06d0ccb21d7b32eb529ea455eddba3cf29bfa097112202cbdf5bf21",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Strait of Hormuz traffic returns to normal by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xba34d786cd7bfbd719aa77c705f27969aba84d6649dca9adb365aad8c255db7a",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "US announces halt in Iran offensive operations by July 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbad91c213787a7542345b8abd72a1d55754987c47ba82ef5d4aa625ac046f024",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Iran full airspace closure by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbb4d51e6364066d92eb6f9b8413dd7193de70966736044463b205834805a1f3b",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will the Iranian regime fall before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbc0079f0872035a9eccf8920c3ceb807750685c25a5f5dcd8a8a235a34cd7bb0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Samuel Alito announce his retirement by September 30, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbe9d61d80c767264a0adc8a16453fbcaf0413e673e665cc7c14701691143fac0",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Ukraine recapture Crimean territory by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xbed2a6374a4ba91a772f009cc811bb4d680f28990038da090a651af2e57e0d61",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "European country agrees to give Ukraine security guarantee by December 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xcd8c8bbbae729acd83366d3f118e428864be2db0678496879e446aa09d284345",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Oleksandr Syrskyi be out as Ukraine's Commander-in-Chief by July 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xce41e10b3c9b3764cfe3b54691b411a4565ac4ee6ced9a810ee629bbfbffce89",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Kharg Island no longer under Iranian control by August 31?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xd7e906eaec2c7f66697447785aa1d4fdaa82f536ca533a2bc0d3535b04e832ec",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will Xi Jinping visit US before 2027?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xe1392afa5a8528ed21382736dd808c190019b7d638e619c1f97f0258ada7a2df",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Iran military action against a Gulf State on July 20?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xf11cac1c942b190540f996bcdd73f8dd2d6e1b379956ac3af2cb9ab65cb4a2a8",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Will WTI Crude Oil (WTI) hit (HIGH) $120 in July?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xf2bf04609e7458df56c9bb4b1e051286dea11da1c944bbc1dafbcc6b76904e52",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "NATO x Russia military clash by December 31, 2026?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xf473c2e521258a81d44f16fd65e811de7bcb6646912561583969004b81c10ec1",
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0,
+        "question": "Israel x Iran ceasefire continues through July 25?",
+        "valid_rounds": 5
+      },
+      {
+        "condition_id": "0xb9a254366a32ce3b274363d9dad3cc45c96127a62c1309cb47d50f3d39243bac",
+        "fixed_rejections": 0,
+        "max_abs_residual": null,
+        "question": "US x Iran Effective Ceasefire by July 18?",
+        "valid_rounds": 0
+      },
+      {
+        "condition_id": "0xcacd424332319971356c757c025b45a4eb5643b919fb3bd2f84051afea599b13",
+        "fixed_rejections": 0,
+        "max_abs_residual": null,
+        "question": "Strait of Hormuz traffic returns to normal by July 15?",
+        "valid_rounds": 0
+      }
+    ],
+    "per_round": [
+      {
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "round_index": 0,
+        "timestamp_skew_ms_max": 2,
+        "valid_pairs": 98
+      },
+      {
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "round_index": 1,
+        "timestamp_skew_ms_max": 1,
+        "valid_pairs": 98
+      },
+      {
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "round_index": 2,
+        "timestamp_skew_ms_max": 1,
+        "valid_pairs": 98
+      },
+      {
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "round_index": 3,
+        "timestamp_skew_ms_max": 2,
+        "valid_pairs": 98
+      },
+      {
+        "fixed_rejections": 0,
+        "max_abs_residual": 0.0001179054732232121,
+        "round_index": 4,
+        "timestamp_skew_ms_max": 2,
+        "valid_pairs": 98
+      }
+    ],
+    "possible_paired_states": 500,
+    "registered_fixed_rule_passes": 490,
+    "registered_fixed_rule_rejections": 0,
+    "same_pair_book_hash_states": 0,
+    "strict_0_002_threshold_rejections": 0,
+    "valid_pair_coverage": 0.98,
+    "valid_paired_states": 490
+  }
+}

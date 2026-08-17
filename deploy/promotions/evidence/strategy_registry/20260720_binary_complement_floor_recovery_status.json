@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T14:19:06Z",
+  "status": "COLLECTING_METRICS_SEALED_TERMINAL_REFRESH_REPAIRED",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "measurement_only": true,
+  "places_orders": false,
+  "strategy_metrics_disclosed": false,
+  "strategy_score_emitted": false,
+  "floor": {
+    "source": "/opt/polymomentum/logs/forward-captures/binary-complement-block1-floor/floor_collection_status.json",
+    "source_generated_at": "2026-07-20T14:18:34Z",
+    "state": "COLLECTING",
+    "unique_ready_terminal_conditions": 241,
+    "target_terminal_conditions": 750,
+    "new_segments_completed": 10,
+    "maximum_new_segments": 96,
+    "support_fraction": 0.32133333333333336,
+    "stopping_rule": "condition support only; no strategy outcome or rate is inspected"
+  },
+  "incident": {
+    "observed_support_before_recovery": 43,
+    "completed_pending_segments": 10,
+    "root_cause": "Each segment attempted terminal Gamma finalization three times over 60 seconds, then permanently left the last group at WAIT_FOR_TERMINAL_MARKETS. The collector counted only fully ready segments and did not revisit terminal-only pending statuses.",
+    "classification": "measurement-pipeline finalization-state defect; not a strategy result",
+    "data_loss": false,
+    "strategy_metrics_opened_during_diagnosis": false
+  },
+  "repair": {
+    "deployed_at": "2026-07-20T14:00:03Z",
+    "future_terminal_wait_attempts": 31,
+    "future_terminal_wait_seconds": 30,
+    "future_terminal_wait_bound_seconds": 900,
+    "refresh_policy": "one immediate attempt for verified segments whose only unresolved verdict is WAIT_FOR_TERMINAL_MARKETS",
+    "refresh_deletes_data": false,
+    "segments_refreshed": 11,
+    "segments_ready_after_refresh": 11,
+    "observed_support_after_recovery": 241,
+    "support_recovered": 198,
+    "active_recorder_interrupted": false,
+    "delayed_refresh_unit": "polymomentum-binary-complement-pending-refresh-20260720.timer",
+    "delayed_refresh_trigger_at": "2026-07-20T16:02:57Z",
+    "delayed_refresh_reason": "Segment 011 loaded the old runner before atomic deployment; recheck it once after expected completion.",
+    "legacy_source_recovery": {
+      "segment": "binary-complement-block1-seg004-007-20260718/segment_002",
+      "admissible_conditions": 20,
+      "legacy_converted_conditions": 24,
+      "missing_audited_conditions": 0,
+      "extra_converted_conditions": 4,
+      "conversion_error_rows": 0,
+      "finalization_scope": "five audited groups containing only the 20 admissible condition IDs",
+      "result": "ALL_ADMISSIBLE_GROUPS_READY"
+    }
+  },
+  "runtime": {
+    "collector_unit": "polymomentum-binary-complement-block1-floor-20260718.service",
+    "collector_active_state": "active",
+    "collector_sub_state": "running",
+    "collector_main_pid": 123092,
+    "collector_restart_count": 0,
+    "collector_active_since": "2026-07-19T05:37:54Z",
+    "active_session": "binary-complement-block1-floor-011",
+    "active_recorder_pid": 216287,
+    "active_first_window": "2026-07-20T13:30:00Z",
+    "active_windows": 24,
+    "active_capture_seconds": 10860,
+    "raw_frame_bytes_at_first_observation": 1356123643,
+    "raw_frame_bytes_five_seconds_later": 1358389156,
+    "raw_frame_bytes_at_latest_observation": 1892942250,
+    "recorder_growth_verified": true,
+    "disk_available_gib_approx": 12,
+    "filesystem_used_percent": 84,
+    "collector_free_disk_reserve_gib": 5
+  },
+  "deployed_artifacts": {
+    "measurement_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v4",
+    "measurement_binary_sha256": "80e01d8259dfe8c5e717654c8fc128ced96d09da6655256dffbae239907378ad",
+    "capture_runner": "/opt/polymomentum/tools/capture-forward-segments-v4.sh",
+    "capture_runner_sha256_before_repair": "741fbf4731ec2ae3b3699cab85297ab84ca6482faa09226cae52af608f0c587a",
+    "capture_runner_sha256_after_repair": "f0255acfb4add5d5d852eadd8d6ea189f2bd0b7b85c7faa20b81b60cec51540b",
+    "floor_collector": "/opt/polymomentum/tools/collect-binary-complement-floor.sh",
+    "floor_collector_sha256_before_repair": "6dbf0c20ab4368f8e1ebedbf30ab7e82ed2accd7fb84f7a7a3d9c56caa2d1af1",
+    "floor_collector_sha256_after_repair": "8bb66f98d94b6b347807d92523ac1e89d59101588709724570cf1fe5d62b88ae",
+    "rollback_copies_preserved": true
+  },
+  "service_health": {
+    "observed_at": "2026-07-20T14:03:31Z",
+    "failed_polymomentum_units": 0,
+    "engine": {
+      "active": true,
+      "mode": "paper_only",
+      "main_pid": 225469,
+      "restart_count": 0
+    },
+    "telegram_monitor": {
+      "active": true,
+      "main_pid": 225471,
+      "restart_count": 0
+    },
+    "healthcheck_last_exit": "SUCCESS",
+    "soak_report_last_exit": "SUCCESS",
+    "legacy_candle_unit_enabled": false,
+    "legacy_rust_unit_enabled": false
+  },
+  "decision_boundary": {
+    "support_recovery_is_strategy_evidence": false,
+    "block_1_score_allowed_now": false,
+    "reason": "241 unique terminal conditions is below the frozen 750-condition disclosure floor.",
+    "next_action": "Continue bounded collection with metrics sealed; score exactly once at the floor."
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T03:47:24Z",
+  "status": "KEEP_REPLAY_RESEARCH",
+  "live_ready": false,
+  "question": "Can observed PMXT trade prints justify a conservative one-tick passive-entry fill model that improves the known strict-42 loss cluster?",
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "latency_ms": 202,
+    "cluster_folds": [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "trades": 40,
+    "wins": 30,
+    "losses": 10,
+    "total_pnl_usd": -16.0665
+  },
+  "pre_registered_contract": {
+    "limit_rule": "decision-time best ask minus one 0.01 tick",
+    "order_latency_ms": 202,
+    "resting_timeout_seconds": 3.0,
+    "size_rule": "reuse the exact taker trade share count; do not increase size at the cheaper maker price",
+    "arrival_rule": "reject if the fixed limit crosses the arrival ask or sits below the arrival best bid",
+    "queue_ahead_rule": "freeze visible bid size at the limit on arrival",
+    "queue_depletion_rule": "count unique explicit SELL trade prints at the limit; give no credit for cancellations or later book-size reductions",
+    "price_through_rule": "an explicit SELL print below the resting buy limit implies full fill",
+    "missing_data_rule": "fail closed",
+    "scope_rule": "test the known failing tail first; expand to 42 folds only if the fixed tail screen is viable"
+  },
+  "coverage": {
+    "baseline_trades": 40,
+    "trades_with_retained_trade_tape": 26,
+    "trades_without_retained_trade_tape": 14,
+    "post_only_eligible_orders": 19,
+    "post_only_cross_rejects": 7,
+    "no_contra_trade": 9,
+    "queue_not_cleared": 4
+  },
+  "trade_side_validation": {
+    "sell_comparable_prints": 1567,
+    "sell_at_or_below_prior_bid": 1430,
+    "sell_at_or_below_prior_bid_ratio": 0.912572,
+    "buy_comparable_prints": 18788,
+    "buy_at_or_above_prior_ask": 16570,
+    "buy_at_or_above_prior_ask_ratio": 0.881946,
+    "interpretation": "The retained side field behaves predominantly as aggressor side. The fill screen therefore allows only SELL prints to deplete a resting buy queue."
+  },
+  "results": {
+    "defensible_full_fills": 6,
+    "queue_cleared_at_limit_fills": 0,
+    "price_through_fills": 6,
+    "filled_winners": 4,
+    "filled_losses": 2,
+    "fill_rate_over_covered": 0.230769,
+    "fill_rate_over_eligible": 0.315789,
+    "covered_baseline_pnl_usd": -7.81402,
+    "maker_skip_unfilled_pnl_usd": -5.2417,
+    "delta_on_covered_usd": 2.57232,
+    "covered_counterfactual_profitable": false
+  },
+  "fills": [
+    {"fold": 29, "won": true, "limit": 0.82, "queue_ahead": 40.0, "trigger_print_price": 0.80, "trigger_print_size": 6.41, "baseline_pnl_usd": 0.97355, "maker_pnl_usd": 1.0944},
+    {"fold": 29, "won": true, "limit": 0.83, "queue_ahead": 342.55, "trigger_print_price": 0.80, "trigger_print_size": 1.5, "baseline_pnl_usd": 0.91409, "maker_pnl_usd": 1.0319},
+    {"fold": 34, "won": false, "limit": 0.76, "queue_ahead": 200.0, "trigger_print_price": 0.72, "trigger_print_size": 4.0, "baseline_pnl_usd": -5.07776, "maker_pnl_usd": -4.9324},
+    {"fold": 35, "won": true, "limit": 0.78, "queue_ahead": 5.0, "trigger_print_price": 0.75, "trigger_print_size": 94.0, "baseline_pnl_usd": 1.31729, "maker_pnl_usd": 1.4608},
+    {"fold": 37, "won": true, "limit": 0.82, "queue_ahead": 0.0, "trigger_print_price": 0.80, "trigger_print_size": 6.06, "baseline_pnl_usd": 0.96394, "maker_pnl_usd": 1.0836},
+    {"fold": 37, "won": false, "limit": 0.83, "queue_ahead": 109.57, "trigger_print_price": 0.82, "trigger_print_size": 6.32, "baseline_pnl_usd": -5.09645, "maker_pnl_usd": -4.98}
+  ],
+  "folds": [
+    {"fold": 29, "covered_trades": 6, "fills": 2, "covered_baseline_pnl_usd": -0.24369, "maker_skip_unfilled_pnl_usd": 2.1263},
+    {"fold": 30, "covered_trades": 0, "fills": 0, "covered_baseline_pnl_usd": 0.0, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 31, "covered_trades": 2, "fills": 0, "covered_baseline_pnl_usd": -3.53932, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 32, "covered_trades": 0, "fills": 0, "covered_baseline_pnl_usd": 0.0, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 33, "covered_trades": 0, "fills": 0, "covered_baseline_pnl_usd": 0.0, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 34, "covered_trades": 1, "fills": 1, "covered_baseline_pnl_usd": -5.07776, "maker_skip_unfilled_pnl_usd": -4.9324},
+    {"fold": 35, "covered_trades": 5, "fills": 1, "covered_baseline_pnl_usd": 6.28189, "maker_skip_unfilled_pnl_usd": 1.4608},
+    {"fold": 36, "covered_trades": 0, "fills": 0, "covered_baseline_pnl_usd": 0.0, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 37, "covered_trades": 2, "fills": 2, "covered_baseline_pnl_usd": -4.13251, "maker_skip_unfilled_pnl_usd": -3.8964},
+    {"fold": 38, "covered_trades": 5, "fills": 0, "covered_baseline_pnl_usd": 6.25365, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 39, "covered_trades": 1, "fills": 0, "covered_baseline_pnl_usd": -5.12096, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 40, "covered_trades": 4, "fills": 0, "covered_baseline_pnl_usd": -2.23532, "maker_skip_unfilled_pnl_usd": 0.0},
+    {"fold": 41, "covered_trades": 0, "fills": 0, "covered_baseline_pnl_usd": 0.0, "maker_skip_unfilled_pnl_usd": 0.0}
+  ],
+  "implementation_audit": {
+    "current_backtest": "Maker::fill_with_key uses a fixed maker_fill_prob, default 0.65, and a deterministic seeded draw.",
+    "current_archive_reader": "DistilledEvent::Trade is retained on disk but explicitly skipped by read_distilled.",
+    "current_promotion_gate": "prefer_maker variants are rejected because the fill probability is not queue/trade calibrated.",
+    "live_timeout_gap": "CANDLE_MAKER_TIMEOUT_S defaults to 3.0 but has no implemented live cancel path."
+  },
+  "limitations": [
+    "Only 26 of 40 tail trades have retained trade tape in the local full distilled cache.",
+    "The archive exposes aggregated price levels, not order IDs or exact queue position.",
+    "The no-cancellation-credit rule is intentionally conservative and may understate fills.",
+    "All six inferred fills are price-through fills; no order cleared the frozen queue from prints at its own limit.",
+    "The screen is a standalone causal reconstruction, not an integrated harness variant.",
+    "The fixed screen failed before a 42-fold expansion or fresh-window replay was warranted."
+  ],
+  "verdict": {
+    "grade": "A- research system; strategy remains below A+",
+    "strategy_adjustment": "none",
+    "screen_result": "reject",
+    "reason": "Observed passive fills are too sparse, the covered counterfactual remains negative, and tape coverage is incomplete. Implementing a trade-aware maker path would add lifecycle complexity without promotion-grade evidence.",
+    "blocked_followups": [
+      "Do not tune timeout, price offset, queue discount, or regime filters on this tail cohort.",
+      "Do not enable prefer_maker or interpret the synthetic 0.65 maker replay as evidence.",
+      "Do not add a maker-to-taker fallback: the prior fixed persistence screen already showed that delayed re-entry disproportionately removes winners."
+    ],
+    "next_mechanism_class": "new exogenous information with demonstrable incremental predictive value on the opportunity-complete cohort"
+  }
+}

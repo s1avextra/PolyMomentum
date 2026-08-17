@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T10:57:29Z",
+  "status": "REJECTED_BEFORE_LABEL_DOWNLOAD_DVOL_SOURCE_GRANULARITY_FAILED",
+  "mechanism_id": "dvol_volatility_max_v1",
+  "authority": {
+    "preregistration_path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_preregistration.json",
+    "preregistration_sha256": "7bec4bf3a7c2ceae20da15e2b4ceb7c11fcbd1b2f7fb028f1db6195a5e9e7c2a",
+    "deribit_endpoint": "https://www.deribit.com/api/v2/public/get_index_chart_data?index_name=btcdvol_usdc&range=1y",
+    "deribit_documentation": "https://docs.deribit.com/api-reference/market-data/public-get_index_chart_data",
+    "dvol_methodology": "https://insights.deribit.com/exchange-updates/dvol-deribit-implied-volatility-index/",
+    "raw_response_snapshot": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_btcdvol_usdc_1y.json.gz",
+      "compressed_sha256": "832ee2d1e77e53b6028e89b606e6bb80e00309245c6c105539629d06958899b8",
+      "uncompressed_sha256": "caa9b09bbf8c5936043439581b6d7c332e2a71d9bc8495cb088e8a39418e9e9a",
+      "uncompressed_bytes": 44802
+    }
+  },
+  "source_quality": {
+    "jsonrpc": "2.0",
+    "error_present": false,
+    "points": 1460,
+    "first_timestamp_ms": 1753120800000,
+    "last_timestamp_ms": 1784635200000,
+    "timestamp_duplicates": 0,
+    "timestamp_regressions": 0,
+    "invalid_values": 0,
+    "minimum_spacing_seconds": 21600,
+    "median_spacing_seconds": 21600,
+    "maximum_spacing_seconds": 21600,
+    "observed_sampling_interval": "exactly six hours"
+  },
+  "pre_label_feasibility": {
+    "evaluation_windows": {
+      "older": "2026-04-16T00:00:00Z through 2026-05-16T00:00:00Z",
+      "fresh_holdout": "2026-07-16T00:00:00Z through 2026-07-21T00:00:00Z"
+    },
+    "decision_offsets_seconds": [120, 150, 179],
+    "registered_maximum_age_seconds": 7200,
+    "possible_forecasts": 30240,
+    "fresh_dvol_forecasts": 10080,
+    "fresh_dvol_forecast_fraction": 0.3333333333333333,
+    "required_fresh_dvol_forecast_fraction": 0.99,
+    "older": {
+      "possible_forecasts": 25920,
+      "fresh_dvol_forecasts": 8640,
+      "fresh_fraction": 0.3333333333333333
+    },
+    "fresh_holdout": {
+      "possible_forecasts": 4320,
+      "fresh_dvol_forecasts": 1440,
+      "fresh_fraction": 0.3333333333333333
+    },
+    "age_seconds": {
+      "p50": 10799.5,
+      "p90": 19379,
+      "maximum": 21479
+    },
+    "failed_checks": [
+      "minimum_fresh_dvol_forecast_fraction"
+    ]
+  },
+  "label_access_audit": {
+    "binance_evaluation_archives_downloaded": 0,
+    "binance_evaluation_labels_loaded": false,
+    "brier_or_log_loss_computed": false,
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false
+  },
+  "decision": {
+    "candidate_rejected": true,
+    "failure_stage": "source feasibility before label download",
+    "staleness_bound_widening_authorized": false,
+    "alternate_deribit_range_authorized": false,
+    "retuning_authorized": false,
+    "strategy_variant_authorized": false,
+    "exact_strategy_replay_authorized": false,
+    "runtime_change_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false,
+    "next_step": "Reject dvol_volatility_max_v1. Do not download outcome labels or adapt the source contract on these registered windows."
+  },
+  "limitations": [
+    "The source-coverage failure says nothing about whether a genuinely high-frequency causal DVOL archive would improve probability quality.",
+    "The preregistered contract forbids switching ranges or widening the two-hour freshness bound after observing the returned source cadence.",
+    "No probability, trade, fill, fee, PnL, profitability, or A+ evidence was generated."
+  ]
+}

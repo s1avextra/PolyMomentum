@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T14:19:06Z",
+  "status": "READY_FOR_CONTINUED_BLINDED_COLLECTION_NOT_READY_TO_SCORE",
+  "intended_use": "Certify condition-level support for the frozen binary-complement block without inspecting strategy candidates, outcomes, rates, or economics.",
+  "grain": "one unique post-registration five-minute condition with terminal Gamma state and official Chainlink settlement alignment",
+  "source_roots": [
+    "/opt/polymomentum/logs/forward-captures/binary-complement-block1-seg003-20260718",
+    "/opt/polymomentum/logs/forward-captures/binary-complement-block1-seg004-007-20260718",
+    "/opt/polymomentum/logs/forward-captures/binary-complement-block1-floor"
+  ],
+  "support_accounting": {
+    "floor_status_generated_at": "2026-07-20T14:18:34Z",
+    "unique_ready_terminal_conditions": 241,
+    "target_terminal_conditions": 750,
+    "support_fraction": 0.32133333333333336,
+    "completed_segments": 15,
+    "sealed_segments": 15,
+    "captured_conditions": 360,
+    "admissible_conditions": 241,
+    "excluded_conditions": 119,
+    "admission_rate": 0.6694444444444444,
+    "admission_rate_interpretation": "reference-tape and settlement data availability only; not a strategy selection or win rate",
+    "resolution_group_manifests": 71
+  },
+  "checks": {
+    "capture_verified_failures": 0,
+    "terminal_pending_segments": 0,
+    "session_owned_frame_deletion_mismatches": 0,
+    "manifest_market_rows": 241,
+    "unique_condition_ids": 241,
+    "duplicate_condition_rows": 0,
+    "empty_or_invalid_condition_ids": 0,
+    "invalid_or_pre_registration_open_timestamps": 0,
+    "distinct_open_timestamps": 241,
+    "settlement_alignment_failures": 0,
+    "official_source_alignment_failures": 0,
+    "invalid_terminal_label_rows": 0,
+    "resolution_schema_failures": 0,
+    "resolution_gate_failures": 0,
+    "manifest_market_count_mismatches": 0,
+    "floor_status_equals_status_admissible_sum": true,
+    "floor_status_equals_manifest_market_rows": true,
+    "manifest_rows_equal_unique_condition_ids": true,
+    "accounting_reconciles": true
+  },
+  "resolved_findings": [
+    {
+      "severity": "high",
+      "finding": "Ten current floor segments and one older continuation segment stopped at WAIT_FOR_TERMINAL_MARKETS and were omitted from support after Gamma became terminal.",
+      "impact": "198 valid conditions were missing from the blinded support count; no strategy metric was affected or disclosed.",
+      "root_cause": "The original runner used only three finalization attempts over 60 seconds, and the collector refreshed only its newest base directory.",
+      "remediation": "Use a bounded 31-attempt/30-second finalization wait for future captures, refresh terminal-only pending statuses across every registered source root, and keep all non-terminal blockers fail closed.",
+      "result": "All 11 pending segments resolved on one refresh; support moved from 43 to 241."
+    },
+    {
+      "severity": "medium",
+      "finding": "The older continuation segment used the legacy unfiltered conversion-manifest shape: 24 converted markets for 20 audited admissible conditions and no selection metadata.",
+      "impact": "The modern exact-allowlist verifier correctly rejected the legacy shape, but this initially prevented terminal-only refresh of otherwise intact data.",
+      "remediation": "A separate legacy-only preflight now requires selection metadata to be absent, zero conversion errors, all 20 audited condition IDs present, valid replay output metadata, and group-specific terminal finalization. Modern filtered manifests retain exact-cardinality enforcement.",
+      "result": "The legacy segment passed with zero missing audited conditions and four extra converted conditions; only the 20 audited IDs entered the condition-group manifests."
+    }
+  ],
+  "automated_invariants": [
+    "modern conversion manifests require exact selected-condition cardinality and selection metadata",
+    "legacy conversion manifests are refreshable only when every audited condition exists and all conversion error counters are zero",
+    "only capture_verified terminal-only pending statuses are eligible for refresh",
+    "refresh scans every registered source root",
+    "support counts only fully ready segments with complete group-manifest cardinality and positive distilled events",
+    "support condition IDs must remain unique and post-registration",
+    "strategy metrics remain sealed below 750 unique terminal conditions"
+  ],
+  "runtime_snapshot": {
+    "collector_active": true,
+    "collector_main_pid": 123092,
+    "collector_restart_count": 0,
+    "active_session": "binary-complement-block1-floor-011",
+    "active_recorder_pid": 216287,
+    "active_raw_frame_bytes": 1892942250,
+    "measurement_binary_sha256": "80e01d8259dfe8c5e717654c8fc128ced96d09da6655256dffbae239907378ad",
+    "capture_runner_sha256": "f0255acfb4add5d5d852eadd8d6ea189f2bd0b7b85c7faa20b81b60cec51540b",
+    "floor_collector_sha256": "8bb66f98d94b6b347807d92523ac1e89d59101588709724570cf1fe5d62b88ae"
+  },
+  "decision": {
+    "safe_to_continue_collection": true,
+    "safe_to_score_strategy_now": false,
+    "reason": "The support dataset is internally reconciled, but 241 conditions remain below the frozen 750-condition disclosure floor.",
+    "next_check": "Repeat the same accounting audit after each recovery or at the 750-condition stop."
+  }
+}

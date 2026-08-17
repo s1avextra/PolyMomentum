@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T06:57:02Z",
+  "mechanism_id": "late_window_article_family_v1",
+  "status": "EXPLORATORY_FAMILY_FROZEN_AFTER_PARENT_AGGREGATES_BEFORE_HYBRID_EVALUATION",
+  "decision_question": "Which of the finitely specified 2-, 3-, and 4-minute BTC path rules deserves at most one cheap Polymarket opportunity pass and at most two exact-L2 replays?",
+  "integrity_disclosure": {
+    "pristine_confirmatory_test": false,
+    "already_observed_before_registration": [
+      "strict four-minute aggregate and slice results",
+      "aggregate first-two-minute 100 USD and 200 USD diagnostics"
+    ],
+    "not_evaluated_before_registration": [
+      "three-minute path rule on the registered archives",
+      "all registered AND and OR hybrids",
+      "rule-specific executable Polymarket prices, fills, fees, or PnL"
+    ],
+    "use_of_results": "exploration and historical shortlist only; no promotion or A+ credit"
+  },
+  "shared_contract": {
+    "window_alignment": "UTC Unix timestamp divisible by 300 seconds",
+    "prices": "official Binance BTCUSDT one-second checkpoints P0, P60, P120, P180, P240 and terminal P300",
+    "terminal_label": "terminal P300 versus P0; exact ties excluded",
+    "direction": "up for positive defining move and down for negative defining move",
+    "zero_checkpoint_return": "strict-path rules are ineligible",
+    "maximum_checkpoint_age_seconds": 2
+  },
+  "frozen_rules": [
+    {
+      "id": "path_3m",
+      "decision_offset_seconds": 180,
+      "predicate": "P60-P0, P120-P60, and P180-P120 are all strictly positive or all strictly negative"
+    },
+    {
+      "id": "path_4m",
+      "decision_offset_seconds": 240,
+      "predicate": "P60-P0, P120-P60, P180-P120, and P240-P180 are all strictly positive or all strictly negative"
+    },
+    {
+      "id": "move_2m_100",
+      "decision_offset_seconds": 120,
+      "predicate": "absolute(P120-P0) is at least 100 USD"
+    },
+    {
+      "id": "move_2m_200",
+      "decision_offset_seconds": 120,
+      "predicate": "absolute(P120-P0) is at least 200 USD"
+    },
+    {
+      "id": "path_3m_and_move_2m_100",
+      "decision_offset_seconds": 180,
+      "predicate": "path_3m and move_2m_100 agree in direction"
+    },
+    {
+      "id": "path_4m_and_move_2m_100",
+      "decision_offset_seconds": 240,
+      "predicate": "path_4m and move_2m_100 agree in direction"
+    },
+    {
+      "id": "path_4m_and_move_2m_200",
+      "decision_offset_seconds": 240,
+      "predicate": "path_4m and move_2m_200 agree in direction"
+    },
+    {
+      "id": "path_4m_or_move_2m_200_aligned",
+      "decision_offset_seconds": 240,
+      "predicate": "path_4m is present, or move_2m_200 agrees with the sign of P240-P0"
+    }
+  ],
+  "excluded_search_dimensions": [
+    "no neighboring dollar thresholds",
+    "no checkpoint offset grid",
+    "no hour or weekday filtering",
+    "no direction-specific thresholds",
+    "no date-window search",
+    "no use of July 14 or later labels while the active forward block is sealed"
+  ],
+  "stage_1_screen": {
+    "data": "same 33 checksum-verified public archives used by the parent audit",
+    "metrics": [
+      "eligible conditions",
+      "accuracy",
+      "UTC-day block-bootstrap interval",
+      "older and fresh-pre-forward accuracy",
+      "up and down accuracy",
+      "decision-time buffer"
+    ],
+    "triage_floor": {
+      "minimum_total_signals": 30,
+      "minimum_fresh_signals_warning": 10,
+      "minimum_accuracy_each_direction": 0.55,
+      "minimum_accuracy_each_chronological_window": 0.55
+    },
+    "triage_floor_is_promotion_gate": false
+  },
+  "stage_2_and_3_contract": {
+    "all_stage_1_survivors_enter_one_shared_opportunity_capture": true,
+    "maximum_exact_l2_shortlist": 2,
+    "selection_basis": [
+      "fee-aware cushion versus contemporaneous chosen-token ask",
+      "support",
+      "chronological and directional stability",
+      "earlier causal entry preferred when economics are comparable"
+    ],
+    "exact_l2_latency_ms": 202,
+    "order": "taker FOK with visible-depth book-walk VWAP and worst-price limit",
+    "fee": "exact market fee metadata with fail-closed fallback",
+    "sizing_and_risk": "existing bankroll, position, exposure, stressed-drawdown, breaker, and authoritative-resolution mechanics",
+    "historical_progression_floor": "positive net expectancy, positive total net PnL, profit factor above 1.0, no unresolved fills or reconciliation errors; breadth failures are warnings until fresh holdout"
+  },
+  "authority": {
+    "parent_preregistration": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_four_minute_continuation_preregistration.json",
+      "sha256": "fcf2763e413400ced44b77c5f932c557e3fd3a3b7c52bc376a279fa77ad37e47"
+    },
+    "parent_evidence": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_four_minute_continuation_public_proxy.json",
+      "sha256": "21aa26600c5b00b7f7b6c6717e7e1451df031a777115a71a1641a43391193bda"
+    },
+    "funnel": "deploy/promotions/evidence/strategy_registry/20260722_strategy_validation_funnel_v2.json"
+  },
+  "authorization": {
+    "default_off_causal_feature": true,
+    "historical_public_screen": true,
+    "historical_opportunity_and_exact_l2_replay": true,
+    "paper_or_live_runtime_change": false,
+    "profitability_or_a_plus_claim": false
+  }
+}

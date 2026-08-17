@@ -1,0 +1,146 @@
+{
+  "a_plus_gate": {
+    "btc_tape_ready": true,
+    "official_settlement_source_ready": true,
+    "proxy_btc_alignment_ready": true,
+    "resolution_manifest_ready": true,
+    "settlement_alignment_ready": true,
+    "terminal_ground_truth_ready": true,
+    "verdict": "FORWARD_GROUND_TRUTH_READY_NEEDS_SAMPLE_SIZE"
+  },
+  "btc_tape": {
+    "boundary_coverage_ready": true,
+    "first_timestamp_ms": 1784040554000,
+    "internal_gap_ready": true,
+    "last_timestamp_ms": 1784046851000,
+    "max_allowed_gap_ms": 5000,
+    "max_internal_gap_ms": 3000,
+    "median_interval_ms": 1000,
+    "required_end_ms": 1784041200000,
+    "required_start_ms": 1784040600000,
+    "rows": 6201,
+    "settlement_source_kind": "chainlink_btc_usd_data_stream",
+    "settlement_source_kind_input": "auto",
+    "source": {
+      "kind": "csv",
+      "path": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z/chainlink_btcusd.csv",
+      "provenance": {
+        "detected_settlement_source_kind": "chainlink_btc_usd_data_stream",
+        "malformed_rows": 0,
+        "official_chainlink_provenance_ready": true,
+        "rows": 6201,
+        "source_column_present": true,
+        "source_values": [
+          "chainlink_btc_usd_data_stream"
+        ]
+      }
+    }
+  },
+  "generated_at": "2026-07-14T21:29:58.416143893+00:00",
+  "markets": [
+    {
+      "active": true,
+      "btc_close": 64014.66492428738,
+      "btc_direction": "up",
+      "btc_move": 102.70175280714466,
+      "btc_open": 63911.96317148024,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784040900,
+      "closed": true,
+      "condition_id": "0x6742e18c4aef606b9762ff9280863e5ccf6c193f14211db49b81df59bc1f63c1",
+      "end_date": "2026-07-14T14:55:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 10:50AM-10:55AM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784040600,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 1.0,
+          "token_id": "100764323957583230326413605371305462619322096192315655458360792859946157157080"
+        },
+        {
+          "name": "Down",
+          "price": 0.0,
+          "token_id": "43193711655229563482717090930947724931513234287050500576193620950034958107693"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 10:50AM-10:55AM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784040600",
+      "terminal_direction": "up",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64244.56118437475,
+      "btc_direction": "up",
+      "btc_move": 229.89626008736377,
+      "btc_open": 64014.66492428738,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784041200,
+      "closed": true,
+      "condition_id": "0xaa3c3a49a1fbe0dd2ce021975fff6f960be036b953a0764c5ef05878a425f59d",
+      "end_date": "2026-07-14T15:00:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 10:55AM-11:00AM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784040900,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 1.0,
+          "token_id": "48724100687658031110849911166768452444110491818412477434972977243982878279929"
+        },
+        {
+          "name": "Down",
+          "price": 0.0,
+          "token_id": "108329827008300175228073350572755889681105299827165800451212862297099261560102"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 10:55AM-11:00AM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784040900",
+      "terminal_direction": "up",
+      "window_seconds": 300
+    }
+  ],
+  "official_settlement_sources": {
+    "chainlink_btc_usd_data_stream": 2,
+    "kinds": [
+      "chainlink_btc_usd_data_stream"
+    ],
+    "known": 2,
+    "matched_to_btc_tape": 2,
+    "mismatched_to_btc_tape": 0,
+    "unknown": 0
+  },
+  "output": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z_segments/segment_01/resolution_manifest.json",
+  "schema_version": 1,
+  "source_manifest": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z_segments/segment_01/manifest.json",
+  "stats": {
+    "btc_tape_covered": 2,
+    "btc_tape_missing": 0,
+    "closed": 2,
+    "gamma_refreshed": 2,
+    "markets": 2,
+    "oracle_checks": 2,
+    "oracle_disagreements": 0,
+    "oracle_ties": 0,
+    "pending": 0,
+    "proxy_oracle_checks": 2,
+    "proxy_oracle_disagreements": 0,
+    "proxy_oracle_ties": 0,
+    "terminal": 2
+  }
+}

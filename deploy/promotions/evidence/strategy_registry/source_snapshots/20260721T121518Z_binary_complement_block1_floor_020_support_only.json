@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T12:15:18Z",
+  "session_id": "binary-complement-block1-floor-020",
+  "segment": 1,
+  "first_window_start": "2026-07-21T10:10:00Z",
+  "capture_verified": true,
+  "full_segment_signal_coverage": true,
+  "session_owned_frames_deleted": true,
+  "captured_conditions": 24,
+  "admissible_conditions": 19,
+  "excluded_conditions": 5,
+  "admissible_groups": 6,
+  "resolution_ready": true,
+  "resolution_total_groups": 6,
+  "resolution_ready_groups": 6,
+  "resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY"
+}

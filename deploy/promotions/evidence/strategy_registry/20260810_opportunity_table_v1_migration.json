@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-09T18:23:22Z",
+  "decision": "replace repeated candidate-by-candidate late-window replay with an immutable causal opportunity table before vectorized policy search",
+  "implementation": {
+    "command": "polymomentum-engine strategy-builder opportunity-table",
+    "schema_version": "opportunity_table_v1",
+    "causal_feature_semantics_version": "late_window_causal_features_v1",
+    "bounded_to_one_cached_pmxt_hour": true,
+    "network_downloads_allowed": false,
+    "parquet_condition_row_filter": true,
+    "single_filtered_event_walk": true,
+    "outcome_columns_present": false,
+    "atomic_parquet_and_manifest_writes": true,
+    "source_and_output_hashes_required": true
+  },
+  "migration_gate": {
+    "legacy_candidate_generation_enabled": false,
+    "legacy_exact_replay_enabled": false,
+    "reason": "opportunity_table_v1_migration",
+    "applied_cycle_id": "cab93d5a-c41b-4b83-a619-2fb7f5798d54",
+    "post_restart_cycle_id": "e6c8aab5-6c19-4294-b146-590526e4d74e",
+    "post_restart_cycle_status": "completed",
+    "post_restart_lane_status": "paused_architecture_migration"
+  },
+  "superseded_exact_job": {
+    "job_id": "22badc19-a34f-4eef-9e43-12b6b46ebbbf",
+    "hypothesis_fingerprint": "b9f18a4f6d05648be8cb223f7996e82e95ef448341ff60dde8d1fe084b49cc99",
+    "reference_fingerprint": "78af669b730768411b781e11f3b1f6085024f2de324df3f30a6e5d0d93b8f548",
+    "matching_completed_windows": 3,
+    "stored_job_status": "blocked",
+    "stored_hypothesis_status": "superseded_execution_equivalent",
+    "queued_exact_jobs_after_migration": 0,
+    "partial_evidence_preserved": true
+  },
+  "installed_bundle": {
+    "measurement_binary_sha256": "906f545e5e38ac6ebd699045dd7104b4c914aeeb7cdf3839da0e406e7e48840c",
+    "config_sha256": "16a5735f4660580217e9c430c81a7dffd5ebe21539220f935e8e5477b87d1992",
+    "coordinator_sha256": "b62ac78a415b67176123f3f75497180dd05b5e2e03882d7e202917d5fade91f3",
+    "source_and_installed_hashes_match": true,
+    "launch_agent_loaded": true,
+    "launch_agent_last_exit_code": 0,
+    "launch_agent_interval_seconds": 1800
+  },
+  "verification": {
+    "rust_library_tests": 502,
+    "rust_cli_tests": 57,
+    "python_coordinator_tests": 55,
+    "failures": 0,
+    "opportunity_table_tests": [
+      "strict outcome-field rejection",
+      "future-checkpoint rejection",
+      "runtime causal feature parity",
+      "TokenBook top/depth parity",
+      "fee-aware multi-level ask walk parity",
+      "stable opportunity IDs",
+      "deterministic Parquet bytes and row count",
+      "signal and source parquet overwrite protection",
+      "bounded CLI parsing"
+    ]
+  },
+  "production_boundary": {
+    "research_only": true,
+    "paper_or_live_authorized": false,
+    "binary_complement_canary_modified": false,
+    "vps_strategy_search_allowed": false
+  },
+  "next_steps": [
+    "compile strict causal signal JSONL from the newest fully resolved public window without outcome fields",
+    "export and seal one-hour opportunity manifests on the dev Mac, then expand to the newest 30 fully resolved days",
+    "build a separately keyed resolution-label table only after causal opportunity manifests are sealed",
+    "evaluate the bounded late-window policy family chronologically in one vectorized pass",
+    "hash accepted opportunity IDs plus execution parameters and exact-replay only one representative per unique decision trace"
+  ]
+}

@@ -1,0 +1,859 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:00:00.470974+00:00",
+  "mechanism_id": "late_window_article_family_v1",
+  "status": "STAGE_1_EXPLORATORY_SCREEN_COMPLETE",
+  "authority": {
+    "registration_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_exploratory_registration.json",
+    "registration_sha256": "39fdb0702cc5a0a15a7000f770a0826e0df21246eb627bb80834866ed697aaaa",
+    "funnel_path": "deploy/promotions/evidence/strategy_registry/20260722_strategy_validation_funnel_v2.json",
+    "funnel_sha256": "3a85c1d04b86554ab015194b45b88d9cfbf20e5810532eb4aecdcdedf8a5087c",
+    "archive_directory": "/private/tmp/polymomentum-dvol-volatility-max-20260721/binance_1s",
+    "archive_manifest": [
+      {
+        "archive": "BTCUSDT-1s-2026-04-16.zip",
+        "archive_sha256": "f071b01b5fcce53f75be6c2f7bb501373b96f3179fcc1056b5baa6e621fda2e9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-16.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "50af12b09fc6460407ac9b271a69ad742edddedf040d3f48a7e7dbaef631e7e9",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-16.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-17.zip",
+        "archive_sha256": "c0da9364440b72194a5c2cd2ed7abdc0a71f8470ea8334f3c533e1351aaba307",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-17.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "79d7491ea4573525185f5093c8c56d999def5e246165a654e8ad0a16c943660e",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-17.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-18.zip",
+        "archive_sha256": "d6864b10b124aeccf69eac2f8cd53739ceabade61fade52f5e738e8acda80b32",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-18.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "eff6cd56207818814f3ecd4043cd41b92db7bbbf77ae989eb98c237a870a11a0",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-18.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-19.zip",
+        "archive_sha256": "1f5e2b51ae4abd33c5f27b60831d21280a99e677e96614d1afdad47ec4ea0cdb",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-19.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "412d3851ccfbccebbb9beb8c23a0143fa7c975fd86a1c7dbdb5c1dc400b14bcf",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-19.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-20.zip",
+        "archive_sha256": "1d0290ea9cc0fed023ef920d7594b8b576139416df9924dc4d4decaac452a07c",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-20.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "36932f06042f1822bee666b5dda54229a944632a609a02079c2b2c0cafd8f838",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-20.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-21.zip",
+        "archive_sha256": "ccee70ade8b4beb6cc3ad008c06711f4e3d4a70d28ed3c200ddc760941f22877",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-21.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "701998e8cbd670a496a0d2483a84ab9ead9ad87241c436abf45a073c8d35417c",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-21.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-22.zip",
+        "archive_sha256": "87ee3cbca125cf8aade6177107260c5911271624984cbe72850b43b9d6805fd0",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-22.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "fa140869816f07b06b6c2392fff20530a91c5bee6370f49df78d9125eaf36155",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-22.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-23.zip",
+        "archive_sha256": "f51a584c136c1e2fdd41e8690f36faeab936e301f7f60cd1fa5286a0a6f75106",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-23.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "2bceb4ecd1b52e5bb2cc3ed43b75a55cd93c912b0ba58650edb5595272aaa5ea",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-23.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-24.zip",
+        "archive_sha256": "6159bc973b9030ab1cd711c9a25d450de929688878f55c3b451fadf0cee4cde1",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-24.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "99f870ce21863be08fdcab18e7e62f204319665c601fd55073784a060edc342a",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-24.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-25.zip",
+        "archive_sha256": "535f885ace4639d563eab27b6f78e9853cf24081b91c3d045c93dc70105a25f9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-25.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "78be39e88347508007c9ab58b71660adfb57288cc78c25748431811e72da1374",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-25.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-26.zip",
+        "archive_sha256": "9f5cc79f72866e3ea6bcbd3d32668a401bdfb2ad988f276f8e3d41b8649d9480",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-26.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "b3be9e720e171d8ee5f91e304862223f83f31d9ee243cafce521ccf67cf6d139",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-26.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-27.zip",
+        "archive_sha256": "de89f46d20d1df582d13f32d197bf062188948994a12dd5dab5919ae09cff5b5",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-27.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "96a49d0716ada9d235e53864c47b4409f610a87b5fea2e82a33393785e4900ca",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-27.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-28.zip",
+        "archive_sha256": "c851e451d8f3aec552fff24e3cec5889c1c73f6ab8ee2d447145ac9efabb8cdd",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-28.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "0e62c1da37e9acf68694fd1bbb5eadfd64cfd3f4adc5a52fd1eeb790acb20c44",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-28.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-29.zip",
+        "archive_sha256": "624328df76c7b9203b8db45a6a4e08b0aa97a1d45b0a729f824d926b0271eb11",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-29.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "5cb9711e146a0b1dba3ba94eb3f09f9b8ddba48981619ee22562f04a481e0e93",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-29.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-04-30.zip",
+        "archive_sha256": "eea9c63c9423f9cf1ffc8fa81f2c0d8649ef7c5188c0bfe4709f03d1c7215b80",
+        "adjacent_checksum": "BTCUSDT-1s-2026-04-30.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "032201a379d1aec9c1c8123ca06d5d9fa7d4b83472d8ade7f7392da57367179b",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-04-30.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-01.zip",
+        "archive_sha256": "0d171887aae9ba64b66d2238f82a286703f8bb6b7350d80c893aa636636a0057",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-01.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "aa595b55da4d57efe41c5b87b23ecb3d1d52bc1504d7428a4655268421793792",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-01.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-02.zip",
+        "archive_sha256": "7831b6591bf7af6196a909420433a34668583e6aa903197ed77102a319c35e81",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-02.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "d5197ae69014e6b32849d3361a3ebb8ef347b12b7fa6c837716a312e7578364c",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-02.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-03.zip",
+        "archive_sha256": "d9a02ab46c720294d70e517dfc74b37ce7e425a24cdca61792b593baae904b1e",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-03.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "e2f7432794c379b3d6feab8066416ada1e65d480338c469c2a41c1dc5da7d0e2",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-03.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-04.zip",
+        "archive_sha256": "2e1c754e0b0dc23dd5e0a9144f6df3e44b6f5e7974bae2f68762c19a10be983f",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-04.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "cc76f323403464f045d19d49df6dff29a38c81ce8e7c5fb59aab42cf5673875b",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-04.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-05.zip",
+        "archive_sha256": "7fd2278bd004749de9255d3dfc644d5709f1fe697fb1e1a75b34946f7a92312e",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-05.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "7f3af972e7a9a25355228dcbb0de92a5a6e65cb3cfc09155c95ba53ad8a0c256",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-05.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-06.zip",
+        "archive_sha256": "d0512ccb9d9f5f9997cabdf7025c575f64e4d1c9d0406eb960f45c00856b7164",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-06.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "59a79d6b08b9e6675eb0c68284dfabf5e67a016d97f6efe9272a784dee1f55de",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-06.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-07.zip",
+        "archive_sha256": "c7e55d6de03628479d92c6a9a03ae310161874694fca35f494d9bf123b0dfbaf",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-07.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "709c3095850905d6359b704378d1ac8549e7554ec12494c0af8a6e23daf6de07",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-07.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-08.zip",
+        "archive_sha256": "5ca22031e702e28120898dd3590865c92b4e8f19945d4fb50d83712eb468c80d",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-08.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "4fc2ecda6143cef1c54584562ca8354ec9e2e45f437fbe5a3bf9de6eb01a41d3",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-08.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-09.zip",
+        "archive_sha256": "a1acb013dbcc886bb534c6a33bcf3b1fd0b18d58be65e5881cfc1069d00aba76",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-09.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "49d5aa9a978f7855410dd0df305634bd73c9279da0fdfd3b14ec9c275b2a8c50",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-09.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-10.zip",
+        "archive_sha256": "ff5324d82d7cd52ac5549f96f884b25bd1f1da9f1ffd49837e8f673ebbdd8ceb",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-10.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "0ee5a799007acfa18a099b75740b9f6975671c6be8f48b5cece4c3ee20f971d5",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-10.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-11.zip",
+        "archive_sha256": "ada1f3b91b28058156899e677fd9d2d9bb028dc233cd33f82e502abfbf7c2b48",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-11.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "fe8ef21488c63c8f7bc05aa50fcbe453eaccb8828b7eabbfec3f3e0839d1df50",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-11.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-12.zip",
+        "archive_sha256": "ab932234fe8fe5b839324e27d419777684d6a27fc6d6cfd53a3fd46b91d3332e",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-12.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "a0770967d388a4b029c8f5557e04d80babdb28bd87db1539943a14c669b053c1",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-12.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-13.zip",
+        "archive_sha256": "4891f1fb3504627973fe23841441d0a9f828fac98e07d8ee8736b83f3a67d3d9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-13.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "2706dbdd62be13fa9b84add56a62f980c571205f646048e57a755b490dc473e1",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-13.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-14.zip",
+        "archive_sha256": "c4aa772e4cd70386fdcb48892b80cacda6d0fba817b57e911172dc9774f71ed9",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-14.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "deef5d7f98ef51dee39824dd11c8e8f373d7c990d97562d331d12d825b27e191",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-14.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-05-15.zip",
+        "archive_sha256": "fb2c09187afa0a46f2da6c3549389e20029a724a5ef7c45c0feeda6045204b42",
+        "adjacent_checksum": "BTCUSDT-1s-2026-05-15.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "cc56263b1534c53168dd5f637599be1fe03f28d32062e5adcd1d4867e2d003c5",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-05-15.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-11.zip",
+        "archive_sha256": "dcd57e038cc67ada068e862e5db8850b62d2d0aa26718bcb25a6a198b590f98b",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-11.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "23496efdc28f90ccfe47c08f9275b7bb03e428c50043eeaa1fdc1f00a9e58391",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-11.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-12.zip",
+        "archive_sha256": "5c71785e9c1b7b0e0fdf2bae512778699fcc6a1479cdb237262e5fe442d2e530",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-12.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "88c5f9879450ec145d9b465f15923cd55e53cdc144ec02aa148f8bb3100cfcd0",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-12.zip"
+      },
+      {
+        "archive": "BTCUSDT-1s-2026-07-13.zip",
+        "archive_sha256": "de1ccbd88f141d4b6436da00b04d1b8964c6b1d403a12e1de1f5528411dd0154",
+        "adjacent_checksum": "BTCUSDT-1s-2026-07-13.zip.CHECKSUM",
+        "adjacent_checksum_sha256": "1936eb6cdf887ce6343abbd69fa2e5c32b4c4e4d80148eab063a2a33efa7952e",
+        "rows": 86400,
+        "url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-2026-07-13.zip"
+      }
+    ]
+  },
+  "source_data_quality": {
+    "archives": 33,
+    "rows": 2851200,
+    "schema_widths": [
+      12
+    ],
+    "rows_per_archive_minimum": 86400,
+    "rows_per_archive_maximum": 86400,
+    "timestamp_unit": "microseconds",
+    "timestamp_duplicates": 0,
+    "timestamp_regressions": 0,
+    "one_second_gap_violations": 0,
+    "maximum_internal_gap_seconds": 1.0,
+    "invalid_close_durations": 0,
+    "invalid_prices": 0,
+    "checksum_failures": 0
+  },
+  "window_data_quality": {
+    "expected_conditions": 9504,
+    "complete_conditions": 9504,
+    "complete_conditions_fraction": 1.0,
+    "incomplete_conditions": 0,
+    "terminal_tie_conditions": 14,
+    "zero_one_minute_return_conditions": 1144,
+    "duplicate_conditions": 0,
+    "conditions_by_chronological_window": {
+      "fresh_pre_forward": 864,
+      "older": 8640
+    }
+  },
+  "results": {
+    "path_3m": {
+      "decision_offset_seconds": 180,
+      "overall": {
+        "eligible_signals": 2147,
+        "wins": 1910,
+        "losses": 237,
+        "accuracy": 0.8896134140661388
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 206,
+          "wins": 181,
+          "losses": 25,
+          "accuracy": 0.8786407766990292
+        },
+        "older": {
+          "eligible_signals": 1941,
+          "wins": 1729,
+          "losses": 212,
+          "accuracy": 0.8907779495105616
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 1057,
+          "wins": 940,
+          "losses": 117,
+          "accuracy": 0.8893093661305582
+        },
+        "up": {
+          "eligible_signals": 1090,
+          "wins": 970,
+          "losses": 120,
+          "accuracy": 0.8899082568807339
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 33,
+        "resamples": 10000,
+        "seed": 20260723,
+        "accuracy_95pct": [
+          0.8750580320485164,
+          0.9035490860895645
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 75.30758733115985,
+        "median": 58.69000000000233,
+        "p10": 21.552000000004774,
+        "p90": 144.78399999999678
+      },
+      "post_decision_continuation_rate": 0.4657661853749418,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": false
+      },
+      "stage_1_survivor": true
+    },
+    "path_4m": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "eligible_signals": 1032,
+        "wins": 986,
+        "losses": 46,
+        "accuracy": 0.9554263565891473
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 98,
+          "wins": 91,
+          "losses": 7,
+          "accuracy": 0.9285714285714286
+        },
+        "older": {
+          "eligible_signals": 934,
+          "wins": 895,
+          "losses": 39,
+          "accuracy": 0.9582441113490364
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 488,
+          "wins": 468,
+          "losses": 20,
+          "accuracy": 0.9590163934426229
+        },
+        "up": {
+          "eligible_signals": 544,
+          "wins": 518,
+          "losses": 26,
+          "accuracy": 0.9522058823529411
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 33,
+        "resamples": 10000,
+        "seed": 20260724,
+        "accuracy_95pct": [
+          0.9384765625,
+          0.9691542288557214
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 100.62296511627935,
+        "median": 77.67000000000553,
+        "p10": 32.5399999999936,
+        "p90": 192.95300000000572
+      },
+      "post_decision_continuation_rate": 0.45058139534883723,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": false
+      },
+      "stage_1_survivor": true
+    },
+    "move_2m_100": {
+      "decision_offset_seconds": 120,
+      "overall": {
+        "eligible_signals": 547,
+        "wins": 508,
+        "losses": 39,
+        "accuracy": 0.9287020109689214
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 16,
+          "wins": 15,
+          "losses": 1,
+          "accuracy": 0.9375
+        },
+        "older": {
+          "eligible_signals": 531,
+          "wins": 493,
+          "losses": 38,
+          "accuracy": 0.928436911487759
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 279,
+          "wins": 257,
+          "losses": 22,
+          "accuracy": 0.921146953405018
+        },
+        "up": {
+          "eligible_signals": 268,
+          "wins": 251,
+          "losses": 17,
+          "accuracy": 0.9365671641791045
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 32,
+        "resamples": 10000,
+        "seed": 20260725,
+        "accuracy_95pct": [
+          0.908026257314273,
+          0.9503247399782486
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 148.98475319926854,
+        "median": 131.0899999999965,
+        "p10": 104.10599999999977,
+        "p90": 215.49200000000133
+      },
+      "post_decision_continuation_rate": 0.4351005484460695,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": false
+      },
+      "stage_1_survivor": true
+    },
+    "move_2m_200": {
+      "decision_offset_seconds": 120,
+      "overall": {
+        "eligible_signals": 69,
+        "wins": 65,
+        "losses": 4,
+        "accuracy": 0.9420289855072463
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 3,
+          "wins": 2,
+          "losses": 1,
+          "accuracy": 0.6666666666666666
+        },
+        "older": {
+          "eligible_signals": 66,
+          "wins": 63,
+          "losses": 3,
+          "accuracy": 0.9545454545454546
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 38,
+          "wins": 34,
+          "losses": 4,
+          "accuracy": 0.8947368421052632
+        },
+        "up": {
+          "eligible_signals": 31,
+          "wins": 31,
+          "losses": 0,
+          "accuracy": 1.0
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 20,
+        "resamples": 10000,
+        "seed": 20260726,
+        "accuracy_95pct": [
+          0.9027777777777778,
+          0.9833333333333333
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 260.90405797101437,
+        "median": 237.8000000000029,
+        "p10": 209.79799999999813,
+        "p90": 341.41399999999567
+      },
+      "post_decision_continuation_rate": 0.4782608695652174,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": true
+      },
+      "stage_1_survivor": true
+    },
+    "path_3m_and_move_2m_100": {
+      "decision_offset_seconds": 180,
+      "overall": {
+        "eligible_signals": 200,
+        "wins": 194,
+        "losses": 6,
+        "accuracy": 0.97
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 6,
+          "wins": 6,
+          "losses": 0,
+          "accuracy": 1.0
+        },
+        "older": {
+          "eligible_signals": 194,
+          "wins": 188,
+          "losses": 6,
+          "accuracy": 0.9690721649484536
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 93,
+          "wins": 92,
+          "losses": 1,
+          "accuracy": 0.989247311827957
+        },
+        "up": {
+          "eligible_signals": 107,
+          "wins": 102,
+          "losses": 5,
+          "accuracy": 0.9532710280373832
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 30,
+        "resamples": 10000,
+        "seed": 20260727,
+        "accuracy_95pct": [
+          0.9466650485436893,
+          0.991869918699187
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 204.76314999999985,
+        "median": 178.93999999999505,
+        "p10": 124.8150000000096,
+        "p90": 318.522000000003
+      },
+      "post_decision_continuation_rate": 0.4,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": true
+      },
+      "stage_1_survivor": true
+    },
+    "path_4m_and_move_2m_100": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "eligible_signals": 85,
+        "wins": 85,
+        "losses": 0,
+        "accuracy": 1.0
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 3,
+          "wins": 3,
+          "losses": 0,
+          "accuracy": 1.0
+        },
+        "older": {
+          "eligible_signals": 82,
+          "wins": 82,
+          "losses": 0,
+          "accuracy": 1.0
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 37,
+          "wins": 37,
+          "losses": 0,
+          "accuracy": 1.0
+        },
+        "up": {
+          "eligible_signals": 48,
+          "wins": 48,
+          "losses": 0,
+          "accuracy": 1.0
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 26,
+        "resamples": 10000,
+        "seed": 20260728,
+        "accuracy_95pct": [
+          1.0,
+          1.0
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 259.75294117647,
+        "median": 234.84999999999127,
+        "p10": 145.475999999998,
+        "p90": 385.2539999999921
+      },
+      "post_decision_continuation_rate": 0.4470588235294118,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": true
+      },
+      "stage_1_survivor": true
+    },
+    "path_4m_and_move_2m_200": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "eligible_signals": 11,
+        "wins": 11,
+        "losses": 0,
+        "accuracy": 1.0
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 1,
+          "wins": 1,
+          "losses": 0,
+          "accuracy": 1.0
+        },
+        "older": {
+          "eligible_signals": 10,
+          "wins": 10,
+          "losses": 0,
+          "accuracy": 1.0
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 6,
+          "wins": 6,
+          "losses": 0,
+          "accuracy": 1.0
+        },
+        "up": {
+          "eligible_signals": 5,
+          "wins": 5,
+          "losses": 0,
+          "accuracy": 1.0
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 6,
+        "resamples": 10000,
+        "seed": 20260729,
+        "accuracy_95pct": [
+          1.0,
+          1.0
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 417.18272727272813,
+        "median": 379.0,
+        "p10": 291.3099999999977,
+        "p90": 547.7300000000105
+      },
+      "post_decision_continuation_rate": 0.5454545454545454,
+      "triage_checks": {
+        "minimum_total_signals_30": false,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": true
+      },
+      "stage_1_survivor": false
+    },
+    "path_4m_or_move_2m_200_aligned": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "eligible_signals": 1088,
+        "wins": 1040,
+        "losses": 48,
+        "accuracy": 0.9558823529411765
+      },
+      "chronological_windows": {
+        "fresh_pre_forward": {
+          "eligible_signals": 100,
+          "wins": 92,
+          "losses": 8,
+          "accuracy": 0.92
+        },
+        "older": {
+          "eligible_signals": 988,
+          "wins": 948,
+          "losses": 40,
+          "accuracy": 0.9595141700404858
+        }
+      },
+      "directions": {
+        "down": {
+          "eligible_signals": 518,
+          "wins": 496,
+          "losses": 22,
+          "accuracy": 0.9575289575289575
+        },
+        "up": {
+          "eligible_signals": 570,
+          "wins": 544,
+          "losses": 26,
+          "accuracy": 0.9543859649122807
+        }
+      },
+      "bootstrap": {
+        "unit": "UTC day",
+        "days": 33,
+        "resamples": 10000,
+        "seed": 20260730,
+        "accuracy_95pct": [
+          0.9396471680594243,
+          0.9691719500529187
+        ]
+      },
+      "decision_buffer_usd": {
+        "mean": 106.75978860294148,
+        "median": 82.32999999999447,
+        "p10": 32.72100000000064,
+        "p90": 211.0309999999998
+      },
+      "post_decision_continuation_rate": 0.4494485294117647,
+      "triage_checks": {
+        "minimum_total_signals_30": true,
+        "accuracy_each_direction_above_0_55": true,
+        "accuracy_each_chronological_window_above_0_55": true
+      },
+      "triage_warnings": {
+        "fresh_signals_below_10": false
+      },
+      "stage_1_survivor": true
+    }
+  },
+  "stage_1": {
+    "survivors": [
+      "path_3m",
+      "path_4m",
+      "move_2m_100",
+      "move_2m_200",
+      "path_3m_and_move_2m_100",
+      "path_4m_and_move_2m_100",
+      "path_4m_or_move_2m_200_aligned"
+    ],
+    "survivor_count": 7,
+    "triage_not_promotion": true,
+    "next_step": "Run one shared historical Polymarket opportunity capture for survivors, then shortlist at most two exact-L2 variants by fee-aware ask cushion and support."
+  },
+  "article_claim_audit": {
+    "reported_path_3m_accuracy": 0.8096,
+    "observed_path_3m_accuracy": 0.8896134140661388,
+    "reported_path_4m_up_accuracy": 0.9683,
+    "reported_path_4m_down_accuracy": 0.9597,
+    "reported_move_2m_100_accuracy": 0.8858,
+    "observed_move_2m_100_accuracy": 0.9287020109689214,
+    "reported_move_2m_200_accuracy": 0.9276,
+    "observed_move_2m_200_accuracy": 0.9420289855072463,
+    "reported_overall_strategy_accuracy": 0.7846,
+    "overall_strategy_still_not_reproducible": true,
+    "reason": "The article never specifies how overlapping rules are combined, priced, sized, or deduplicated."
+  },
+  "snapshot": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722_late_window_article_family_signals.jsonl.gz",
+    "rows": 5179,
+    "sha256": "e6da327f31e4b9c3cdcd3cbc2b898ec8e7ee8b48e8937bc9631276d4097bdffd",
+    "uncompressed_sha256": "d3fe57dafcec454b39d8b3da06150dc2376c75306fc71b57490355033fb41852"
+  },
+  "decision": {
+    "historical_polymarket_opportunity_screen_authorized": true,
+    "maximum_exact_l2_shortlist": 2,
+    "runtime_paper_or_live_change_authorized": false,
+    "profitability_or_a_plus_claim": false
+  },
+  "integrity": {
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "july_14_or_later_archive_opened": false
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T05:44:36Z",
+  "updated_at": "2026-07-21T06:04:16Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "REALIZED_SUPPORT_GATES_REGISTERED_BEFORE_FORWARD_SCORE",
+  "decision": {
+    "forward_strategy_metrics_seen_before_decision": false,
+    "disclosed_support_count_at_decision": 290,
+    "forward_screen_artifacts_generated": 0,
+    "block_1_scored": false,
+    "strategy_feature_or_selection_rule_changed": false,
+    "classification_rate_threshold_changed": false,
+    "fee_aware_economic_threshold_changed": false,
+    "collection_floor_or_stopping_rule_changed": false,
+    "realized_support_gate_set_changed": true,
+    "threshold_or_neighbor_search_permitted": false
+  },
+  "registered_gates": {
+    "minimum_terminal_settlement_aligned_conditions": 750,
+    "minimum_baseline_candidates": 100,
+    "minimum_baseline_losses": 15,
+    "minimum_selected_candidates": 80,
+    "failure_action": "reject the family at the fixed 750-condition score; do not extend collection adaptively"
+  },
+  "preexisting_basis": {
+    "blinded_power_amendment": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_blinded_power_amendment.json",
+    "blinded_power_amendment_sha256": "93158926e974fe1d763e0e336b9c715ab068b360204db387e02ad08aded84871",
+    "historical_baseline_candidates": 102,
+    "historical_baseline_losses": 23,
+    "expected_baseline_candidates_at_750": 121.23613312202853,
+    "expected_baseline_losses_at_750": 27.33755942947702,
+    "probability_of_at_least_100_baseline_candidates": 0.9861,
+    "probability_of_at_least_15_baseline_losses": 0.9966,
+    "expected_selected_candidates_at_registered_effect": 103.64500792393027,
+    "standing_a_plus_policy": "docs/strategy_registry.json",
+    "standing_a_plus_policy_sha256": "08c06f01eacb82241d295c9bc15b3d5aa64427060bea890910da43af6186c371",
+    "standing_a_plus_minimum_trades_where_applicable": 80
+  },
+  "methodological_defect_closed": {
+    "before": "A completed block could pass all ratio, Wilson, and unit-economics gates on a much smaller realized candidate/loss sample than the blinded power analysis called decision-useful.",
+    "after": "Schema 5 makes the preexisting support assumptions explicit hard gates and recomputes them from pinned source counts in the repeat audit.",
+    "why_selected_support_is_applicable": "The selected candidates are the forward screen's trade-like observations used for Wilson and fee-aware unit economics, so the standing minimum-80-trades policy applies.",
+    "anti_leakage": "All three thresholds come from artifacts fixed before forward scoring; no winner, loss, residual, retention, Wilson, PnL, opportunity, or selected-candidate metric from the forward block was inspected."
+  },
+  "implementation": {
+    "screen_schema_version_before": 4,
+    "screen_schema_version_after": 5,
+    "source": "rust_engine/src/strategy_builder.rs",
+    "source_sha256_before": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "source_sha256_after": "d42d7c9853107b3fe240ade0602d17ca0c735656cc6bd6b02465bc3debf2ee51",
+    "preregistration_sha256_before_amendment": "f7befd929c8ac32a61ea55451a9b18dd2cb69b8d0fcbb54fdd70ab035a3a99d4",
+    "preregistration_sha256_after_amendment": "abbdadb281e33a980961d3c691bad53985761a32cd2201d8a951051767460ec5",
+    "tests": {
+      "command": "cargo test binary_complement_screen_ --lib",
+      "result": "13 passed; 0 failed",
+      "new_sparse_baseline_fixture": "750 terminal conditions, 99 baseline candidates, 9 baseline losses, and 84 selected candidates rejects on both deficient baseline support gates",
+      "new_sparse_selected_fixture": "100 baseline candidates, 15 baseline losses, and 79 selected candidates passes the other frozen gates but rejects on selected support"
+    },
+    "measurement_only_linux_binary": {
+      "status": "INSTALLED_HASH_VERIFIED_NOT_ACTIVE",
+      "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v11",
+      "sha256": "07a386c748d3756462cb3a654c5999936b929f9be93f8190ebbfb80c34f00b89",
+      "size_bytes": 25529184,
+      "owner": "polymomentum:polymomentum",
+      "mode": "0755",
+      "architecture": "ELF64 x86-64",
+      "build_command": "nice -n 10 cargo build --release --locked -j 1",
+      "build_location": "/opt/polymomentum/builds/measurement-v11/rust_engine",
+      "cli_preflight": "strategy-builder binary-complement-screen exposes --opportunity, --resolution-manifest, and --block-id",
+      "active_collector_binary_changed": false,
+      "production_binary_changed": false
+    }
+  },
+  "collection_boundary": {
+    "active_collector_changed": false,
+    "active_collector_restart_required": false,
+    "production_engine_changed": false,
+    "production_engine_restart_required": false,
+    "forward_outcomes_unsealed": false,
+    "score_before_exactly_750_conditions": "forbidden",
+    "adaptive_extension_after_750": "forbidden",
+    "block_2": "required, disjoint, and subject to the identical schema-5 support, rate, and economic gates"
+  },
+  "build_overlap_audit": {
+    "active_session": "binary-complement-block1-floor-018",
+    "session_core_window_start": "2026-07-21T06:00:00Z",
+    "measurement_v11_build_finished": "2026-07-21T06:04:16Z",
+    "policy_caveat": "The clean VPS build overlapped the beginning of the capture core window. Nice 10 and one job limited impact but do not prove measurement neutrality.",
+    "collector_pid": 289160,
+    "collector_restarts": 0,
+    "production_pid": 289976,
+    "production_restarts": 0,
+    "new_recorder_stderr_warnings_during_build": 0,
+    "preexisting_preroll_chainlink_stale_reconnect_warnings": 10,
+    "evidence_action": "Session 018 receives support only if the existing post-capture source-continuity and admissibility audits pass; any build-period or reference-feed gap rejects affected conditions fail closed."
+  },
+  "limitations": [
+    "The support gates prevent an under-supported false pass; they do not improve the strategy's signal or prove profitability.",
+    "The 750-condition block may now fail because nuisance rates drifted below the preexisting power assumptions. That is a valid rejection, not permission to collect until the gates pass.",
+    "Passing both blocks remains only a prerequisite for one exact measured-latency replay and is not live-trading authorization."
+  ]
+}

@@ -1,0 +1,332 @@
+{
+  "schema_version": "cross_venue_lead_lag_preregistration_v1",
+  "generated_at": "2026-08-11T19:22:20Z",
+  "family_id": "cross_venue_lead_lag_residual_v1",
+  "inputs": {
+    "dataset_seal": {
+      "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375"
+    },
+    "labels_manifest": {
+      "path": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "sha256": "32d071e7d2f64a50eacd5db5e28664889cf4b55e8bd30375f5addfd75efc7a6e"
+    },
+    "feature_store": {
+      "path": "logs/strategy-research/binance-cross-venue/cross_venue_features_20260812.manifest.json",
+      "sha256": "ddbc794a828e6a96fb2df2d74862a59b2825c881ab89aa137abd285594332dcf"
+    }
+  },
+  "policy_grid_sha256": "ed914d312a7a567b7f8368301f8547c305c5b0792ba9a43deaace90ea44a0519",
+  "policies_evaluated": 36,
+  "policy_grid": [
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 120,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 180,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.05,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 1,
+      "minimum_consensus_return_bps": 0.25,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 0.5,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 5,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 1.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.03,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    },
+    {
+      "decision_seconds": 240,
+      "lookback_seconds": 15,
+      "minimum_consensus_return_bps": 2.0,
+      "maximum_directional_polymarket_move_15s": 0.08,
+      "maximum_spot_perpetual_gap_bps": 2.0,
+      "maximum_pair_spread": 0.02
+    }
+  ],
+  "cheap_screen": {
+    "minimum_calibration_support": 12,
+    "minimum_policy_support": 20,
+    "safety_margin": 0.02
+  },
+  "exact_replay_budget": {
+    "maximum_unique_traces": 2,
+    "latency_ms": 128,
+    "additional_discovery_hours": 0,
+    "additional_parameter_variants": 0
+  },
+  "advancement_gate": {
+    "minimum_exact_replay_wilson_edge": 0.02,
+    "require_positive_exact_replay_pnl": true
+  },
+  "label_access_audit": {
+    "label_artifacts_read": 0,
+    "outcomes_read": 0,
+    "scores_read": 0,
+    "pnl_read": 0
+  }
+}

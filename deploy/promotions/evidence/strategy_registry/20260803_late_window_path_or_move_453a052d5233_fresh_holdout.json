@@ -1,0 +1,453 @@
+{
+  "completed_windows": [
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-23.zip",
+        "archive_sha256": "b8ac35d35f8db388c92f3413b43d9b9f13ad0e737bf9606d0c6d1c8f8c952029",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260723.csv",
+        "tape_sha256": "4f99fa3dd075d3386ac17511866fabeaf255f242b991424bdbe0f1b505d293a4"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 4293708,
+        "reason": null
+      },
+      "end": "2026-07-23T14:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260723_14/reports/fold_001_20260723T140000Z_20260723T140000Z_sweep.json",
+      "report_sha256": "feaecfa0eddbcdec6db94aabd6a153a18453014d70a6daf52edfb5e64ceea229",
+      "returncode": 2,
+      "start": "2026-07-23T14:00:00Z",
+      "summary": {
+        "avg_pnl": 0.0,
+        "breaker_tripped": false,
+        "by_direction": {},
+        "execution_attempts": 0,
+        "fill_rate": 0.0,
+        "fills_failed": 0,
+        "fills_success": 0,
+        "losses": 0,
+        "total_fees": -0.0,
+        "total_pnl": -0.0,
+        "trades": 0,
+        "unresolved_fills": 0,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-17.zip",
+        "archive_sha256": "7dd03d1726375dab3de8de32a2662fa8ad64583ae5034a44498da5863c90d290",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260717.csv",
+        "tape_sha256": "407b6618e485330675aa9f2ad4ca93b3473a9f18ee6b4617a357af9a74964222"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3515822,
+        "reason": null
+      },
+      "end": "2026-07-17T08:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260717_08/reports/fold_001_20260717T080000Z_20260717T080000Z_sweep.json",
+      "report_sha256": "6b34f3e149844d9a673c612c4cdb8eaf0c417dcf5cca7947699e69fea6e8a1b2",
+      "returncode": 2,
+      "start": "2026-07-17T08:00:00Z",
+      "summary": {
+        "avg_pnl": 0.0,
+        "breaker_tripped": false,
+        "by_direction": {},
+        "execution_attempts": 0,
+        "fill_rate": 0.0,
+        "fills_failed": 0,
+        "fills_success": 0,
+        "losses": 0,
+        "total_fees": -0.0,
+        "total_pnl": -0.0,
+        "trades": 0,
+        "unresolved_fills": 0,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-24.zip",
+        "archive_sha256": "15b936dbb715a97d45f3915b14366c2af8e8f68b27a839cdedd872be63c7a981",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260724.csv",
+        "tape_sha256": "9da9c9d562df9a5fd272189c3557a58536510ab3dbbd4ff267f80eb1e3f97100"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3220441,
+        "reason": null
+      },
+      "end": "2026-07-24T07:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260724_07/reports/fold_001_20260724T070000Z_20260724T070000Z_sweep.json",
+      "report_sha256": "7d0f24d93d973ab0c413c5befdbffd7af035d704a90955b531b0540a7a6cdb6f",
+      "returncode": 2,
+      "start": "2026-07-24T07:00:00Z",
+      "summary": {
+        "avg_pnl": 0.004650000000000005,
+        "breaker_tripped": false,
+        "by_direction": {
+          "up": {
+            "losses": 0,
+            "total_pnl": 0.004650000000000005,
+            "trades": 1,
+            "wins": 1
+          }
+        },
+        "execution_attempts": 1,
+        "fill_rate": 1.0,
+        "fills_failed": 0,
+        "fills_success": 1,
+        "losses": 0,
+        "total_fees": 0.00035,
+        "total_pnl": 0.004650000000000005,
+        "trades": 1,
+        "unresolved_fills": 0,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-24.zip",
+        "archive_sha256": "15b936dbb715a97d45f3915b14366c2af8e8f68b27a839cdedd872be63c7a981",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260724.csv",
+        "tape_sha256": "9da9c9d562df9a5fd272189c3557a58536510ab3dbbd4ff267f80eb1e3f97100"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 4069511,
+        "reason": null
+      },
+      "end": "2026-07-24T14:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260724_14/reports/fold_001_20260724T140000Z_20260724T140000Z_sweep.json",
+      "report_sha256": "3cfb6c8b5a0ac2cabb650df6655c7dead32a85bb8387b7f3698a3ce1c35cc67f",
+      "returncode": 2,
+      "start": "2026-07-24T14:00:00Z",
+      "summary": {
+        "avg_pnl": 0.03722000000000004,
+        "breaker_tripped": false,
+        "by_direction": {
+          "down": {
+            "losses": 0,
+            "total_pnl": 0.03722000000000004,
+            "trades": 1,
+            "wins": 1
+          }
+        },
+        "execution_attempts": 1,
+        "fill_rate": 1.0,
+        "fills_failed": 0,
+        "fills_success": 1,
+        "losses": 0,
+        "total_fees": 0.00278,
+        "total_pnl": 0.03722000000000004,
+        "trades": 1,
+        "unresolved_fills": 0,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-27.zip",
+        "archive_sha256": "662c3651fe32c61e747bc79f3abe856211babce20c3c2639d6cdaf2edaec8899",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260727.csv",
+        "tape_sha256": "b401ca969bf17f9148c50f683dcd09c96a24f316ef9b9415f4d7cf76d3d34dae"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3235357,
+        "reason": null
+      },
+      "end": "2026-07-27T12:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260727_12/reports/fold_001_20260727T120000Z_20260727T120000Z_sweep.json",
+      "report_sha256": "d66be03923534b841982a14280e7ec9ad69f0009345df2e83bb457a0429c0ea0",
+      "returncode": 2,
+      "start": "2026-07-27T12:00:00Z",
+      "summary": {
+        "avg_pnl": 0.004650000000000005,
+        "breaker_tripped": false,
+        "by_direction": {
+          "down": {
+            "losses": 0,
+            "total_pnl": 0.004650000000000005,
+            "trades": 1,
+            "wins": 1
+          }
+        },
+        "execution_attempts": 1,
+        "fill_rate": 1.0,
+        "fills_failed": 0,
+        "fills_success": 1,
+        "losses": 0,
+        "total_fees": 0.00035,
+        "total_pnl": 0.004650000000000005,
+        "trades": 1,
+        "unresolved_fills": 0,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    },
+    {
+      "btc_tape": {
+        "archive_sha256": [
+          "662c3651fe32c61e747bc79f3abe856211babce20c3c2639d6cdaf2edaec8899",
+          "1d246b7bddb00b7d45d9cc9b31f1886c4d636c6cd831d3db9a138dcdd9576434"
+        ],
+        "archives": [
+          "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-27.zip",
+          "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-28.zip"
+        ],
+        "coverage_end": "2026-07-28T00:00:00+00:00",
+        "coverage_start": "2026-07-27T22:00:00+00:00",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_window_20260727T22_20260728T00.csv",
+        "tape_sha256": "837be093297f205471d6ffeeb97b392827894bd7deffe0ad4977a3e54c0a6b96"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3636003,
+        "reason": null
+      },
+      "end": "2026-07-27T23:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260727_23/reports/fold_001_20260727T230000Z_20260727T230000Z_sweep.json",
+      "report_sha256": "989d07db1ca8534ec53533f6a8d38d0d14c7190187ea470ad16aa6b06a23971f",
+      "returncode": 2,
+      "start": "2026-07-27T23:00:00Z",
+      "summary": {
+        "avg_pnl": 0.0,
+        "breaker_tripped": false,
+        "by_direction": {},
+        "execution_attempts": 0,
+        "fill_rate": 0.0,
+        "fills_failed": 0,
+        "fills_success": 0,
+        "losses": 0,
+        "total_fees": -0.0,
+        "total_pnl": -0.0,
+        "trades": 0,
+        "unresolved_fills": 0,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-28.zip",
+        "archive_sha256": "1d246b7bddb00b7d45d9cc9b31f1886c4d636c6cd831d3db9a138dcdd9576434",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260728.csv",
+        "tape_sha256": "9d008ee859c945860371ef6d066e034b680c96894b638fdd17135807bcd25030"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3713835,
+        "reason": null
+      },
+      "end": "2026-07-28T01:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260728_01/reports/fold_001_20260728T010000Z_20260728T010000Z_sweep.json",
+      "report_sha256": "3833dae9411735863d9161b22d00ba20a730056dada1a81a0dffd5848495be6e",
+      "returncode": 2,
+      "start": "2026-07-28T01:00:00Z",
+      "summary": {
+        "avg_pnl": 0.047000000000000604,
+        "breaker_tripped": false,
+        "by_direction": {
+          "up": {
+            "losses": 0,
+            "total_pnl": 0.047000000000000604,
+            "trades": 1,
+            "wins": 1
+          }
+        },
+        "execution_attempts": 1,
+        "fill_rate": 1.0,
+        "fills_failed": 0,
+        "fills_success": 1,
+        "losses": 0,
+        "total_fees": 0.0035,
+        "total_pnl": 0.047000000000000604,
+        "trades": 1,
+        "unresolved_fills": 0,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    },
+    {
+      "btc_tape": {
+        "archive": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/BTCUSDT-1s-2026-07-28.zip",
+        "archive_sha256": "1d246b7bddb00b7d45d9cc9b31f1886c4d636c6cd831d3db9a138dcdd9576434",
+        "tape": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/data/binance/btc_20260728.csv",
+        "tape_sha256": "9d008ee859c945860371ef6d066e034b680c96894b638fdd17135807bcd25030"
+      },
+      "command_status": "failed",
+      "data_support": {
+        "observable": true,
+        "pmxt_complete": true,
+        "pmxt_row_count": 3856521,
+        "reason": null
+      },
+      "end": "2026-07-28T16:00:00Z",
+      "public_signals": 2,
+      "report": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/runs/fresh_holdout/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/20260728_16/reports/fold_001_20260728T160000Z_20260728T160000Z_sweep.json",
+      "report_sha256": "5f6e54cbd464df06da329ba1f764f8dfbde847ffc2f7ae0723afb58efb39398b",
+      "returncode": 2,
+      "start": "2026-07-28T16:00:00Z",
+      "summary": {
+        "avg_pnl": 0.004650000000000005,
+        "breaker_tripped": false,
+        "by_direction": {
+          "down": {
+            "losses": 0,
+            "total_pnl": 0.004650000000000005,
+            "trades": 1,
+            "wins": 1
+          }
+        },
+        "execution_attempts": 1,
+        "fill_rate": 1.0,
+        "fills_failed": 0,
+        "fills_success": 1,
+        "losses": 0,
+        "total_fees": 0.00035,
+        "total_pnl": 0.004650000000000005,
+        "trades": 1,
+        "unresolved_fills": 0,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    }
+  ],
+  "generated_at": "2026-08-03T10:32:36+00:00",
+  "global_reserve": {
+    "input_starts_sha256": "6b2e377ebdd258849c34119d8f90c1fc46974a81809cfefccb30fdc487ae5bb7",
+    "input_window_count": 66,
+    "matching_candidate_window_count": 35,
+    "policy": "global_measured_window_reserve_v1"
+  },
+  "global_reserve_candidate_starts_sha256": "7db6bfc9c98c0d8bbbc69be78cca97dc0e07984af0706ce33a282a5e7db56ced",
+  "global_reserve_version": "other_jobs_measured_starts_v1",
+  "hypothesis_fingerprint": "453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018",
+  "live_ready": false,
+  "next_stage": "fixed_forward_confirmation",
+  "proposal": {
+    "expected_failure_mode": "The denser lower-displacement sample may admit a terminal reversal whose asymmetric loss overwhelms the thin late-entry wins.",
+    "rationale": "Use the final frozen decision-margin step after the $125 variant preserved independent positive economics but could produce at most four fresh fills.",
+    "rule": {
+      "direction": "both",
+      "maximum_entry_price": 1.0,
+      "minimum_book_pressure": -1.0,
+      "minimum_decision_buffer_usd": 100,
+      "minimum_two_minute_move_usd": 200,
+      "operator": "path_or_move",
+      "path_minutes": 4,
+      "settlement_sigma_buffer": 0.1
+    },
+    "title": "Four-minute path or $200 move with a $100 decision buffer"
+  },
+  "research_only": true,
+  "schema_version": 1,
+  "selection_policy": "first observable windows, up to the fixed maximum, from the frozen causal-signal-ranked newest fully resolved pool; terminal outcomes unread",
+  "status": "research_eligible",
+  "support_only_windows": [],
+  "support_reserve_policy": null,
+  "variant": {
+    "base_path": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
+    "base_sha256": "29e58bacdf07aa1b3e058d539a97011b800a6c21a713d540ff1fbae753d2e6e0",
+    "execution_filters": {
+      "maximum_entry_price": 1.0,
+      "minimum_book_pressure": -1.0,
+      "minimum_decision_buffer_usd": 100.0,
+      "settlement_guard_minutes": 5.0,
+      "settlement_sigma_buffer": 0.1
+    },
+    "path": "/Users/ttoomm/Library/Application Support/PolyMomentumStrategyResearch/logs/strategy-research/candidates/late_window_mechanisms/453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018/variant.json",
+    "selectivity": {
+      "require_tags": {
+        "article_path_4m_or_move_2m_200": "aligned"
+      }
+    },
+    "sha256": "d4688cc7f9aa4052e92a53522b9935a4bb4090321ee7729d28a8a4bf3006b9f5",
+    "strategy_name": "research_late_path_or_move_453a052d5233"
+  },
+  "verdict": {
+    "aggregate": {
+      "active_window_fraction": 0.625,
+      "active_windows": 5,
+      "average_pnl": 0.01963400000000013,
+      "by_direction": {
+        "down": {
+          "losses": 0,
+          "total_pnl": 0.04652000000000005,
+          "trades": 3,
+          "wins": 3
+        },
+        "up": {
+          "losses": 0,
+          "total_pnl": 0.05165000000000061,
+          "trades": 2,
+          "wins": 2
+        }
+      },
+      "execution_attempts": 5,
+      "fill_rate": 1.0,
+      "fills_failed": 0,
+      "fills_success": 5,
+      "maximum_stake_usd": 5.0,
+      "pnl_after_one_maximum_stake_loss": -4.9018299999999995,
+      "positive_active_window_fraction": 1.0,
+      "public_signals": 16,
+      "signal_to_attempt_rate": 0.3125,
+      "total_fees": 0.00733,
+      "total_pnl": 0.09817000000000066,
+      "trades": 5,
+      "unresolved_fills": 0,
+      "windows": 8
+    },
+    "classification": "research_eligible",
+    "eligible": true,
+    "evaluated_at": "2026-08-03T10:31:32+00:00",
+    "gates": {
+      "breaker_not_tripped": true,
+      "direction_robustness": true,
+      "maximum_unresolved_fills": true,
+      "minimum_active_window_fraction": true,
+      "minimum_fill_rate": true,
+      "minimum_fills": true,
+      "minimum_positive_active_window_fraction": true,
+      "minimum_signal_to_attempt_rate": true,
+      "positive_mean_net_pnl": true,
+      "positive_total_net_pnl": true,
+      "required_one_maximum_stake_loss_robustness": true
+    },
+    "observations": {
+      "raw_one_maximum_stake_loss_robustness": false
+    },
+    "policy": {
+      "require_one_maximum_stake_loss_robustness": false
+    },
+    "schema_version": 1
+  }
+}

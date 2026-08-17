@@ -1,0 +1,67 @@
+{
+  "schema_version": "pure_cross_token_liquidity_dislocation_preregistration_v1",
+  "generated_at": "2026-08-11T14:54:30Z",
+  "family_id": "pure_cross_token_liquidity_dislocation_v1",
+  "hypothesis": "At a fixed causal observation time, buy the complementary token whose top-book depth pressure is stronger, but only when the cross-token pressure gap is wide, has widened over the preceding 15 seconds, and both books retain a narrow spread.",
+  "inputs": {
+    "dataset_seal": {
+      "path": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "sha256": "7b661759f764b1b634c0a9ca57481356b0b91e99926a79a7aacf92dc4646f375"
+    },
+    "labels_manifest": {
+      "path": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "sha256": "32d071e7d2f64a50eacd5db5e28664889cf4b55e8bd30375f5addfd75efc7a6e"
+    },
+    "paired_features": {
+      "path": "logs/strategy-research/opportunity-liquidity/paired_features_20260811.manifest.json",
+      "sha256": "1de253883c715db34a4c668ae3117c091dcc95deda3d87adcb4004e69dc7674c"
+    }
+  },
+  "selection_contract": {
+    "direction": "sign(up_top_book_pressure - down_top_book_pressure)",
+    "lookback_seconds": 15,
+    "allowed_inputs": [
+      "decision_seconds",
+      "up/down best bid and ask",
+      "up/down top bid and ask depth",
+      "up/down top-book pressure at observation and observation minus 15 seconds",
+      "visible selected-token ask depth and fixed fee economics"
+    ],
+    "forbidden_inputs": [
+      "BTC path or displacement",
+      "strike distance",
+      "realized or implied volatility",
+      "external model probability or model edge",
+      "outcome, score, retention, or PnL"
+    ]
+  },
+  "policy_grid": {
+    "decision_seconds": [120, 180, 240],
+    "minimum_pressure_gap": [0.5, 1.0, 1.5],
+    "minimum_pressure_gap_widening_15s": [0.0, 0.25, 0.5],
+    "maximum_pair_spread": [0.01, 0.02]
+  },
+  "policy_grid_sha256": "b9d6674a5cd78ef8b2113c19b61a0e71f3b1be33cb641a8f2cf73844d3a982c5",
+  "policies_evaluated": 54,
+  "cheap_screen": {
+    "minimum_calibration_support": 12,
+    "minimum_policy_support": 20,
+    "safety_margin": 0.02,
+    "older_gate": "positive point edge above fee-aware break-even",
+    "recent_gate": "point edge above 0.02 and positive fee-aware payoff proxy"
+  },
+  "exact_replay_budget": {
+    "maximum_unique_traces": 2,
+    "latency_ms": 128,
+    "stake_usd": 5.0,
+    "fee_rate": 0.07,
+    "additional_discovery_hours": 0,
+    "additional_parameter_variants": 0
+  },
+  "advancement_gate": {
+    "minimum_exact_replay_wilson_edge": 0.02,
+    "require_positive_exact_replay_pnl": true
+  },
+  "fresh_holdout_policy": "Fresh outcomes remain physically unavailable unless a frozen exact-replay trace clears the advancement gate.",
+  "terminal_rule": "After the bounded exact replay, advance once to the fresh gate or reject the family. Positive point PnL cannot authorize more hours, variants, or replay traces."
+}

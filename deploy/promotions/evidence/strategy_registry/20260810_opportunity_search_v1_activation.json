@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-10T15:49:01Z",
+  "decision": "activate the sealed opportunity-table policy-search lane and keep legacy generation and replay fail-closed",
+  "implementation": {
+    "signal_command": "strategy-builder opportunity-signals",
+    "table_command": "strategy-builder opportunity-table",
+    "dataset_command": "strategy-builder opportunity-dataset-seal",
+    "label_command": "strategy-builder opportunity-labels",
+    "search_command": "strategy-builder opportunity-policy-search",
+    "policy_grid_size": 7290,
+    "calibration_partition": "older",
+    "selection_partition": "recent_discovery",
+    "fresh_partition_access": "causal support only",
+    "fresh_holdout_outcomes_accessed": false,
+    "decision_trace_contract": "ordered opportunity IDs plus buy side, maximum ask, stake, latency, fee rate, and causal feature semantics",
+    "exact_replay_scope": "one representative per unique eligible discovery trace"
+  },
+  "pilot": {
+    "hour": "2026-05-25T15:00:00Z",
+    "markets": 12,
+    "opportunity_rows": 36,
+    "observable_book_rows": 35,
+    "fully_executable_rows": 35,
+    "calibration_rows": 36,
+    "recent_discovery_rows": 0,
+    "fresh_holdout_rows": 0,
+    "eligible_policies": 0,
+    "unique_exact_replays": 0,
+    "verdict": "no_candidate_survived_discovery",
+    "interpretation": "pipeline and leakage-boundary validation only; not a strategy-quality result",
+    "dataset_sha256": "29016932ba246d82273c74b1153b20f3e32c3373322380200544ca1e05c782f9",
+    "policy_grid_sha256": "b782ce5ad041f9a6426c0beec6b58a14d4bd4b5513019287f12fe65500a0e0f9"
+  },
+  "artifacts": {
+    "opportunity_manifest": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/2026-05-25T15.manifest.json",
+      "sha256": "d177731e671319597f7460131967226db7f5edf04d6c2d3a9365bc9c7a3d2793"
+    },
+    "opportunity_table": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/2026-05-25T15.parquet",
+      "sha256": "eff396a9198bb645ecd12c1dbc72b19c0d7f0b848697b090da495a5b7371b58b"
+    },
+    "dataset_seal": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/dataset.seal.json",
+      "sha256": "b21c1131b0b11010fce385e2ac2ae040083179a2eb9505b86d317174a0631aff"
+    },
+    "discovery_labels_manifest": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/discovery-labels.manifest.json",
+      "sha256": "6bfe2ce3e0bcd5dfd36279105a615862b70b98eafc76dd6aa4ed10fad41f6435"
+    },
+    "discovery_labels": {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/discovery-labels.parquet",
+      "sha256": "f7f21e66af921612674779c6171b08580f806e55a542b1c8d2958e0bac3b7f5f"
+    },
+    "policy_search_report": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260810_opportunity_policy_search_pilot.json",
+      "sha256": "c24091b027806d1bbc4454eb5db10860a9dc7ccb20aae35494aca92b0b909ab4"
+    }
+  },
+  "verification": {
+    "rust_library_tests": 513,
+    "rust_cli_tests": 59,
+    "python_coordinator_tests": 58,
+    "failures": 0,
+    "clippy_all_targets_deny_warnings": true,
+    "synthetic_equivalent_policy_count": 100,
+    "synthetic_unique_trace_count": 1,
+    "synthetic_replay_reduction_fraction": 0.99,
+    "fresh_label_physical_exclusion_test": true,
+    "fresh_label_manifest_rejection_test": true,
+    "single_in_memory_policy_pass": true
+  },
+  "installed_bundle": {
+    "measurement_binary_sha256": "68e30b83d8eb29ebd239de5b3fbdc46718cdfb154e314c8894ae053b715a0dd7",
+    "config_sha256": "bb1be284d2df45c7e023261fc2f0948b56f5a869baa104cd28e0a621d354d5d1",
+    "coordinator_sha256": "582d95b1450534b26f0946baba9ef3374f6e9762eda8df8bb3afd02f3993d793",
+    "source_and_installed_hashes_match": true,
+    "launch_agent_loaded": true,
+    "launch_agent_last_exit_code": 0,
+    "launch_agent_interval_seconds": 1800,
+    "first_successful_cycle_id": "9a7c538e-e67b-4dea-ac80-2a8c9748a9c0",
+    "first_cycle_status": "completed",
+    "first_cycle_elapsed_seconds": 0.033,
+    "idempotence_cycle_id": "733d4f0d-3f43-4c8a-a29c-eff2ed0e1976",
+    "idempotence_cycle_status": "unchanged_inputs",
+    "content_input_hash": "d77c08c81dcc728d72da4a87452972e28e5305d2449f43c9f12d23b515d0d451"
+  },
+  "production_boundary": {
+    "research_only": true,
+    "paper_or_live_authorized": false,
+    "legacy_candidate_generation_enabled": false,
+    "legacy_exact_replay_enabled": false,
+    "binary_complement_canary_modified": false,
+    "vps_strategy_search_allowed": false
+  },
+  "next_operation": {
+    "objective": "populate a chronological multi-hour seal on the dev Mac",
+    "minimum_requirements": [
+      "at least 20 older labeled observations in each usable coarse calibration cell",
+      "at least 20 separate recent_discovery executable opportunities for a policy",
+      "fresh_holdout rows included causally but physically absent from discovery labels"
+    ],
+    "stop_rule": "if no policy survives, emit zero exact replays and widen data coverage before changing the grid"
+  }
+}

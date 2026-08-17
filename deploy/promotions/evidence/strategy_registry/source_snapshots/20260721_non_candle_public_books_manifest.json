@@ -1,0 +1,60 @@
+{
+  "captured_at": "2026-07-21T06:34:38.487694+00:00",
+  "rounds": [
+    {
+      "completed_at": "2026-07-21T06:34:30.604318+00:00",
+      "raw_response_sha256": "179a63c17bd151fa15f10a4acf5004c9e0508fb52e29163aa0c43fc4a86d649c",
+      "requested_at": "2026-07-21T06:34:29.665855+00:00",
+      "response_books": 200,
+      "round_index": 0
+    },
+    {
+      "completed_at": "2026-07-21T06:34:32.547053+00:00",
+      "raw_response_sha256": "9ea17afa43b252ba36da0982aa3cf8605cb2a73654ccb9c6f55ee3e7a130d43b",
+      "requested_at": "2026-07-21T06:34:31.607166+00:00",
+      "response_books": 200,
+      "round_index": 1
+    },
+    {
+      "completed_at": "2026-07-21T06:34:34.534144+00:00",
+      "raw_response_sha256": "7906e2be49a1b38790a11a72426cc7838c5d950841d10c2a206b3474f7cc8bf0",
+      "requested_at": "2026-07-21T06:34:33.552589+00:00",
+      "response_books": 200,
+      "round_index": 2
+    },
+    {
+      "completed_at": "2026-07-21T06:34:36.518706+00:00",
+      "raw_response_sha256": "01404715d2aee626da3ac919c3e0a5160756a8608f93435b3004e380afa19e89",
+      "requested_at": "2026-07-21T06:34:35.534886+00:00",
+      "response_books": 200,
+      "round_index": 3
+    },
+    {
+      "completed_at": "2026-07-21T06:34:38.487262+00:00",
+      "raw_response_sha256": "2f0197e3a8697592945191a0d5174a312ab7feed9022ca3035970fdb67555bd7",
+      "requested_at": "2026-07-21T06:34:37.523372+00:00",
+      "response_books": 200,
+      "round_index": 4
+    }
+  ],
+  "schema_version": 1,
+  "selection": {
+    "eligible_before_rank_limit": 129,
+    "excluded_text_regex": "bitcoin|\\bbtc\\b|ethereum|solana|\\bxrp\\b|doge|crypto|up or down|price of",
+    "exclusion_counts": {
+      "crypto_or_candle_text": 48,
+      "duplicate_condition": 0,
+      "negative_risk": 279,
+      "not_active_accepting_binary_clob": 44
+    },
+    "gamma_rows_loaded": 500,
+    "selected_markets": 100,
+    "selected_tokens": 200,
+    "selection_order": "volume24hr descending, condition_id ascending tie-break"
+  },
+  "snapshot_bytes": 620571,
+  "snapshot_path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books.json.gz",
+  "snapshot_sha256": "5fd25a3e78e1f46c556b1adcb6e05d0939f5fd475d4ddf48136863588fc78811",
+  "snapshot_uncompressed_bytes": 3341642,
+  "snapshot_uncompressed_sha256": "c00bd2b1fb8f92b83005e85c4e72a9e0c4fa478bee9dd87f1bb7315721de5bea"
+}
