@@ -1,0 +1,331 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Направленный сигнал есть, но literal-вход по статье покупает слишком дорого",
+    "description": "Техническое решение по 2-, 3- и 4-минутным правилам из статьи: публичный screen, top-of-book экономика, exact-L2 discovery, хронологический holdout и новая многоступенчатая система валидации.",
+    "generatedAt": "2026-07-22T07:57:12Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# Направленный сигнал есть, но literal-вход по статье покупает слишком дорого"
+      },
+      {
+        "id": "answer",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Ответ сразу\n\nИдею из [исходной статьи](https://x.com/0xbobaaa/status/2036073103281803412) действительно стоило просто реализовать и прогнать. Это сделано. Паттерны хорошо угадывают конечное направление BTC, но рынок Polymarket обычно уже включает это знание в цену. Простое трёхминутное правило убыточно после исполнения. Гибрид «три однонаправленные минуты + не менее $100 за первые две минуты» стабилен и прибылен в discovery и holdout, однако его holdout-прибыль не переживает один типичный полный проигрыш. Literal price-insensitive версия остановлена; production и paper-конфигурации не менялись."
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": [
+          "plain_pnl_card",
+          "holdout_pnl_card",
+          "stress_pnl_card",
+          "support_card"
+        ]
+      },
+      {
+        "id": "economics_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "late_window_decision",
+        "body": "## Высокая точность не равна положительному ожиданию\n\nУ простого трёхминутного правила 61 победа из 68 исполнений, но средний победитель даёт лишь $0,56, а средний проигрыш забирает $5,09. Гибрид улучшает отбор, но его средняя holdout-цена входа 0,9733 оставляет слишком маленькую выплату: 33 победы дали +$4,30, тогда как один средний полный проигрыш стоит $5,01."
+      },
+      {
+        "id": "economics_chart_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "economics_chart"
+      },
+      {
+        "id": "exact_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "exact_results_table"
+      },
+      {
+        "id": "public_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "late_window_decision",
+        "body": "## Статья описывает terminal hit, а не продолжение импульса\n\nПосле трёх однонаправленных минут конечное направление совпадает в 88,96% случаев; после четырёх — в 95,54%; движение не менее $100 за первые две минуты даёт 92,87%. Но цена BTC продолжает двигаться в ту же сторону после точки решения лишь примерно в 40–48% случаев. Большая accuracy возникает в основном из уже накопленного буфера к strike, а не из гарантированного продолжения."
+      },
+      {
+        "id": "public_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "public_results_table"
+      },
+      {
+        "id": "funnel_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "late_window_decision",
+        "body": "## 750 условий теперь только финальный этап\n\nНовая схема не требует большого forward-блока, пока экономика кандидата не доказана дешёвыми тестами. Любая новая причинная гипотеза сначала проходит публичный directional screen, один общий economic screen и только затем exact L2. Хронологический holdout выполняется один раз без retuning. Медленный prospective block появляется лишь после положительного holdout."
+      },
+      {
+        "id": "funnel_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "funnel_table"
+      },
+      {
+        "id": "system_status",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "support_status",
+        "body": "## Текущее состояние старого 750-блока и VPS\n\nBinary-complement session 022 independently sealed: 352 из 750 готовых условий, осталось 398; outcomes, rates, score и PnL этой forward-популяции остаются закрыты. Сбор сейчас остановлен не стратегическим gate, а диском: свободно около 7 ГБ, engine fail-closed на watermark, следующий capture требует больше места с учётом 5 ГБ резерва. Telegram и health/soak timers активны."
+      },
+      {
+        "id": "next_mechanism",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "late_window_decision",
+        "body": "## Следующий кандидат должен чинить цену входа\n\nЗарегистрировать новый, отдельный механизм: сигнал $100 за две минуты даёт ранний trigger; трёхминутный путь служит подтверждением; ордер разрешается только когда executable ask + комиссия ниже консервативной вероятности, рассчитанной исключительно по предшествующим данным, с фиксированным EV buffer. Если цена уже 0,98–0,99, стратегия пропускает рынок. Порог $100 не подгоняется на текущем holdout."
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "late_window_decision",
+        "body": "## Метод\n\nПубличный слой использует checksum-verified Binance BTCUSDT one-second archives и строго причинные checkpoints. Economic screen берёт contemporaneous chosen-token ask и комиссию. Exact replay моделирует 202 мс insertion latency, taker FOK, проход по видимой L2-глубине, market fee metadata, bankroll sizing, exposure controls и authoritative resolution. Holdout состоит из десяти более поздних восьмичасовых окон 7–10 июня и был зарегистрирован до запуска."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Ограничения\n\nHoldout содержит 33 исполнения и ни одного наблюдаемого проигрыша, поэтому profit factor и реальный loss tail не идентифицированы. Каждый восьмичасовой fold сбрасывает bankroll; aggregate drawdown является диагностикой, а не единой equity curve. Historical replay не заменяет forward confirmation. Активная binary-complement forward-популяция не использовалась ни для выбора, ни для оценки этой статьи."
+      },
+      {
+        "id": "decision",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Решение\n\n1. Остановить literal path-only и literal hybrid: оба не получают runtime-кредит.\n2. Не ждать 750 для новой price-aware гипотезы; прогнать её через тот же дешёвый funnel.\n3. Не смотреть score binary-complement до его отдельного preregistered floor.\n4. Освобождение VPS-диска рассматривать как отдельную operational задачу с архивированием доказательств, а не удалением наугад.\n5. Production/live остаются без изменений."
+      }
+    ],
+    "cards": [
+      {
+        "id": "plain_pnl_card",
+        "dataset": "headline",
+        "description": "Net PnL простого трёхминутного taker-правила в exact-L2 discovery.",
+        "sourceId": "late_window_decision",
+        "metrics": [
+          {"field": "plain_path_3m_pnl_usd", "format": "number", "label": "Path 3m PnL, USD", "signed": true}
+        ]
+      },
+      {
+        "id": "holdout_pnl_card",
+        "dataset": "headline",
+        "description": "Net PnL гибрида на десяти более поздних exact-L2 holdout-фолдах.",
+        "sourceId": "late_window_decision",
+        "metrics": [
+          {"field": "hybrid_holdout_pnl_usd", "format": "number", "label": "Hybrid holdout PnL, USD", "signed": true}
+        ]
+      },
+      {
+        "id": "stress_pnl_card",
+        "dataset": "headline",
+        "description": "Holdout PnL после одного среднего observed-size полного проигрыша.",
+        "sourceId": "late_window_decision",
+        "metrics": [
+          {"field": "hybrid_one_loss_stress_pnl_usd", "format": "number", "label": "One-loss stress PnL, USD", "signed": true}
+        ]
+      },
+      {
+        "id": "support_card",
+        "dataset": "headline",
+        "description": "Готовые terminal conditions в отдельном sealed binary-complement block.",
+        "sourceId": "support_status",
+        "metrics": [
+          {"field": "binary_complement_support", "format": "number", "label": "Sealed support / 750"}
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "economics_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "economics",
+        "title": "Exact-L2 net PnL and the frozen one-loss stress",
+        "subtitle": "Positive is better; the stress bar subtracts one average full loss from holdout PnL.",
+        "question": "Does high directional accuracy remain profitable after execution and one plausible loss?",
+        "rationale": "The comparison separates observed profitability from loss-tail robustness.",
+        "maxRows": 4,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "comparisonContext": {"baseline": "zero net PnL", "grain": "candidate phase or stress scenario", "unit": "USD"},
+        "referenceLines": [
+          {"axis": "y", "value": 0, "label": "Break-even", "color": "neutral", "lineStyle": "dashed"}
+        ],
+        "encodings": {
+          "x": {"field": "result", "type": "nominal", "label": "Result"},
+          "y": {"field": "net_pnl_usd", "type": "quantitative", "label": "Net PnL, USD", "format": "number"},
+          "tooltip": [
+            {"field": "fills", "type": "quantitative", "label": "Fills", "format": "number"},
+            {"field": "mean_fill_price", "type": "quantitative", "label": "Mean fill price", "format": "number"}
+          ]
+        },
+        "sourceId": "late_window_decision"
+      }
+    ],
+    "tables": [
+      {
+        "id": "exact_results_table",
+        "dataset": "exact_results",
+        "title": "Exact-L2 execution results",
+        "subtitle": "202 ms taker FOK replay after fees, depth, sizing and authoritative resolution.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "late_window_decision",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "candidate", "label": "Candidate", "type": "text"},
+          {"field": "phase", "label": "Phase", "type": "text"},
+          {"field": "fills", "label": "Fills", "format": "number"},
+          {"field": "wins", "label": "Wins", "format": "number"},
+          {"field": "losses", "label": "Losses", "format": "number"},
+          {"field": "net_pnl_usd", "label": "Net PnL, USD", "format": "number", "movement": true},
+          {"field": "mean_fill_price", "label": "Mean fill price", "format": "number"},
+          {"field": "stress_pnl_usd", "label": "One-loss stress, USD", "format": "number", "movement": true},
+          {"field": "verdict", "label": "Verdict", "type": "text"}
+        ]
+      },
+      {
+        "id": "public_results_table",
+        "dataset": "public_results",
+        "title": "Directional signal before execution",
+        "subtitle": "Accuracy measures terminal direction; continuation measures movement after the decision point.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "signals", "direction": "desc"},
+        "sourceId": "late_window_decision",
+        "columns": [
+          {"field": "rule", "label": "Rule", "type": "text"},
+          {"field": "signals", "label": "Signals", "format": "number"},
+          {"field": "accuracy", "label": "Terminal accuracy", "format": "percent"},
+          {"field": "fresh_signals", "label": "Fresh signals", "format": "number"},
+          {"field": "fresh_accuracy", "label": "Fresh accuracy", "format": "percent"},
+          {"field": "continuation_rate", "label": "Post-decision continuation", "format": "percent"},
+          {"field": "median_buffer_usd", "label": "Median BTC buffer, USD", "format": "number"}
+        ]
+      },
+      {
+        "id": "funnel_table",
+        "dataset": "funnel",
+        "title": "Лёгкая многоступенчатая валидация",
+        "subtitle": "Большой forward support нужен только после положительной executable экономики.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "late_window_decision",
+        "columns": [
+          {"field": "order", "label": "Stage", "format": "number"},
+          {"field": "stage", "label": "Check", "type": "text"},
+          {"field": "cost", "label": "Cost", "type": "text"},
+          {"field": "purpose", "label": "Purpose", "type": "text"},
+          {"field": "hard_support_floor", "label": "Large support floor", "type": "boolean"}
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "late_window_decision",
+        "label": "Late-window article-family decision evidence",
+        "path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_decision.json",
+        "query": {
+          "description": "Reviewed synthesis of public, top-of-book, exact-L2 discovery and frozen chronological holdout evidence.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_decision.json');",
+          "filters": ["5-minute BTC Up/Down markets", "202 ms insertion latency for exact replay", "no July 14 or later forward labels", "no holdout retuning"],
+          "metric_definitions": ["Net PnL is resolved payout minus executable cost and fee.", "One-loss stress subtracts one average observed-size full-loss cost from aggregate holdout PnL.", "Terminal accuracy compares the rule direction with P300 versus P0."]
+        }
+      },
+      {
+        "id": "support_status",
+        "label": "Binary-complement support-only status",
+        "path": "deploy/promotions/evidence/strategy_registry/20260722_binary_complement_support_only_status_352.json",
+        "query": {
+          "description": "Read-only service health, readiness and unique terminal-condition support; strategy metrics remain sealed.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260722_binary_complement_support_only_status_352.json');",
+          "filters": ["support and operational health only", "no candidates, outcomes, rates, scores or PnL"],
+          "metric_definitions": ["Sealed support is the unique count of resolution-ready terminal conditions passing the preregistered source and alignment checks."]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "accessIssues": [],
+    "datasets": {
+      "headline": [
+        {"plain_path_3m_pnl_usd": -1.4389499999999966, "hybrid_holdout_pnl_usd": 4.300910000000003, "hybrid_one_loss_stress_pnl_usd": -0.7123957575757549, "binary_complement_support": 352}
+      ],
+      "economics": [
+        {"result": "Path 3m discovery", "net_pnl_usd": -1.4389499999999966, "fills": 68, "mean_fill_price": 0.8881223349601849},
+        {"result": "Hybrid discovery", "net_pnl_usd": 1.1037300000000032, "fills": 14, "mean_fill_price": 0.9835000000000002},
+        {"result": "Hybrid holdout", "net_pnl_usd": 4.300910000000003, "fills": 33, "mean_fill_price": 0.9733030303030303},
+        {"result": "Holdout + one loss", "net_pnl_usd": -0.7123957575757549, "fills": 34, "mean_fill_price": 0.9733030303030303}
+      ],
+      "exact_results": [
+        {"order": 1, "candidate": "Path 3m literal taker", "phase": "Discovery", "fills": 68, "wins": 61, "losses": 7, "net_pnl_usd": -1.4389499999999966, "mean_fill_price": 0.8881223349601849, "stress_pnl_usd": -6.424963970588232, "verdict": "Rejected"},
+        {"order": 2, "candidate": "Path 3m + move 2m $100", "phase": "Discovery", "fills": 14, "wins": 14, "losses": 0, "net_pnl_usd": 1.1037300000000032, "mean_fill_price": 0.9835000000000002, "stress_pnl_usd": -3.9024321428571396, "verdict": "Advanced to frozen holdout"},
+        {"order": 3, "candidate": "Path 3m + move 2m $100", "phase": "Chronological holdout", "fills": 33, "wins": 33, "losses": 0, "net_pnl_usd": 4.300910000000003, "mean_fill_price": 0.9733030303030303, "stress_pnl_usd": -0.7123957575757549, "verdict": "Rejected by one-loss stress"}
+      ],
+      "public_results": [
+        {"rule": "Path 3m", "signals": 2147, "accuracy": 0.8896134140661388, "fresh_signals": 206, "fresh_accuracy": 0.8786407766990292, "continuation_rate": 0.4657661853749418, "median_buffer_usd": 58.69000000000233},
+        {"rule": "Path 4m", "signals": 1032, "accuracy": 0.9554263565891473, "fresh_signals": 98, "fresh_accuracy": 0.9285714285714286, "continuation_rate": 0.45058139534883723, "median_buffer_usd": 77.67000000000553},
+        {"rule": "Move 2m ≥ $100", "signals": 547, "accuracy": 0.9287020109689214, "fresh_signals": 16, "fresh_accuracy": 0.9375, "continuation_rate": 0.4351005484460695, "median_buffer_usd": 131.0899999999965},
+        {"rule": "Move 2m ≥ $200", "signals": 69, "accuracy": 0.9420289855072463, "fresh_signals": 3, "fresh_accuracy": 0.6666666666666666, "continuation_rate": 0.4782608695652174, "median_buffer_usd": 237.8000000000029},
+        {"rule": "Path 3m + move 2m ≥ $100", "signals": 200, "accuracy": 0.97, "fresh_signals": 6, "fresh_accuracy": 1.0, "continuation_rate": 0.4, "median_buffer_usd": 178.93999999999505}
+      ],
+      "funnel": [
+        {"order": 1, "stage": "Mechanism registration", "cost": "Minutes", "purpose": "Freeze causal rule and search space", "hard_support_floor": false},
+        {"order": 2, "stage": "Public directional screen", "cost": "Seconds", "purpose": "Reject absent signal or breadth", "hard_support_floor": false},
+        {"order": 3, "stage": "Shared top-of-book screen", "cost": "One capture pass", "purpose": "Reject signal already priced away", "hard_support_floor": false},
+        {"order": 4, "stage": "Exact-L2 discovery", "cost": "At most two candidates", "purpose": "Model latency, fees, depth and fills", "hard_support_floor": false},
+        {"order": 5, "stage": "Chronological holdout", "cost": "One frozen replay", "purpose": "Test stability without retuning", "hard_support_floor": false},
+        {"order": 6, "stage": "Bounded forward confirmation", "cost": "Slow", "purpose": "Final prospective evidence", "hard_support_floor": true}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "late_window_decision",
+      "label": "Late-window article-family decision evidence",
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_decision.json",
+      "query": {
+        "description": "Reviewed public and exact execution evidence.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_decision.json');",
+        "filters": ["no holdout retuning"],
+        "metric_definitions": ["Net PnL includes fees and executable cost."]
+      }
+    },
+    {
+      "id": "support_status",
+      "label": "Binary-complement support-only status",
+      "path": "deploy/promotions/evidence/strategy_registry/20260722_binary_complement_support_only_status_352.json",
+      "query": {
+        "description": "Operational health and sealed support only.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260722_binary_complement_support_only_status_352.json');",
+        "filters": ["no strategy metrics"],
+        "metric_definitions": ["Support counts unique resolution-ready terminal conditions."]
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 Single-strategy bot trading **"Up or Down" 5/15-min crypto candle markets on Polymarket**, written in Rust. Multi-exchange momentum signal → BS-binary fair-value mispricing → CLOB execution.
 
-> **Status (2026-06-30):** Rust-only engine. Offline execution, inventory, preflight, diagnostics, and strategy-builder gates are strong, but no strategy registry entry is live-ready. Live trading remains fail-closed behind explicit preflight, CLOB v2, reconciliation, wallet, and operator confirmation gates.
+> **Status (2026-07-14):** Rust-only engine. Offline execution, inventory, preflight, diagnostics, and strategy-builder gates are strong, but no strategy registry entry is live-ready. Live trading remains fail-closed behind explicit preflight, CLOB v2, reconciliation, wallet, and operator confirmation gates.
 
 ## What it does
 
@@ -23,8 +23,9 @@ Zone gates split the window into bands with independent thresholds. Current regi
 PolyMomentum/
 ├── rust_engine/             # the entire bot
 │   ├── src/
-│   │   ├── main.rs          # clap subcommand dispatch
+│   │   ├── main.rs          # CLI parsing and command orchestration
 │   │   ├── lib.rs           # module re-exports
+│   │   ├── strategy_builder.rs # replay-first strategy research and promotion gates
 │   │   ├── config.rs        # env-driven Settings
 │   │   ├── data/            # gamma client, scanner, ctf reader, wallet, models
 │   │   ├── strategy/        # momentum detector, decide_candle_trade
@@ -46,13 +47,16 @@ PolyMomentum/
 
 ## Subcommands
 
+Run `polymomentum-engine --help` or `polymomentum-engine <command> --help` for the
+complete, authoritative command surface. Primary operational commands include:
+
 ```bash
 polymomentum-engine live --mode paper           # main runtime (default)
 polymomentum-engine preflight --mode paper      # startup/deploy checks
 polymomentum-engine release-manifest --mode paper
 polymomentum-engine live --mode live --i-understand-live   # real money; also requires VENUE/compliance env
 polymomentum-engine scan                        # Gamma + scanner smoke test
-polymomentum-engine wallet                      # USDC.e + POL balances
+polymomentum-engine wallet                      # pUSD/USDC diagnostics + POL balance
 polymomentum-engine ctf <condition_id>          # on-chain CTF resolution read
 polymomentum-engine validate-replay <session.jsonl>   # parity check
 ```
@@ -105,10 +109,10 @@ Exit 0 = clean, 1 = decision drift.
 
 ```bash
 cd rust_engine
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                # 316 tests as of 2026-06-30
-cargo build --release     # ./target/release/polymomentum-engine
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked       # full library and CLI suite
+cargo build --release --locked --bin polymomentum-engine
 ```
 
 ## Multibot etiquette

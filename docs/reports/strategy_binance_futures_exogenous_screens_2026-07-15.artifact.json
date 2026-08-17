@@ -1,0 +1,266 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "External futures data still does not clear the A+ strategy gate",
+    "description": "Technical audit of passive-entry execution and Binance futures flow and positioning hypotheses against the strict-42 PolyMomentum strategy evidence.",
+    "generatedAt": "2026-07-15T03:58:01Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# External futures data still does not clear the A+ strategy gate"
+      },
+      {
+        "id": "summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "exogenous_screens",
+        "body": "## Answer first\n\nThe retained `0.30` volatility-floor strategy remains profitable at measured latency (`102` trades, `+$13.54`) but below A+. Trade-print passive entry produced only six defensible fills and remained negative on covered tail trades. Binance futures taker flow worsened both proper scores in both chronological halves. Lagged positioning improved aggregate Brier and log loss, but reversed negative in the second half, failed both bootstrap lower bounds, and still raised probability on known losses. **No strategy parameter or production path changed; live trading remains off.**"
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": ["baseline_card", "maker_card", "positioning_card", "second_half_card"]
+      },
+      {
+        "id": "score_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "exogenous_screens",
+        "body": "## Positioning has signal, but not stable signal\n\nDirection-aligned top-trader position crowding plus 15-minute open-interest change improves the aggregate scores and the first half. The second half gives the improvement back. The chart shows the sign reversal directly; this violates the predeclared requirement that both proper scores improve in both halves."
+      },
+      {
+        "id": "chart",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "brier_improvement_chart"
+      },
+      {
+        "id": "scores_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "proper_score_table"
+      },
+      {
+        "id": "execution_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "passive_entry",
+        "body": "## Real trade prints reject the synthetic maker assumption\n\nOnly `26 / 40` tail trades had retained full trade tape. Nineteen orders remained post-only eligible after `202 ms`; six had defensible full fills, all from explicit price-through SELL prints. The maker-or-skip counterfactual improved the covered tail from `-$7.81` to `-$5.24` but remained negative. The engine's fixed `0.65` maker-fill probability is therefore not promotion evidence."
+      },
+      {
+        "id": "gate_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "gate_table"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "exogenous_screens",
+        "body": "## Method and causality\n\nBoth futures screens use a ridge logistic meta-label with executable Polymarket price as a log-odds offset. Each resolved condition has total weight one. After eight warm-up folds, ridge is selected on the final two strictly prior folds, the model is refit on all prior folds, and the next fold is scored once. Futures flow uses only fully closed prior minutes. Positioning uses a full five-minute publication buffer. All 28 Binance archives were checksum-verified. No feature subset, direction, lag, or threshold was selected after seeing outcomes."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "exogenous_screens",
+        "body": "## Limitations and uncertainty\n\nThe opportunity-complete cohort is historical and the latest fully warmed resolved block remains too small for promotion. A read-only VPS check on July 15 found zero shared distilled files, zero shared raw parquets, and only three PolyMomentum-private July 14 distilled hours. Positioning's aggregate gain is not independent because the feature family was evaluated on the same strict window used for diagnosis. Its 95% condition-bootstrap intervals cross zero, and the final validation selects ridge `10`, shrinking both standardized positioning coefficients below `0.004`. The forward model is authorized only for prospective scoring, never entry decisions."
+      },
+      {
+        "id": "next",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Next concrete run\n\n1. Keep `primary_v6_volfloor_300` unchanged and research-only.\n2. Stop historical feature and threshold mining on the strict-42 block.\n3. Score the frozen positioning diagnostic without refitting on at least `100` new fully resolved conditions.\n4. Require positive Brier and log-loss improvement and a non-positive mean correction on losses.\n5. Repeat on a second disjoint fresh block before materializing one exact strategy variant.\n6. Preserve unchanged A+ gates and `LIVE_TRADING_OFF` until the exact replay and fresh blocks pass."
+      }
+    ],
+    "cards": [
+      {
+        "id": "baseline_card",
+        "dataset": "headline",
+        "description": "Exact strict-42 retained strategy PnL at measured p99 latency.",
+        "sourceId": "strict_baseline",
+        "metrics": [{"field": "baseline_pnl_usd", "format": "number", "label": "Baseline PnL, USD", "signed": true}]
+      },
+      {
+        "id": "maker_card",
+        "dataset": "headline",
+        "description": "Defensible price-through passive fills among 40 tail trades.",
+        "sourceId": "passive_entry",
+        "metrics": [{"field": "defensible_maker_fills", "format": "number", "label": "Defensible maker fills"}]
+      },
+      {
+        "id": "positioning_card",
+        "dataset": "headline",
+        "description": "Positive aggregate market-minus-meta Brier difference for positioning.",
+        "sourceId": "exogenous_screens",
+        "metrics": [{"field": "positioning_overall_brier", "format": "number", "label": "Positioning Brier improvement", "signed": true}]
+      },
+      {
+        "id": "second_half_card",
+        "dataset": "headline",
+        "description": "Negative second-half Brier difference blocks integration.",
+        "sourceId": "exogenous_screens",
+        "metrics": [{"field": "positioning_second_half_brier", "format": "number", "label": "Second-half Brier improvement", "signed": true}]
+      }
+    ],
+    "charts": [
+      {
+        "id": "brier_improvement_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "brier_slices",
+        "title": "Brier improvement versus executable market probability",
+        "subtitle": "Positive is better; condition-weighted feed-forward scoring over 34 folds.",
+        "question": "Does either exogenous feature family improve Brier score consistently across time?",
+        "rationale": "Grouped bars expose the positioning sign reversal and the uniformly negative taker-flow result.",
+        "maxRows": 6,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "legend": {"position": "top", "title": "Screen", "interactive": true, "sort": "labelAsc"},
+        "comparisonContext": {"baseline": "executable market probability", "grain": "chronological slice", "unit": "market Brier minus meta-label Brier"},
+        "referenceLines": [{"axis": "y", "value": 0, "label": "No improvement", "color": "neutral", "lineStyle": "dashed"}],
+        "encodings": {
+          "x": {"field": "slice", "type": "nominal", "label": "Scoring slice"},
+          "y": {"field": "brier_improvement", "type": "quantitative", "label": "Brier improvement", "format": "number"},
+          "color": {"field": "screen", "type": "nominal", "label": "Screen"},
+          "tooltip": [{"field": "conditions", "type": "quantitative", "label": "Resolved conditions", "format": "number"}]
+        },
+        "sourceId": "exogenous_screens"
+      }
+    ],
+    "tables": [
+      {
+        "id": "proper_score_table",
+        "dataset": "proper_scores",
+        "title": "Feed-forward proper-score results",
+        "subtitle": "Positive market-minus-meta differences favor the exogenous model.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "sort_order", "direction": "asc"},
+        "sourceId": "exogenous_screens",
+        "columns": [
+          {"field": "sort_order", "label": "Order", "format": "number"},
+          {"field": "screen", "label": "Screen", "type": "text"},
+          {"field": "slice", "label": "Slice", "type": "text"},
+          {"field": "conditions", "label": "Conditions", "format": "number"},
+          {"field": "brier_improvement", "label": "Brier improvement", "format": "number", "movement": true},
+          {"field": "log_loss_improvement", "label": "Log-loss improvement", "format": "number", "movement": true}
+        ]
+      },
+      {
+        "id": "gate_table",
+        "dataset": "gates",
+        "title": "Why no strategy adjustment was authorized",
+        "subtitle": "Each mechanism had to clear its fixed gate before code or exact replay.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "gate_order", "direction": "asc"},
+        "sourceId": "exogenous_screens",
+        "columns": [
+          {"field": "gate_order", "label": "Order", "format": "number"},
+          {"field": "mechanism", "label": "Mechanism", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "required", "label": "Required", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "exogenous_screens",
+        "label": "Binance futures exogenous-feature screens",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_binance_futures_exogenous_screens.json",
+        "query": {
+          "description": "Condition-weighted feed-forward taker-flow and positioning screens joined to the strict-42 opportunity-complete cohort.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_binance_futures_exogenous_screens.json');",
+          "filters": ["2026-05-28 through 2026-06-10", "34 scored folds after eight-fold warm-up", "strictly prior data only", "condition total weight one"],
+          "metric_definitions": ["Brier improvement is executable-market Brier minus meta-label Brier.", "Log-loss improvement is executable-market log loss minus meta-label log loss."]
+        }
+      },
+      {
+        "id": "passive_entry",
+        "label": "Trade-print passive-entry tail screen",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_trade_print_passive_entry_tail.json",
+        "query": {
+          "description": "Conservative explicit-trade queue and price-through reconstruction for the known failing tail.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_trade_print_passive_entry_tail.json');",
+          "filters": ["folds 29 through 41", "202 ms insertion latency", "3 s timeout", "no cancellation credit"],
+          "metric_definitions": ["A defensible fill requires frozen queue clearance from SELL prints or an explicit SELL print below the buy limit."]
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold retained strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+          "filters": ["volatility floor 0.30", "42 strict folds", "202 ms replay latency"],
+          "metric_definitions": ["Loss burst is the maximum losing-report count in any five-report window."]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "accessIssues": [],
+    "datasets": {
+      "headline": [{"baseline_pnl_usd": 13.54, "defensible_maker_fills": 6, "positioning_overall_brier": 0.0017, "positioning_second_half_brier": -0.000786}],
+      "brier_slices": [
+        {"screen": "Taker flow", "slice": "Overall", "brier_improvement": -0.000785, "conditions": 498},
+        {"screen": "Taker flow", "slice": "First half", "brier_improvement": -0.001339, "conditions": 246},
+        {"screen": "Taker flow", "slice": "Second half", "brier_improvement": -0.000244, "conditions": 252},
+        {"screen": "Positioning", "slice": "Overall", "brier_improvement": 0.0017, "conditions": 498},
+        {"screen": "Positioning", "slice": "First half", "brier_improvement": 0.004247, "conditions": 246},
+        {"screen": "Positioning", "slice": "Second half", "brier_improvement": -0.000786, "conditions": 252}
+      ],
+      "proper_scores": [
+        {"sort_order": 1, "screen": "Taker flow", "slice": "Overall", "conditions": 498, "brier_improvement": -0.000785, "log_loss_improvement": -0.002098},
+        {"sort_order": 2, "screen": "Taker flow", "slice": "First half", "conditions": 246, "brier_improvement": -0.001339, "log_loss_improvement": -0.003455},
+        {"sort_order": 3, "screen": "Taker flow", "slice": "Second half", "conditions": 252, "brier_improvement": -0.000244, "log_loss_improvement": -0.000773},
+        {"sort_order": 4, "screen": "Positioning", "slice": "Overall", "conditions": 498, "brier_improvement": 0.0017, "log_loss_improvement": 0.005975},
+        {"sort_order": 5, "screen": "Positioning", "slice": "First half", "conditions": 246, "brier_improvement": 0.004247, "log_loss_improvement": 0.014755},
+        {"sort_order": 6, "screen": "Positioning", "slice": "Second half", "conditions": 252, "brier_improvement": -0.000786, "log_loss_improvement": -0.002597}
+      ],
+      "gates": [
+        {"gate_order": 1, "mechanism": "Passive entry", "observed": "6 fills; covered PnL -$5.24", "required": "viable fill support and positive tail economics", "status": "fail"},
+        {"gate_order": 2, "mechanism": "Futures taker flow", "observed": "both scores negative in both halves", "required": "both scores positive in both halves", "status": "fail"},
+        {"gate_order": 3, "mechanism": "Futures positioning", "observed": "second half negative; bootstrap crosses zero", "required": "both halves and both lower bounds positive", "status": "fail"},
+        {"gate_order": 4, "mechanism": "Retained strategy", "observed": "Wilson 0.6843; breadth 19; burst 4", "required": "Wilson >= 0.70; breadth >= 20; burst <= 2", "status": "fail A+"}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "exogenous_screens",
+      "label": "Binance futures exogenous-feature screens",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_binance_futures_exogenous_screens.json",
+      "query": {"description": "Feed-forward proper-score evidence.", "engine": "duckdb", "language": "sql", "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_binance_futures_exogenous_screens.json');", "filters": ["strictly prior folds"], "metric_definitions": ["Positive score differences favor the meta-label."]}
+    },
+    {
+      "id": "passive_entry",
+      "label": "Trade-print passive-entry tail screen",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_trade_print_passive_entry_tail.json",
+      "query": {"description": "Conservative passive-fill evidence.", "engine": "duckdb", "language": "sql", "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_trade_print_passive_entry_tail.json');", "filters": ["no cancellation credit"], "metric_definitions": ["Only explicit trade prints authorize fills."]}
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict baseline",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {"description": "Retained strategy exact replay.", "engine": "duckdb", "language": "sql", "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');", "filters": ["202 ms"], "metric_definitions": ["PnL is after fees."]}
+    }
+  ]
+}

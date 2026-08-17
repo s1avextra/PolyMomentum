@@ -1,0 +1,723 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Cross-venue path confirmation fails the strict strategy gate",
+        "id": "title",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Technical summary\n\nThe fixed-horizon cross-venue meta-label is **rejected before strategy integration**. It is worse than the executable market on both condition-weighted proper scores across 34 feed-forward folds / 496 terminal conditions: Brier improvement is `-0.001597` and log-loss improvement is `-0.003363`. Both chronological halves are negative, and both 95% condition-bootstrap intervals cross zero. The mechanism therefore does not earn exact strategy replay, and live trading remains off.",
+        "id": "technical_summary",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "cardIds": [
+          "conditions_card",
+          "coverage_card",
+          "brier_card",
+          "logloss_card"
+        ],
+        "id": "metrics",
+        "layout": "full",
+        "type": "metric-strip"
+      },
+      {
+        "body": "## Path features degrade probability quality in both halves\n\nThe market baseline beats the meta-label overall and separately in the first and second 17 scored folds. This is stronger rejection evidence than a mixed aggregate: no favorable half is masking the other. The 95% intervals for market-minus-meta improvement are `[-0.004264, +0.000791]` for Brier and `[-0.011677, +0.004032]` for log loss, so uncertainty does not rescue the model.",
+        "id": "proper_score_finding",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "chartId": "score_improvement_chart",
+        "id": "score_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "id": "proper_scores",
+        "layout": "full",
+        "tableId": "proper_score_table",
+        "type": "table"
+      },
+      {
+        "body": "## The model does not isolate the clustered losses\n\nAmong 85 out-of-sample baseline trades, the meta-label raises probability by `+0.0430` on losses versus `+0.0246` on wins on average. Its win-versus-loss pairwise AUC is `0.539`, close to chance, and the correction sign is unsafe for a loss veto. This match is descriptive rather than an executable counterfactual, but it confirms there is no credible loss-cluster mechanism to integrate.",
+        "id": "loss_diagnostic_finding",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "id": "trade_diag",
+        "layout": "full",
+        "tableId": "trade_diagnostic_table",
+        "type": "table"
+      },
+      {
+        "body": "## A+ remains blocked despite positive aggregate PnL\n\nThe retained volatility-floor strategy remains profitable at 202 ms with 102 trades and `$+13.54`, but it still fails three unchanged gates: Wilson lower `0.6843 < 0.70`, 19 profitable reports `< 20`, and a five-report loss burst of 4 `> 2`. The cross-venue result supplies no validated adjustment to change those outcomes.",
+        "id": "a_plus_finding",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "type": "markdown"
+      },
+      {
+        "id": "a_plus",
+        "layout": "full",
+        "tableId": "a_plus_table",
+        "type": "table"
+      },
+      {
+        "body": "## Scope and metric definitions\n\nThe harness captured 10,609 one-second, pre-edge opportunities from 631 terminal conditions across 42 disjoint folds at 202 ms. The selected token's logit change and direction-aligned BTC log return were measured causally at 5, 30, and 60 seconds. Complete-case coverage is 10,534 rows / 628 conditions (`99.293%`); missing token history is excluded without imputation. Each terminal condition receives total analytical weight one.",
+        "id": "scope",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "id": "coverage",
+        "layout": "full",
+        "tableId": "coverage_table",
+        "type": "table"
+      },
+      {
+        "body": "## Model and validation design\n\nOne pre-registered ridge-logistic family uses executable-market log-odds as an offset and the six path features as bounded standardized corrections. Scoring begins after eight prior folds. Ridge is chosen on the final two strictly prior folds, the model is refit on all prior folds, and the next fold is scored once. Eligibility required positive Brier and log-loss improvement overall, in both chronological halves, and at both 95% condition-bootstrap lower bounds, with at least 30 folds / 300 conditions.",
+        "id": "methodology",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "body": "## Limitations and robustness\n\nThe result rejects this fixed path meta-label inside the current strategy grammar; it does not prove every possible cross-venue mechanism is useless. Seventy-five rows lack at least one token-path horizon and fail closed. One of 102 baseline trades could not be matched within one second, and the trade comparison is diagnostic only. The bootstrap clusters repeated seconds by terminal condition, but it cannot manufacture unseen regimes or replace the newest fully resolved promotion window.",
+        "id": "limitations",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "type": "markdown"
+      },
+      {
+        "body": "## Recommended next step\n\n1. Keep the retained volatility-floor strategy research-only and leave live trading off.\n2. Do not add the path meta-label or run an exact guard replay; its pre-registered eligibility gate failed.\n3. Move the next bounded probe from static probability correction to **stateful entry timing**: require a candidate to survive a short causal recheck while preserving the original edge, price, and BTC direction.\n4. Probe only the known loss-cluster folds first. A candidate must retain every known winner there before it earns a full 42-fold replay and newest fully resolved validation.",
+        "id": "next_steps",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- Do losing entries decay or flip during a short post-signal recheck more often than winners?\n- Can a stateful confirmation rule reduce the five-report loss burst without dropping below 80 trades?\n- Is the result stable once the newest fully resolved Binance-signal / Chainlink-settlement block has enough warmed conditions?",
+        "id": "further_questions",
+        "layout": "full",
+        "type": "markdown"
+      }
+    ],
+    "cards": [
+      {
+        "dataset": "headline",
+        "description": "Terminal conditions scored after the minimum prior-history requirement.",
+        "id": "conditions_card",
+        "metrics": [
+          {
+            "field": "scored_conditions",
+            "format": "number",
+            "label": "Scored conditions"
+          }
+        ],
+        "sourceId": "path_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Rows with all six causal path features; incomplete rows are excluded without imputation.",
+        "id": "coverage_card",
+        "metrics": [
+          {
+            "field": "complete_case_fraction",
+            "format": "percent",
+            "label": "Complete-case coverage"
+          }
+        ],
+        "sourceId": "path_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Executable-market Brier minus meta-label Brier; positive would indicate improvement.",
+        "id": "brier_card",
+        "metrics": [
+          {
+            "field": "brier_improvement_x10k",
+            "format": "number",
+            "label": "Brier improvement x10k",
+            "signed": true
+          }
+        ],
+        "sourceId": "path_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Executable-market log loss minus meta-label log loss; positive would indicate improvement.",
+        "id": "logloss_card",
+        "metrics": [
+          {
+            "field": "log_loss_improvement_x10k",
+            "format": "number",
+            "label": "Log-loss improvement x10k",
+            "signed": true
+          }
+        ],
+        "sourceId": "path_audit"
+      }
+    ],
+    "charts": [
+      {
+        "comparisonContext": {
+          "baseline": "executable market probability",
+          "grain": "overall and chronological-half cohort",
+          "unit": "proper-score difference"
+        },
+        "dataset": "score_improvements",
+        "encodings": {
+          "color": {
+            "field": "metric",
+            "label": "Metric",
+            "type": "nominal"
+          },
+          "tooltip": [
+            {
+              "field": "conditions",
+              "format": "number",
+              "label": "Conditions",
+              "type": "quantitative"
+            },
+            {
+              "field": "rows",
+              "format": "number",
+              "label": "Rows",
+              "type": "quantitative"
+            }
+          ],
+          "x": {
+            "field": "cohort",
+            "label": "Scored cohort",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "improvement",
+            "format": "number",
+            "label": "Market minus meta-label",
+            "type": "quantitative"
+          }
+        },
+        "id": "score_improvement_chart",
+        "intent": "comparison",
+        "layout": "full",
+        "legend": {
+          "interactive": true,
+          "position": "top",
+          "sort": "labelAsc",
+          "title": "Metric"
+        },
+        "maxRows": 6,
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "question": "Does the path meta-label improve Brier score and log loss overall and in both chronological halves?",
+        "rationale": "Grouped bars compare two same-direction proper-score deltas across three discrete validation cohorts without implying a time trend.",
+        "referenceLines": [
+          {
+            "axis": "y",
+            "color": "neutral",
+            "label": "No improvement",
+            "lineStyle": "dashed",
+            "value": 0
+          }
+        ],
+        "sourceId": "path_audit",
+        "subtitle": "Executable market minus meta-label; positive would indicate improvement, 202 ms strict replay.",
+        "title": "Proper-score improvement by scored cohort",
+        "type": "bar"
+      }
+    ],
+    "description": "Technical audit of fixed-horizon CLOB and BTC path confirmation, with a grouped comparison chart and exact audit tables.",
+    "generatedAt": "2026-07-15T02:48:39.195357Z",
+    "sources": [
+      {
+        "id": "path_audit",
+        "label": "Strict 42-fold cross-venue path confirmation evidence",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_cross_venue_path_confirmation_strict42.json",
+        "query": {
+          "description": "Condition-equal, chronological fold-forward audit of the fixed 5, 30, and 60 second CLOB and BTC path features.",
+          "engine": "duckdb",
+          "filters": [
+            "42 disjoint strict folds",
+            "202 ms replay latency",
+            "minimum 8 strictly prior folds before scoring",
+            "complete causal path features only; no imputation"
+          ],
+          "language": "sql",
+          "metric_definitions": [
+            "Brier improvement equals executable-market Brier score minus meta-label Brier score; positive is better.",
+            "Log-loss improvement equals executable-market log loss minus meta-label log loss; positive is better.",
+            "Each terminal condition has total analytical weight one regardless of one-second observation count."
+          ],
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_cross_venue_path_confirmation_strict42.json');"
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold retained strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy at measured p99 latency.",
+          "engine": "duckdb",
+          "filters": [
+            "volatility floor 0.30",
+            "42 strict folds",
+            "202 ms replay latency"
+          ],
+          "language": "sql",
+          "metric_definitions": [
+            "Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate.",
+            "Loss burst is the maximum count of losing eligible reports in any five-report window."
+          ],
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');"
+        }
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "cohort",
+            "label": "Cohort",
+            "type": "text"
+          },
+          {
+            "field": "conditions",
+            "format": "number",
+            "label": "Conditions"
+          },
+          {
+            "field": "rows",
+            "format": "number",
+            "label": "Rows"
+          },
+          {
+            "field": "market_brier",
+            "format": "number",
+            "label": "Market Brier"
+          },
+          {
+            "field": "meta_brier",
+            "format": "number",
+            "label": "Meta Brier"
+          },
+          {
+            "field": "brier_improvement",
+            "format": "number",
+            "label": "Brier improvement",
+            "movement": true
+          },
+          {
+            "field": "market_log_loss",
+            "format": "number",
+            "label": "Market log loss"
+          },
+          {
+            "field": "meta_log_loss",
+            "format": "number",
+            "label": "Meta log loss"
+          },
+          {
+            "field": "log_loss_improvement",
+            "format": "number",
+            "label": "Log-loss improvement",
+            "movement": true
+          }
+        ],
+        "dataset": "proper_scores",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "cohort"
+        },
+        "density": "spacious",
+        "id": "proper_score_table",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "subtitle": "Market minus meta-label improvement is positive only when the path model adds information.",
+        "title": "Out-of-sample proper scores"
+      },
+      {
+        "columns": [
+          {
+            "field": "outcome",
+            "label": "Terminal outcome",
+            "type": "text"
+          },
+          {
+            "field": "trades",
+            "format": "number",
+            "label": "Trades"
+          },
+          {
+            "field": "mean_meta_minus_market",
+            "format": "number",
+            "label": "Mean meta minus market",
+            "movement": true
+          }
+        ],
+        "dataset": "trade_diagnostic",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "outcome"
+        },
+        "density": "spacious",
+        "id": "trade_diagnostic_table",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "subtitle": "Nearest same-condition, same-direction matches within one second; scored folds only.",
+        "title": "Meta-label correction on exact baseline trades"
+      },
+      {
+        "columns": [
+          {
+            "field": "source",
+            "label": "Source",
+            "type": "text"
+          },
+          {
+            "field": "horizon_seconds",
+            "format": "number",
+            "label": "Horizon (s)"
+          },
+          {
+            "field": "available_rows",
+            "format": "number",
+            "label": "Available rows"
+          },
+          {
+            "field": "total_rows",
+            "format": "number",
+            "label": "Total rows"
+          },
+          {
+            "field": "coverage",
+            "format": "percent",
+            "label": "Coverage"
+          }
+        ],
+        "dataset": "coverage",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "coverage"
+        },
+        "density": "dense",
+        "id": "coverage_table",
+        "layout": "full",
+        "sourceId": "path_audit",
+        "subtitle": "All 10,609 captured rows; missing token histories fail closed and are not imputed.",
+        "title": "Causal path feature availability"
+      },
+      {
+        "columns": [
+          {
+            "field": "gate",
+            "label": "Gate",
+            "type": "text"
+          },
+          {
+            "field": "actual",
+            "label": "Actual",
+            "type": "text"
+          },
+          {
+            "field": "requirement",
+            "label": "Requirement",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          }
+        ],
+        "dataset": "a_plus_gates",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "gate"
+        },
+        "density": "spacious",
+        "id": "a_plus_table",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "subtitle": "Retained 0.30 volatility-floor strategy, 42 strict folds at 202 ms.",
+        "title": "Unchanged A+ gate status"
+      }
+    ],
+    "title": "Cross-venue path confirmation fails the strict strategy gate",
+    "version": 1
+  },
+  "snapshot": {
+    "accessIssues": [],
+    "datasets": {
+      "a_plus_gates": [
+        {
+          "actual": "102",
+          "gate": "Trades",
+          "requirement": ">= 80",
+          "status": "PASS"
+        },
+        {
+          "actual": "0.6843",
+          "gate": "Wilson 95% lower",
+          "requirement": ">= 0.70",
+          "status": "FAIL"
+        },
+        {
+          "actual": "$+13.54",
+          "gate": "Aggregate PnL",
+          "requirement": "> $0",
+          "status": "PASS"
+        },
+        {
+          "actual": "19",
+          "gate": "Profitable eligible reports",
+          "requirement": ">= 20",
+          "status": "FAIL"
+        },
+        {
+          "actual": "39",
+          "gate": "Eligible reports",
+          "requirement": ">= 20",
+          "status": "PASS"
+        },
+        {
+          "actual": "$-5.13",
+          "gate": "Worst fold PnL",
+          "requirement": ">= -$13",
+          "status": "PASS"
+        },
+        {
+          "actual": "$-4.97",
+          "gate": "20% left-tail CVaR",
+          "requirement": ">= -$8",
+          "status": "PASS"
+        },
+        {
+          "actual": "4",
+          "gate": "Losing reports / 5-report window",
+          "requirement": "<= 2",
+          "status": "FAIL"
+        },
+        {
+          "actual": "0.324",
+          "gate": "Payoff ratio",
+          "requirement": ">= 0.30",
+          "status": "PASS"
+        },
+        {
+          "actual": "3.346",
+          "gate": "Worst loss / average win",
+          "requirement": "<= 3.5",
+          "status": "PASS"
+        }
+      ],
+      "coverage": [
+        {
+          "available_rows": 10609,
+          "coverage": 1.0,
+          "feature": "directional_btc_return_bps_30s",
+          "horizon_seconds": 30,
+          "source": "BTC",
+          "total_rows": 10609
+        },
+        {
+          "available_rows": 10609,
+          "coverage": 1.0,
+          "feature": "directional_btc_return_bps_5s",
+          "horizon_seconds": 5,
+          "source": "BTC",
+          "total_rows": 10609
+        },
+        {
+          "available_rows": 10609,
+          "coverage": 1.0,
+          "feature": "directional_btc_return_bps_60s",
+          "horizon_seconds": 60,
+          "source": "BTC",
+          "total_rows": 10609
+        },
+        {
+          "available_rows": 10591,
+          "coverage": 0.9983033273635592,
+          "feature": "token_logit_change_30s",
+          "horizon_seconds": 30,
+          "source": "CLOB token",
+          "total_rows": 10609
+        },
+        {
+          "available_rows": 10543,
+          "coverage": 0.9937788669997172,
+          "feature": "token_logit_change_5s",
+          "horizon_seconds": 5,
+          "source": "CLOB token",
+          "total_rows": 10609
+        },
+        {
+          "available_rows": 10593,
+          "coverage": 0.998491846545386,
+          "feature": "token_logit_change_60s",
+          "horizon_seconds": 60,
+          "source": "CLOB token",
+          "total_rows": 10609
+        }
+      ],
+      "headline": [
+        {
+          "brier_improvement_x10k": -15.969730834539675,
+          "complete_case_fraction": 0.9929305306814968,
+          "log_loss_improvement_x10k": -33.62717187742559,
+          "scored_conditions": 496
+        }
+      ],
+      "proper_scores": [
+        {
+          "brier_improvement": -0.0015969730834539675,
+          "cohort": "Overall",
+          "conditions": 496,
+          "log_loss_improvement": -0.003362717187742559,
+          "market_brier": 0.14219054378686188,
+          "market_log_loss": 0.45619873840887964,
+          "meta_brier": 0.14378751687031585,
+          "meta_log_loss": 0.4595614555966222,
+          "rows": 7708
+        },
+        {
+          "brier_improvement": -0.0025527721959756333,
+          "cohort": "First 17 scored folds",
+          "conditions": 244,
+          "log_loss_improvement": -0.0044032353577216354,
+          "market_brier": 0.13529209765598108,
+          "market_log_loss": 0.43929429678582926,
+          "meta_brier": 0.1378448698519567,
+          "meta_log_loss": 0.4436975321435509,
+          "rows": 3764
+        },
+        {
+          "brier_improvement": -0.0006715167999012672,
+          "cohort": "Last 17 scored folds",
+          "conditions": 252,
+          "log_loss_improvement": -0.00235523134061999,
+          "market_brier": 0.14886999162787343,
+          "market_log_loss": 0.47256653109151575,
+          "meta_brier": 0.1495415084277747,
+          "meta_log_loss": 0.47492176243213574,
+          "rows": 3944
+        }
+      ],
+      "score_improvements": [
+        {
+          "cohort": "Overall",
+          "conditions": 496,
+          "improvement": -0.0015969730834539675,
+          "metric": "Brier",
+          "rows": 7708
+        },
+        {
+          "cohort": "Overall",
+          "conditions": 496,
+          "improvement": -0.003362717187742559,
+          "metric": "Log loss",
+          "rows": 7708
+        },
+        {
+          "cohort": "First 17 scored folds",
+          "conditions": 244,
+          "improvement": -0.0025527721959756333,
+          "metric": "Brier",
+          "rows": 3764
+        },
+        {
+          "cohort": "First 17 scored folds",
+          "conditions": 244,
+          "improvement": -0.0044032353577216354,
+          "metric": "Log loss",
+          "rows": 3764
+        },
+        {
+          "cohort": "Last 17 scored folds",
+          "conditions": 252,
+          "improvement": -0.0006715167999012672,
+          "metric": "Brier",
+          "rows": 3944
+        },
+        {
+          "cohort": "Last 17 scored folds",
+          "conditions": 252,
+          "improvement": -0.00235523134061999,
+          "metric": "Log loss",
+          "rows": 3944
+        }
+      ],
+      "trade_diagnostic": [
+        {
+          "mean_meta_minus_market": 0.024599738189535775,
+          "outcome": "Wins",
+          "trades": 65
+        },
+        {
+          "mean_meta_minus_market": 0.04302532453968586,
+          "outcome": "Losses",
+          "trades": 20
+        }
+      ]
+    },
+    "status": "ready",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "path_audit",
+      "label": "Strict 42-fold cross-venue path confirmation evidence",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_cross_venue_path_confirmation_strict42.json",
+      "query": {
+        "description": "Condition-equal, chronological fold-forward audit of the fixed 5, 30, and 60 second CLOB and BTC path features.",
+        "engine": "duckdb",
+        "filters": [
+          "42 disjoint strict folds",
+          "202 ms replay latency",
+          "minimum 8 strictly prior folds before scoring",
+          "complete causal path features only; no imputation"
+        ],
+        "language": "sql",
+        "metric_definitions": [
+          "Brier improvement equals executable-market Brier score minus meta-label Brier score; positive is better.",
+          "Log-loss improvement equals executable-market log loss minus meta-label log loss; positive is better.",
+          "Each terminal condition has total analytical weight one regardless of one-second observation count."
+        ],
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_cross_venue_path_confirmation_strict42.json');"
+      }
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict 42-fold retained strategy aggregate",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {
+        "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy at measured p99 latency.",
+        "engine": "duckdb",
+        "filters": [
+          "volatility floor 0.30",
+          "42 strict folds",
+          "202 ms replay latency"
+        ],
+        "language": "sql",
+        "metric_definitions": [
+          "Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate.",
+          "Loss burst is the maximum count of losing eligible reports in any five-report window."
+        ],
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');"
+      }
+    }
+  ],
+  "surface": "report"
+}

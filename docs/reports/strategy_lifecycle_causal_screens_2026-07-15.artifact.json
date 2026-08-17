@@ -1,0 +1,382 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Stateful lifecycle screens do not clear the strategy gate",
+    "description": "Technical audit of fixed entry-persistence, executable profit-lock, and late-loss-cut mechanisms on the strict-42 clustered-loss cohort.",
+    "generatedAt": "2026-07-15T03:27:09Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# Stateful lifecycle screens do not clear the strategy gate"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Technical summary\n\nAll three fixed causal lifecycle mechanisms are **rejected before strategy integration**. Two-second entry persistence removed `13 / 17` known winners. The executable profit lock improved toxic-fold PnL by `+$2.91` but made three terminal winners negative; the 30-second late loss cut improved it by `+$7.08` but made two winners negative. No neighboring thresholds were searched. The retained strategy remains below A+, `live_ready=false`, and no strategy parameters changed."
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": [
+          "screens_card",
+          "persistence_card",
+          "late_delta_card",
+          "late_harm_card"
+        ]
+      },
+      {
+        "id": "fold_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Aggregate improvement is bought by sacrificing winners\n\nBoth executable exits improve the 13-fold aggregate and raise profitable folds from `3` to `5`, but the effect is not stable across folds. The profit lock worsens folds 29, 33, 35, and 40; the late cut drives fold 40 from `-$2.24` to `-$7.81`. The grouped bars show why an aggregate-only selection would be unsafe: neither rule dominates the unchanged baseline."
+      },
+      {
+        "id": "fold_chart_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "fold_pnl_chart"
+      },
+      {
+        "id": "screen_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "screen_outcome_table"
+      },
+      {
+        "id": "path_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Fixed post-entry marks do not separate winners from losses\n\nAt 60 seconds after fill, `7 / 29` available terminal winners and `7 / 10` losses have negative executable marks. At 90 seconds, 26 winners are positive, but three winners remain negative while seven losses are negative. A rescue deadline would therefore create known losses even before exact engine integration. The overlap supports stopping lifecycle-threshold tuning on this cohort."
+      },
+      {
+        "id": "horizon_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "horizon_table"
+      },
+      {
+        "id": "a_plus_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "body": "## A+ remains blocked despite positive full-history PnL\n\nThe unchanged 202 ms baseline has `102` trades and `+$13.54`, but Wilson lower is `0.6843 < 0.70`, profitable eligible reports are `19 < 20`, and the five-report loss burst is `4 > 2`. Because every lifecycle screen failed winner preservation, none earns an exact 42-fold counterfactual or promotion credit."
+      },
+      {
+        "id": "a_plus_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "a_plus_table"
+      },
+      {
+        "id": "scope",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Scope, data, and definitions\n\nEntry persistence uses exact trades plus one-Hz post-gate opportunity rows in the ten negative folds inside the maximum burst window. Exit screens use all 40 exact positions across folds 29–41 and their target-token PMXT v2 book/change paths. An executable mark is the full-size visible-bid FOK quote net of entry and hypothetical exit fees. Insufficient depth fails closed. The comparison baseline is each trade's exact held-to-resolution PnL."
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Registered design and execution model\n\nThe persistence rule rechecks once between two and three seconds, requires the same direction and fresh edge at least `0.07`, and rejects missing state. The profit lock arms at `+$0.50` and sells after a fall to `+$0.10`. The late cut marks once at close minus 30 seconds and sells only a negative position. Both exits apply the measured `202 ms` insertion delay, retain the signal-time worst visible bid as the FOK limit, charge the current binary fee on both sides, and wait one second after a failed attempt. Each rule had a winner-preservation gate declared before its screen."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_audit",
+        "body": "## Limitations, uncertainty, and robustness\n\nThe exit results are standalone causal reconstructions, not integrated harness variants. That is intentional: a failing causal screen should not trigger production code or a costly 42-fold replay. The cohort is the known loss cluster and is not independent promotion evidence. No adjacent recheck delay, PnL threshold, or seconds-before-close value was searched after rejection. The newest fully resolved sample still contains too few warmed trades to validate a new strategy mechanism."
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Recommended next step\n\n1. Keep the volatility-floor strategy research-only and leave live trading off.\n2. Do not implement or tune the rejected persistence, profit-lock, or late-loss-cut rules.\n3. Move to **trade-print-calibrated passive entry**, a distinct payoff-geometry mechanism: replace the fixed `0.65` maker fill probability with causal touch, opposite-side volume, queue, and adverse-selection evidence from retained PMXT trade events.\n4. Calibrate on older folds, freeze one maker-or-skip rule, and test the known loss cluster before any full 42-fold replay.\n5. Require unchanged A+ gates, both-half profitability, and a larger fresh fully resolved block before promotion credit."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Can PMXT trade prints support an auditable passive-fill and queue model at the required one-tick price?\n- Does maker-or-skip improve loss-fold economics after accounting for missed winners and adverse selection?\n- How many additional fresh warmed markets are required before the new payoff geometry has meaningful promotion power?"
+      }
+    ],
+    "cards": [
+      {
+        "id": "screens_card",
+        "dataset": "headline",
+        "description": "Every predeclared lifecycle mechanism failed its winner-preservation contract.",
+        "sourceId": "lifecycle_audit",
+        "metrics": [
+          {"field": "rejected_screens", "format": "number", "label": "Rejected screens"}
+        ]
+      },
+      {
+        "id": "persistence_card",
+        "dataset": "headline",
+        "description": "Known profitable trades removed by the fixed two-second entry recheck.",
+        "sourceId": "lifecycle_audit",
+        "metrics": [
+          {"field": "persistence_removed_winners", "format": "number", "label": "Persistence removed winners"}
+        ]
+      },
+      {
+        "id": "late_delta_card",
+        "dataset": "headline",
+        "description": "Aggregate PnL improvement from the strongest rejected exit; this is not promotion credit.",
+        "sourceId": "lifecycle_audit",
+        "metrics": [
+          {"field": "late_cut_delta_usd", "format": "number", "label": "Late-cut tail delta, USD", "signed": true}
+        ]
+      },
+      {
+        "id": "late_harm_card",
+        "dataset": "headline",
+        "description": "Terminal winners made negative by the 30-second late loss cut.",
+        "sourceId": "lifecycle_audit",
+        "metrics": [
+          {"field": "late_cut_harmed_winners", "format": "number", "label": "Late-cut harmed winners"}
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "fold_pnl_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "fold_pnl",
+        "title": "Fold PnL by lifecycle rule",
+        "subtitle": "Folds 29–41, exact baseline positions; USD after fees and 202 ms exit execution.",
+        "question": "Do either of the fixed executable exits improve fold PnL without unstable fold-level reversals?",
+        "rationale": "Grouped bars compare three discrete rules over 13 ordered folds and keep the zero boundary visible.",
+        "maxRows": 39,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "legend": {"position": "top", "title": "Lifecycle rule", "interactive": true, "sort": "labelAsc"},
+        "comparisonContext": {"baseline": "held to resolution", "grain": "strict fold", "unit": "USD after fees"},
+        "referenceLines": [
+          {"axis": "y", "value": 0, "label": "Break-even", "color": "neutral", "lineStyle": "dashed"}
+        ],
+        "encodings": {
+          "x": {"field": "fold", "type": "nominal", "label": "Strict fold"},
+          "y": {"field": "pnl_usd", "type": "quantitative", "label": "PnL after fees, USD", "format": "number"},
+          "color": {"field": "rule", "type": "nominal", "label": "Lifecycle rule"},
+          "tooltip": [
+            {"field": "trades", "type": "quantitative", "label": "Trades", "format": "number"},
+            {"field": "baseline_pnl_usd", "type": "quantitative", "label": "Baseline PnL", "format": "number"}
+          ]
+        },
+        "sourceId": "lifecycle_audit"
+      }
+    ],
+    "tables": [
+      {
+        "id": "screen_outcome_table",
+        "dataset": "screen_outcomes",
+        "title": "Predeclared lifecycle screen outcomes",
+        "subtitle": "A rule fails if it removes or makes any known terminal winner negative.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "screen_order", "direction": "asc"},
+        "sourceId": "lifecycle_audit",
+        "columns": [
+          {"field": "screen_order", "label": "Order", "format": "number"},
+          {"field": "screen", "label": "Screen", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"},
+          {"field": "tail_delta_pnl_usd", "label": "Tail delta, USD", "format": "number", "movement": true},
+          {"field": "removed_or_harmed_winners", "label": "Removed / harmed winners", "format": "number"},
+          {"field": "losses_removed_or_converted", "label": "Losses removed / converted", "format": "number"}
+        ]
+      },
+      {
+        "id": "horizon_table",
+        "dataset": "horizon_diagnostic",
+        "title": "Executable marks at fixed post-fill horizons",
+        "subtitle": "Terminal outcome is known only for diagnosis; each mark uses information available at the stated horizon.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "sort_key", "direction": "asc"},
+        "sourceId": "lifecycle_audit",
+        "columns": [
+          {"field": "sort_key", "label": "Order", "format": "number"},
+          {"field": "seconds_after_fill", "label": "Seconds after fill", "format": "number"},
+          {"field": "terminal_group", "label": "Terminal group", "type": "text"},
+          {"field": "available", "label": "Available", "format": "number"},
+          {"field": "negative_marks", "label": "Negative marks", "format": "number"},
+          {"field": "positive_marks", "label": "Positive marks", "format": "number"},
+          {"field": "median_pnl_usd", "label": "Median mark, USD", "format": "number", "movement": true}
+        ]
+      },
+      {
+        "id": "a_plus_table",
+        "dataset": "a_plus_gates",
+        "title": "Unchanged A+ promotion gates",
+        "subtitle": "Measured-latency strict-42 baseline; failed gates remain fail-closed.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "gate_order", "direction": "asc"},
+        "sourceId": "strict_baseline",
+        "columns": [
+          {"field": "gate_order", "label": "Order", "format": "number"},
+          {"field": "metric", "label": "Metric", "type": "text"},
+          {"field": "result", "label": "Result", "type": "text"},
+          {"field": "gate", "label": "Gate", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "lifecycle_audit",
+        "label": "Strict-42 stateful lifecycle causal screens",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json",
+        "query": {
+          "description": "Fixed entry-persistence and executable exit screens on the known clustered-loss cohort.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json');",
+          "filters": [
+            "strict folds 29 through 41 for executable lifecycle paths",
+            "ten negative cluster folds for entry persistence",
+            "202 ms order insertion latency",
+            "full-size visible-bid FOK quotes; insufficient depth fails closed",
+            "fixed predeclared rules; no neighboring threshold search"
+          ],
+          "metric_definitions": [
+            "Executable PnL equals sell VWAP minus entry fill price times full shares, less entry and exit fees.",
+            "Harmed winner means a terminally winning baseline trade has negative counterfactual PnL after measured-latency exit execution.",
+            "Profitable fold means aggregate resolved PnL after fees is greater than zero."
+          ]
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold retained strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy at measured p99 latency.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+          "filters": ["volatility floor 0.30", "42 strict folds", "202 ms replay latency"],
+          "metric_definitions": [
+            "Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate.",
+            "Loss burst is the maximum count of losing eligible reports in any five-report window."
+          ]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "accessIssues": [],
+    "datasets": {
+      "headline": [
+        {"rejected_screens": 3, "persistence_removed_winners": 13, "late_cut_delta_usd": 7.08078, "late_cut_harmed_winners": 2}
+      ],
+      "screen_outcomes": [
+        {"screen_order": 1, "screen": "2 s entry persistence", "status": "reject", "tail_delta_pnl_usd": null, "removed_or_harmed_winners": 13, "losses_removed_or_converted": 5},
+        {"screen_order": 2, "screen": "+$0.50 to +$0.10 profit lock", "status": "reject", "tail_delta_pnl_usd": 2.91237, "removed_or_harmed_winners": 3, "losses_removed_or_converted": 3},
+        {"screen_order": 3, "screen": "30 s pre-close loss cut", "status": "reject", "tail_delta_pnl_usd": 7.08078, "removed_or_harmed_winners": 2, "losses_removed_or_converted": 2}
+      ],
+      "horizon_diagnostic": [
+        {"sort_key": 1, "seconds_after_fill": 5, "terminal_group": "Loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -0.23844},
+        {"sort_key": 2, "seconds_after_fill": 5, "terminal_group": "Win", "available": 30, "negative_marks": 23, "positive_marks": 7, "median_pnl_usd": -0.18277},
+        {"sort_key": 3, "seconds_after_fill": 15, "terminal_group": "Loss", "available": 10, "negative_marks": 9, "positive_marks": 1, "median_pnl_usd": -0.53699},
+        {"sort_key": 4, "seconds_after_fill": 15, "terminal_group": "Win", "available": 30, "negative_marks": 15, "positive_marks": 15, "median_pnl_usd": 0.00724},
+        {"sort_key": 5, "seconds_after_fill": 30, "terminal_group": "Loss", "available": 10, "negative_marks": 9, "positive_marks": 1, "median_pnl_usd": -0.63147},
+        {"sort_key": 6, "seconds_after_fill": 30, "terminal_group": "Win", "available": 30, "negative_marks": 14, "positive_marks": 16, "median_pnl_usd": 0.14752},
+        {"sort_key": 7, "seconds_after_fill": 60, "terminal_group": "Loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -2.17788},
+        {"sort_key": 8, "seconds_after_fill": 60, "terminal_group": "Win", "available": 29, "negative_marks": 7, "positive_marks": 22, "median_pnl_usd": 0.32362},
+        {"sort_key": 9, "seconds_after_fill": 90, "terminal_group": "Loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -2.10861},
+        {"sort_key": 10, "seconds_after_fill": 90, "terminal_group": "Win", "available": 29, "negative_marks": 3, "positive_marks": 26, "median_pnl_usd": 0.59918}
+      ],
+      "a_plus_gates": [
+        {"gate_order": 1, "metric": "Trades", "result": "102", "gate": ">= 80", "status": "pass"},
+        {"gate_order": 2, "metric": "Wilson lower", "result": "0.6843", "gate": ">= 0.70", "status": "fail"},
+        {"gate_order": 3, "metric": "Total PnL", "result": "+$13.54", "gate": "> $0", "status": "pass"},
+        {"gate_order": 4, "metric": "Profitable / eligible reports", "result": "19 / 39", "gate": ">= 20 / 20", "status": "fail"},
+        {"gate_order": 5, "metric": "Five-report loss burst", "result": "4", "gate": "<= 2", "status": "fail"}
+      ],
+      "fold_pnl": [
+        {"fold": "29", "rule": "Baseline", "pnl_usd": -0.24369, "trades": 6, "baseline_pnl_usd": -0.24369},
+        {"fold": "29", "rule": "Profit lock", "pnl_usd": -1.85157, "trades": 6, "baseline_pnl_usd": -0.24369},
+        {"fold": "29", "rule": "Late loss cut", "pnl_usd": -2.27184, "trades": 6, "baseline_pnl_usd": -0.24369},
+        {"fold": "30", "rule": "Baseline", "pnl_usd": 4.50786, "trades": 3, "baseline_pnl_usd": 4.50786},
+        {"fold": "30", "rule": "Profit lock", "pnl_usd": 2.73596, "trades": 3, "baseline_pnl_usd": 4.50786},
+        {"fold": "30", "rule": "Late loss cut", "pnl_usd": 4.50786, "trades": 3, "baseline_pnl_usd": 4.50786},
+        {"fold": "31", "rule": "Baseline", "pnl_usd": -3.53932, "trades": 2, "baseline_pnl_usd": -3.53932},
+        {"fold": "31", "rule": "Profit lock", "pnl_usd": 1.88408, "trades": 2, "baseline_pnl_usd": -3.53932},
+        {"fold": "31", "rule": "Late loss cut", "pnl_usd": -3.53932, "trades": 2, "baseline_pnl_usd": -3.53932},
+        {"fold": "32", "rule": "Baseline", "pnl_usd": -5.01516, "trades": 1, "baseline_pnl_usd": -5.01516},
+        {"fold": "32", "rule": "Profit lock", "pnl_usd": -5.01516, "trades": 1, "baseline_pnl_usd": -5.01516},
+        {"fold": "32", "rule": "Late loss cut", "pnl_usd": -2.05036, "trades": 1, "baseline_pnl_usd": -5.01516},
+        {"fold": "33", "rule": "Baseline", "pnl_usd": -3.60591, "trades": 2, "baseline_pnl_usd": -3.60591},
+        {"fold": "33", "rule": "Profit lock", "pnl_usd": -5.0065, "trades": 2, "baseline_pnl_usd": -3.60591},
+        {"fold": "33", "rule": "Late loss cut", "pnl_usd": -3.60591, "trades": 2, "baseline_pnl_usd": -3.60591},
+        {"fold": "34", "rule": "Baseline", "pnl_usd": -5.07776, "trades": 1, "baseline_pnl_usd": -5.07776},
+        {"fold": "34", "rule": "Profit lock", "pnl_usd": -5.07776, "trades": 1, "baseline_pnl_usd": -5.07776},
+        {"fold": "34", "rule": "Late loss cut", "pnl_usd": -3.415, "trades": 1, "baseline_pnl_usd": -5.07776},
+        {"fold": "35", "rule": "Baseline", "pnl_usd": 6.28189, "trades": 5, "baseline_pnl_usd": 6.28189},
+        {"fold": "35", "rule": "Profit lock", "pnl_usd": 2.61903, "trades": 5, "baseline_pnl_usd": 6.28189},
+        {"fold": "35", "rule": "Late loss cut", "pnl_usd": 6.28189, "trades": 5, "baseline_pnl_usd": 6.28189},
+        {"fold": "36", "rule": "Baseline", "pnl_usd": -2.96842, "trades": 3, "baseline_pnl_usd": -2.96842},
+        {"fold": "36", "rule": "Profit lock", "pnl_usd": -2.96842, "trades": 3, "baseline_pnl_usd": -2.96842},
+        {"fold": "36", "rule": "Late loss cut", "pnl_usd": 0.68464, "trades": 3, "baseline_pnl_usd": -2.96842},
+        {"fold": "37", "rule": "Baseline", "pnl_usd": -4.13251, "trades": 2, "baseline_pnl_usd": -4.13251},
+        {"fold": "37", "rule": "Profit lock", "pnl_usd": -0.10581, "trades": 2, "baseline_pnl_usd": -4.13251},
+        {"fold": "37", "rule": "Late loss cut", "pnl_usd": -2.88458, "trades": 2, "baseline_pnl_usd": -4.13251},
+        {"fold": "38", "rule": "Baseline", "pnl_usd": 6.25365, "trades": 5, "baseline_pnl_usd": 6.25365},
+        {"fold": "38", "rule": "Profit lock", "pnl_usd": 4.54233, "trades": 5, "baseline_pnl_usd": 6.25365},
+        {"fold": "38", "rule": "Late loss cut", "pnl_usd": 6.25365, "trades": 5, "baseline_pnl_usd": 6.25365},
+        {"fold": "39", "rule": "Baseline", "pnl_usd": -5.12096, "trades": 1, "baseline_pnl_usd": -5.12096},
+        {"fold": "39", "rule": "Profit lock", "pnl_usd": -5.12096, "trades": 1, "baseline_pnl_usd": -5.12096},
+        {"fold": "39", "rule": "Late loss cut", "pnl_usd": -5.04939, "trades": 1, "baseline_pnl_usd": -5.12096},
+        {"fold": "40", "rule": "Baseline", "pnl_usd": -2.23532, "trades": 4, "baseline_pnl_usd": -2.23532},
+        {"fold": "40", "rule": "Profit lock", "pnl_usd": -3.37934, "trades": 4, "baseline_pnl_usd": -2.23532},
+        {"fold": "40", "rule": "Late loss cut", "pnl_usd": -7.80973, "trades": 4, "baseline_pnl_usd": -2.23532},
+        {"fold": "41", "rule": "Baseline", "pnl_usd": -1.17085, "trades": 5, "baseline_pnl_usd": -1.17085},
+        {"fold": "41", "rule": "Profit lock", "pnl_usd": 3.58999, "trades": 5, "baseline_pnl_usd": -1.17085},
+        {"fold": "41", "rule": "Late loss cut", "pnl_usd": 3.91237, "trades": 5, "baseline_pnl_usd": -1.17085}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "lifecycle_audit",
+      "label": "Strict-42 stateful lifecycle causal screens",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json",
+      "query": {
+        "description": "Fixed entry-persistence and executable exit screens on the known clustered-loss cohort.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json');",
+        "filters": ["strict folds 29 through 41", "202 ms exit latency", "no neighboring threshold search"],
+        "metric_definitions": ["Executable PnL includes both entry and exit fees and full-size visible-bid execution."]
+      }
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict 42-fold retained strategy aggregate",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {
+        "description": "Exact executable replay aggregate for the retained volatility-floor strategy.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+        "filters": ["volatility floor 0.30", "42 strict folds", "202 ms replay latency"],
+        "metric_definitions": ["Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate."]
+      }
+    }
+  ]
+}

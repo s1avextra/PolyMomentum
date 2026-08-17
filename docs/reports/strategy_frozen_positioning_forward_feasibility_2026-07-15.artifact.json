@@ -1,0 +1,588 @@
+{
+  "surface": "report",
+  "manifest": {
+    "surface": "report",
+    "version": 1,
+    "title": "The frozen positioning model cannot pass its own forward gate",
+    "description": "Technical feasibility audit of the frozen positioning diagnostic and the attempted fresh replay source. One bounded comparison chart shows why the clipped feature term cannot cancel the intercept.",
+    "generatedAt": "2026-07-15T04:28:19Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# The frozen positioning model cannot pass its own forward gate"
+      },
+      {
+        "id": "summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## Technical summary\n\nThe prospective positioning run is rejected before scoring. The frozen model adds at least `+0.048201` log-odds to every executable market probability, so every losing condition must receive a positive probability correction. That contradicts the hard requirement that mean correction on losses be non-positive. The fresh-source attempt also found zero target PMXT events in its first two hours. **No strategy code changed, no exact profitability replay is authorized, and live trading remains off.**"
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": [
+          "min_correction_card",
+          "events_card",
+          "hours_card",
+          "storage_card"
+        ]
+      },
+      {
+        "id": "proof_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## The intercept makes the loss gate impossible\n\nThe model uses an executable-market logit offset plus an intercept and two clipped standardized features. Even if both feature contributions move in the most negative admissible direction, they can subtract only `0.024935` log-odds from the `0.073136` intercept. The total correction therefore stays positive. Because the logistic function is strictly increasing, more data cannot change this structural failure."
+      },
+      {
+        "id": "bounds_chart",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "bounds_chart_spec"
+      },
+      {
+        "id": "bounds_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "bounds_table_spec"
+      },
+      {
+        "id": "source_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## The public fresh replay source is not usable yet\n\nGamma supplied nearly complete metadata, and the checksum-verified Binance tape was contiguous. PMXT URL checks returned HTTP 200, but the filtered replay found no events for the expected candle conditions. The manifest correctly stayed incomplete. URL availability must not be treated as data coverage."
+      },
+      {
+        "id": "attempt_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "attempt_table_spec"
+      },
+      {
+        "id": "scope",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## Scope and decision definitions\n\nThe audited unit is a resolved five-minute BTC opportunity condition. The frozen diagnostic was trained on the existing 42-fold May 28\u2013June 10 cohort and was authorized only for prospective scoring. Its forward block required at least 100 new resolved conditions, positive Brier and log-loss improvement, and a non-positive mean probability correction on losses. This audit tests whether those gates are mathematically attainable before evaluating outcomes."
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## Model specification and feasibility method\n\nFor each row, the model computes `sigmoid(logit(p_market) + a + beta_1 z_1 + beta_2 z_2)`, with each standardized feature clipped to \u00b15. The worst-case feature term is bounded by `5 \u00d7 (|beta_1| + |beta_2|)`. Subtracting that bound from the intercept proves the sign of every admissible correction. The fresh attempt used one frozen zero-trade capture variant, continuous state, 202 ms latency, and session-owned atomic parquet cleanup."
+      },
+      {
+        "id": "baseline_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "body": "## The retained strategy remains profitable but A\u2212\n\nThe retained volatility-floor strategy still has `102` trades and `+$13.54` after fees, but it misses Wilson confidence, profitable-report breadth, loss-cluster, and second-half stability requirements. Rejecting the positioning diagnostic does not reduce those gaps and does not justify changing any live control."
+      },
+      {
+        "id": "baseline_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "baseline_table_spec"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "feasibility_audit",
+        "body": "## Limitations and robustness checks\n\nThis is a feasibility rejection, not an out-of-sample score. It establishes that the frozen model cannot pass one hard gate and that the tested public replay hours lack target events. It does not show that every possible exogenous feature is useless. The PMXT run was intentionally stopped after two hours because continuing could not reverse either failure. The 72-hour storage estimate is a linear capacity bound from the observed July 14 recorder rate, not a guarantee of future byte volume."
+      },
+      {
+        "id": "next",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Recommended next step\n\n1. Close the positioning family; do not refit its intercept or tune a neighboring transform on the same folds.\n2. Preserve `primary_v6_volfloor_300`, the unchanged A+ gates, and `LIVE_TRADING_OFF`.\n3. With explicit authorization, deploy a measurement-capable collector to the PolyMomentum tenant only.\n4. Capture fresh CLOB, Binance RTDS, and Chainlink RTDS in bounded segments; convert and verify each owned segment before deleting only its raw files.\n5. Pre-register one genuinely new causal mechanism before inspecting its outcomes, then require at least 100 resolved opportunity conditions and a second disjoint block."
+      },
+      {
+        "id": "questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Should the next capture deployment be authorized on the VPS now?\n- Can the collector be rotated and converted without creating decision-time gaps around market boundaries?\n- Which new mechanism will be fixed before the fresh outcomes are inspected?"
+      }
+    ],
+    "cards": [
+      {
+        "id": "min_correction_card",
+        "dataset": "headline",
+        "description": "Smallest admissible frozen-model log-odds correction.",
+        "sourceId": "feasibility_audit",
+        "metrics": [
+          {
+            "field": "minimum_logit_correction",
+            "format": "number",
+            "label": "Minimum logit correction",
+            "signed": true
+          }
+        ]
+      },
+      {
+        "id": "events_card",
+        "dataset": "headline",
+        "description": "Target PMXT events across the two processed hours.",
+        "sourceId": "feasibility_audit",
+        "metrics": [
+          {
+            "field": "pmxt_target_events",
+            "format": "number",
+            "label": "PMXT target events"
+          }
+        ]
+      },
+      {
+        "id": "hours_card",
+        "dataset": "headline",
+        "description": "Hours processed before the fail-closed stop.",
+        "sourceId": "feasibility_audit",
+        "metrics": [
+          {
+            "field": "processed_hours",
+            "format": "number",
+            "label": "Processed fresh hours"
+          }
+        ]
+      },
+      {
+        "id": "storage_card",
+        "dataset": "headline",
+        "description": "Linear raw-storage estimate from the observed recorder byte rate.",
+        "sourceId": "latency_capture",
+        "metrics": [
+          {
+            "field": "raw_capture_72h_gb",
+            "format": "number",
+            "label": "Estimated raw 72-hour capture",
+            "unit": "GB"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "bounds_chart_spec",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "correction_bounds",
+        "title": "Frozen log-odds correction components",
+        "subtitle": "Exact bounds under the \u00b15 standardized-feature clip; positive values raise probability.",
+        "question": "Can the largest admissible negative feature contribution cancel the frozen intercept?",
+        "rationale": "Four signed bars make the structural lower bound visible while the adjacent table preserves exact values.",
+        "maxRows": 4,
+        "palette": {
+          "kind": "single",
+          "name": "blue"
+        },
+        "comparisonContext": {
+          "baseline": "zero log-odds correction",
+          "grain": "algebraic bound component",
+          "unit": "log-odds"
+        },
+        "referenceLines": [
+          {
+            "axis": "y",
+            "value": 0,
+            "label": "No correction",
+            "color": "neutral",
+            "lineStyle": "dashed"
+          }
+        ],
+        "encodings": {
+          "x": {
+            "field": "component",
+            "type": "nominal",
+            "label": "Bound component"
+          },
+          "y": {
+            "field": "log_odds",
+            "type": "quantitative",
+            "label": "Log-odds",
+            "format": "number"
+          },
+          "tooltip": [
+            {
+              "field": "interpretation",
+              "type": "nominal",
+              "label": "Meaning"
+            }
+          ]
+        },
+        "sourceId": "feasibility_audit"
+      }
+    ],
+    "tables": [
+      {
+        "id": "bounds_table_spec",
+        "dataset": "correction_bounds",
+        "title": "Frozen correction bounds",
+        "subtitle": "Exact log-odds components under the \u00b15 standardized-feature clip.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "sourceId": "feasibility_audit",
+        "columns": [
+          {
+            "field": "order",
+            "label": "Order",
+            "format": "number"
+          },
+          {
+            "field": "component",
+            "label": "Component",
+            "type": "text"
+          },
+          {
+            "field": "log_odds",
+            "label": "Log-odds",
+            "format": "number",
+            "movement": true
+          },
+          {
+            "field": "interpretation",
+            "label": "Interpretation",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "attempt_table_spec",
+        "dataset": "forward_checks",
+        "title": "Forward feasibility and source checks",
+        "subtitle": "Observed July 15 checks against the frozen model and bounded fresh-data contract.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "sourceId": "feasibility_audit",
+        "columns": [
+          {
+            "field": "order",
+            "label": "Order",
+            "format": "number"
+          },
+          {
+            "field": "check",
+            "label": "Check",
+            "type": "text"
+          },
+          {
+            "field": "observed",
+            "label": "Observed",
+            "type": "text"
+          },
+          {
+            "field": "required",
+            "label": "Required",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "baseline_table_spec",
+        "dataset": "baseline_gates",
+        "title": "Retained strategy versus unchanged A+ requirements",
+        "subtitle": "Strict 42-fold replay at 202 ms; profitability alone does not satisfy promotion.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "sourceId": "strict_baseline",
+        "columns": [
+          {
+            "field": "order",
+            "label": "Order",
+            "format": "number"
+          },
+          {
+            "field": "metric",
+            "label": "Metric",
+            "type": "text"
+          },
+          {
+            "field": "observed",
+            "label": "Observed",
+            "type": "text"
+          },
+          {
+            "field": "required",
+            "label": "Required",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "feasibility_audit",
+        "label": "Frozen positioning forward-feasibility audit",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_frozen_positioning_forward_feasibility_audit.json",
+        "query": {
+          "description": "Algebraic gate-feasibility proof plus the bounded July 11\u201313 fresh-source attempt.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_frozen_positioning_forward_feasibility_audit.json');",
+          "filters": [
+            "frozen July 15 model",
+            "feature clip \u00b15",
+            "202 ms replay",
+            "first two July 11 PMXT hours"
+          ],
+          "metric_definitions": [
+            "Minimum logit correction equals intercept minus five times the sum of absolute standardized feature coefficients.",
+            "The loss guard passes only when the mean probability correction on losing conditions is non-positive."
+          ]
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold retained strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+          "filters": [
+            "volatility floor 0.30",
+            "42 strict folds",
+            "202 ms replay latency"
+          ],
+          "metric_definitions": [
+            "Loss burst is the maximum losing-report count in any five-report window."
+          ]
+        }
+      },
+      {
+        "id": "latency_capture",
+        "label": "July 14 joint CLOB and RTDS capture",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_forward_latency_joint_rtds_fresh.json",
+        "query": {
+          "description": "Observed raw recorder byte volume and duration used for the storage-capacity bound.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_forward_latency_joint_rtds_fresh.json');",
+          "filters": [
+            "6,300-second Dublin VPS capture"
+          ],
+          "metric_definitions": [
+            "The 72-hour raw estimate linearly extrapolates observed capture bytes per second."
+          ]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "datasets": {
+      "headline": [
+        {
+          "minimum_logit_correction": 0.04820097586753173,
+          "pmxt_target_events": 0,
+          "processed_hours": 2,
+          "raw_capture_72h_gb": 102.42549076114285
+        }
+      ],
+      "correction_bounds": [
+        {
+          "order": 1,
+          "component": "Frozen intercept",
+          "log_odds": 0.07313642333336683,
+          "interpretation": "Raises every score before feature corrections"
+        },
+        {
+          "order": 2,
+          "component": "Largest possible negative feature contribution",
+          "log_odds": -0.0249354474658351,
+          "interpretation": "Both clipped features at their most negative combined bound"
+        },
+        {
+          "order": 3,
+          "component": "Minimum total correction",
+          "log_odds": 0.04820097586753173,
+          "interpretation": "Still strictly positive"
+        },
+        {
+          "order": 4,
+          "component": "Maximum total correction",
+          "log_odds": 0.09807187079920193,
+          "interpretation": "Upper admissible correction"
+        }
+      ],
+      "forward_checks": [
+        {
+          "order": 1,
+          "check": "Frozen loss gate",
+          "observed": "minimum correction +0.048201 log-odds",
+          "required": "mean correction on losses <= 0",
+          "status": "impossible"
+        },
+        {
+          "order": 2,
+          "check": "Gamma metadata",
+          "observed": "863 of 864 five-minute markets",
+          "required": "enough target metadata",
+          "status": "usable"
+        },
+        {
+          "order": 3,
+          "check": "PMXT target coverage",
+          "observed": "0 events in 2 processed hours",
+          "required": "non-zero causal L2 events",
+          "status": "fail"
+        },
+        {
+          "order": 4,
+          "check": "Replay manifest",
+          "observed": "complete=false",
+          "required": "complete=true",
+          "status": "fail"
+        },
+        {
+          "order": 5,
+          "check": "VPS collector binary",
+          "observed": "record-btc-books unavailable",
+          "required": "measurement-capable collector",
+          "status": "blocked"
+        },
+        {
+          "order": 6,
+          "check": "Raw 72-hour storage",
+          "observed": "102.4 GB estimate vs 26 GB free",
+          "required": "bounded within free disk",
+          "status": "fail"
+        }
+      ],
+      "baseline_gates": [
+        {
+          "order": 1,
+          "metric": "Trades",
+          "observed": 102,
+          "required": ">= 80",
+          "status": "pass"
+        },
+        {
+          "order": 2,
+          "metric": "PnL, USD",
+          "observed": 13.54086,
+          "required": "> 0",
+          "status": "pass"
+        },
+        {
+          "order": 3,
+          "metric": "Wilson lower bound",
+          "observed": 0.684308,
+          "required": ">= 0.70",
+          "status": "fail"
+        },
+        {
+          "order": 4,
+          "metric": "Profitable reports",
+          "observed": 19,
+          "required": ">= 20",
+          "status": "fail"
+        },
+        {
+          "order": 5,
+          "metric": "Five-report loss burst",
+          "observed": 4,
+          "required": "<= 2",
+          "status": "fail"
+        },
+        {
+          "order": 6,
+          "metric": "Last 21-fold PnL, USD",
+          "observed": -4.33848,
+          "required": "> 0 stability prerequisite",
+          "status": "fail"
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "feasibility_audit",
+      "label": "Frozen positioning forward-feasibility audit",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_frozen_positioning_forward_feasibility_audit.json",
+      "query": {
+        "description": "Algebraic gate-feasibility proof plus the bounded July 11\u201313 fresh-source attempt.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_frozen_positioning_forward_feasibility_audit.json');",
+        "filters": [
+          "frozen July 15 model",
+          "feature clip \u00b15",
+          "202 ms replay",
+          "first two July 11 PMXT hours"
+        ],
+        "metric_definitions": [
+          "Minimum logit correction equals intercept minus five times the sum of absolute standardized feature coefficients.",
+          "The loss guard passes only when the mean probability correction on losing conditions is non-positive."
+        ]
+      }
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict 42-fold retained strategy aggregate",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {
+        "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+        "filters": [
+          "volatility floor 0.30",
+          "42 strict folds",
+          "202 ms replay latency"
+        ],
+        "metric_definitions": [
+          "Loss burst is the maximum losing-report count in any five-report window."
+        ]
+      }
+    },
+    {
+      "id": "latency_capture",
+      "label": "July 14 joint CLOB and RTDS capture",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_forward_latency_joint_rtds_fresh.json",
+      "query": {
+        "description": "Observed raw recorder byte volume and duration used for the storage-capacity bound.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_forward_latency_joint_rtds_fresh.json');",
+        "filters": [
+          "6,300-second Dublin VPS capture"
+        ],
+        "metric_definitions": [
+          "The 72-hour raw estimate linearly extrapolates observed capture bytes per second."
+        ]
+      }
+    }
+  ]
+}
