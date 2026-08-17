@@ -156,6 +156,11 @@ pub struct Settings {
     pub candle_breaker_min_trades: i64,
     pub candle_breaker_min_win_rate: f64,
     pub candle_breaker_max_drawdown_pct: f64,
+    pub candle_breaker_max_session_loss_pct: f64,
+    pub candle_breaker_max_consecutive_losses: i64,
+    /// Cross-restart cumulative live-loss cap as a fraction of initial
+    /// bankroll. The ledger survives bankroll actualization; 0 disables.
+    pub candle_live_max_cumulative_loss_pct: f64,
     pub candle_paper_breaker_reset_on_start: bool,
     pub candle_simulated_balance_reset_on_start: bool,
     pub candle_paper_breaker_auto_rearm_secs: i64,
@@ -295,9 +300,12 @@ impl Settings {
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
             candle_position_pct: env_f64("CANDLE_POSITION_PCT", 0.10),
+            // Enabled by default since 2026-08-17 (audit Ф0): the feed-forward
+            // sizing cap is the only pre-trade drawdown control during the
+            // first `min_trades` resolutions. Set 0.0 to disable explicitly.
             candle_max_projected_stressed_drawdown_pct: env_f64(
                 "CANDLE_MAX_PROJECTED_STRESSED_DRAWDOWN_PCT",
-                0.0,
+                0.25,
             ),
             candle_cross_asset_enabled: env_bool("CANDLE_CROSS_ASSET_ENABLED", false),
             candle_cross_asset_min_correlation: env_f64("CANDLE_CROSS_ASSET_MIN_CORRELATION", 0.70),
@@ -312,6 +320,18 @@ impl Settings {
             candle_breaker_min_trades: env_i64("CANDLE_BREAKER_MIN_TRADES", 20),
             candle_breaker_min_win_rate: env_f64("CANDLE_BREAKER_MIN_WIN_RATE", 0.65),
             candle_breaker_max_drawdown_pct: env_f64("CANDLE_BREAKER_MAX_DRAWDOWN_PCT", 0.30),
+            candle_breaker_max_session_loss_pct: env_f64(
+                "CANDLE_BREAKER_MAX_SESSION_LOSS_PCT",
+                0.20,
+            ),
+            candle_breaker_max_consecutive_losses: env_i64(
+                "CANDLE_BREAKER_MAX_CONSECUTIVE_LOSSES",
+                8,
+            ),
+            candle_live_max_cumulative_loss_pct: env_f64(
+                "CANDLE_LIVE_MAX_CUMULATIVE_LOSS_PCT",
+                0.50,
+            ),
             candle_paper_breaker_reset_on_start: env_bool(
                 "CANDLE_PAPER_BREAKER_RESET_ON_START",
                 false,

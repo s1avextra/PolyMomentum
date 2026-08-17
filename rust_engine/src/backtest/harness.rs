@@ -3411,6 +3411,7 @@ mod tests {
             min_trades: 2,
             min_win_rate: 0.75,
             max_drawdown_pct: 0.30,
+            ..Default::default()
         };
         let mut strategy = CandleBacktestStrategy::new_with_breaker(
             variants[0].clone(),

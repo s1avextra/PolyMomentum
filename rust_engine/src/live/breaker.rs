@@ -7,6 +7,15 @@ pub struct BreakerConfig {
     pub min_trades: u32,
     pub min_win_rate: f64,
     pub max_drawdown_pct: f64,
+    /// Absolute session-loss floor as a fraction of initial bankroll. Trips at
+    /// ANY trade count — the first live session of a new strategy is exactly
+    /// when the model is most likely wrong, so this must not wait for
+    /// `min_trades` resolutions. 0 disables.
+    pub max_session_loss_pct: f64,
+    /// Consecutive-loss streak limit, also ungated by `min_trades`.
+    /// At a promoted 65% win rate, 8 straight losses has p ≈ 2e-4 under the
+    /// model — a "model is wrong" signal, not variance. 0 disables.
+    pub max_consecutive_losses: u32,
 }
 
 impl Default for BreakerConfig {
@@ -15,6 +24,8 @@ impl Default for BreakerConfig {
             min_trades: 20,
             min_win_rate: 0.65,
             max_drawdown_pct: 0.30,
+            max_session_loss_pct: 0.20,
+            max_consecutive_losses: 8,
         }
     }
 }
@@ -25,6 +36,8 @@ impl BreakerConfig {
             min_trades: settings.candle_breaker_min_trades.max(1) as u32,
             min_win_rate: settings.candle_breaker_min_win_rate,
             max_drawdown_pct: settings.candle_breaker_max_drawdown_pct,
+            max_session_loss_pct: settings.candle_breaker_max_session_loss_pct,
+            max_consecutive_losses: settings.candle_breaker_max_consecutive_losses.max(0) as u32,
         }
     }
 }
@@ -35,6 +48,10 @@ pub struct BreakerState {
     pub losses: u64,
     pub realized_pnl: f64,
     pub peak_pnl: f64,
+    /// Current losing streak. `serde(default)` keeps previously persisted
+    /// state (which lacks the field) loadable; the streak then restarts at 0.
+    #[serde(default)]
+    pub consecutive_losses: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -53,8 +70,10 @@ impl BreakerState {
     pub fn record_resolution(&mut self, won: bool, pnl: f64) {
         if won {
             self.wins += 1;
+            self.consecutive_losses = 0;
         } else {
             self.losses += 1;
+            self.consecutive_losses += 1;
         }
         self.realized_pnl += pnl;
         if self.realized_pnl > self.peak_pnl {
@@ -73,6 +92,14 @@ impl BreakerState {
                 self.wins += 1;
             } else {
                 self.losses += 1;
+            }
+            // Oracle corrections arrive out of order, so the exact streak is
+            // unrecoverable; adjust conservatively in the correction's
+            // direction rather than replaying history.
+            if final_won {
+                self.consecutive_losses = 0;
+            } else {
+                self.consecutive_losses += 1;
             }
         }
         self.realized_pnl += pnl_delta;
@@ -123,9 +150,12 @@ impl BreakerState {
 
     /// Should we trip the breaker now?
     ///
-    /// Realized drawdown is the primary circuit breaker. Open exposure is
-    /// still stress-tested, but bounded paper/live positions are not treated
-    /// as realized losses while stressed PnL remains positive.
+    /// Loss-magnitude checks (session-loss floor, consecutive losses,
+    /// drawdown, exposure stress) fire at ANY trade count — 19 max-size
+    /// losses in a row must not be survivable just because `min_trades`
+    /// hasn't been reached. Only the win-rate check stays behind
+    /// `min_trades`, because a rate is meaningless on a tiny sample while
+    /// a loss magnitude is not.
     pub fn should_trip(
         &self,
         cfg: &BreakerConfig,
@@ -133,17 +163,27 @@ impl BreakerState {
         initial_bankroll: f64,
     ) -> Option<&'static str> {
         let metrics = self.metrics(open_exposure, initial_bankroll);
-        if metrics.total_trades < cfg.min_trades as u64 {
-            return None;
+        if cfg.max_session_loss_pct > 0.0
+            && self.realized_pnl <= -cfg.max_session_loss_pct * initial_bankroll.max(1.0)
+        {
+            return Some("session_loss_floor");
         }
-        if metrics.win_rate < cfg.min_win_rate {
-            return Some("win_rate_low");
+        if cfg.max_consecutive_losses > 0
+            && self.consecutive_losses >= cfg.max_consecutive_losses as u64
+        {
+            return Some("consecutive_losses");
         }
         if metrics.realized_drawdown_pct > cfg.max_drawdown_pct {
             return Some("realized_drawdown");
         };
         if metrics.stressed_pnl < 0.0 && metrics.stressed_drawdown_pct > cfg.max_drawdown_pct {
             return Some("open_exposure_stress");
+        }
+        if metrics.total_trades < cfg.min_trades as u64 {
+            return None;
+        }
+        if metrics.win_rate < cfg.min_win_rate {
+            return Some("win_rate_low");
         }
         None
     }
@@ -179,14 +219,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_trip_below_min_trades() {
+    fn win_rate_check_stays_gated_below_min_trades() {
         let mut s = BreakerState::default();
-        for _ in 0..10 {
-            s.record_resolution(false, -1.0);
+        // 3W/4L alternating: WR 43% < 65%, but only 7 trades, tiny loss,
+        // streak ≤ 2 — no loss-magnitude check applies, and the win-rate
+        // check must stay silent below min_trades.
+        for i in 0..7 {
+            s.record_resolution(i % 2 == 0, if i % 2 == 0 { 0.4 } else { -0.5 });
         }
         assert!(s
             .should_trip(&BreakerConfig::default(), 0.0, 100.0)
             .is_none());
+    }
+
+    #[test]
+    fn session_loss_floor_trips_at_any_trade_count() {
+        let mut s = BreakerState::default();
+        // Two max-size losses on a $100 bankroll: -21% crosses the 20% floor
+        // long before min_trades=20 resolutions exist.
+        s.record_resolution(false, -10.5);
+        s.record_resolution(false, -10.5);
+        assert_eq!(
+            s.should_trip(&BreakerConfig::default(), 0.0, 100.0),
+            Some("session_loss_floor"),
+        );
+    }
+
+    #[test]
+    fn consecutive_losses_trip_before_min_trades() {
+        let mut s = BreakerState::default();
+        for _ in 0..8 {
+            s.record_resolution(false, -1.0);
+        }
+        assert_eq!(
+            s.should_trip(&BreakerConfig::default(), 0.0, 100.0),
+            Some("consecutive_losses"),
+        );
+    }
+
+    #[test]
+    fn win_resets_consecutive_loss_streak() {
+        let mut s = BreakerState::default();
+        for _ in 0..7 {
+            s.record_resolution(false, -1.0);
+        }
+        s.record_resolution(true, 1.0);
+        assert_eq!(s.consecutive_losses, 0);
+        assert!(s
+            .should_trip(&BreakerConfig::default(), 0.0, 100.0)
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_persisted_state_without_streak_field_still_loads() {
+        let raw = r#"{"wins":3,"losses":2,"realized_pnl":1.5,"peak_pnl":2.0}"#;
+        let restored: BreakerState = serde_json::from_str(raw).unwrap();
+        assert_eq!(restored.wins, 3);
+        assert_eq!(restored.consecutive_losses, 0);
     }
 
     #[test]
@@ -207,8 +296,10 @@ mod tests {
     #[test]
     fn trips_on_low_win_rate() {
         let mut s = BreakerState::default();
-        for _ in 0..30 {
-            s.record_resolution(false, -1.0);
+        // 12W/18L alternating with small stakes: no floor (-4.2%), no streak,
+        // no drawdown breach — only the 40% win rate over 30 trades trips.
+        for i in 0..30 {
+            s.record_resolution(i % 5 < 2, if i % 5 < 2 { 0.4 } else { -0.5 });
         }
         assert_eq!(
             s.should_trip(&BreakerConfig::default(), 0.0, 100.0),
@@ -222,8 +313,14 @@ mod tests {
         for _ in 0..20 {
             s.record_resolution(true, 5.0);
         }
-        for _ in 0..10 {
-            s.record_resolution(false, -10.0);
+        // Draw down 45% from peak equity via 3L+1W cycles so the streak
+        // stays below the consecutive-loss limit and pnl stays positive
+        // (no session floor) — isolating the drawdown check.
+        for _ in 0..3 {
+            for _ in 0..3 {
+                s.record_resolution(false, -10.0);
+            }
+            s.record_resolution(true, 0.1);
         }
         let trip = s.should_trip(&BreakerConfig::default(), 0.0, 100.0);
         assert_eq!(trip, Some("realized_drawdown"));
@@ -236,6 +333,7 @@ mod tests {
             peak_pnl: 67.8299,
             wins: 26,
             losses: 12,
+            ..Default::default()
         };
 
         let metrics = s.metrics(0.0, 100.0);

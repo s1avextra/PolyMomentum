@@ -714,6 +714,11 @@ pub struct Pipeline {
     paper_positions: Mutex<HashMap<String, PaperPosition>>,
     oracle_pending: Mutex<HashMap<String, OraclePending>>,
     breaker: Mutex<BreakerState>,
+    /// Cumulative realized live PnL from PRIOR sessions (meta key
+    /// `live_cumulative_realized_pnl`). Survives the bankroll-actualization
+    /// breaker reset so live loss streaks accumulate across restarts;
+    /// current-session PnL lives in the breaker state and is added on check.
+    live_loss_ledger_prior: f64,
     breaker_tripped: Mutex<bool>,
     breaker_trip_reason: Mutex<Option<String>>,
     breaker_tripped_at_s: Mutex<Option<i64>>,
@@ -847,6 +852,25 @@ impl Pipeline {
                 pnl = breaker_state.realized_pnl,
                 "resetting breaker session after bankroll actualization"
             );
+            // Fold the finished session's realized PnL into the cross-restart
+            // live loss ledger BEFORE the reset wipes it. The ledger meta key
+            // is deliberately absent from the delete list below.
+            if mode == Mode::Live && breaker_state.realized_pnl.abs() > 1e-9 {
+                let prior: f64 = risk
+                    .get_meta("live_cumulative_realized_pnl")
+                    .await?
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                let updated = prior + breaker_state.realized_pnl;
+                risk.set_meta("live_cumulative_realized_pnl", &format!("{updated:.6}"))
+                    .await?;
+                tracing::info!(
+                    prior,
+                    session = breaker_state.realized_pnl,
+                    cumulative = updated,
+                    "live loss ledger updated across restart"
+                );
+            }
             for key in [
                 "candle_breaker_tripped",
                 "candle_breaker_state",
@@ -934,6 +958,27 @@ impl Pipeline {
                 .map(|pending| paper_position_exposure(&pending.position))
                 .sum::<f64>();
 
+        // Cross-restart live loss ledger: prior-session cumulative realized
+        // PnL. Checked together with current-session breaker PnL so live
+        // losses cannot be laundered by restarting the process.
+        let live_loss_ledger_prior: f64 = risk
+            .get_meta("live_cumulative_realized_pnl")
+            .await?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        if mode == Mode::Live {
+            let cap_pct = settings.candle_live_max_cumulative_loss_pct;
+            let bankroll_floor = risk.initial_bankroll().await.max(1.0);
+            if cap_pct > 0.0 && live_loss_ledger_prior <= -cap_pct * bankroll_floor {
+                bail!(
+                    "live start blocked: cumulative live loss ledger {live_loss_ledger_prior:.2} \
+                     breaches -{:.0}% of bankroll {bankroll_floor:.2}; clear \
+                     live_cumulative_realized_pnl meta only after an explicit post-mortem",
+                    cap_pct * 100.0,
+                );
+            }
+        }
+
         let mut momentum_map = HashMap::new();
         let mom_cfg = MomentumConfig {
             noise_z_threshold: settings.candle_noise_z_threshold,
@@ -1008,6 +1053,7 @@ impl Pipeline {
             paper_positions: Mutex::new(paper_positions),
             oracle_pending: Mutex::new(oracle_pending),
             breaker: Mutex::new(breaker_state),
+            live_loss_ledger_prior,
             breaker_tripped: Mutex::new(breaker_tripped),
             breaker_trip_reason: Mutex::new(breaker_trip_reason),
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
@@ -1889,7 +1935,7 @@ impl Pipeline {
                 let open_exposure = self.open_position_exposure().await;
                 let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
                 if let Some(reason) =
-                    bs.should_trip(&self.breaker_cfg, open_exposure, breaker_bankroll)
+                    self.breaker_trip_reason_for(&bs, open_exposure, breaker_bankroll)
                 {
                     self.trip_breaker(reason).await;
                 }
@@ -3174,7 +3220,8 @@ impl Pipeline {
                 let bs = *self.breaker.lock().await;
                 let open_exp = self.open_position_exposure().await;
                 let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
-                if let Some(reason) = bs.should_trip(&self.breaker_cfg, open_exp, breaker_bankroll)
+                if let Some(reason) =
+                    self.breaker_trip_reason_for(&bs, open_exp, breaker_bankroll)
                 {
                     self.trip_breaker(reason).await;
                     self.stop.notify_one();
@@ -3355,7 +3402,7 @@ impl Pipeline {
                         .max(0.0);
                         let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
                         if let Some(reason) =
-                            bs.should_trip(&self.breaker_cfg, open_exposure, breaker_bankroll)
+                            self.breaker_trip_reason_for(&bs, open_exposure, breaker_bankroll)
                         {
                             self.trip_breaker(reason).await;
                             self.stop.notify_one();
@@ -3633,6 +3680,30 @@ impl Pipeline {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Breaker check plus the cross-restart cumulative live-loss cap. The
+    /// ledger holds prior sessions' realized PnL; adding the current breaker
+    /// PnL makes the cap restart-proof (a live trip cannot be cleared by
+    /// bouncing the process).
+    fn breaker_trip_reason_for(
+        &self,
+        bs: &BreakerState,
+        open_exposure: f64,
+        bankroll: f64,
+    ) -> Option<&'static str> {
+        if let Some(reason) = bs.should_trip(&self.breaker_cfg, open_exposure, bankroll) {
+            return Some(reason);
+        }
+        if self.mode == Mode::Live {
+            let cap_pct = self.settings.candle_live_max_cumulative_loss_pct;
+            if cap_pct > 0.0
+                && self.live_loss_ledger_prior + bs.realized_pnl <= -cap_pct * bankroll.max(1.0)
+            {
+                return Some("live_cumulative_loss");
+            }
+        }
+        None
     }
 
     async fn persist_breaker_state(&self) {
@@ -4198,6 +4269,7 @@ mod tests {
             peak_pnl: 67.8299,
             wins: 26,
             losses: 12,
+            ..Default::default()
         };
 
         assert_eq!(
