@@ -102,6 +102,50 @@ impl OrderManager {
             .ok_or_else(|| "inserted order missing".to_string())
     }
 
+    pub fn restore(&mut self, order: ManagedOrder) -> Result<&ManagedOrder, String> {
+        let intent_id = order.intent.intent_id.clone();
+        if self.orders.contains_key(&intent_id) {
+            return Err(format!("duplicate intent_id {intent_id}"));
+        }
+        if !matches!(
+            order.state,
+            OrderState::Submitted | OrderState::Acked | OrderState::PartiallyFilled
+        ) {
+            return Err(format!("cannot restore order in {}", order.state.as_str()));
+        }
+        if order
+            .venue_order_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty())
+        {
+            return Err("restored order requires venue_order_id".to_string());
+        }
+        if !order.requested_size.is_finite()
+            || order.requested_size <= 0.0
+            || !order.filled_size.is_finite()
+            || order.filled_size < 0.0
+            || order.filled_size - order.requested_size > 1e-9
+            || !order.total_fees.is_finite()
+            || order.total_fees < 0.0
+            || (order.intent.size - order.requested_size).abs() > 1e-9
+        {
+            return Err("restored order economics are invalid".to_string());
+        }
+        if order.filled_size > 0.0
+            && (!order.avg_fill_price.is_finite() || !(0.0..=1.0).contains(&order.avg_fill_price))
+        {
+            return Err("restored order fill price is invalid".to_string());
+        }
+        self.orders.insert(intent_id.clone(), order);
+        self.orders
+            .get(&intent_id)
+            .ok_or_else(|| "restored order missing".to_string())
+    }
+
+    pub fn get(&self, intent_id: &str) -> Option<&ManagedOrder> {
+        self.orders.get(intent_id)
+    }
+
     pub fn risk_accept(&mut self, intent_id: &str, ts: f64) -> Result<&ManagedOrder, String> {
         self.transition(intent_id, OrderState::RiskAccepted, ts)
     }
@@ -361,6 +405,29 @@ mod tests {
         assert_eq!(order.state, OrderState::Filled);
         assert_eq!(order.fill_pct(), 1.0);
         assert_eq!(order.venue_order_id.as_deref(), Some("paper-1"));
+    }
+
+    #[test]
+    fn restores_a_persisted_nonterminal_order() {
+        let mut manager = OrderManager::new();
+        let intent = intent(10.0);
+        let order = ManagedOrder {
+            intent: intent.clone(),
+            state: OrderState::Submitted,
+            venue_order_id: Some("0xorder".to_string()),
+            requested_size: 10.0,
+            filled_size: 0.0,
+            avg_fill_price: 0.0,
+            total_fees: 0.0,
+            reject_reason: None,
+            created_ts: 1.0,
+            updated_ts: 1.1,
+        };
+        manager.restore(order).unwrap();
+        assert_eq!(
+            manager.intent_id_for_venue_order_id("0xorder"),
+            Some(intent.intent_id)
+        );
     }
 
     #[test]

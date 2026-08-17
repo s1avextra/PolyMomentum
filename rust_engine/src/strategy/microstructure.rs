@@ -1,5 +1,29 @@
 //! Order-book microstructure features for short-horizon candle entries.
 
+pub const DYNAMIC_TICK_PRICE_LOWER: f64 = 0.04;
+pub const DYNAMIC_TICK_PRICE_UPPER: f64 = 0.96;
+pub const DYNAMIC_TICK_SIZE: f64 = 0.001;
+
+pub fn top_crosses_dynamic_tick_threshold(best_bid: f64, best_ask: f64) -> bool {
+    [best_bid, best_ask].into_iter().any(|price| {
+        price.is_finite()
+            && price > 0.0
+            && !(DYNAMIC_TICK_PRICE_LOWER..=DYNAMIC_TICK_PRICE_UPPER).contains(&price)
+    })
+}
+
+pub fn apply_causal_dynamic_tick_transition(
+    current_tick_size: f64,
+    best_bid: f64,
+    best_ask: f64,
+) -> f64 {
+    if top_crosses_dynamic_tick_threshold(best_bid, best_ask) {
+        current_tick_size.min(DYNAMIC_TICK_SIZE)
+    } else {
+        current_tick_size
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct BookLevelView {
     pub price: f64,
@@ -161,6 +185,42 @@ where
     Some((current_mid - min_mid).max(0.0))
 }
 
+/// Causal change in binary-outcome log odds over a recent midpoint window.
+/// The latest point must be no more than two seconds old and the retained
+/// history must cover at least 80% of the requested horizon. Values outside
+/// the open probability interval fail closed instead of being clamped.
+pub fn recent_mid_logit_change<'a, H>(history: H, now_ts: f64, lookback_seconds: f64) -> Option<f64>
+where
+    H: IntoIterator<Item = &'a (f64, f64)>,
+    H::IntoIter: DoubleEndedIterator,
+{
+    if !now_ts.is_finite() || !lookback_seconds.is_finite() || lookback_seconds <= 0.0 {
+        return None;
+    }
+    let cutoff = now_ts - lookback_seconds;
+    let mut earliest: Option<(f64, f64)> = None;
+    let mut latest: Option<(f64, f64)> = None;
+    for &(ts, mid) in history.into_iter().rev() {
+        if ts < cutoff {
+            break;
+        }
+        if !ts.is_finite() || !mid.is_finite() || !(0.0..1.0).contains(&mid) || ts > now_ts {
+            continue;
+        }
+        if latest.is_none() {
+            latest = Some((ts, mid));
+        }
+        earliest = Some((ts, mid));
+    }
+    let (earliest_ts, earliest_mid) = earliest?;
+    let (latest_ts, latest_mid) = latest?;
+    if now_ts - latest_ts > 2.0 || latest_ts - earliest_ts < lookback_seconds * 0.80 {
+        return None;
+    }
+    let logit = |probability: f64| (probability / (1.0 - probability)).ln();
+    Some(logit(latest_mid) - logit(earliest_mid))
+}
+
 pub fn bookwalk_buy_slippage(asks: &[BookLevelView], size: f64, _tick_size: f64) -> Option<f64> {
     if size <= 0.0 || !size.is_finite() || asks.is_empty() {
         return None;
@@ -205,6 +265,66 @@ pub struct BookMicrostructure {
     pub imbalance: f64,
     pub microprice: f64,
     pub pressure: f64,
+}
+
+/// Paired-book consistency for fully collateralized binary outcome tokens.
+/// A valid Yes/No pair has complementary probabilities, so both the midpoint
+/// and depth-weighted microprice sums should remain close to one.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BinaryComplementMicrostructure {
+    pub chosen_best_bid: f64,
+    pub chosen_best_ask: f64,
+    pub chosen_bid_depth: f64,
+    pub chosen_ask_depth: f64,
+    pub opposite_best_bid: f64,
+    pub opposite_best_ask: f64,
+    pub opposite_bid_depth: f64,
+    pub opposite_ask_depth: f64,
+    pub chosen_mid: f64,
+    pub opposite_mid: f64,
+    pub chosen_microprice: f64,
+    pub opposite_microprice: f64,
+    pub mid_sum_residual: f64,
+    pub microprice_sum_residual: f64,
+}
+
+pub fn binary_complement_microstructure(
+    chosen: &BookMicrostructure,
+    opposite: &BookMicrostructure,
+) -> Option<BinaryComplementMicrostructure> {
+    let valid = |book: &BookMicrostructure| {
+        book.best_bid.is_finite()
+            && book.best_ask.is_finite()
+            && book.microprice.is_finite()
+            && book.best_bid > 0.0
+            && book.best_bid < book.best_ask
+            && book.best_ask < 1.0
+            && book.bid_depth > 0.0
+            && book.ask_depth > 0.0
+            && book.microprice >= book.best_bid
+            && book.microprice <= book.best_ask
+    };
+    if !valid(chosen) || !valid(opposite) {
+        return None;
+    }
+    let chosen_mid = (chosen.best_bid + chosen.best_ask) / 2.0;
+    let opposite_mid = (opposite.best_bid + opposite.best_ask) / 2.0;
+    Some(BinaryComplementMicrostructure {
+        chosen_best_bid: chosen.best_bid,
+        chosen_best_ask: chosen.best_ask,
+        chosen_bid_depth: chosen.bid_depth,
+        chosen_ask_depth: chosen.ask_depth,
+        opposite_best_bid: opposite.best_bid,
+        opposite_best_ask: opposite.best_ask,
+        opposite_bid_depth: opposite.bid_depth,
+        opposite_ask_depth: opposite.ask_depth,
+        chosen_mid,
+        opposite_mid,
+        chosen_microprice: chosen.microprice,
+        opposite_microprice: opposite.microprice,
+        mid_sum_residual: chosen_mid + opposite_mid - 1.0,
+        microprice_sum_residual: chosen.microprice + opposite.microprice - 1.0,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -339,6 +459,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dynamic_tick_transition_uses_strict_venue_boundaries_and_persists() {
+        assert!(!top_crosses_dynamic_tick_threshold(0.04, 0.96));
+        assert!(top_crosses_dynamic_tick_threshold(0.03, 0.04));
+        assert!(top_crosses_dynamic_tick_threshold(0.96, 0.97));
+        assert!(!top_crosses_dynamic_tick_threshold(0.0, f64::NAN));
+        assert_eq!(apply_causal_dynamic_tick_transition(0.01, 0.50, 0.51), 0.01);
+        assert_eq!(
+            apply_causal_dynamic_tick_transition(0.01, 0.03, 0.04),
+            DYNAMIC_TICK_SIZE
+        );
+        assert_eq!(
+            apply_causal_dynamic_tick_transition(DYNAMIC_TICK_SIZE, 0.50, 0.51),
+            DYNAMIC_TICK_SIZE
+        );
+    }
+
+    #[test]
     fn positive_depth_imbalance_pushes_microprice_up() {
         let bids = vec![BookLevelView {
             price: 0.50,
@@ -429,6 +566,44 @@ mod tests {
         assert!(cfg
             .check_recent_mid_path(recent_mid_runup(&pullback, 115.0, 15.0))
             .is_ok());
+    }
+
+    #[test]
+    fn recent_mid_logit_change_is_causal_and_requires_coverage() {
+        let history = vec![(100.0, 0.40), (104.0, 0.45), (105.0, 0.50), (106.0, 0.90)];
+        let change = recent_mid_logit_change(&history, 105.0, 5.0).unwrap();
+        let expected = (0.50_f64 / 0.50).ln() - (0.40_f64 / 0.60).ln();
+        assert!((change - expected).abs() < 1e-9);
+
+        let sparse = vec![(102.0, 0.40), (105.0, 0.50)];
+        assert_eq!(recent_mid_logit_change(&sparse, 105.0, 5.0), None);
+
+        let stale = vec![(100.0, 0.40), (102.0, 0.50)];
+        assert_eq!(recent_mid_logit_change(&stale, 105.0, 5.0), None);
+    }
+
+    #[test]
+    fn binary_complement_microstructure_uses_both_depth_weighted_books() {
+        let chosen = BookMicrostructure::from_top(0.58, 0.60, 80.0, 20.0);
+        let opposite = BookMicrostructure::from_top(0.40, 0.42, 20.0, 80.0);
+        let paired = binary_complement_microstructure(&chosen, &opposite).unwrap();
+
+        assert!((paired.chosen_mid - 0.59).abs() < 1e-12);
+        assert!((paired.opposite_mid - 0.41).abs() < 1e-12);
+        assert!((paired.chosen_best_bid - 0.58).abs() < 1e-12);
+        assert!((paired.chosen_best_ask - 0.60).abs() < 1e-12);
+        assert!((paired.chosen_bid_depth - 80.0).abs() < 1e-12);
+        assert!((paired.chosen_ask_depth - 20.0).abs() < 1e-12);
+        assert!((paired.opposite_best_bid - 0.40).abs() < 1e-12);
+        assert!((paired.opposite_best_ask - 0.42).abs() < 1e-12);
+        assert!((paired.opposite_bid_depth - 20.0).abs() < 1e-12);
+        assert!((paired.opposite_ask_depth - 80.0).abs() < 1e-12);
+        assert!(paired.mid_sum_residual.abs() < 1e-12);
+        assert!(paired.microprice_sum_residual.abs() < 1e-12);
+
+        assert!(
+            binary_complement_microstructure(&chosen, &BookMicrostructure::default()).is_none()
+        );
     }
 
     #[test]

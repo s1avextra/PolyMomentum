@@ -16,6 +16,7 @@ use k256::ecdsa::SigningKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -83,8 +84,80 @@ pub struct OrderResponse {
     pub status: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct PreparedOrder {
+    body: String,
+    expected_order_id: String,
+    order_type: String,
+    side: String,
+    token_id: String,
+    price: f64,
+    size: f64,
+    sign_us: u128,
+    started_at: Instant,
+}
+
+impl PreparedOrder {
+    pub fn expected_order_id(&self) -> &str {
+        &self.expected_order_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionReceipt {
+    pub order_id: String,
+    pub expected_order_id: String,
+}
+
+impl SubmissionReceipt {
+    pub fn id_matches_expected(&self) -> bool {
+        self.order_id.eq_ignore_ascii_case(&self.expected_order_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitFailureKind {
+    DefinitiveReject,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmitOrderError {
+    pub kind: SubmitFailureKind,
+    pub message: String,
+}
+
+impl SubmitOrderError {
+    fn definitive(message: impl Into<String>) -> Self {
+        Self {
+            kind: SubmitFailureKind::DefinitiveReject,
+            message: message.into(),
+        }
+    }
+
+    fn ambiguous(message: impl Into<String>) -> Self {
+        Self {
+            kind: SubmitFailureKind::Ambiguous,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for SubmitOrderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SubmitOrderError {}
+
 impl ClobClient {
-    pub fn new(base_url: &str, api_key: &str, api_secret: &str, api_passphrase: &str) -> Self {
+    pub fn new(
+        base_url: &str,
+        api_key: &str,
+        api_secret: &str,
+        api_passphrase: &str,
+    ) -> Result<Self, String> {
         // Build client with connection pooling and HTTP/2
         let client = Client::builder()
             .pool_max_idle_per_host(5)
@@ -94,9 +167,9 @@ impl ClobClient {
             .timeout(Duration::from_secs(10))
             .tcp_nodelay(true)
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|error| format!("build CLOB HTTP client: {error}"))?;
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.to_string(),
             api_key: api_key.to_string(),
@@ -106,19 +179,21 @@ impl ClobClient {
             maker_address: String::new(),
             latencies: Vec::with_capacity(1000),
             warmed: false,
-        }
+        })
     }
 
     /// Set the private key for EIP-712 order signing.
-    pub fn set_signing_key(&mut self, hex_key: &str) {
-        if let Some(key) = signing::parse_private_key(hex_key) {
-            let addr = signing::address_from_key(&key);
-            self.maker_address = format!("0x{}", hex::encode(addr));
-            self.signing_key = Some(key);
-            eprintln!("CLOB signing key set: {}", self.maker_address);
-        } else {
-            eprintln!("CLOB signing key parse failed");
-        }
+    pub fn set_signing_key(&mut self, hex_key: &str) -> Result<(), String> {
+        let Some(key) = signing::parse_private_key(hex_key) else {
+            self.signing_key = None;
+            self.maker_address.clear();
+            return Err("PRIVATE_KEY must be a valid secp256k1 private key".to_string());
+        };
+        let addr = signing::address_from_key(&key);
+        self.maker_address = format!("0x{}", hex::encode(addr));
+        self.signing_key = Some(key);
+        eprintln!("CLOB signing key set: {}", self.maker_address);
+        Ok(())
     }
 
     /// Pre-warm the connection pool by sending a lightweight request.
@@ -138,23 +213,28 @@ impl ClobClient {
     }
 
     /// Build HMAC-SHA256 authenticated headers for a request.
-    fn auth_headers(&self, method: &str, path: &str, body: &str) -> Vec<(String, String)> {
+    fn auth_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<Vec<(String, String)>, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|error| format!("system clock is before Unix epoch: {error}"))?
             .as_secs()
             .to_string();
 
         let signature =
-            signing::hmac_sign_request(&self.api_secret, &timestamp, method, path, body);
+            signing::hmac_sign_request(&self.api_secret, &timestamp, method, path, body)?;
 
-        vec![
+        Ok(vec![
             ("POLY_ADDRESS".into(), self.maker_address.clone()),
             ("POLY_SIGNATURE".into(), signature),
             ("POLY_TIMESTAMP".into(), timestamp),
             ("POLY_API_KEY".into(), self.api_key.clone()),
             ("POLY_PASSPHRASE".into(), self.api_passphrase.clone()),
-        ]
+        ])
     }
 
     fn require_l2_auth(&self) -> Result<(), String> {
@@ -204,7 +284,7 @@ impl ClobClient {
         self.require_l2_auth()?;
         let path_with_query = path_with_query(path, params);
         let url = format!("{}{}", self.base_url, path_with_query);
-        let headers = self.auth_headers("GET", &path_with_query, "");
+        let headers = self.auth_headers("GET", &path_with_query, "")?;
         let mut req = self.client.get(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
@@ -224,7 +304,7 @@ impl ClobClient {
     async fn post_private_json(&self, path: &str, body: &str) -> Result<Value, String> {
         self.require_l2_auth()?;
         let url = format!("{}{}", self.base_url, path);
-        let headers = self.auth_headers("POST", path, body);
+        let headers = self.auth_headers("POST", path, body)?;
         let mut req = self.client.post(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
@@ -328,10 +408,12 @@ impl ClobClient {
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(
-            token_id, price, size, side, "GTC", true, neg_risk, tick_size,
-        )
-        .await
+        let prepared =
+            self.prepare_maker_order(token_id, price, size, side, neg_risk, tick_size)?;
+        self.submit_prepared_order(prepared)
+            .await
+            .map(|receipt| receipt.order_id)
+            .map_err(|error| error.to_string())
     }
 
     /// Place a FOK taker order (crosses the spread immediately).
@@ -344,16 +426,46 @@ impl ClobClient {
         neg_risk: bool,
         tick_size: f64,
     ) -> Result<String, String> {
-        self.place_order_internal(
-            token_id, price, size, side, "FOK", false, neg_risk, tick_size,
-        )
-        .await
+        let prepared =
+            self.prepare_taker_order(token_id, price, size, side, neg_risk, tick_size)?;
+        self.submit_prepared_order(prepared)
+            .await
+            .map(|receipt| receipt.order_id)
+            .map_err(|error| error.to_string())
     }
 
-    /// Internal: build, sign, and submit an order.
+    pub fn prepare_maker_order(
+        &self,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        side: &str,
+        neg_risk: bool,
+        tick_size: f64,
+    ) -> Result<PreparedOrder, String> {
+        self.prepare_order_internal(
+            token_id, price, size, side, "GTC", true, neg_risk, tick_size,
+        )
+    }
+
+    pub fn prepare_taker_order(
+        &self,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        side: &str,
+        neg_risk: bool,
+        tick_size: f64,
+    ) -> Result<PreparedOrder, String> {
+        self.prepare_order_internal(
+            token_id, price, size, side, "FOK", false, neg_risk, tick_size,
+        )
+    }
+
+    /// Build and sign an order without crossing the network.
     #[allow(clippy::too_many_arguments)]
-    async fn place_order_internal(
-        &mut self,
+    fn prepare_order_internal(
+        &self,
         token_id: &str,
         price: f64,
         size: f64,
@@ -362,7 +474,7 @@ impl ClobClient {
         post_only: bool,
         neg_risk: bool,
         tick_size: f64,
-    ) -> Result<String, String> {
+    ) -> Result<PreparedOrder, String> {
         self.require_l2_auth()?;
         let key = self
             .signing_key
@@ -373,8 +485,12 @@ impl ClobClient {
 
         // Build and sign the CLOB V2 order. Fees are protocol/operator-set at
         // match time in V2 and are not part of the signed EIP-712 struct.
-        let order = signing::build_order(key, token_id, price, size, side, neg_risk, tick_size);
-        let signed = signing::sign_order(&order, key, neg_risk);
+        let order = signing::build_order(key, token_id, price, size, side, tick_size)
+            .map_err(|error| format!("Build order: {error}"))?;
+        let signed = signing::sign_order(&order, key, neg_risk)
+            .map_err(|error| format!("Sign order: {error}"))?;
+        let expected_order_id = signing::order_hash(&signed.order, neg_risk)
+            .map_err(|error| format!("Hash order: {error}"))?;
 
         let sign_us = t0.elapsed().as_micros();
 
@@ -403,19 +519,41 @@ impl ClobClient {
 
         let body = serde_json::to_string(&payload).map_err(|e| format!("Serialize: {}", e))?;
 
-        // Build auth headers
-        let headers = self.auth_headers("POST", "/order", &body);
+        Ok(PreparedOrder {
+            body,
+            expected_order_id,
+            order_type: order_type.to_string(),
+            side: side.to_string(),
+            token_id: token_id.to_string(),
+            price,
+            size,
+            sign_us,
+            started_at: t0,
+        })
+    }
 
+    /// Submit a previously journaled order. Transport/server uncertainty is
+    /// reported separately from a definitive venue rejection so callers keep
+    /// the expected order hash locked for REST recovery.
+    pub async fn submit_prepared_order(
+        &mut self,
+        prepared: PreparedOrder,
+    ) -> Result<SubmissionReceipt, SubmitOrderError> {
+        let headers = self
+            .auth_headers("POST", "/order", &prepared.body)
+            .map_err(SubmitOrderError::ambiguous)?;
+
+        // Build auth headers
         let url = format!("{}/order", self.base_url);
         let mut req = self.client.post(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
         req = req.header("Content-Type", "application/json");
-        req = req.body(body);
+        req = req.body(prepared.body.clone());
 
         let result = req.send().await;
-        let latency_us = t0.elapsed().as_micros() as u64;
+        let latency_us = prepared.started_at.elapsed().as_micros() as u64;
         self.latencies.push(latency_us);
 
         match result {
@@ -424,47 +562,58 @@ impl ClobClient {
                 let body = resp.text().await.unwrap_or_default();
 
                 if !status.is_success() {
-                    return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+                    let message = format!("HTTP {}: {}", status, &body[..100.min(body.len())]);
+                    return if status.is_client_error()
+                        && status != reqwest::StatusCode::REQUEST_TIMEOUT
+                        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        Err(SubmitOrderError::definitive(message))
+                    } else {
+                        Err(SubmitOrderError::ambiguous(message))
+                    };
                 }
 
                 match serde_json::from_str::<OrderResponse>(&body) {
                     Ok(order_resp) => {
                         if let Some(err) = order_resp.error.filter(|e| !e.trim().is_empty()) {
-                            return Err(err);
+                            return Err(SubmitOrderError::definitive(err));
                         }
                         if let Some(err) = order_resp.error_msg.filter(|e| !e.trim().is_empty()) {
-                            return Err(err);
+                            return Err(SubmitOrderError::definitive(err));
                         }
                         if matches!(order_resp.success, Some(false)) {
-                            return Err(format!(
+                            return Err(SubmitOrderError::definitive(format!(
                                 "CLOB rejected order: status={}",
                                 order_resp.status.unwrap_or_else(|| "unknown".to_string())
-                            ));
+                            )));
                         }
                         let oid = order_resp.order_id.or(order_resp.id).unwrap_or_default();
                         if oid.is_empty() {
-                            return Err(format!(
+                            return Err(SubmitOrderError::ambiguous(format!(
                                 "CLOB response missing order id: status={}",
                                 order_resp.status.unwrap_or_else(|| "unknown".to_string())
-                            ));
+                            )));
                         }
                         eprintln!(
                             "Order {} placed in {}µs (sign: {}µs): {} {} {:.1}@{:.4} id={}",
-                            order_type,
+                            prepared.order_type,
                             latency_us,
-                            sign_us,
-                            side,
-                            token_id.get(..16).unwrap_or(token_id),
-                            size,
-                            price,
+                            prepared.sign_us,
+                            prepared.side,
+                            prepared.token_id.get(..16).unwrap_or(&prepared.token_id),
+                            prepared.size,
+                            prepared.price,
                             oid.get(..16).unwrap_or(&oid)
                         );
-                        Ok(oid)
+                        Ok(SubmissionReceipt {
+                            order_id: oid,
+                            expected_order_id: prepared.expected_order_id,
+                        })
                     }
-                    Err(e) => Err(format!("Parse error: {}", e)),
+                    Err(e) => Err(SubmitOrderError::ambiguous(format!("Parse error: {e}"))),
                 }
             }
-            Err(e) => Err(format!("Request failed: {}", e)),
+            Err(e) => Err(SubmitOrderError::ambiguous(format!("Request failed: {e}"))),
         }
     }
 }
@@ -494,13 +643,13 @@ pub fn create_shared_client(
     api_key: &str,
     api_secret: &str,
     api_passphrase: &str,
-) -> SharedClobClient {
-    Arc::new(RwLock::new(ClobClient::new(
+) -> Result<SharedClobClient, String> {
+    Ok(Arc::new(RwLock::new(ClobClient::new(
         base_url,
         api_key,
         api_secret,
         api_passphrase,
-    )))
+    )?)))
 }
 
 #[cfg(test)]
@@ -509,9 +658,10 @@ mod tests {
 
     #[test]
     fn private_auth_uses_current_poly_header_names() {
-        let mut client = ClobClient::new("https://clob.polymarket.com", "key", "secret", "pass");
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "c2VjcmV0", "pass").unwrap();
         client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
-        let headers = client.auth_headers("GET", "/data/orders", "");
+        let headers = client.auth_headers("GET", "/data/orders", "").unwrap();
         let names: Vec<_> = headers.into_iter().map(|(name, _)| name).collect();
 
         assert_eq!(
@@ -537,11 +687,25 @@ mod tests {
     #[test]
     fn l2_auth_rejects_malformed_api_secret() {
         let mut client =
-            ClobClient::new("https://clob.polymarket.com", "key", "not base64!", "pass");
+            ClobClient::new("https://clob.polymarket.com", "key", "not base64!", "pass").unwrap();
         client.maker_address = "0x0000000000000000000000000000000000000001".to_string();
 
         let err = client.require_l2_auth().unwrap_err();
         assert!(err.contains("POLY_API_SECRET"));
+    }
+
+    #[test]
+    fn invalid_private_key_clears_stale_signing_identity() {
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "c2VjcmV0", "pass").unwrap();
+        client
+            .set_signing_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+            .unwrap();
+        assert!(client.signing_key.is_some());
+
+        assert!(client.set_signing_key("invalid").is_err());
+        assert!(client.signing_key.is_none());
+        assert!(client.maker_address.is_empty());
     }
 
     #[test]
@@ -573,5 +737,32 @@ mod tests {
         assert!(body.contains("\"orderType\":\"GTC\""));
         assert!(body.contains("\"postOnly\":true"));
         assert!(body.contains("\"deferExec\":false"));
+    }
+
+    #[test]
+    fn prepares_order_and_lookup_hash_before_network_submission() {
+        let mut client =
+            ClobClient::new("https://clob.polymarket.com", "key", "c2VjcmV0", "pass").unwrap();
+        client
+            .set_signing_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+            .unwrap();
+
+        let prepared = client
+            .prepare_maker_order("123", 0.5, 10.0, "BUY", false, 0.01)
+            .unwrap();
+
+        assert_eq!(prepared.expected_order_id().len(), 66);
+        assert!(prepared.expected_order_id().starts_with("0x"));
+        assert!(prepared.body.contains("\"orderType\":\"GTC\""));
+        assert!(prepared.body.contains("\"postOnly\":true"));
+    }
+
+    #[test]
+    fn submission_receipt_compares_hashes_case_insensitively() {
+        let receipt = SubmissionReceipt {
+            order_id: "0xABCD".to_string(),
+            expected_order_id: "0xabcd".to_string(),
+        };
+        assert!(receipt.id_matches_expected());
     }
 }

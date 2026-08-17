@@ -312,6 +312,34 @@ impl BTCHistory {
         self.price_at((timestamp_s * 1000.0) as i64)
     }
 
+    /// Most recent observable price at or before `timestamp_ms`, provided it
+    /// is no older than `max_age_ms`. This is the fail-closed lookup used by
+    /// source-specific fair-value anchors; it never reads a future tick.
+    pub fn price_at_with_max_age(&self, timestamp_ms: i64, max_age_ms: i64) -> Option<f64> {
+        self.price_and_age_at_with_max_age(timestamp_ms, max_age_ms)
+            .map(|(price, _)| price)
+    }
+
+    /// Price plus causal observation age at `timestamp_ms`. This exposes the
+    /// exact freshness used by source-coverage evidence without allowing a
+    /// future tick or a separate lookup rule.
+    pub fn price_and_age_at_with_max_age(
+        &self,
+        timestamp_ms: i64,
+        max_age_ms: i64,
+    ) -> Option<(f64, i64)> {
+        if self.timestamps_ms.is_empty() || max_age_ms < 0 {
+            return None;
+        }
+        let idx = match self.timestamps_ms.binary_search(&timestamp_ms) {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+        let age_ms = timestamp_ms.saturating_sub(self.timestamps_ms[idx]);
+        (age_ms <= max_age_ms).then_some((self.prices[idx], age_ms))
+    }
+
     /// (open, high, low, close) over `[start_ms, end_ms]`. Returns zeros if
     /// the window has no ticks.
     #[cfg(test)]
@@ -374,12 +402,19 @@ pub fn classify_btc_source_values(source_values: &BTreeSet<String>) -> &'static 
         "binance_btcusdt_rtds",
         "crypto_prices",
     ];
+    const BINANCE_RTDS_SOURCES: &[&str] = &["binance_btcusdt_rtds", "crypto_prices"];
     if !source_values.is_empty()
         && source_values
             .iter()
             .all(|source| CHAINLINK_SOURCES.contains(&source.as_str()))
     {
         "chainlink_btc_usd_data_stream"
+    } else if !source_values.is_empty()
+        && source_values
+            .iter()
+            .all(|source| BINANCE_RTDS_SOURCES.contains(&source.as_str()))
+    {
+        "binance_btcusdt_rtds"
     } else if !source_values.is_empty()
         && source_values
             .iter()
@@ -412,6 +447,25 @@ mod tests {
         let h = BTCHistory::new();
         assert_eq!(h.price_at(0), 0.0);
         assert_eq!(h.price_at(1_700_000_000_000), 0.0);
+        assert_eq!(h.price_at_with_max_age(1_700_000_000_000, 10_000), None);
+    }
+
+    #[test]
+    fn max_age_lookup_is_causal_and_fail_closed() {
+        let mut h = BTCHistory::new();
+        h.timestamps_ms.extend([1_000, 3_000, 6_000]);
+        h.prices.extend([100.0, 101.0, 102.0]);
+
+        assert_eq!(h.price_at_with_max_age(2_000, 1_000), Some(100.0));
+        assert_eq!(h.price_at_with_max_age(2_000, 999), None);
+        assert_eq!(h.price_at_with_max_age(3_000, 0), Some(101.0));
+        assert_eq!(h.price_at_with_max_age(500, 10_000), None);
+        assert_eq!(h.price_at_with_max_age(5_000, -1), None);
+        assert_eq!(h.price_at_with_max_age(5_000, 10_000), Some(101.0));
+        assert_eq!(
+            h.price_and_age_at_with_max_age(5_000, 10_000),
+            Some((101.0, 2_000))
+        );
     }
 
     #[test]
@@ -483,6 +537,19 @@ mod tests {
         h.load_csv(f.path()).unwrap();
 
         assert_eq!(h.source_kind(), "chainlink_btc_usd_data_stream");
+    }
+
+    #[test]
+    fn collector_tick_csv_preserves_binance_rtds_provenance() {
+        let f = write_csv(&[
+            "timestamp_ms,source,price",
+            "1700000000000,binance_btcusdt_rtds,70000",
+            "1700000001000,binance_btcusdt_rtds,70010",
+        ]);
+        let mut h = BTCHistory::new();
+        h.load_csv(f.path()).unwrap();
+
+        assert_eq!(h.source_kind(), "binance_btcusdt_rtds");
     }
 
     #[test]

@@ -98,6 +98,10 @@ impl EvaluationRow {
             z_score: self.z_score,
             reversion_count: 0,
             directional_impulse_10s_bps: None,
+            article_path_2m: None,
+            article_path_3m: None,
+            article_path_4m: None,
+            article_move_2m_usd: None,
         }
     }
 }

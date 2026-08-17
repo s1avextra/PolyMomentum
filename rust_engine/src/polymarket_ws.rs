@@ -49,6 +49,12 @@ pub struct TokenBookState {
     pub asks: Vec<BookLevel>,
     /// Polymarket source event time, not local receipt time.
     pub last_update_us: u64,
+    /// Latest market-channel tick-size value for this token.
+    #[serde(default)]
+    pub tick_size: Option<f64>,
+    /// Source event time for `tick_size`; kept separate from book freshness.
+    #[serde(default)]
+    pub tick_update_us: u64,
     #[serde(skip)]
     pub mid_history: VecDeque<(f64, f64)>,
 }
@@ -343,7 +349,10 @@ async fn apply_message_value(book_state: &SharedBookState, msg: serde_json::Valu
 }
 
 async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_json::Value) {
-    if !matches!(t, "book" | "price_change" | "best_bid_ask") {
+    if !matches!(
+        t,
+        "book" | "price_change" | "best_bid_ask" | "tick_size_change"
+    ) {
         return;
     }
     let Some(timestamp_us) = source_timestamp_us(&data) else {
@@ -351,6 +360,23 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
     };
 
     match t {
+        "tick_size_change" => {
+            let asset_id = data
+                .get("asset_id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned);
+            let tick_size = data.get("new_tick_size").and_then(parse_positive_price);
+            let (Some(asset_id), Some(tick_size)) = (asset_id, tick_size) else {
+                return;
+            };
+            let mut map = book_state.write().await;
+            let state = map.entry(asset_id).or_default();
+            if timestamp_us < state.tick_update_us {
+                return;
+            }
+            state.tick_size = Some(tick_size);
+            state.tick_update_us = timestamp_us;
+        }
         "book" => {
             let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else {
                 return;
@@ -452,6 +478,15 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
         }
         _ => {}
     }
+}
+
+fn parse_positive_price(value: &serde_json::Value) -> Option<f64> {
+    let parsed = match value {
+        serde_json::Value::String(raw) => raw.parse::<f64>().ok(),
+        serde_json::Value::Number(number) => number.as_f64(),
+        _ => None,
+    }?;
+    (parsed.is_finite() && parsed > 0.0 && parsed < 1.0).then_some(parsed)
 }
 
 #[cfg(test)]
@@ -588,6 +623,52 @@ mod tests {
         let token = state.get("token-a").unwrap();
         assert!((token.mid - 0.50).abs() < 1e-9);
         assert_eq!(token.last_update_us, 2_002_500);
+    }
+
+    #[tokio::test]
+    async fn applies_latest_tick_size_change_without_refreshing_book_age() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": "3000",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.95", "size": "30"}],
+                "asks": [{"price": "0.96", "size": "25"}],
+            }),
+        )
+        .await;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "tick_size_change",
+                "timestamp": "4000",
+                "asset_id": "token-a",
+                "market": "condition-a",
+                "old_tick_size": "0.01",
+                "new_tick_size": "0.001"
+            }),
+        )
+        .await;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "tick_size_change",
+                "timestamp": "3500",
+                "asset_id": "token-a",
+                "market": "condition-a",
+                "old_tick_size": "0.001",
+                "new_tick_size": "0.01"
+            }),
+        )
+        .await;
+
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert_eq!(token.tick_size, Some(0.001));
+        assert_eq!(token.tick_update_us, 4_000_000);
+        assert_eq!(token.last_update_us, 3_000_000);
     }
 
     #[tokio::test]

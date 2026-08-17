@@ -92,6 +92,31 @@ pub struct L2Event {
     pub body: L2EventBody,
 }
 
+/// Lightweight causal tape event for feature extraction. Unlike `L2Event`,
+/// this retains trade prints but deliberately omits full book levels so a
+/// feature plugin can scan a filtered parquet hour without materializing the
+/// multi-million-row event stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketFlowEventKind {
+    Book,
+    PriceChange,
+    Trade,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarketFlowEvent {
+    pub timestamp_ms: i64,
+    pub market_id: String,
+    pub token_id: String,
+    pub kind: MarketFlowEventKind,
+    pub side: String,
+    pub price: f64,
+    pub size: f64,
+    pub best_bid: f64,
+    pub best_ask: f64,
+    pub transaction_hash: Option<String>,
+}
+
 pub struct PMXTv2Loader {
     cache_dir: PathBuf,
     http: Client,
@@ -276,6 +301,26 @@ impl PMXTv2Loader {
         read_parquet(&path, condition_ids)
     }
 
+    /// Stream book-top, price-change, and trade-print rows for selected
+    /// conditions in parquet-native order. The callback must not retain a
+    /// reference to the event. This is intentionally separate from the
+    /// execution loader, whose replay contract continues to ignore trades.
+    pub fn scan_cached_hour_market_flow<F>(
+        &self,
+        hour: DateTime<Utc>,
+        condition_ids: &HashSet<String>,
+        visitor: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(&MarketFlowEvent),
+    {
+        let path = self.cache_path_for_hour(hour);
+        if !path.exists() {
+            anyhow::bail!("PMXT v2 hour {} not cached at {}", hour, path.display());
+        }
+        scan_market_flow_parquet(&path, condition_ids, visitor)
+    }
+
     /// Sidecar path for a `(hour, cid_set)` event cache. Filenames are
     /// distinct from the parquet (different suffix) so we never touch the
     /// upstream archive — important on the multi-tenant VPS where
@@ -288,6 +333,21 @@ impl PMXTv2Loader {
         ))
     }
 
+    pub fn sidecar_path_for_conditions(
+        &self,
+        hour: DateTime<Utc>,
+        condition_ids: &HashSet<String>,
+    ) -> PathBuf {
+        let mut sorted: Vec<&String> = condition_ids.iter().collect();
+        sorted.sort();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hasher::write_usize(&mut hasher, sorted.len());
+        for condition_id in sorted {
+            std::hash::Hash::hash(condition_id.as_str(), &mut hasher);
+        }
+        self.sidecar_path(hour, std::hash::Hasher::finish(&hasher))
+    }
+
     /// Load events for the given hour, using a per-(hour, cid_set) sidecar
     /// cache if one exists. First call decodes the parquet (slow) then
     /// writes a compact gzipped bincode of the filtered events. Subsequent
@@ -297,15 +357,7 @@ impl PMXTv2Loader {
         hour: DateTime<Utc>,
         condition_ids: &HashSet<String>,
     ) -> Result<Vec<L2Event>> {
-        let mut sorted: Vec<&String> = condition_ids.iter().collect();
-        sorted.sort();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hasher::write_usize(&mut hasher, sorted.len());
-        for s in &sorted {
-            std::hash::Hash::hash(s.as_str(), &mut hasher);
-        }
-        let cid_hash = std::hash::Hasher::finish(&hasher);
-        let sidecar = self.sidecar_path(hour, cid_hash);
+        let sidecar = self.sidecar_path_for_conditions(hour, condition_ids);
 
         if sidecar.exists() {
             if let Ok(events) = read_sidecar(&sidecar) {
@@ -361,6 +413,192 @@ impl PMXTv2Loader {
         }
         Ok(out)
     }
+}
+
+fn scan_market_flow_parquet<F>(
+    path: &Path,
+    condition_ids: &HashSet<String>,
+    mut visitor: F,
+) -> Result<usize>
+where
+    F: FnMut(&MarketFlowEvent),
+{
+    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .with_context(|| format!("parquet builder {}", path.display()))?;
+    let needed = [
+        "timestamp",
+        "timestamp_received",
+        "market",
+        "event_type",
+        "asset_id",
+        "price",
+        "size",
+        "side",
+        "best_bid",
+        "best_ask",
+        "transaction_hash",
+    ];
+    let leaf_indices = needed
+        .iter()
+        .filter_map(|name| {
+            builder
+                .parquet_schema()
+                .columns()
+                .iter()
+                .position(|column| column.name() == *name)
+        })
+        .collect::<Vec<_>>();
+    let market_index = builder
+        .parquet_schema()
+        .columns()
+        .iter()
+        .position(|column| column.name() == "market")
+        .context("parquet schema missing `market` column")?;
+    let projection = ProjectionMask::leaves(builder.parquet_schema(), leaf_indices);
+    let predicate_projection = ProjectionMask::leaves(builder.parquet_schema(), vec![market_index]);
+    let cid_set = condition_ids
+        .iter()
+        .map(|condition_id| condition_id.as_bytes().to_vec())
+        .collect::<HashSet<_>>();
+    let predicate = ArrowPredicateFn::new(predicate_projection, move |batch| {
+        let column = batch.column(0);
+        let rows = batch.num_rows();
+        let mut keep = Vec::with_capacity(rows);
+        if let Some(array) = column.as_any().downcast_ref::<FixedSizeBinaryArray>() {
+            for index in 0..rows {
+                keep.push(!array.is_null(index) && cid_set.contains(array.value(index)));
+            }
+        } else if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
+            for index in 0..rows {
+                keep.push(!array.is_null(index) && cid_set.contains(array.value(index).as_bytes()));
+            }
+        } else {
+            keep.resize(rows, false);
+        }
+        Ok(BooleanArray::from(keep))
+    });
+    let reader = builder
+        .with_projection(projection)
+        .with_row_filter(RowFilter::new(vec![
+            Box::new(predicate) as Box<dyn ArrowPredicate>
+        ]))
+        .build()
+        .context("build market-flow parquet reader")?;
+
+    let mut emitted = 0usize;
+    for batch in reader {
+        emitted +=
+            decode_market_flow_batch(&batch.context("read market-flow batch")?, &mut visitor)?;
+    }
+    Ok(emitted)
+}
+
+fn decode_market_flow_batch<F>(batch: &RecordBatch, visitor: &mut F) -> Result<usize>
+where
+    F: FnMut(&MarketFlowEvent),
+{
+    let market_column = batch
+        .column_by_name("market")
+        .context("missing column `market`")?;
+    let market_fixed = market_column
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>();
+    let market_string = market_column.as_any().downcast_ref::<StringArray>();
+    let event_type = batch
+        .column_by_name("event_type")
+        .context("missing column `event_type`")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("`event_type` not a StringArray")?;
+    let asset_id = batch
+        .column_by_name("asset_id")
+        .context("missing column `asset_id`")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("`asset_id` not a StringArray")?;
+    let timestamp = batch
+        .column_by_name("timestamp")
+        .context("missing column `timestamp`")?
+        .as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .context("`timestamp` not TimestampMillisecondArray")?;
+    let timestamp_received = batch
+        .column_by_name("timestamp_received")
+        .and_then(|column| column.as_any().downcast_ref::<TimestampMillisecondArray>());
+    let side = batch
+        .column_by_name("side")
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+    let price = batch
+        .column_by_name("price")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let size = batch
+        .column_by_name("size")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let best_bid = batch
+        .column_by_name("best_bid")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let best_ask = batch
+        .column_by_name("best_ask")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let transaction_hash = batch
+        .column_by_name("transaction_hash")
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+
+    let mut emitted = 0usize;
+    for index in 0..batch.num_rows() {
+        let kind = match event_type.value(index) {
+            "book" => MarketFlowEventKind::Book,
+            "price_change" => MarketFlowEventKind::PriceChange,
+            "last_trade_price" => MarketFlowEventKind::Trade,
+            _ => continue,
+        };
+        let timestamp_ms = if !timestamp.is_null(index) {
+            timestamp.value(index)
+        } else if let Some(received) = timestamp_received {
+            if received.is_null(index) {
+                continue;
+            }
+            received.value(index)
+        } else {
+            continue;
+        };
+        let market_id = if let Some(array) = market_fixed {
+            std::str::from_utf8(array.value(index))
+                .unwrap_or("")
+                .to_string()
+        } else if let Some(array) = market_string {
+            array.value(index).to_string()
+        } else {
+            continue;
+        };
+        let event = MarketFlowEvent {
+            timestamp_ms,
+            market_id,
+            token_id: asset_id.value(index).to_string(),
+            kind,
+            side: side
+                .and_then(|array| (!array.is_null(index)).then(|| array.value(index).to_string()))
+                .unwrap_or_default(),
+            price: price
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            size: size
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            best_bid: best_bid
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            best_ask: best_ask
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            transaction_hash: transaction_hash
+                .and_then(|array| (!array.is_null(index)).then(|| array.value(index).to_string())),
+        };
+        visitor(&event);
+        emitted += 1;
+    }
+    Ok(emitted)
 }
 
 fn read_parquet(path: &Path, condition_ids: Option<&HashSet<String>>) -> Result<Vec<L2Event>> {
@@ -686,20 +924,33 @@ const SIDECAR_VERSION: u32 = 1;
 
 fn write_sidecar(path: &Path, events: &[L2Event]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("bin.gz.tmp");
-    let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
-    let mut buf = std::io::BufWriter::new(f);
-    buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
-    buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
-    let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
-    let mut bin = std::io::BufWriter::new(encoder);
-    bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
-    bin.flush()?;
-    let encoder = bin.into_inner().context("flush gz writer")?;
-    let mut buf = encoder.finish().context("finish gz")?;
-    buf.flush()?;
-    drop(buf);
-    std::fs::rename(&tmp, path).context("rename tmp sidecar")?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sidecar.bin.gz");
+    let tmp = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    let write_result = (|| -> Result<()> {
+        let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
+        let mut buf = std::io::BufWriter::new(f);
+        buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
+        buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
+        let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
+        let mut bin = std::io::BufWriter::new(encoder);
+        bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
+        bin.flush()?;
+        let encoder = bin.into_inner().context("flush gz writer")?;
+        let mut buf = encoder.finish().context("finish gz")?;
+        buf.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error).context("rename tmp sidecar");
+    }
     Ok(())
 }
 
@@ -764,5 +1015,35 @@ mod tests {
             PMXTv2Loader::url_for_hour(h),
             "https://r2v2.pmxt.dev/polymarket_orderbook_2026-04-26T14.parquet"
         );
+    }
+
+    #[test]
+    fn sidecar_write_is_atomic_and_round_trips() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("sample.events.bin.gz");
+        let events = vec![L2Event {
+            timestamp_s: 1.25,
+            market_id: "market-1".to_string(),
+            body: L2EventBody::BookSnapshot(BookSnapshot {
+                market_id: "market-1".to_string(),
+                token_id: "token-1".to_string(),
+                best_bid: 0.49,
+                best_ask: 0.51,
+                timestamp_s: 1.25,
+                bids: Vec::new(),
+                asks: Vec::new(),
+            }),
+        }];
+
+        write_sidecar(&path, &events).unwrap();
+        let loaded = read_sidecar(&path).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].market_id, "market-1");
+        assert_eq!(loaded[0].timestamp_s, 1.25);
+        assert!(!temp
+            .path()
+            .join(format!("sample.events.bin.gz.tmp.{}", std::process::id()))
+            .exists());
     }
 }

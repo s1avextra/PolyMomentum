@@ -19,6 +19,7 @@ use crate::execution::fees::polymarket_fee;
 pub const POLYMARKET_USER_WS_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 const STALE_AFTER: Duration = Duration::from_secs(60);
+const HEARTBEAT: &str = "PING";
 
 #[derive(Debug, Clone)]
 pub struct UserChannelAuth {
@@ -136,7 +137,7 @@ pub struct UserTradeEvent {
     pub status: String,
     #[serde(default)]
     pub timestamp: String,
-    #[serde(default)]
+    #[serde(default, alias = "match_time")]
     pub matchtime: String,
     #[serde(default)]
     pub maker_orders: Vec<UserMakerOrder>,
@@ -177,6 +178,13 @@ impl UserTradeEvent {
         )
     }
 
+    pub fn is_confirmed_fill(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "CONFIRMED" | "TRADE_STATUS_CONFIRMED"
+        )
+    }
+
     pub fn is_failed(&self) -> bool {
         matches!(
             self.status.to_ascii_uppercase().as_str(),
@@ -196,6 +204,29 @@ impl UserTradeEvent {
         }
         ids
     }
+
+    pub fn candidate_order_fills(&self) -> Vec<UserTradeOrderFill> {
+        let mut fills = Vec::new();
+        if !self.taker_order_id.is_empty() {
+            fills.push(UserTradeOrderFill {
+                order_id: self.taker_order_id.clone(),
+                size: self.size(),
+                price: self.price(),
+            });
+        }
+        for maker in &self.maker_orders {
+            if maker.order_id.is_empty() || fills.iter().any(|fill| fill.order_id == maker.order_id)
+            {
+                continue;
+            }
+            fills.push(UserTradeOrderFill {
+                order_id: maker.order_id.clone(),
+                size: parse_number(&maker.matched_amount),
+                price: parse_number(&maker.price),
+            });
+        }
+        fills
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -206,6 +237,13 @@ pub struct UserMakerOrder {
     pub matched_amount: String,
     #[serde(default)]
     pub price: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserTradeOrderFill {
+    pub order_id: String,
+    pub size: f64,
+    pub price: f64,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +273,21 @@ pub fn parse_user_events_text(text: &str) -> Vec<UserEvent> {
             .into_iter()
             .collect()
     }
+}
+
+pub fn parse_rest_trade_events(value: &serde_json::Value) -> Result<Vec<UserTradeEvent>, String> {
+    let values = value
+        .as_array()
+        .or_else(|| value.get("data").and_then(|data| data.as_array()))
+        .or_else(|| value.get("trades").and_then(|trades| trades.as_array()))
+        .ok_or_else(|| "REST trade response has no data array".to_string())?;
+    values
+        .iter()
+        .cloned()
+        .map(|trade| {
+            serde_json::from_value(trade).map_err(|error| format!("parse REST trade: {error}"))
+        })
+        .collect()
 }
 
 fn parse_user_event_value(value: serde_json::Value) -> Option<UserEvent> {
@@ -310,7 +363,7 @@ async fn run_session(
                 if last_msg.elapsed() > STALE_AFTER {
                     return Err("stale (no frames)".to_string());
                 }
-                let _ = write.send(Message::Text("{}".into())).await;
+                let _ = write.send(Message::Text(HEARTBEAT.into())).await;
             }
             msg = timeout(Duration::from_secs(60), read.next()) => {
                 match msg {
@@ -411,10 +464,87 @@ mod tests {
             panic!("trade event")
         };
         assert!(trade.is_fill_status());
+        assert!(!trade.is_confirmed_fill());
         assert_eq!(
             trade.candidate_order_ids(),
             vec!["0xtaker".to_string(), "0xmaker".to_string()]
         );
+        assert_eq!(
+            trade.candidate_order_fills(),
+            vec![
+                UserTradeOrderFill {
+                    order_id: "0xtaker".to_string(),
+                    size: 10.0,
+                    price: 0.57,
+                },
+                UserTradeOrderFill {
+                    order_id: "0xmaker".to_string(),
+                    size: 10.0,
+                    price: 0.57,
+                },
+            ]
+        );
         assert!((trade.fee() - 0.00735).abs() < 1e-9);
+    }
+
+    #[test]
+    fn maker_candidate_uses_its_matched_leg_economics() {
+        let text = r#"{
+          "event_type": "trade",
+          "type": "TRADE",
+          "id": "trade-1",
+          "taker_order_id": "0xtaker",
+          "price": "0.58",
+          "size": "10",
+          "status": "CONFIRMED",
+          "maker_orders": [
+            {"order_id": "0xmaker-a", "matched_amount": "4", "price": "0.57"},
+            {"order_id": "0xmaker-b", "matched_amount": "6", "price": "0.59"}
+          ]
+        }"#;
+        let events = parse_user_events_text(text);
+        let UserEvent::Trade(trade) = &events[0] else {
+            panic!("trade event")
+        };
+        let fills = trade.candidate_order_fills();
+        assert!(trade.is_confirmed_fill());
+        assert_eq!(fills[0].size, 10.0);
+        assert_eq!(fills[0].price, 0.58);
+        assert_eq!(fills[1].size, 4.0);
+        assert_eq!(fills[1].price, 0.57);
+        assert_eq!(fills[2].size, 6.0);
+        assert_eq!(fills[2].price, 0.59);
+    }
+
+    #[test]
+    fn user_channel_heartbeat_matches_documented_protocol() {
+        assert_eq!(HEARTBEAT, "PING");
+    }
+
+    #[test]
+    fn parses_confirmed_rest_trade_page() {
+        let value = serde_json::json!({
+            "limit": 100,
+            "next_cursor": "LTE=",
+            "count": 1,
+            "data": [{
+                "id": "trade-1",
+                "taker_order_id": "0xtaker",
+                "market": "0xmarket",
+                "asset_id": "123",
+                "side": "BUY",
+                "size": "10",
+                "price": "0.57",
+                "status": "TRADE_STATUS_CONFIRMED",
+                "match_time": "1700000000",
+                "trader_side": "TAKER",
+                "maker_orders": []
+            }]
+        });
+        let trades = parse_rest_trade_events(&value).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].id, "trade-1");
+        assert!(trades[0].is_confirmed_fill());
+        assert_eq!(trades[0].timestamp_s(), 1_700_000_000.0);
     }
 }

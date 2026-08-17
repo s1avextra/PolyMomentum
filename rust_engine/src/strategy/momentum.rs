@@ -24,6 +24,21 @@ pub struct MomentumSignal {
     pub reversion_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directional_impulse_10s_bps: Option<f64>,
+    /// Strict signs of the first two one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_2m: Option<String>,
+    /// Strict signs of the first three one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_3m: Option<String>,
+    /// Strict signs of the first four one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute four.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_4m: Option<String>,
+    /// Causal BTC move from the window open to the two-minute checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_move_2m_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -238,6 +253,12 @@ impl MomentumDetector {
         let direction = if price_change >= 0.0 { "up" } else { "down" };
         let directional_impulse_10s_bps =
             self.directional_impulse_bps(direction, current_price, now, 10.0);
+        let article_path_2m = self.article_checkpoint_path(window_start, open_price, now, 2);
+        let article_path_3m = self.article_checkpoint_path(window_start, open_price, now, 3);
+        let article_path_4m = self.article_checkpoint_path(window_start, open_price, now, 4);
+        let article_move_2m_usd = self
+            .checkpoint_price(window_start + 120.0, now)
+            .map(|price| price - open_price);
 
         // Walk ticks newest → oldest, stop at window_start.
         let mut recent: Vec<(f64, f64)> = Vec::new();
@@ -318,7 +339,52 @@ impl MomentumDetector {
             z_score,
             reversion_count,
             directional_impulse_10s_bps,
+            article_path_2m,
+            article_path_3m,
+            article_path_4m,
+            article_move_2m_usd,
         })
+    }
+
+    fn checkpoint_price(&self, checkpoint_ts: f64, now_ts: f64) -> Option<f64> {
+        if !checkpoint_ts.is_finite() || !now_ts.is_finite() || now_ts + 1e-9 < checkpoint_ts {
+            return None;
+        }
+        let &(observed_ts, price) = self.ticks.iter().rev().find(|(timestamp, price)| {
+            *timestamp <= checkpoint_ts && *price > 0.0 && price.is_finite()
+        })?;
+        (checkpoint_ts - observed_ts <= 2.0).then_some(price)
+    }
+
+    fn article_checkpoint_path(
+        &self,
+        window_start: f64,
+        open_price: f64,
+        now_ts: f64,
+        minutes: usize,
+    ) -> Option<String> {
+        if !(2..=4).contains(&minutes) {
+            return None;
+        }
+        let mut previous = open_price;
+        let mut all_up = true;
+        let mut all_down = true;
+        for minute in 1..=minutes {
+            let price = self.checkpoint_price(window_start + minute as f64 * 60.0, now_ts)?;
+            all_up &= price > previous;
+            all_down &= price < previous;
+            previous = price;
+        }
+        Some(
+            if all_up {
+                "up"
+            } else if all_down {
+                "down"
+            } else {
+                "mixed"
+            }
+            .to_string(),
+        )
     }
 
     pub fn directional_impulse_bps(
@@ -384,6 +450,40 @@ mod tests {
         assert_eq!(sig.direction, "up");
         assert!(sig.consistency > 0.5);
         assert!(sig.confidence > 0.0);
+    }
+
+    #[test]
+    fn article_checkpoints_become_available_only_at_their_causal_offsets() {
+        let mut det = MomentumDetector::new(Some(0.5), MomentumConfig::default());
+        let t0 = 1_700_000_100.0;
+        det.set_window_open("c", 70_000.0);
+        for second in 0..=180 {
+            det.add_tick(70_000.0 + second as f64, Some(t0 + second as f64));
+        }
+
+        let at_two = det
+            .detect("c", 2.0, 3.0, 70_120.0, Some(t0 + 120.0))
+            .expect("two-minute signal");
+        assert_eq!(at_two.article_path_2m.as_deref(), Some("up"));
+        assert_eq!(at_two.article_path_3m, None);
+
+        let at_three = det
+            .detect("c", 3.0, 2.0, 70_180.0, Some(t0 + 180.0))
+            .expect("three-minute signal");
+        assert_eq!(at_three.article_path_2m.as_deref(), Some("up"));
+        assert_eq!(at_three.article_path_3m.as_deref(), Some("up"));
+        assert_eq!(at_three.article_path_4m, None);
+        assert_eq!(at_three.article_move_2m_usd, Some(120.0));
+
+        for second in 181..=240 {
+            det.add_tick(70_000.0 + second as f64, Some(t0 + second as f64));
+        }
+        let at_four = det
+            .detect("c", 4.0, 1.0, 70_240.0, Some(t0 + 240.0))
+            .expect("four-minute signal");
+        assert_eq!(at_four.article_path_3m.as_deref(), Some("up"));
+        assert_eq!(at_four.article_path_4m.as_deref(), Some("up"));
+        assert_eq!(at_four.article_move_2m_usd, Some(120.0));
     }
 
     #[test]

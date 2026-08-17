@@ -390,6 +390,12 @@ fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
             ))
         }
     };
+    if !variant.exit.is_disabled() {
+        return Some(
+            "strategy_params enable an exit lifecycle that live runtime does not yet implement"
+                .to_string(),
+        );
+    }
     let params_hash = stable_json_hash(&variant);
     if params_hash != artifact.selected_strategy.params_hash {
         return Some(format!(
@@ -1148,6 +1154,23 @@ mod tests {
         assert!(report
             .failure_summary()
             .contains("failed to load promotion"));
+    }
+
+    #[test]
+    fn preflight_rejects_complete_set_lock_until_live_runtime_has_parity() {
+        let tmp = TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.exit.complete_set_lock_enabled = true;
+        let artifact = write_test_promotion(tmp.path(), variant);
+        let mut settings = test_settings(&tmp);
+        settings.promotion_artifact_path = artifact.display().to_string();
+
+        let report = run_preflight(&settings, RuntimeMode::Paper, false);
+
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("exit lifecycle that live runtime does not yet implement"));
     }
 
     #[test]

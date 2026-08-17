@@ -324,9 +324,19 @@ fn parse_fee_rate_bps(v: &Value) -> Option<f64> {
 }
 
 fn parse_taker_fee_rate(raw: &Value) -> Option<f64> {
-    raw.get("fd")
-        .and_then(|fd| fd.get("r"))
+    raw.get("feeSchedule")
+        .and_then(|schedule| schedule.get("rate"))
         .and_then(parse_fee_rate_decimal)
+        .or_else(|| {
+            raw.get("fee_schedule")
+                .and_then(|schedule| schedule.get("rate"))
+                .and_then(parse_fee_rate_decimal)
+        })
+        .or_else(|| {
+            raw.get("fd")
+                .and_then(|fd| fd.get("r"))
+                .and_then(parse_fee_rate_decimal)
+        })
         .or_else(|| raw.get("feeRate").and_then(parse_fee_rate_decimal))
         .or_else(|| raw.get("fee_rate").and_then(parse_fee_rate_decimal))
         .or_else(|| raw.get("takerFeeRate").and_then(parse_fee_rate_decimal))
@@ -523,6 +533,7 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
         minimum_tick_size: raw
             .get("minimum_tick_size")
             .or_else(|| raw.get("minimumTickSize"))
+            .or_else(|| raw.get("orderPriceMinTickSize"))
             .and_then(parse_f64),
         fees_enabled: parse_fees_enabled(raw),
         taker_fee_rate: parse_taker_fee_rate(raw),
@@ -621,5 +632,22 @@ mod tests {
         let m = parse_gamma_market(&raw).unwrap();
         assert_eq!(m.taker_fee_rate, Some(0.07));
         assert_eq!(m.maker_fee_rate, Some(0.0));
+    }
+
+    #[test]
+    fn parses_current_gamma_tick_and_fee_schedule_fields() {
+        let raw = serde_json::json!({
+            "conditionId": "0xabc",
+            "question": "Bitcoin Up or Down - July 20, 1PM ET?",
+            "category": "Crypto",
+            "orderPriceMinTickSize": 0.01,
+            "feesEnabled": true,
+            "takerBaseFee": 1000,
+            "feeSchedule": {"exponent": 1, "rate": 0.07, "takerOnly": true},
+        });
+        let market = parse_gamma_market(&raw).unwrap();
+        assert_eq!(market.minimum_tick_size, Some(0.01));
+        assert_eq!(market.taker_fee_rate, Some(0.07));
+        assert_eq!(market.effective_maker_fee_rate(0.0), 0.0);
     }
 }

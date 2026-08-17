@@ -7,7 +7,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -17,11 +16,36 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::artifact::{write_json_artifact_atomic, write_jsonl_atomic};
 use crate::backtest::experiment::{self, PromotionArtifact};
 use crate::backtest::resolver::TradePnlDiagnostics;
-use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
+use crate::backtest::strategies::{
+    decision_volatility_with_floor, SelectivityFilter, StrategyVariant,
+};
+use crate::data::models::category_taker_fee_rate;
+use crate::execution::fees::polymarket_fee;
+use crate::fair_value::binary_option_price_with_rate;
 use crate::monitoring::{causality, diagnostics};
+use crate::strategy::decision::zone_for;
+use crate::strategy::microstructure::{top_crosses_dynamic_tick_threshold, DYNAMIC_TICK_SIZE};
 use crate::strategy::spec::stable_json_hash;
+
+pub mod opportunity_cross_venue;
+pub mod opportunity_dataset;
+pub mod opportunity_feature_store;
+pub mod opportunity_flow;
+pub mod opportunity_liquidity;
+pub mod opportunity_policy;
+pub mod opportunity_probability;
+pub mod opportunity_replay;
+pub mod opportunity_signals;
+pub mod opportunity_table;
+mod registry_io;
+
+use registry_io::{
+    archive_evidence_file, merge_unique_strings, read_strategy_registry, safe_path_component,
+    strategy_version_id, write_strategy_registry_atomic,
+};
 
 #[derive(Debug, Clone)]
 pub struct StrategyBuilderPlanInput {
@@ -88,6 +112,204 @@ pub struct StrategyBuilderAudit {
     pub grade: String,
     pub checks: Vec<StrategyBuilderCheck>,
     pub next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryComplementScreenInput {
+    pub opportunity_paths: Vec<String>,
+    pub resolution_manifest_paths: Vec<String>,
+    pub block_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementScreen {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub mechanism_id: String,
+    pub block_id: String,
+    pub status: String,
+    pub ok: bool,
+    pub preregistered_at: String,
+    pub capture_identity: BinaryComplementCaptureIdentity,
+    pub fixed_rule: BinaryComplementFixedRule,
+    pub sources: BinaryComplementSources,
+    pub counts: BinaryComplementCounts,
+    pub rates: BinaryComplementRates,
+    pub diagnostics: BinaryComplementDiagnostics,
+    pub unit_economics: BinaryComplementUnitEconomics,
+    pub attribution: BinaryComplementAttribution,
+    pub gates: Vec<BinaryComplementGate>,
+    pub failure_reasons: Vec<String>,
+    pub aligned_condition_ids: Vec<String>,
+    pub aligned_condition_ids_hash: String,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementCaptureIdentity {
+    pub strategy_name: String,
+    pub params_hash: String,
+    pub baseline_strategy_name: String,
+    pub baseline_params_hash: String,
+    pub baseline_primary_min_edge: f64,
+    pub minimum_latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementFixedRule {
+    pub residual_multiplier: f64,
+    pub expression: String,
+    pub missing_feature_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementSources {
+    pub opportunity_reports: Vec<String>,
+    pub opportunity_report_sha256: Vec<String>,
+    pub resolution_manifests: Vec<String>,
+    pub resolution_manifest_sha256: Vec<String>,
+    pub report_start: String,
+    pub report_end: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementCounts {
+    pub terminal_settlement_aligned_conditions: usize,
+    pub conditions_with_opportunity_rows: usize,
+    pub baseline_candidates: usize,
+    pub baseline_winners: usize,
+    pub baseline_losses: usize,
+    pub valid_pair_feature_conditions: usize,
+    pub selected_candidates: usize,
+    pub selected_winners: usize,
+    pub selected_losses: usize,
+    pub baseline_winners_retained: usize,
+    pub baseline_losses_removed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementRates {
+    pub valid_pair_feature_coverage: Option<f64>,
+    pub candidate_retention: Option<f64>,
+    pub baseline_winner_retention: Option<f64>,
+    pub baseline_loss_removal: Option<f64>,
+    pub selected_win_rate: Option<f64>,
+    pub selected_wilson_95_lower: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementAttribution {
+    pub gating_use: String,
+    pub baseline: BinaryComplementAttributionComparator,
+    pub paired_book_validity: BinaryComplementAttributionComparator,
+    pub frozen_residual: BinaryComplementAttributionComparator,
+    pub paired_validity_candidate_removals: usize,
+    pub paired_validity_loss_removals: usize,
+    pub residual_candidate_removals: usize,
+    pub residual_loss_removals: usize,
+    pub residual_decision_disagreements: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementAttributionComparator {
+    pub candidates: usize,
+    pub winners: usize,
+    pub losses: usize,
+    pub win_rate: Option<f64>,
+    pub unit_economics: BinaryComplementUnitEconomics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementDiagnostics {
+    pub gating_use: String,
+    pub baseline_decision_ask: BinaryComplementDistribution,
+    pub selected_decision_ask: BinaryComplementDistribution,
+    pub selection_delay_seconds: BinaryComplementDistribution,
+    pub selected_seconds_to_close: BinaryComplementDistribution,
+    pub same_direction_decision_ask_change: BinaryComplementDistribution,
+    pub selected_in_final_60_seconds: usize,
+    pub selected_in_final_60_seconds_rate: Option<f64>,
+    pub selected_direction_changes: usize,
+    pub selected_direction_change_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementDistribution {
+    pub count: usize,
+    pub min: Option<f64>,
+    pub p10: Option<f64>,
+    pub p50: Option<f64>,
+    pub p90: Option<f64>,
+    pub max: Option<f64>,
+    pub mean: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementUnitEconomics {
+    pub entry_budget_usd: f64,
+    pub pricing_basis: String,
+    pub fee_model: String,
+    pub gross_win_pnl_usd: f64,
+    pub gross_loss_pnl_usd: f64,
+    pub total_pnl_usd: f64,
+    pub maximum_drawdown_usd: f64,
+    pub average_win_pnl_usd: Option<f64>,
+    pub average_loss_pnl_usd: Option<f64>,
+    pub profit_factor: Option<f64>,
+    pub payoff_ratio: Option<f64>,
+    pub profit_factor_gate_margin_usd: f64,
+    pub payoff_gate_margin_usd: f64,
+    pub first_half_candidates: usize,
+    pub first_half_pnl_usd: f64,
+    pub second_half_candidates: usize,
+    pub second_half_pnl_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryComplementGate {
+    pub name: String,
+    pub passed: bool,
+    pub observed: Option<f64>,
+    pub minimum: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryComplementRepeatAuditInput {
+    pub screen_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatAudit {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub mechanism_id: String,
+    pub status: String,
+    pub ok: bool,
+    pub screens: Vec<BinaryComplementRepeatBlock>,
+    pub checks: Vec<BinaryComplementRepeatCheck>,
+    pub overlapping_condition_ids: Vec<String>,
+    pub failure_reasons: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatBlock {
+    pub path: String,
+    pub artifact_hash: String,
+    pub block_id: String,
+    pub screen_passed: bool,
+    pub report_start: String,
+    pub report_end: String,
+    pub aligned_conditions: usize,
+    pub aligned_condition_ids_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryComplementRepeatCheck {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1276,6 +1498,2120 @@ fn registry_entry_paths(entry: &StrategyRegistryEntry) -> Vec<(String, String)> 
         }
     }
     paths
+}
+
+const BINARY_COMPLEMENT_MECHANISM_ID: &str = "binary_complement_coherence_v1";
+const BINARY_COMPLEMENT_PREREGISTERED_AT: &str = "2026-07-15T04:49:14Z";
+const BINARY_COMPLEMENT_CAPTURE_NAME: &str = "primary_v6_calibration_capture_edge1000";
+const BINARY_COMPLEMENT_CAPTURE_HASH: &str =
+    "34aa177f7ae8614814208cdd81ed74e09199007b924ee16b6e18dfa62fd49aa9";
+const BINARY_COMPLEMENT_BASELINE_NAME: &str = "primary_v6_volfloor_300";
+const BINARY_COMPLEMENT_BASELINE_HASH: &str =
+    "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5";
+const BINARY_COMPLEMENT_RISK_PROFILE: &str =
+    "position_pct=0.0500;max_per_market_usd=10.00;stress_dd_cap=0.1200;decision_vol_floor=0.3000";
+const BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE: f64 = 0.07;
+const BINARY_COMPLEMENT_CAPTURE_MIN_EDGE: f64 = 1.0;
+const BINARY_COMPLEMENT_CAPTURE_MIN_EV_BUFFER: f64 = -1.0;
+const BINARY_COMPLEMENT_CAPTURE_EDGE_CAP: f64 = 0.25;
+const BINARY_COMPLEMENT_CAPTURE_VOLATILITY_FLOOR: f64 = 0.30;
+const BINARY_COMPLEMENT_CAPTURE_DEFAULT_TAKER_FEE_RATE: f64 = 0.07;
+const BINARY_COMPLEMENT_CAPTURE_MIN_REVERSION_COUNT: u32 = 1;
+const BINARY_COMPLEMENT_CAPTURE_MAX_REVERSION_COUNT: u32 = 2;
+const BINARY_COMPLEMENT_CAPTURE_MIN_PRICE: f64 = 0.10;
+const BINARY_COMPLEMENT_CAPTURE_MAX_PRICE: f64 = 0.85;
+const BINARY_COMPLEMENT_CAPTURE_SETTLEMENT_CUTOFF_MINUTES: f64 = 2.0;
+const BINARY_COMPLEMENT_CAPTURE_DEAD_ZONE_LO: f64 = 0.80;
+const BINARY_COMPLEMENT_CAPTURE_DEAD_ZONE_HI: f64 = 0.90;
+const BINARY_COMPLEMENT_MIN_LATENCY_MS: u64 = 202;
+const BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER: f64 = 2.0;
+const BINARY_COMPLEMENT_MIN_CONDITIONS: usize = 750;
+const BINARY_COMPLEMENT_MIN_BASELINE_CANDIDATES: usize = 100;
+const BINARY_COMPLEMENT_MIN_BASELINE_LOSSES: usize = 15;
+const BINARY_COMPLEMENT_MIN_SELECTED_CANDIDATES: usize = 80;
+const BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE: f64 = 0.95;
+const BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION: f64 = 0.70;
+const BINARY_COMPLEMENT_MIN_WINNER_RETENTION: f64 = 0.90;
+const BINARY_COMPLEMENT_MIN_LOSS_REMOVAL: f64 = 0.30;
+const BINARY_COMPLEMENT_MIN_WILSON: f64 = 0.70;
+const BINARY_COMPLEMENT_MIN_UNIT_PROFIT_FACTOR: f64 = 1.20;
+const BINARY_COMPLEMENT_MIN_UNIT_PAYOFF_RATIO: f64 = 0.20;
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunityReport {
+    mode: String,
+    start: String,
+    end: String,
+    latency_ms: u64,
+    window_minutes: f64,
+    continuous: bool,
+    sampling: String,
+    variant_count: usize,
+    rows: Vec<BinaryComplementOpportunityReportRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunityReportRow {
+    opportunity_index: usize,
+    strategy_name: String,
+    params_hash: String,
+    risk_profile: String,
+    opportunity: BinaryComplementOpportunity,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementOpportunity {
+    condition_id: String,
+    token_id: String,
+    opposite_token_id: String,
+    decision_timestamp_s: f64,
+    evaluation_result: String,
+    btc_price: f64,
+    open_btc: f64,
+    fair_value_btc: f64,
+    fair_value_open_btc: f64,
+    observed_volatility: f64,
+    decision_volatility: f64,
+    reversion_count: u32,
+    market_fees_enabled: Option<bool>,
+    market_taker_fee_rate: Option<f64>,
+    market_category: String,
+    actual_direction: String,
+    won: bool,
+    entry_fee_rate: f64,
+    up_price: f64,
+    down_price: f64,
+    market_tick_size: f64,
+    chosen_best_bid: Option<f64>,
+    chosen_best_ask: Option<f64>,
+    chosen_bid_depth: Option<f64>,
+    chosen_ask_depth: Option<f64>,
+    chosen_book_age_ms: Option<f64>,
+    opposite_best_bid: Option<f64>,
+    opposite_best_ask: Option<f64>,
+    opposite_bid_depth: Option<f64>,
+    opposite_ask_depth: Option<f64>,
+    opposite_book_age_ms: Option<f64>,
+    chosen_microprice: Option<f64>,
+    opposite_mid: Option<f64>,
+    opposite_microprice: Option<f64>,
+    complement_mid_sum_residual: Option<f64>,
+    complement_microprice_sum_residual: Option<f64>,
+    decision: BinaryComplementDecision,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementDecision {
+    direction: String,
+    confidence: f64,
+    z_score: f64,
+    zone: String,
+    fair_value: f64,
+    market_price: f64,
+    gross_edge: f64,
+    entry_fee_per_share: f64,
+    edge: f64,
+    minutes_remaining: f64,
+    yes_no_vig: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolutionManifest {
+    a_plus_gate: BinaryComplementResolutionGate,
+    markets: Vec<BinaryComplementResolvedMarket>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolutionGate {
+    settlement_alignment_ready: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolvedMarket {
+    condition_id: String,
+    open_ts_s: f64,
+    close_ts_s: f64,
+    window_seconds: i64,
+    btc_open: f64,
+    btc_close: f64,
+    btc_direction: String,
+    settlement_aligned: bool,
+    official_source_matches_btc_tape: bool,
+    terminal_direction: String,
+    outcomes: Vec<BinaryComplementResolvedOutcome>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BinaryComplementResolvedOutcome {
+    name: String,
+    token_id: String,
+    price: f64,
+}
+
+#[derive(Debug)]
+struct BinaryComplementScreenRow {
+    open_ts_s: f64,
+    decision_timestamp_s: f64,
+    opportunity_index: usize,
+    direction: String,
+    decision_ask: f64,
+    entry_fee_rate: f64,
+    won: bool,
+    baseline_eligible: bool,
+    pair_features_valid: bool,
+    passes_fixed_rule: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BinaryComplementRecomputedFeatures {
+    mid_sum_residual: f64,
+    microprice_sum_residual: f64,
+}
+
+fn binary_complement_price_conforms_to_tick(price: f64, tick_size: f64) -> bool {
+    if !price.is_finite()
+        || !tick_size.is_finite()
+        || price <= 0.0
+        || price >= 1.0
+        || tick_size <= 0.0
+        || tick_size >= 1.0
+    {
+        return false;
+    }
+    let nearest = (price / tick_size).round() * tick_size;
+    (price - nearest).abs() <= 1e-9
+}
+
+fn binary_complement_recompute_baseline_eligibility(
+    path: &str,
+    opportunity: &BinaryComplementOpportunity,
+    open_ts_s: f64,
+    decision_ask: f64,
+) -> Result<bool> {
+    let decision = &opportunity.decision;
+    if ![
+        opportunity.decision_timestamp_s,
+        opportunity.btc_price,
+        opportunity.open_btc,
+        opportunity.fair_value_btc,
+        opportunity.fair_value_open_btc,
+        opportunity.observed_volatility,
+        opportunity.decision_volatility,
+        decision.confidence,
+        decision.z_score,
+        decision.fair_value,
+        decision.market_price,
+        decision.gross_edge,
+        decision.entry_fee_per_share,
+        decision.edge,
+        decision.minutes_remaining,
+        decision.yes_no_vig,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || opportunity.btc_price <= 0.0
+        || opportunity.open_btc <= 0.0
+        || opportunity.fair_value_btc <= 0.0
+        || opportunity.fair_value_open_btc <= 0.0
+    {
+        bail!(
+            "opportunity report {path} condition {} has invalid baseline decision inputs",
+            opportunity.condition_id
+        );
+    }
+
+    let expected_decision_volatility = decision_volatility_with_floor(
+        opportunity.observed_volatility,
+        BINARY_COMPLEMENT_CAPTURE_VOLATILITY_FLOOR,
+    );
+    if !binary_complement_float_close(
+        opportunity.decision_volatility,
+        expected_decision_volatility,
+    ) {
+        bail!(
+            "opportunity report {path} condition {} decision volatility does not reproduce from the frozen volatility floor",
+            opportunity.condition_id
+        );
+    }
+
+    let expected_entry_fee_rate = if opportunity.market_fees_enabled == Some(false) {
+        0.0
+    } else {
+        opportunity
+            .market_taker_fee_rate
+            .filter(|rate| rate.is_finite() && *rate >= 0.0)
+            .or_else(|| category_taker_fee_rate(&opportunity.market_category))
+            .unwrap_or(BINARY_COMPLEMENT_CAPTURE_DEFAULT_TAKER_FEE_RATE)
+    };
+    if !binary_complement_float_close(opportunity.entry_fee_rate, expected_entry_fee_rate) {
+        bail!(
+            "opportunity report {path} condition {} entry fee rate does not reproduce from serialized market fee metadata",
+            opportunity.condition_id
+        );
+    }
+
+    let elapsed_pct = (opportunity.decision_timestamp_s - open_ts_s) / 300.0;
+    let expected_zone = zone_for(elapsed_pct);
+    let expected_minutes_remaining = (open_ts_s + 300.0 - opportunity.decision_timestamp_s) / 60.0;
+    let expected_market_price = decision_ask;
+    let expected_raw_fair = binary_option_price_with_rate(
+        opportunity.fair_value_btc,
+        opportunity.fair_value_open_btc,
+        expected_minutes_remaining / 1440.0,
+        expected_decision_volatility,
+        0.05,
+    );
+    let expected_fair_value = if decision.direction == "up" {
+        expected_raw_fair
+    } else {
+        1.0 - expected_raw_fair
+    };
+    let expected_gross_edge = expected_fair_value - expected_market_price;
+    let expected_entry_fee_per_share =
+        opportunity.entry_fee_rate * expected_market_price * (1.0 - expected_market_price);
+    let expected_edge = expected_gross_edge - expected_entry_fee_per_share;
+    let expected_yes_no_vig = opportunity.up_price + opportunity.down_price - 1.0;
+    if decision.zone != expected_zone
+        || !binary_complement_float_close(decision.minutes_remaining, expected_minutes_remaining)
+        || !binary_complement_float_close(decision.market_price, expected_market_price)
+        || !binary_complement_float_close(decision.fair_value, expected_fair_value)
+        || !binary_complement_float_close(decision.gross_edge, expected_gross_edge)
+        || !binary_complement_float_close(
+            decision.entry_fee_per_share,
+            expected_entry_fee_per_share,
+        )
+        || !binary_complement_float_close(decision.edge, expected_edge)
+        || !binary_complement_float_close(decision.yes_no_vig, expected_yes_no_vig)
+    {
+        bail!(
+            "opportunity report {path} condition {} baseline decision does not reproduce from its serialized causal inputs",
+            opportunity.condition_id
+        );
+    }
+
+    let (minimum_confidence, minimum_z) = match expected_zone {
+        "primary" => (0.40, 0.70),
+        _ => (1.10, 100.0),
+    };
+    if expected_minutes_remaining <= BINARY_COMPLEMENT_CAPTURE_SETTLEMENT_CUTOFF_MINUTES
+        || opportunity.reversion_count < BINARY_COMPLEMENT_CAPTURE_MIN_REVERSION_COUNT
+        || opportunity.reversion_count > BINARY_COMPLEMENT_CAPTURE_MAX_REVERSION_COUNT
+        || decision.confidence < minimum_confidence
+        || decision.z_score < minimum_z
+        || (BINARY_COMPLEMENT_CAPTURE_DEAD_ZONE_LO..BINARY_COMPLEMENT_CAPTURE_DEAD_ZONE_HI)
+            .contains(&decision.confidence)
+        || !(BINARY_COMPLEMENT_CAPTURE_MIN_PRICE..=BINARY_COMPLEMENT_CAPTURE_MAX_PRICE)
+            .contains(&expected_market_price)
+    {
+        bail!(
+            "opportunity report {path} condition {} could not have reached the frozen capture edge gates",
+            opportunity.condition_id
+        );
+    }
+
+    let expected_evaluation_result = if expected_edge < BINARY_COMPLEMENT_CAPTURE_MIN_EV_BUFFER {
+        "negative_ev"
+    } else if expected_zone != "terminal"
+        && expected_gross_edge > BINARY_COMPLEMENT_CAPTURE_EDGE_CAP
+    {
+        "edge_too_high_stale"
+    } else if expected_edge < BINARY_COMPLEMENT_CAPTURE_MIN_EDGE {
+        "low_edge"
+    } else {
+        "edge_pass"
+    };
+    if opportunity.evaluation_result != expected_evaluation_result {
+        bail!(
+            "opportunity report {path} condition {} evaluation result {} does not reproduce as {expected_evaluation_result}",
+            opportunity.condition_id,
+            opportunity.evaluation_result
+        );
+    }
+    if expected_evaluation_result == "edge_pass" {
+        bail!(
+            "opportunity report {path} condition {} passed the capture variant's impossible final edge gate",
+            opportunity.condition_id
+        );
+    }
+
+    Ok(expected_evaluation_result == "low_edge"
+        && expected_zone == "primary"
+        && expected_edge + 1e-12 >= BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE)
+}
+
+fn binary_complement_recompute_features(
+    path: &str,
+    opportunity: &BinaryComplementOpportunity,
+    decision_ask: f64,
+    opposite_ask: f64,
+) -> Result<Option<BinaryComplementRecomputedFeatures>> {
+    let raw = [
+        opportunity.chosen_best_bid,
+        opportunity.chosen_best_ask,
+        opportunity.chosen_bid_depth,
+        opportunity.chosen_ask_depth,
+        opportunity.opposite_best_bid,
+        opportunity.opposite_best_ask,
+        opportunity.opposite_bid_depth,
+        opportunity.opposite_ask_depth,
+        opportunity.chosen_microprice,
+        opportunity.opposite_mid,
+        opportunity.opposite_microprice,
+        opportunity.complement_mid_sum_residual,
+        opportunity.complement_microprice_sum_residual,
+    ];
+    let [Some(chosen_best_bid), Some(chosen_best_ask), Some(chosen_bid_depth), Some(chosen_ask_depth), Some(opposite_best_bid), Some(opposite_best_ask), Some(opposite_bid_depth), Some(opposite_ask_depth), Some(chosen_microprice), Some(stored_opposite_mid), Some(opposite_microprice), Some(stored_mid_sum_residual), Some(stored_microprice_sum_residual)] =
+        raw
+    else {
+        return Ok(None);
+    };
+    if ![
+        chosen_best_bid,
+        chosen_best_ask,
+        chosen_bid_depth,
+        chosen_ask_depth,
+        opposite_best_bid,
+        opposite_best_ask,
+        opposite_bid_depth,
+        opposite_ask_depth,
+        chosen_microprice,
+        stored_opposite_mid,
+        opposite_microprice,
+        stored_mid_sum_residual,
+        stored_microprice_sum_residual,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        return Ok(None);
+    }
+
+    let valid_book =
+        |best_bid: f64, best_ask: f64, bid_depth: f64, ask_depth: f64, microprice: f64| {
+            best_bid > 0.0
+                && best_bid < best_ask
+                && best_ask < 1.0
+                && bid_depth > 0.0
+                && ask_depth > 0.0
+                && microprice >= best_bid
+                && microprice <= best_ask
+        };
+    if !valid_book(
+        chosen_best_bid,
+        chosen_best_ask,
+        chosen_bid_depth,
+        chosen_ask_depth,
+        chosen_microprice,
+    ) || !valid_book(
+        opposite_best_bid,
+        opposite_best_ask,
+        opposite_bid_depth,
+        opposite_ask_depth,
+        opposite_microprice,
+    ) {
+        bail!(
+            "opportunity report {path} condition {} has an invalid serialized paired book",
+            opportunity.condition_id
+        );
+    }
+    if opportunity.market_tick_size.is_finite()
+        && opportunity.market_tick_size > 0.0
+        && opportunity.market_tick_size < 1.0
+        && ![
+            chosen_best_bid,
+            chosen_best_ask,
+            opposite_best_bid,
+            opposite_best_ask,
+        ]
+        .into_iter()
+        .all(|price| binary_complement_price_conforms_to_tick(price, opportunity.market_tick_size))
+    {
+        bail!(
+            "opportunity report {path} condition {} paired-book top prices do not conform to the serialized market tick size {}",
+            opportunity.condition_id,
+            opportunity.market_tick_size
+        );
+    }
+
+    let chosen_mid = (chosen_best_bid + chosen_best_ask) / 2.0;
+    let opposite_mid = (opposite_best_bid + opposite_best_ask) / 2.0;
+    let recomputed_chosen_microprice = (chosen_best_ask * chosen_bid_depth
+        + chosen_best_bid * chosen_ask_depth)
+        / (chosen_bid_depth + chosen_ask_depth);
+    let recomputed_opposite_microprice = (opposite_best_ask * opposite_bid_depth
+        + opposite_best_bid * opposite_ask_depth)
+        / (opposite_bid_depth + opposite_ask_depth);
+    let recomputed = BinaryComplementRecomputedFeatures {
+        mid_sum_residual: chosen_mid + opposite_mid - 1.0,
+        microprice_sum_residual: recomputed_chosen_microprice + recomputed_opposite_microprice
+            - 1.0,
+    };
+
+    if !binary_complement_float_close(chosen_best_ask, decision_ask)
+        || !binary_complement_float_close(opposite_best_ask, opposite_ask)
+    {
+        bail!(
+            "opportunity report {path} condition {} paired-book asks do not match the decision-time executable asks",
+            opportunity.condition_id
+        );
+    }
+    if !binary_complement_float_close(chosen_microprice, recomputed_chosen_microprice)
+        || !binary_complement_float_close(stored_opposite_mid, opposite_mid)
+        || !binary_complement_float_close(opposite_microprice, recomputed_opposite_microprice)
+        || !binary_complement_float_close(stored_mid_sum_residual, recomputed.mid_sum_residual)
+        || !binary_complement_float_close(
+            stored_microprice_sum_residual,
+            recomputed.microprice_sum_residual,
+        )
+    {
+        bail!(
+            "opportunity report {path} condition {} paired-book features do not reproduce from the serialized book",
+            opportunity.condition_id
+        );
+    }
+    if (top_crosses_dynamic_tick_threshold(chosen_best_bid, chosen_best_ask)
+        || top_crosses_dynamic_tick_threshold(opposite_best_bid, opposite_best_ask))
+        && opportunity.market_tick_size > DYNAMIC_TICK_SIZE + 1e-12
+    {
+        bail!(
+            "opportunity report {path} condition {} has an extreme paired book without the causal dynamic tick transition",
+            opportunity.condition_id
+        );
+    }
+
+    Ok(Some(recomputed))
+}
+
+/// Score exactly one unseen block against the frozen binary-complement screen.
+///
+/// The capture identity, baseline edge floor, feature threshold, and all pass
+/// gates are constants by design. This function refuses to reveal partial
+/// metrics before 750 post-registration terminal conditions are available.
+pub fn binary_complement_screen(
+    input: BinaryComplementScreenInput,
+) -> Result<BinaryComplementScreen> {
+    if input.opportunity_paths.is_empty() {
+        bail!("at least one --opportunity report is required");
+    }
+    if input.resolution_manifest_paths.is_empty() {
+        bail!("at least one --resolution-manifest is required");
+    }
+    let block_id = input.block_id.trim();
+    if block_id.is_empty() {
+        bail!("--block-id must not be empty");
+    }
+    if block_id.contains('/') || block_id.contains('\\') {
+        bail!("--block-id must not contain path separators");
+    }
+
+    let preregistered_at = parse_rfc3339(
+        BINARY_COMPLEMENT_PREREGISTERED_AT,
+        "binary-complement preregistration timestamp",
+    )?;
+    let preregistered_ts_s = preregistered_at.timestamp() as f64
+        + f64::from(preregistered_at.timestamp_subsec_nanos()) / 1e9;
+
+    let mut aligned_directions = BTreeMap::<String, String>::new();
+    let mut aligned_open_ts = BTreeMap::<String, f64>::new();
+    let mut aligned_token_roles = BTreeMap::<String, (String, String)>::new();
+    let mut resolution_manifest_sha256 = Vec::new();
+    for path in &input.resolution_manifest_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read resolution manifest {path}"))?;
+        resolution_manifest_sha256.push(binary_complement_source_hash(&raw));
+        let manifest: BinaryComplementResolutionManifest = serde_json::from_str(&raw)
+            .with_context(|| format!("parse resolution manifest {path}"))?;
+        if !manifest.a_plus_gate.settlement_alignment_ready {
+            bail!("resolution manifest {path} is not official-source settlement-aligned");
+        }
+        for market in manifest.markets {
+            if market.open_ts_s + 1e-9 < preregistered_ts_s
+                || !market.settlement_aligned
+                || !market.official_source_matches_btc_tape
+            {
+                continue;
+            }
+            if !matches!(market.terminal_direction.as_str(), "up" | "down") {
+                continue;
+            }
+            if !market.open_ts_s.is_finite()
+                || !market.close_ts_s.is_finite()
+                || market.open_ts_s <= 0.0
+                || (market.close_ts_s - market.open_ts_s - 300.0).abs() > 1e-6
+                || market.window_seconds != 300
+            {
+                bail!(
+                    "condition {} resolution manifest is not an exact five-minute window",
+                    market.condition_id
+                );
+            }
+            if !market.btc_open.is_finite()
+                || !market.btc_close.is_finite()
+                || market.btc_open <= 0.0
+                || market.btc_close <= 0.0
+            {
+                bail!(
+                    "condition {} has invalid official-source BTC settlement prices",
+                    market.condition_id
+                );
+            }
+            let reproduced_btc_direction = if market.btc_close > market.btc_open {
+                "up"
+            } else if market.btc_close < market.btc_open {
+                "down"
+            } else {
+                "tie"
+            };
+            if market.btc_direction != reproduced_btc_direction
+                || market.terminal_direction != reproduced_btc_direction
+            {
+                bail!(
+                    "condition {} terminal direction does not reproduce from official-source BTC settlement prices",
+                    market.condition_id
+                );
+            }
+            let mut up_outcome = None;
+            let mut down_outcome = None;
+            for outcome in &market.outcomes {
+                let slot = match outcome.name.trim().to_ascii_lowercase().as_str() {
+                    "up" => &mut up_outcome,
+                    "down" => &mut down_outcome,
+                    _ => {
+                        bail!(
+                            "condition {} has a non-binary outcome name {}",
+                            market.condition_id,
+                            outcome.name
+                        )
+                    }
+                };
+                if outcome.token_id.trim().is_empty()
+                    || !outcome.price.is_finite()
+                    || !(0.0..=1.0).contains(&outcome.price)
+                    || slot
+                        .replace((outcome.token_id.clone(), outcome.price))
+                        .is_some()
+                {
+                    bail!(
+                        "condition {} has an invalid or duplicate {} outcome token",
+                        market.condition_id,
+                        outcome.name
+                    );
+                }
+            }
+            let (Some((up_token_id, up_price)), Some((down_token_id, down_price))) =
+                (up_outcome, down_outcome)
+            else {
+                bail!(
+                    "condition {} resolution manifest is missing an Up or Down outcome token",
+                    market.condition_id
+                );
+            };
+            if market.outcomes.len() != 2 || up_token_id == down_token_id {
+                bail!(
+                    "condition {} resolution manifest does not contain exactly two distinct outcome tokens",
+                    market.condition_id
+                );
+            }
+            let reproduced_terminal_direction = if up_price > down_price {
+                "up"
+            } else if down_price > up_price {
+                "down"
+            } else {
+                "tie"
+            };
+            if up_price.max(down_price) < 0.99
+                || market.terminal_direction != reproduced_terminal_direction
+            {
+                bail!(
+                    "condition {} terminal direction does not reproduce from terminal outcome prices",
+                    market.condition_id
+                );
+            }
+            if let Some(existing) = aligned_token_roles.insert(
+                market.condition_id.clone(),
+                (up_token_id.clone(), down_token_id.clone()),
+            ) {
+                if existing != (up_token_id, down_token_id) {
+                    bail!(
+                        "condition {} has conflicting Up/Down token identities",
+                        market.condition_id
+                    );
+                }
+            }
+            if let Some(existing) = aligned_directions.insert(
+                market.condition_id.clone(),
+                market.terminal_direction.clone(),
+            ) {
+                if existing != market.terminal_direction {
+                    bail!(
+                        "condition {} has conflicting terminal directions {existing} and {}",
+                        market.condition_id,
+                        market.terminal_direction
+                    );
+                }
+            }
+            if let Some(existing) =
+                aligned_open_ts.insert(market.condition_id.clone(), market.open_ts_s)
+            {
+                if (existing - market.open_ts_s).abs() > 1e-6 {
+                    bail!(
+                        "condition {} has conflicting open timestamps {existing} and {}",
+                        market.condition_id,
+                        market.open_ts_s
+                    );
+                }
+            }
+        }
+    }
+
+    let mut rows_by_condition = BTreeMap::<String, Vec<BinaryComplementScreenRow>>::new();
+    let mut report_start: Option<DateTime<Utc>> = None;
+    let mut report_end: Option<DateTime<Utc>> = None;
+    let mut report_ranges = Vec::<(f64, f64)>::new();
+    let mut opportunity_report_sha256 = Vec::new();
+    let mut token_pair_by_condition = BTreeMap::<String, (String, String)>::new();
+    let mut chosen_token_by_condition_direction = BTreeMap::<(String, String), String>::new();
+    for path in &input.opportunity_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read opportunity report {path}"))?;
+        opportunity_report_sha256.push(binary_complement_source_hash(&raw));
+        let report: BinaryComplementOpportunityReport = serde_json::from_str(&raw)
+            .with_context(|| format!("parse opportunity report {path}"))?;
+        if report.mode != "harness_sweep_calibration_opportunities"
+            || report.sampling != "first_pre_edge_candidate_per_condition_utc_second"
+            || !report.continuous
+            || report.variant_count != 1
+        {
+            bail!("opportunity report {path} is not the required single-variant continuous calibration capture");
+        }
+        if report.latency_ms < BINARY_COMPLEMENT_MIN_LATENCY_MS {
+            bail!(
+                "opportunity report {path} latency {} ms is below the frozen measured-latency floor {} ms",
+                report.latency_ms,
+                BINARY_COMPLEMENT_MIN_LATENCY_MS
+            );
+        }
+        if !report.window_minutes.is_finite() || (report.window_minutes - 5.0).abs() > 1e-9 {
+            bail!("opportunity report {path} must use five-minute markets");
+        }
+        let start = parse_rfc3339(&report.start, &format!("{path} start"))?;
+        let end = parse_rfc3339(&report.end, &format!("{path} end"))?;
+        if end < start {
+            bail!("opportunity report {path} has end before start");
+        }
+        if start < preregistered_at {
+            bail!(
+                "opportunity report {path} starts before the preregistration boundary {}",
+                BINARY_COMPLEMENT_PREREGISTERED_AT
+            );
+        }
+        report_ranges.push((
+            start.timestamp() as f64,
+            (end + ChronoDuration::hours(1)).timestamp() as f64,
+        ));
+        report_start = Some(report_start.map_or(start, |current| current.min(start)));
+        report_end = Some(report_end.map_or(end, |current| current.max(end)));
+
+        for row in report.rows {
+            if row.strategy_name != BINARY_COMPLEMENT_CAPTURE_NAME
+                || row.params_hash != BINARY_COMPLEMENT_CAPTURE_HASH
+                || row.risk_profile != BINARY_COMPLEMENT_RISK_PROFILE
+            {
+                bail!(
+                    "opportunity report {path} row {} does not match the frozen capture identity",
+                    row.opportunity_index
+                );
+            }
+            let opportunity = row.opportunity;
+            let Some(terminal_direction) = aligned_directions.get(&opportunity.condition_id) else {
+                continue;
+            };
+            let open_ts_s = aligned_open_ts
+                .get(&opportunity.condition_id)
+                .expect("aligned direction has an open timestamp");
+            if !opportunity.decision_timestamp_s.is_finite()
+                || opportunity.decision_timestamp_s + 1e-9 < preregistered_ts_s
+            {
+                bail!(
+                    "opportunity report {path} contains a non-forward decision for condition {}",
+                    opportunity.condition_id
+                );
+            }
+            if opportunity.decision_timestamp_s + 1e-9 < *open_ts_s
+                || opportunity.decision_timestamp_s > *open_ts_s + 300.0 + 1e-9
+            {
+                bail!(
+                    "opportunity report {path} condition {} decision lies outside its five-minute market window",
+                    opportunity.condition_id
+                );
+            }
+            if opportunity.actual_direction != *terminal_direction {
+                bail!(
+                    "opportunity report {path} condition {} label {} disagrees with terminal manifest label {terminal_direction}",
+                    opportunity.condition_id,
+                    opportunity.actual_direction
+                );
+            }
+            if !matches!(opportunity.decision.direction.as_str(), "up" | "down") {
+                bail!(
+                    "opportunity report {path} condition {} has invalid decision direction {}",
+                    opportunity.condition_id,
+                    opportunity.decision.direction
+                );
+            }
+            if opportunity.token_id.trim().is_empty()
+                || opportunity.opposite_token_id.trim().is_empty()
+                || opportunity.token_id == opportunity.opposite_token_id
+            {
+                bail!(
+                    "opportunity report {path} condition {} does not contain two distinct paired token IDs",
+                    opportunity.condition_id
+                );
+            }
+            let (up_token_id, down_token_id) = aligned_token_roles
+                .get(&opportunity.condition_id)
+                .expect("aligned condition has outcome token identities");
+            let (expected_token_id, expected_opposite_token_id) =
+                if opportunity.decision.direction == "up" {
+                    (up_token_id, down_token_id)
+                } else {
+                    (down_token_id, up_token_id)
+                };
+            if &opportunity.token_id != expected_token_id
+                || &opportunity.opposite_token_id != expected_opposite_token_id
+            {
+                bail!(
+                    "opportunity report {path} condition {} chosen and opposite tokens do not match the resolution manifest's Up/Down identities",
+                    opportunity.condition_id
+                );
+            }
+            let token_pair = if opportunity.token_id < opportunity.opposite_token_id {
+                (
+                    opportunity.token_id.clone(),
+                    opportunity.opposite_token_id.clone(),
+                )
+            } else {
+                (
+                    opportunity.opposite_token_id.clone(),
+                    opportunity.token_id.clone(),
+                )
+            };
+            if let Some(existing) =
+                token_pair_by_condition.insert(opportunity.condition_id.clone(), token_pair.clone())
+            {
+                if existing != token_pair {
+                    bail!(
+                        "opportunity report {path} condition {} changes its paired token IDs",
+                        opportunity.condition_id
+                    );
+                }
+            }
+            let direction_key = (
+                opportunity.condition_id.clone(),
+                opportunity.decision.direction.clone(),
+            );
+            if let Some(existing) = chosen_token_by_condition_direction
+                .insert(direction_key, opportunity.token_id.clone())
+            {
+                if existing != opportunity.token_id {
+                    bail!(
+                        "opportunity report {path} condition {} changes the chosen token for direction {}",
+                        opportunity.condition_id,
+                        opportunity.decision.direction
+                    );
+                }
+            }
+            let decision_ask = if opportunity.decision.direction == "up" {
+                opportunity.up_price
+            } else {
+                opportunity.down_price
+            };
+            let opposite_ask = if opportunity.decision.direction == "up" {
+                opportunity.down_price
+            } else {
+                opportunity.up_price
+            };
+            if !opportunity.up_price.is_finite()
+                || !opportunity.down_price.is_finite()
+                || !opportunity.entry_fee_rate.is_finite()
+                || !(0.0..=1.0).contains(&opportunity.up_price)
+                || !(0.0..=1.0).contains(&opportunity.down_price)
+                || opportunity.up_price == 0.0
+                || opportunity.down_price == 0.0
+                || !(0.0..=1.0).contains(&opportunity.entry_fee_rate)
+            {
+                bail!(
+                    "opportunity report {path} condition {} has an invalid decision-time ask or fee rate",
+                    opportunity.condition_id
+                );
+            }
+            let won = opportunity.decision.direction == *terminal_direction;
+            if opportunity.won != won {
+                bail!(
+                    "opportunity report {path} condition {} has a terminal win-label mismatch",
+                    opportunity.condition_id
+                );
+            }
+
+            let baseline_eligible = binary_complement_recompute_baseline_eligibility(
+                path,
+                &opportunity,
+                *open_ts_s,
+                decision_ask,
+            )?;
+            let recomputed_pair = binary_complement_recompute_features(
+                path,
+                &opportunity,
+                decision_ask,
+                opposite_ask,
+            )?;
+            let pair_features_valid = opportunity.market_tick_size.is_finite()
+                && opportunity.market_tick_size > 0.0
+                && opportunity.market_tick_size < 1.0
+                && opportunity
+                    .chosen_book_age_ms
+                    .is_some_and(|age| age.is_finite() && (0.0..=30_000.0).contains(&age))
+                && opportunity
+                    .opposite_book_age_ms
+                    .is_some_and(|age| age.is_finite() && (0.0..=30_000.0).contains(&age))
+                && recomputed_pair.is_some();
+            let passes_fixed_rule = if pair_features_valid {
+                let recomputed_pair = recomputed_pair.expect("validated recomputed paired book");
+                let max_residual = recomputed_pair
+                    .mid_sum_residual
+                    .abs()
+                    .max(recomputed_pair.microprice_sum_residual.abs());
+                max_residual
+                    <= BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER * opportunity.market_tick_size + 1e-12
+            } else {
+                false
+            };
+            rows_by_condition
+                .entry(opportunity.condition_id)
+                .or_default()
+                .push(BinaryComplementScreenRow {
+                    open_ts_s: *open_ts_s,
+                    decision_timestamp_s: opportunity.decision_timestamp_s,
+                    opportunity_index: row.opportunity_index,
+                    direction: opportunity.decision.direction,
+                    decision_ask,
+                    entry_fee_rate: opportunity.entry_fee_rate,
+                    won,
+                    baseline_eligible,
+                    pair_features_valid,
+                    passes_fixed_rule,
+                });
+        }
+    }
+
+    aligned_directions.retain(|condition_id, _| {
+        aligned_open_ts.get(condition_id).is_some_and(|open_ts_s| {
+            report_ranges
+                .iter()
+                .any(|(start, end)| *open_ts_s >= *start && *open_ts_s < *end)
+        })
+    });
+    rows_by_condition.retain(|condition_id, _| aligned_directions.contains_key(condition_id));
+    if aligned_directions.len() < BINARY_COMPLEMENT_MIN_CONDITIONS {
+        bail!(
+            "opportunity-report windows contain {} post-registration terminal settlement-aligned conditions; require at least {} before scoring to prevent sequential peeking",
+            aligned_directions.len(),
+            BINARY_COMPLEMENT_MIN_CONDITIONS
+        );
+    }
+    if aligned_directions.len() > BINARY_COMPLEMENT_MIN_CONDITIONS {
+        let mut chronological_conditions = aligned_directions
+            .keys()
+            .map(|condition_id| {
+                (
+                    *aligned_open_ts
+                        .get(condition_id)
+                        .expect("aligned condition has an open timestamp"),
+                    condition_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        chronological_conditions.sort_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let fixed_block = chronological_conditions
+            .into_iter()
+            .take(BINARY_COMPLEMENT_MIN_CONDITIONS)
+            .map(|(_, condition_id)| condition_id)
+            .collect::<BTreeSet<_>>();
+        aligned_directions.retain(|condition_id, _| fixed_block.contains(condition_id));
+        aligned_open_ts.retain(|condition_id, _| fixed_block.contains(condition_id));
+        rows_by_condition.retain(|condition_id, _| fixed_block.contains(condition_id));
+    }
+
+    let mut baseline_candidates = 0usize;
+    let mut baseline_winners = 0usize;
+    let mut baseline_losses = 0usize;
+    let mut valid_pair_feature_conditions = 0usize;
+    let mut paired_validity_winners = 0usize;
+    let mut paired_validity_losses = 0usize;
+    let mut paired_validity_loss_removals = 0usize;
+    let mut selected_candidates = 0usize;
+    let mut selected_winners = 0usize;
+    let mut selected_losses = 0usize;
+    let mut baseline_winners_retained = 0usize;
+    let mut baseline_losses_removed = 0usize;
+    let mut residual_loss_removals = 0usize;
+    let mut residual_decision_disagreements = 0usize;
+    let mut baseline_decision_asks = Vec::new();
+    let mut selected_decision_asks = Vec::new();
+    let mut selection_delays_seconds = Vec::new();
+    let mut selected_seconds_to_close = Vec::new();
+    let mut same_direction_decision_ask_changes = Vec::new();
+    let mut selected_in_final_60_seconds = 0usize;
+    let mut selected_direction_changes = 0usize;
+    let mut baseline_unit_pnls = Vec::new();
+    let mut paired_validity_unit_pnls = Vec::new();
+    let mut selected_unit_pnls = Vec::new();
+
+    for (condition_id, rows) in &mut rows_by_condition {
+        rows.sort_by(|left, right| {
+            left.decision_timestamp_s
+                .partial_cmp(&right.decision_timestamp_s)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.opportunity_index.cmp(&right.opportunity_index))
+        });
+        let eligible: Vec<_> = rows.iter().filter(|row| row.baseline_eligible).collect();
+        let Some(baseline) = eligible.first().copied() else {
+            continue;
+        };
+        baseline_candidates += 1;
+        if baseline.won {
+            baseline_winners += 1;
+        } else {
+            baseline_losses += 1;
+        }
+        baseline_unit_pnls.push((
+            baseline.open_ts_s,
+            condition_id.clone(),
+            baseline.won,
+            binary_complement_unit_terminal_pnl(
+                baseline.decision_ask,
+                baseline.entry_fee_rate,
+                baseline.won,
+            ),
+        ));
+        baseline_decision_asks.push(baseline.decision_ask);
+        let paired_validity_selected = eligible.iter().copied().find(|row| row.pair_features_valid);
+        if let Some(paired) = paired_validity_selected {
+            valid_pair_feature_conditions += 1;
+            if paired.won {
+                paired_validity_winners += 1;
+            } else {
+                paired_validity_losses += 1;
+            }
+            paired_validity_unit_pnls.push((
+                paired.open_ts_s,
+                condition_id.clone(),
+                paired.won,
+                binary_complement_unit_terminal_pnl(
+                    paired.decision_ask,
+                    paired.entry_fee_rate,
+                    paired.won,
+                ),
+            ));
+        }
+
+        let selected = eligible.iter().copied().find(|row| row.passes_fixed_rule);
+        if let Some(selected) = selected {
+            selected_candidates += 1;
+            selected_unit_pnls.push((
+                selected.open_ts_s,
+                condition_id.clone(),
+                selected.won,
+                binary_complement_unit_terminal_pnl(
+                    selected.decision_ask,
+                    selected.entry_fee_rate,
+                    selected.won,
+                ),
+            ));
+            selected_decision_asks.push(selected.decision_ask);
+            selection_delays_seconds
+                .push((selected.decision_timestamp_s - baseline.decision_timestamp_s).max(0.0));
+            let seconds_to_close =
+                (selected.open_ts_s + 300.0 - selected.decision_timestamp_s).clamp(0.0, 300.0);
+            selected_seconds_to_close.push(seconds_to_close);
+            if seconds_to_close <= 60.0 + 1e-9 {
+                selected_in_final_60_seconds += 1;
+            }
+            if selected.direction == baseline.direction {
+                same_direction_decision_ask_changes
+                    .push(selected.decision_ask - baseline.decision_ask);
+            } else {
+                selected_direction_changes += 1;
+            }
+            if selected.won {
+                selected_winners += 1;
+            } else {
+                selected_losses += 1;
+            }
+        }
+        if baseline.won && selected.is_some_and(|row| row.won) {
+            baseline_winners_retained += 1;
+        }
+        if !baseline.won && paired_validity_selected.is_none_or(|row| row.won) {
+            paired_validity_loss_removals += 1;
+        }
+        if !baseline.won && selected.is_none_or(|row| row.won) {
+            baseline_losses_removed += 1;
+        }
+        if paired_validity_selected.is_some_and(|row| !row.won)
+            && selected.is_none_or(|row| row.won)
+        {
+            residual_loss_removals += 1;
+        }
+        let same_attribution_decision = match (paired_validity_selected, selected) {
+            (None, None) => true,
+            (Some(paired), Some(frozen)) => paired.opportunity_index == frozen.opportunity_index,
+            _ => false,
+        };
+        if !same_attribution_decision {
+            residual_decision_disagreements += 1;
+        }
+    }
+
+    let ratio = |numerator: usize, denominator: usize| {
+        (denominator > 0).then_some(numerator as f64 / denominator as f64)
+    };
+    let valid_pair_feature_coverage = ratio(valid_pair_feature_conditions, baseline_candidates);
+    let candidate_retention = ratio(selected_candidates, baseline_candidates);
+    let baseline_winner_retention = ratio(baseline_winners_retained, baseline_winners);
+    let baseline_loss_removal = ratio(baseline_losses_removed, baseline_losses);
+    let selected_win_rate = ratio(selected_winners, selected_candidates);
+    let selected_wilson_95_lower =
+        (selected_candidates > 0).then_some(wilson_lower(selected_winners, selected_candidates));
+    let diagnostics = BinaryComplementDiagnostics {
+        gating_use: "descriptive_only_non_gating".to_string(),
+        baseline_decision_ask: binary_complement_distribution(baseline_decision_asks),
+        selected_decision_ask: binary_complement_distribution(selected_decision_asks),
+        selection_delay_seconds: binary_complement_distribution(selection_delays_seconds),
+        selected_seconds_to_close: binary_complement_distribution(selected_seconds_to_close),
+        same_direction_decision_ask_change: binary_complement_distribution(
+            same_direction_decision_ask_changes,
+        ),
+        selected_in_final_60_seconds,
+        selected_in_final_60_seconds_rate: ratio(selected_in_final_60_seconds, selected_candidates),
+        selected_direction_changes,
+        selected_direction_change_rate: ratio(selected_direction_changes, selected_candidates),
+    };
+    let unit_economics =
+        binary_complement_unit_economics(selected_unit_pnls, selected_winners, selected_losses);
+    let attribution = BinaryComplementAttribution {
+        gating_use: "descriptive_only_non_gating".to_string(),
+        baseline: BinaryComplementAttributionComparator {
+            candidates: baseline_candidates,
+            winners: baseline_winners,
+            losses: baseline_losses,
+            win_rate: ratio(baseline_winners, baseline_candidates),
+            unit_economics: binary_complement_unit_economics(
+                baseline_unit_pnls,
+                baseline_winners,
+                baseline_losses,
+            ),
+        },
+        paired_book_validity: BinaryComplementAttributionComparator {
+            candidates: valid_pair_feature_conditions,
+            winners: paired_validity_winners,
+            losses: paired_validity_losses,
+            win_rate: ratio(paired_validity_winners, valid_pair_feature_conditions),
+            unit_economics: binary_complement_unit_economics(
+                paired_validity_unit_pnls,
+                paired_validity_winners,
+                paired_validity_losses,
+            ),
+        },
+        frozen_residual: BinaryComplementAttributionComparator {
+            candidates: selected_candidates,
+            winners: selected_winners,
+            losses: selected_losses,
+            win_rate: ratio(selected_winners, selected_candidates),
+            unit_economics: unit_economics.clone(),
+        },
+        paired_validity_candidate_removals: baseline_candidates
+            .saturating_sub(valid_pair_feature_conditions),
+        paired_validity_loss_removals,
+        residual_candidate_removals: valid_pair_feature_conditions
+            .saturating_sub(selected_candidates),
+        residual_loss_removals,
+        residual_decision_disagreements,
+    };
+
+    let mut gates = Vec::new();
+    for (name, observed, minimum) in [
+        (
+            "terminal_settlement_aligned_conditions",
+            aligned_directions.len(),
+            BINARY_COMPLEMENT_MIN_CONDITIONS,
+        ),
+        (
+            "baseline_candidates",
+            baseline_candidates,
+            BINARY_COMPLEMENT_MIN_BASELINE_CANDIDATES,
+        ),
+        (
+            "baseline_losses",
+            baseline_losses,
+            BINARY_COMPLEMENT_MIN_BASELINE_LOSSES,
+        ),
+        (
+            "selected_candidates",
+            selected_candidates,
+            BINARY_COMPLEMENT_MIN_SELECTED_CANDIDATES,
+        ),
+    ] {
+        gates.push(BinaryComplementGate {
+            name: name.to_string(),
+            passed: observed >= minimum,
+            observed: Some(observed as f64),
+            minimum: minimum as f64,
+            unit: "conditions".to_string(),
+        });
+    }
+    for (name, observed, minimum) in [
+        (
+            "valid_pair_feature_coverage",
+            valid_pair_feature_coverage,
+            BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE,
+        ),
+        (
+            "candidate_retention",
+            candidate_retention,
+            BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION,
+        ),
+        (
+            "baseline_winner_retention",
+            baseline_winner_retention,
+            BINARY_COMPLEMENT_MIN_WINNER_RETENTION,
+        ),
+        (
+            "baseline_loss_removal",
+            baseline_loss_removal,
+            BINARY_COMPLEMENT_MIN_LOSS_REMOVAL,
+        ),
+        (
+            "selected_wilson_95_lower",
+            selected_wilson_95_lower,
+            BINARY_COMPLEMENT_MIN_WILSON,
+        ),
+    ] {
+        gates.push(BinaryComplementGate {
+            name: name.to_string(),
+            passed: observed.is_some_and(|value| value + 1e-12 >= minimum),
+            observed,
+            minimum,
+            unit: "ratio".to_string(),
+        });
+    }
+    for (name, observed) in [
+        (
+            "selected_fee_aware_unit_profit_factor_margin",
+            unit_economics.profit_factor_gate_margin_usd,
+        ),
+        (
+            "selected_fee_aware_unit_payoff_margin",
+            unit_economics.payoff_gate_margin_usd,
+        ),
+    ] {
+        gates.push(BinaryComplementGate {
+            name: name.to_string(),
+            passed: observed + 1e-12 >= 0.0,
+            observed: Some(observed),
+            minimum: 0.0,
+            unit: "normalized_usd_margin".to_string(),
+        });
+    }
+    let failure_reasons: Vec<_> = gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(|gate| format!("gate_failed:{}", gate.name))
+        .collect();
+    let ok = failure_reasons.is_empty();
+    let aligned_condition_ids: Vec<_> = aligned_directions.keys().cloned().collect();
+    let aligned_condition_ids_hash = stable_json_hash(&aligned_condition_ids);
+
+    Ok(BinaryComplementScreen {
+        schema_version: 6,
+        generated_at: Utc::now().to_rfc3339(),
+        mechanism_id: BINARY_COMPLEMENT_MECHANISM_ID.to_string(),
+        block_id: block_id.to_string(),
+        status: if ok {
+            "BLOCK_PASS_REQUIRES_SECOND_DISJOINT_BLOCK"
+        } else {
+            "REJECT_MECHANISM_FAMILY"
+        }
+        .to_string(),
+        ok,
+        preregistered_at: BINARY_COMPLEMENT_PREREGISTERED_AT.to_string(),
+        capture_identity: BinaryComplementCaptureIdentity {
+            strategy_name: BINARY_COMPLEMENT_CAPTURE_NAME.to_string(),
+            params_hash: BINARY_COMPLEMENT_CAPTURE_HASH.to_string(),
+            baseline_strategy_name: BINARY_COMPLEMENT_BASELINE_NAME.to_string(),
+            baseline_params_hash: BINARY_COMPLEMENT_BASELINE_HASH.to_string(),
+            baseline_primary_min_edge: BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE,
+            minimum_latency_ms: BINARY_COMPLEMENT_MIN_LATENCY_MS,
+        },
+        fixed_rule: BinaryComplementFixedRule {
+            residual_multiplier: BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER,
+            expression: "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size".to_string(),
+            missing_feature_action: "reject_row".to_string(),
+        },
+        sources: BinaryComplementSources {
+            opportunity_reports: input.opportunity_paths,
+            opportunity_report_sha256,
+            resolution_manifests: input.resolution_manifest_paths,
+            resolution_manifest_sha256,
+            report_start: report_start
+                .expect("at least one opportunity report")
+                .to_rfc3339(),
+            report_end: report_end
+                .expect("at least one opportunity report")
+                .to_rfc3339(),
+        },
+        counts: BinaryComplementCounts {
+            terminal_settlement_aligned_conditions: aligned_directions.len(),
+            conditions_with_opportunity_rows: rows_by_condition.len(),
+            baseline_candidates,
+            baseline_winners,
+            baseline_losses,
+            valid_pair_feature_conditions,
+            selected_candidates,
+            selected_winners,
+            selected_losses,
+            baseline_winners_retained,
+            baseline_losses_removed,
+        },
+        rates: BinaryComplementRates {
+            valid_pair_feature_coverage,
+            candidate_retention,
+            baseline_winner_retention,
+            baseline_loss_removal,
+            selected_win_rate,
+            selected_wilson_95_lower,
+        },
+        diagnostics,
+        unit_economics,
+        attribution,
+        gates,
+        failure_reasons,
+        aligned_condition_ids,
+        aligned_condition_ids_hash,
+        notes: vec![
+            "The capture variant is identical to the registered baseline except for its impossible final edge thresholds and name; its hash is enforced before scoring.".to_string(),
+            "If supplied sources contain more than 750 eligible terminal conditions, the block scores exactly the first 750 ordered by market open time and condition ID; later conditions are left outside this block.".to_string(),
+            "Baseline eligibility is reconstructed only from low_edge primary-zone rows with recorded fee-adjusted edge >= 0.07; negative-EV and stale-edge rows remain excluded.".to_string(),
+            "The screen is condition-level and recomputes wins from terminal manifest direction; it is not an executable fill or PnL replay.".to_string(),
+            "Timing, direction-change, and decision-time ask summaries are descriptive only; they do not alter the frozen rule, gates, block verdict, or exact-replay requirement.".to_string(),
+            "Baseline, paired-book-validity, and frozen-residual attribution is descriptive only; it cannot alter the frozen rule, gates, block verdict, or exact-replay requirement.".to_string(),
+            "The fee-aware unit-economics screen normalizes every selected entry to $1 at its recorded decision ask and requires the existing A+ profit-factor 1.20 and payoff 0.20 thresholds before latency, depth traversal, and stateful sizing; passing remains necessary but not sufficient for exact-replay profitability.".to_string(),
+            "Both paired-book ages must satisfy the existing 30-second replay freshness contract, and every opportunity and resolution source is pinned by SHA-256.".to_string(),
+            "A passing block is research evidence only and must be repeated unchanged on a disjoint forward block before one exact runtime replay is allowed.".to_string(),
+        ],
+    })
+}
+
+fn binary_complement_distribution(mut values: Vec<f64>) -> BinaryComplementDistribution {
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    let count = values.len();
+    if count == 0 {
+        return BinaryComplementDistribution {
+            count,
+            min: None,
+            p10: None,
+            p50: None,
+            p90: None,
+            max: None,
+            mean: None,
+        };
+    }
+    let quantile = |probability: f64| {
+        let position = probability * (count - 1) as f64;
+        let lower = position.floor() as usize;
+        let upper = position.ceil() as usize;
+        let weight = position - lower as f64;
+        values[lower] * (1.0 - weight) + values[upper] * weight
+    };
+    BinaryComplementDistribution {
+        count,
+        min: values.first().copied(),
+        p10: Some(quantile(0.10)),
+        p50: Some(quantile(0.50)),
+        p90: Some(quantile(0.90)),
+        max: values.last().copied(),
+        mean: Some(values.iter().sum::<f64>() / count as f64),
+    }
+}
+
+fn binary_complement_unit_terminal_pnl(decision_ask: f64, entry_fee_rate: f64, won: bool) -> f64 {
+    let entry_budget_usd = 1.0;
+    let shares = entry_budget_usd / decision_ask;
+    let entry_fee = polymarket_fee(shares, decision_ask, entry_fee_rate);
+    if won {
+        (1.0 - decision_ask) * shares - entry_fee
+    } else {
+        -entry_budget_usd - entry_fee
+    }
+}
+
+fn binary_complement_unit_economics(
+    mut rows: Vec<(f64, String, bool, f64)>,
+    selected_winners: usize,
+    selected_losses: usize,
+) -> BinaryComplementUnitEconomics {
+    rows.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    debug_assert_eq!(rows.len(), selected_winners + selected_losses);
+
+    let gross_win_pnl_usd = rows
+        .iter()
+        .filter(|(_, _, won, _)| *won)
+        .map(|(_, _, _, pnl)| *pnl)
+        .sum::<f64>();
+    let gross_loss_pnl_usd = rows
+        .iter()
+        .filter(|(_, _, won, _)| !*won)
+        .map(|(_, _, _, pnl)| *pnl)
+        .sum::<f64>();
+    let total_pnl_usd = gross_win_pnl_usd + gross_loss_pnl_usd;
+    let mut cumulative_pnl_usd = 0.0_f64;
+    let mut peak_pnl_usd = 0.0_f64;
+    let mut maximum_drawdown_usd = 0.0_f64;
+    for (_, _, _, pnl) in &rows {
+        cumulative_pnl_usd += pnl;
+        peak_pnl_usd = peak_pnl_usd.max(cumulative_pnl_usd);
+        maximum_drawdown_usd = maximum_drawdown_usd.max(peak_pnl_usd - cumulative_pnl_usd);
+    }
+    let average_win_pnl_usd =
+        (selected_winners > 0).then_some(gross_win_pnl_usd / selected_winners as f64);
+    let average_loss_pnl_usd =
+        (selected_losses > 0).then_some(gross_loss_pnl_usd / selected_losses as f64);
+    let profit_factor =
+        (selected_losses > 0).then_some(gross_win_pnl_usd / gross_loss_pnl_usd.abs());
+    let payoff_ratio = match (average_win_pnl_usd, average_loss_pnl_usd) {
+        (Some(average_win), Some(average_loss)) => Some(average_win / average_loss.abs()),
+        _ => None,
+    };
+    let profit_factor_gate_margin_usd =
+        gross_win_pnl_usd - BINARY_COMPLEMENT_MIN_UNIT_PROFIT_FACTOR * gross_loss_pnl_usd.abs();
+    let payoff_gate_margin_usd = average_win_pnl_usd.unwrap_or(0.0)
+        - BINARY_COMPLEMENT_MIN_UNIT_PAYOFF_RATIO * average_loss_pnl_usd.unwrap_or(0.0).abs();
+    let first_half_candidates = rows.len() / 2;
+    let first_half_pnl_usd = rows
+        .iter()
+        .take(first_half_candidates)
+        .map(|(_, _, _, pnl)| *pnl)
+        .sum::<f64>();
+    let second_half_candidates = rows.len() - first_half_candidates;
+    let second_half_pnl_usd = rows
+        .iter()
+        .skip(first_half_candidates)
+        .map(|(_, _, _, pnl)| *pnl)
+        .sum::<f64>();
+
+    BinaryComplementUnitEconomics {
+        entry_budget_usd: 1.0,
+        pricing_basis: "one_usd_entry_cost_at_recorded_decision_ask".to_string(),
+        fee_model: "polymarket_fee=shares*entry_fee_rate*price*(1-price), rounded_to_5_decimals"
+            .to_string(),
+        gross_win_pnl_usd,
+        gross_loss_pnl_usd,
+        total_pnl_usd,
+        maximum_drawdown_usd,
+        average_win_pnl_usd,
+        average_loss_pnl_usd,
+        profit_factor,
+        payoff_ratio,
+        profit_factor_gate_margin_usd,
+        payoff_gate_margin_usd,
+        first_half_candidates,
+        first_half_pnl_usd,
+        second_half_candidates,
+        second_half_pnl_usd,
+    }
+}
+
+fn binary_complement_source_hash(raw: &str) -> String {
+    hex::encode(Sha256::digest(raw.as_bytes()))
+}
+
+fn binary_complement_ratio(numerator: usize, denominator: usize) -> Option<f64> {
+    (denominator > 0).then_some(numerator as f64 / denominator as f64)
+}
+
+fn binary_complement_option_close(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => (left - right).abs() <= 1e-12,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn binary_complement_float_close(left: f64, right: f64) -> bool {
+    left.is_finite()
+        && right.is_finite()
+        && (left - right).abs() <= 1e-10 * left.abs().max(right.abs()).max(1.0)
+}
+
+fn binary_complement_json_close(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (left, right) {
+        (serde_json::Value::Number(left), serde_json::Value::Number(right)) => {
+            match (left.as_f64(), right.as_f64()) {
+                (Some(left), Some(right)) => binary_complement_float_close(left, right),
+                _ => left == right,
+            }
+        }
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| binary_complement_json_close(left, right))
+        }
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, left)| {
+                    right
+                        .get(key)
+                        .is_some_and(|right| binary_complement_json_close(left, right))
+                })
+        }
+        _ => left == right,
+    }
+}
+
+fn validate_binary_complement_distribution(
+    path: &str,
+    name: &str,
+    distribution: &BinaryComplementDistribution,
+    expected_count: usize,
+    minimum: f64,
+    maximum: f64,
+) -> Result<()> {
+    if distribution.count != expected_count {
+        bail!("screen {path} diagnostic {name} has an invalid count");
+    }
+    let values = [
+        distribution.min,
+        distribution.p10,
+        distribution.p50,
+        distribution.p90,
+        distribution.max,
+        distribution.mean,
+    ];
+    if expected_count == 0 {
+        if values.iter().any(Option::is_some) {
+            bail!("screen {path} diagnostic {name} must be empty");
+        }
+        return Ok(());
+    }
+    let [Some(min), Some(p10), Some(p50), Some(p90), Some(max), Some(mean)] =
+        values.map(|value| value.filter(|v| v.is_finite()))
+    else {
+        bail!("screen {path} diagnostic {name} contains a missing or non-finite summary");
+    };
+    if min < minimum
+        || max > maximum
+        || min > p10 + 1e-12
+        || p10 > p50 + 1e-12
+        || p50 > p90 + 1e-12
+        || p90 > max + 1e-12
+        || mean < min - 1e-12
+        || mean > max + 1e-12
+    {
+        bail!("screen {path} diagnostic {name} has invalid bounds or ordering");
+    }
+    Ok(())
+}
+
+fn validate_binary_complement_screen_artifact(
+    path: &str,
+    screen: &BinaryComplementScreen,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    if screen.schema_version != 6
+        || screen.mechanism_id != BINARY_COMPLEMENT_MECHANISM_ID
+        || screen.preregistered_at != BINARY_COMPLEMENT_PREREGISTERED_AT
+    {
+        bail!("screen {path} does not match the frozen mechanism contract");
+    }
+    parse_rfc3339(&screen.generated_at, &format!("{path} generated_at"))?;
+    if screen.block_id.trim().is_empty()
+        || screen.block_id.contains('/')
+        || screen.block_id.contains('\\')
+    {
+        bail!("screen {path} has an invalid block_id");
+    }
+    let identity = &screen.capture_identity;
+    if identity.strategy_name != BINARY_COMPLEMENT_CAPTURE_NAME
+        || identity.params_hash != BINARY_COMPLEMENT_CAPTURE_HASH
+        || identity.baseline_strategy_name != BINARY_COMPLEMENT_BASELINE_NAME
+        || identity.baseline_params_hash != BINARY_COMPLEMENT_BASELINE_HASH
+        || (identity.baseline_primary_min_edge - BINARY_COMPLEMENT_BASELINE_PRIMARY_MIN_EDGE).abs()
+            > 1e-12
+        || identity.minimum_latency_ms != BINARY_COMPLEMENT_MIN_LATENCY_MS
+    {
+        bail!("screen {path} capture or baseline identity drifted");
+    }
+    let rule = &screen.fixed_rule;
+    if (rule.residual_multiplier - BINARY_COMPLEMENT_RESIDUAL_MULTIPLIER).abs() > 1e-12
+        || rule.expression
+            != "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size"
+        || rule.missing_feature_action != "reject_row"
+    {
+        bail!("screen {path} fixed rule drifted");
+    }
+    if screen.sources.opportunity_reports.len() != screen.sources.opportunity_report_sha256.len()
+        || screen.sources.resolution_manifests.len()
+            != screen.sources.resolution_manifest_sha256.len()
+    {
+        bail!("screen {path} source path and hash counts differ");
+    }
+    for (source_path, expected_hash) in screen
+        .sources
+        .opportunity_reports
+        .iter()
+        .zip(&screen.sources.opportunity_report_sha256)
+        .chain(
+            screen
+                .sources
+                .resolution_manifests
+                .iter()
+                .zip(&screen.sources.resolution_manifest_sha256),
+        )
+    {
+        let raw = std::fs::read_to_string(source_path)
+            .with_context(|| format!("read binary-complement source {source_path}"))?;
+        if binary_complement_source_hash(&raw) != *expected_hash {
+            bail!("screen {path} source hash drifted for {source_path}");
+        }
+    }
+
+    let start = parse_rfc3339(
+        &screen.sources.report_start,
+        &format!("{path} report_start"),
+    )?;
+    let end = parse_rfc3339(&screen.sources.report_end, &format!("{path} report_end"))?;
+    let preregistered_at = parse_rfc3339(
+        BINARY_COMPLEMENT_PREREGISTERED_AT,
+        "binary-complement preregistration timestamp",
+    )?;
+    if start < preregistered_at || end < start {
+        bail!("screen {path} has an invalid forward report window");
+    }
+
+    let ids = &screen.aligned_condition_ids;
+    if ids.len() < BINARY_COMPLEMENT_MIN_CONDITIONS
+        || ids.windows(2).any(|pair| pair[0] >= pair[1])
+        || screen.counts.terminal_settlement_aligned_conditions != ids.len()
+        || stable_json_hash(ids) != screen.aligned_condition_ids_hash
+    {
+        bail!("screen {path} aligned condition set or hash is invalid");
+    }
+    let counts = &screen.counts;
+    if counts.baseline_winners.checked_add(counts.baseline_losses)
+        != Some(counts.baseline_candidates)
+        || counts.selected_winners.checked_add(counts.selected_losses)
+            != Some(counts.selected_candidates)
+        || counts.conditions_with_opportunity_rows > counts.terminal_settlement_aligned_conditions
+        || counts.baseline_candidates > counts.conditions_with_opportunity_rows
+        || counts.valid_pair_feature_conditions > counts.baseline_candidates
+        || counts.selected_candidates > counts.baseline_candidates
+        || counts.baseline_winners_retained > counts.baseline_winners
+        || counts.baseline_losses_removed > counts.baseline_losses
+    {
+        bail!("screen {path} count invariants are invalid");
+    }
+
+    let attribution = &screen.attribution;
+    let baseline = &attribution.baseline;
+    let paired = &attribution.paired_book_validity;
+    let frozen = &attribution.frozen_residual;
+    let observed_frozen_economics = serde_json::to_value(&frozen.unit_economics)
+        .context("serialize frozen residual attribution economics")?;
+    let screen_economics =
+        serde_json::to_value(&screen.unit_economics).context("serialize screen unit economics")?;
+    if attribution.gating_use != "descriptive_only_non_gating"
+        || baseline.winners.checked_add(baseline.losses) != Some(baseline.candidates)
+        || paired.winners.checked_add(paired.losses) != Some(paired.candidates)
+        || frozen.winners.checked_add(frozen.losses) != Some(frozen.candidates)
+        || !binary_complement_option_close(
+            baseline.win_rate,
+            binary_complement_ratio(baseline.winners, baseline.candidates),
+        )
+        || !binary_complement_option_close(
+            paired.win_rate,
+            binary_complement_ratio(paired.winners, paired.candidates),
+        )
+        || !binary_complement_option_close(
+            frozen.win_rate,
+            binary_complement_ratio(frozen.winners, frozen.candidates),
+        )
+        || baseline.candidates != counts.baseline_candidates
+        || baseline.winners != counts.baseline_winners
+        || baseline.losses != counts.baseline_losses
+        || paired.candidates != counts.valid_pair_feature_conditions
+        || frozen.candidates != counts.selected_candidates
+        || frozen.winners != counts.selected_winners
+        || frozen.losses != counts.selected_losses
+        || attribution.paired_validity_candidate_removals
+            != baseline.candidates.saturating_sub(paired.candidates)
+        || attribution.residual_candidate_removals
+            != paired.candidates.saturating_sub(frozen.candidates)
+        || attribution.paired_validity_loss_removals > baseline.losses
+        || attribution.residual_loss_removals > paired.losses
+        || attribution.residual_decision_disagreements < attribution.residual_candidate_removals
+        || attribution.residual_decision_disagreements > baseline.candidates
+        || !binary_complement_json_close(&observed_frozen_economics, &screen_economics)
+    {
+        bail!("screen {path} descriptive attribution is inconsistent with its counts");
+    }
+
+    let expected_rates = BinaryComplementRates {
+        valid_pair_feature_coverage: binary_complement_ratio(
+            counts.valid_pair_feature_conditions,
+            counts.baseline_candidates,
+        ),
+        candidate_retention: binary_complement_ratio(
+            counts.selected_candidates,
+            counts.baseline_candidates,
+        ),
+        baseline_winner_retention: binary_complement_ratio(
+            counts.baseline_winners_retained,
+            counts.baseline_winners,
+        ),
+        baseline_loss_removal: binary_complement_ratio(
+            counts.baseline_losses_removed,
+            counts.baseline_losses,
+        ),
+        selected_win_rate: binary_complement_ratio(
+            counts.selected_winners,
+            counts.selected_candidates,
+        ),
+        selected_wilson_95_lower: (counts.selected_candidates > 0).then_some(wilson_lower(
+            counts.selected_winners,
+            counts.selected_candidates,
+        )),
+    };
+    if !binary_complement_option_close(
+        screen.rates.valid_pair_feature_coverage,
+        expected_rates.valid_pair_feature_coverage,
+    ) || !binary_complement_option_close(
+        screen.rates.candidate_retention,
+        expected_rates.candidate_retention,
+    ) || !binary_complement_option_close(
+        screen.rates.baseline_winner_retention,
+        expected_rates.baseline_winner_retention,
+    ) || !binary_complement_option_close(
+        screen.rates.baseline_loss_removal,
+        expected_rates.baseline_loss_removal,
+    ) || !binary_complement_option_close(
+        screen.rates.selected_win_rate,
+        expected_rates.selected_win_rate,
+    ) || !binary_complement_option_close(
+        screen.rates.selected_wilson_95_lower,
+        expected_rates.selected_wilson_95_lower,
+    ) {
+        bail!("screen {path} rates do not match its condition counts");
+    }
+
+    let diagnostics = &screen.diagnostics;
+    if diagnostics.gating_use != "descriptive_only_non_gating"
+        || diagnostics.selected_in_final_60_seconds > counts.selected_candidates
+        || diagnostics.selected_direction_changes > counts.selected_candidates
+        || !binary_complement_option_close(
+            diagnostics.selected_in_final_60_seconds_rate,
+            binary_complement_ratio(
+                diagnostics.selected_in_final_60_seconds,
+                counts.selected_candidates,
+            ),
+        )
+        || !binary_complement_option_close(
+            diagnostics.selected_direction_change_rate,
+            binary_complement_ratio(
+                diagnostics.selected_direction_changes,
+                counts.selected_candidates,
+            ),
+        )
+    {
+        bail!("screen {path} descriptive diagnostic counts or rates are invalid");
+    }
+    validate_binary_complement_distribution(
+        path,
+        "baseline_decision_ask",
+        &diagnostics.baseline_decision_ask,
+        counts.baseline_candidates,
+        f64::MIN_POSITIVE,
+        1.0,
+    )?;
+    validate_binary_complement_distribution(
+        path,
+        "selected_decision_ask",
+        &diagnostics.selected_decision_ask,
+        counts.selected_candidates,
+        f64::MIN_POSITIVE,
+        1.0,
+    )?;
+    validate_binary_complement_distribution(
+        path,
+        "selection_delay_seconds",
+        &diagnostics.selection_delay_seconds,
+        counts.selected_candidates,
+        0.0,
+        300.0,
+    )?;
+    validate_binary_complement_distribution(
+        path,
+        "selected_seconds_to_close",
+        &diagnostics.selected_seconds_to_close,
+        counts.selected_candidates,
+        0.0,
+        300.0,
+    )?;
+    validate_binary_complement_distribution(
+        path,
+        "same_direction_decision_ask_change",
+        &diagnostics.same_direction_decision_ask_change,
+        counts
+            .selected_candidates
+            .saturating_sub(diagnostics.selected_direction_changes),
+        -1.0,
+        1.0,
+    )?;
+
+    let economics = &screen.unit_economics;
+    let economic_scalars = [
+        economics.entry_budget_usd,
+        economics.gross_win_pnl_usd,
+        economics.gross_loss_pnl_usd,
+        economics.total_pnl_usd,
+        economics.maximum_drawdown_usd,
+        economics.profit_factor_gate_margin_usd,
+        economics.payoff_gate_margin_usd,
+        economics.first_half_pnl_usd,
+        economics.second_half_pnl_usd,
+    ];
+    if economic_scalars.iter().any(|value| !value.is_finite())
+        || economics
+            .average_win_pnl_usd
+            .is_some_and(|value| !value.is_finite())
+        || economics
+            .average_loss_pnl_usd
+            .is_some_and(|value| !value.is_finite())
+        || economics
+            .profit_factor
+            .is_some_and(|value| !value.is_finite())
+        || economics
+            .payoff_ratio
+            .is_some_and(|value| !value.is_finite())
+        || !binary_complement_float_close(economics.entry_budget_usd, 1.0)
+        || economics.pricing_basis != "one_usd_entry_cost_at_recorded_decision_ask"
+        || economics.fee_model
+            != "polymarket_fee=shares*entry_fee_rate*price*(1-price), rounded_to_5_decimals"
+        || economics.gross_win_pnl_usd < -1e-12
+        || economics.gross_loss_pnl_usd > 1e-12
+        || economics.maximum_drawdown_usd < -1e-12
+        || (counts.selected_winners == 0
+            && !binary_complement_float_close(economics.gross_win_pnl_usd, 0.0))
+        || (counts.selected_losses == 0
+            && !binary_complement_float_close(economics.gross_loss_pnl_usd, 0.0))
+        || !binary_complement_float_close(
+            economics.total_pnl_usd,
+            economics.gross_win_pnl_usd + economics.gross_loss_pnl_usd,
+        )
+        || economics.first_half_candidates != counts.selected_candidates / 2
+        || economics.second_half_candidates
+            != counts.selected_candidates - economics.first_half_candidates
+        || !binary_complement_float_close(
+            economics.total_pnl_usd,
+            economics.first_half_pnl_usd + economics.second_half_pnl_usd,
+        )
+    {
+        bail!("screen {path} fee-aware unit economics have invalid fields or totals");
+    }
+    let expected_average_win = (counts.selected_winners > 0)
+        .then_some(economics.gross_win_pnl_usd / counts.selected_winners as f64);
+    let expected_average_loss = (counts.selected_losses > 0)
+        .then_some(economics.gross_loss_pnl_usd / counts.selected_losses as f64);
+    let expected_profit_factor = (counts.selected_losses > 0)
+        .then_some(economics.gross_win_pnl_usd / economics.gross_loss_pnl_usd.abs());
+    let expected_payoff_ratio = match (expected_average_win, expected_average_loss) {
+        (Some(average_win), Some(average_loss)) => Some(average_win / average_loss.abs()),
+        _ => None,
+    };
+    let expected_profit_factor_margin = economics.gross_win_pnl_usd
+        - BINARY_COMPLEMENT_MIN_UNIT_PROFIT_FACTOR * economics.gross_loss_pnl_usd.abs();
+    let expected_payoff_margin = expected_average_win.unwrap_or(0.0)
+        - BINARY_COMPLEMENT_MIN_UNIT_PAYOFF_RATIO * expected_average_loss.unwrap_or(0.0).abs();
+    if !binary_complement_option_close(economics.average_win_pnl_usd, expected_average_win)
+        || !binary_complement_option_close(economics.average_loss_pnl_usd, expected_average_loss)
+        || !binary_complement_option_close(economics.profit_factor, expected_profit_factor)
+        || !binary_complement_option_close(economics.payoff_ratio, expected_payoff_ratio)
+        || !binary_complement_float_close(
+            economics.profit_factor_gate_margin_usd,
+            expected_profit_factor_margin,
+        )
+        || !binary_complement_float_close(economics.payoff_gate_margin_usd, expected_payoff_margin)
+    {
+        bail!("screen {path} fee-aware unit economics are inconsistent with its counts");
+    }
+
+    let expected_gates = [
+        (
+            "terminal_settlement_aligned_conditions",
+            Some(counts.terminal_settlement_aligned_conditions as f64),
+            BINARY_COMPLEMENT_MIN_CONDITIONS as f64,
+            "conditions",
+        ),
+        (
+            "baseline_candidates",
+            Some(counts.baseline_candidates as f64),
+            BINARY_COMPLEMENT_MIN_BASELINE_CANDIDATES as f64,
+            "conditions",
+        ),
+        (
+            "baseline_losses",
+            Some(counts.baseline_losses as f64),
+            BINARY_COMPLEMENT_MIN_BASELINE_LOSSES as f64,
+            "conditions",
+        ),
+        (
+            "selected_candidates",
+            Some(counts.selected_candidates as f64),
+            BINARY_COMPLEMENT_MIN_SELECTED_CANDIDATES as f64,
+            "conditions",
+        ),
+        (
+            "valid_pair_feature_coverage",
+            expected_rates.valid_pair_feature_coverage,
+            BINARY_COMPLEMENT_MIN_FEATURE_COVERAGE,
+            "ratio",
+        ),
+        (
+            "candidate_retention",
+            expected_rates.candidate_retention,
+            BINARY_COMPLEMENT_MIN_CANDIDATE_RETENTION,
+            "ratio",
+        ),
+        (
+            "baseline_winner_retention",
+            expected_rates.baseline_winner_retention,
+            BINARY_COMPLEMENT_MIN_WINNER_RETENTION,
+            "ratio",
+        ),
+        (
+            "baseline_loss_removal",
+            expected_rates.baseline_loss_removal,
+            BINARY_COMPLEMENT_MIN_LOSS_REMOVAL,
+            "ratio",
+        ),
+        (
+            "selected_wilson_95_lower",
+            expected_rates.selected_wilson_95_lower,
+            BINARY_COMPLEMENT_MIN_WILSON,
+            "ratio",
+        ),
+        (
+            "selected_fee_aware_unit_profit_factor_margin",
+            Some(economics.profit_factor_gate_margin_usd),
+            0.0,
+            "normalized_usd_margin",
+        ),
+        (
+            "selected_fee_aware_unit_payoff_margin",
+            Some(economics.payoff_gate_margin_usd),
+            0.0,
+            "normalized_usd_margin",
+        ),
+    ];
+    if screen.gates.len() != expected_gates.len() {
+        bail!("screen {path} has an unexpected gate set");
+    }
+    for (gate, (name, observed, minimum, unit)) in screen.gates.iter().zip(expected_gates) {
+        let passed = observed.is_some_and(|value| value + 1e-12 >= minimum);
+        if gate.name != name
+            || !binary_complement_option_close(gate.observed, observed)
+            || (gate.minimum - minimum).abs() > 1e-12
+            || gate.unit != unit
+            || gate.passed != passed
+        {
+            bail!("screen {path} gate {} is invalid", gate.name);
+        }
+    }
+    let expected_failures: Vec<_> = screen
+        .gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(|gate| format!("gate_failed:{}", gate.name))
+        .collect();
+    let expected_ok = expected_failures.is_empty();
+    let expected_status = if expected_ok {
+        "BLOCK_PASS_REQUIRES_SECOND_DISJOINT_BLOCK"
+    } else {
+        "REJECT_MECHANISM_FAMILY"
+    };
+    if screen.failure_reasons != expected_failures
+        || screen.ok != expected_ok
+        || screen.status != expected_status
+    {
+        bail!("screen {path} verdict is inconsistent with its gates");
+    }
+
+    let recomputed = binary_complement_screen(BinaryComplementScreenInput {
+        opportunity_paths: screen.sources.opportunity_reports.clone(),
+        resolution_manifest_paths: screen.sources.resolution_manifests.clone(),
+        block_id: screen.block_id.clone(),
+    })?;
+    let mut observed_value =
+        serde_json::to_value(screen).context("serialize observed binary-complement screen")?;
+    let mut recomputed_value = serde_json::to_value(recomputed)
+        .context("serialize recomputed binary-complement screen")?;
+    observed_value
+        .as_object_mut()
+        .expect("screen serializes to an object")
+        .remove("generated_at");
+    recomputed_value
+        .as_object_mut()
+        .expect("screen serializes to an object")
+        .remove("generated_at");
+    if !binary_complement_json_close(&observed_value, &recomputed_value) {
+        let observed = observed_value
+            .as_object()
+            .expect("screen serializes to an object");
+        let recomputed = recomputed_value
+            .as_object()
+            .expect("screen serializes to an object");
+        let differing_fields: Vec<_> = observed
+            .keys()
+            .filter(|key| {
+                observed.get(*key).is_none_or(|observed| {
+                    recomputed.get(*key).is_none_or(|recomputed| {
+                        !binary_complement_json_close(observed, recomputed)
+                    })
+                })
+            })
+            .cloned()
+            .collect();
+        bail!(
+            "screen {path} does not exactly recompute from its pinned sources; differing fields: {}",
+            differing_fields.join(",")
+        );
+    }
+
+    Ok((start, end))
+}
+
+/// Verify that two frozen forward screens are chronological, disjoint, and
+/// individually passing before permitting one exact runtime replay.
+pub fn binary_complement_repeat_audit(
+    input: BinaryComplementRepeatAuditInput,
+) -> Result<BinaryComplementRepeatAudit> {
+    if input.screen_paths.len() != 2 {
+        bail!("binary-complement repeat audit requires exactly two --screen artifacts");
+    }
+    if input.screen_paths[0] == input.screen_paths[1] {
+        bail!("binary-complement repeat audit requires two different screen paths");
+    }
+
+    let mut screens = Vec::with_capacity(2);
+    let mut windows = Vec::with_capacity(2);
+    for path in &input.screen_paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read binary-complement screen {path}"))?;
+        let screen: BinaryComplementScreen = serde_json::from_str(&raw)
+            .with_context(|| format!("parse binary-complement screen {path}"))?;
+        windows.push(validate_binary_complement_screen_artifact(path, &screen)?);
+        screens.push(screen);
+    }
+
+    let first_ids: BTreeSet<_> = screens[0].aligned_condition_ids.iter().cloned().collect();
+    let second_ids: BTreeSet<_> = screens[1].aligned_condition_ids.iter().cloned().collect();
+    let overlapping_condition_ids: Vec<_> = first_ids.intersection(&second_ids).cloned().collect();
+    let first_end_exclusive = windows[0].1 + ChronoDuration::hours(1);
+    let chronological = first_end_exclusive <= windows[1].0;
+
+    let checks = vec![
+        BinaryComplementRepeatCheck {
+            name: "block_ids_distinct".to_string(),
+            passed: screens[0].block_id != screens[1].block_id,
+            detail: format!("{} != {}", screens[0].block_id, screens[1].block_id),
+        },
+        BinaryComplementRepeatCheck {
+            name: "block_1_screen_passed".to_string(),
+            passed: screens[0].ok,
+            detail: screens[0].status.clone(),
+        },
+        BinaryComplementRepeatCheck {
+            name: "block_2_screen_passed".to_string(),
+            passed: screens[1].ok,
+            detail: screens[1].status.clone(),
+        },
+        BinaryComplementRepeatCheck {
+            name: "chronological_non_overlapping_windows".to_string(),
+            passed: chronological,
+            detail: format!(
+                "block_1_end_exclusive={} block_2_start={}",
+                first_end_exclusive.to_rfc3339(),
+                windows[1].0.to_rfc3339()
+            ),
+        },
+        BinaryComplementRepeatCheck {
+            name: "condition_sets_disjoint".to_string(),
+            passed: overlapping_condition_ids.is_empty(),
+            detail: format!("overlap_count={}", overlapping_condition_ids.len()),
+        },
+    ];
+    let failure_reasons: Vec<_> = checks
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| format!("check_failed:{}", check.name))
+        .collect();
+    let ok = failure_reasons.is_empty();
+    let blocks = input
+        .screen_paths
+        .iter()
+        .zip(&screens)
+        .map(|(path, screen)| BinaryComplementRepeatBlock {
+            path: path.clone(),
+            artifact_hash: stable_json_hash(screen),
+            block_id: screen.block_id.clone(),
+            screen_passed: screen.ok,
+            report_start: screen.sources.report_start.clone(),
+            report_end: screen.sources.report_end.clone(),
+            aligned_conditions: screen.counts.terminal_settlement_aligned_conditions,
+            aligned_condition_ids_hash: screen.aligned_condition_ids_hash.clone(),
+        })
+        .collect();
+
+    Ok(BinaryComplementRepeatAudit {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        mechanism_id: BINARY_COMPLEMENT_MECHANISM_ID.to_string(),
+        status: if ok {
+            "TWO_BLOCK_SCREEN_PASS_EXACT_REPLAY_ALLOWED"
+        } else {
+            "REJECT_MECHANISM_FAMILY"
+        }
+        .to_string(),
+        ok,
+        screens: blocks,
+        checks,
+        overlapping_condition_ids,
+        failure_reasons,
+        notes: vec![
+            "Each source screen is revalidated from counts through rates, fixed gates, capture identity, rule, condition-set hash, and verdict before cross-block checks.".to_string(),
+            "Passing this audit authorizes research materialization of exactly one frozen runtime gate and measured-latency replay; it is not live promotion.".to_string(),
+        ],
+    })
 }
 
 pub fn build_plan(input: StrategyBuilderPlanInput) -> Result<StrategyBuilderPlan> {
@@ -5980,7 +8316,7 @@ fn write_evolution_artifacts(
     }
 
     let ledger_path = input.out_dir.join("trial_ledger.jsonl");
-    write_jsonl_artifact_atomic(&ledger_path, &search.trial_ledger)
+    write_jsonl_atomic(&ledger_path, &search.trial_ledger)
         .with_context(|| format!("write {}", ledger_path.display()))?;
 
     let summary_path = input.out_dir.join("evolution_summary.json");
@@ -6192,51 +8528,6 @@ fn evolution_replay_manifest(
             "Static evolution fitness is not promotion evidence."
         ],
     })
-}
-
-fn write_json_artifact_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create artifact dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = serde_json::to_vec_pretty(value).context("serialize artifact JSON")?;
-    payload.push(b'\n');
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename artifact into {}", path.display()))?;
-    Ok(())
-}
-
-fn write_jsonl_artifact_atomic<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create artifact dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = Vec::new();
-    for row in rows {
-        serde_json::to_writer(&mut payload, row).context("serialize artifact JSONL row")?;
-        payload.push(b'\n');
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact.jsonl");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write artifact temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename artifact into {}", path.display()))?;
-    Ok(())
 }
 
 fn variant_names(folds: &[SelectivityFold]) -> Vec<String> {
@@ -7988,169 +10279,6 @@ fn tag_arg((dimension, value): (&String, &String)) -> String {
     format!("{dimension}={value}")
 }
 
-#[derive(Serialize)]
-struct StrategyRegistryFingerprint<'a> {
-    strategy_id: &'a str,
-    parent_id: &'a Option<String>,
-    artifact_path: &'a Option<String>,
-    metrics_path: &'a Option<String>,
-}
-
-fn strategy_version_id(input: &StrategyRegistryMarkInput) -> String {
-    let fingerprint = StrategyRegistryFingerprint {
-        strategy_id: input.strategy_id.trim(),
-        parent_id: &input.parent_id,
-        artifact_path: &input.artifact_path,
-        metrics_path: &input.metrics_path,
-    };
-    let hash = stable_json_hash(&fingerprint);
-    format!("sv_{}", &hash[..16])
-}
-
-fn read_strategy_registry(path: &Path) -> Result<StrategyRegistry> {
-    if !path.exists() {
-        return Ok(StrategyRegistry {
-            schema_version: 1,
-            updated_at: Utc::now().to_rfc3339(),
-            entries: Vec::new(),
-        });
-    }
-    let data = std::fs::read_to_string(path)
-        .with_context(|| format!("read strategy registry {}", path.display()))?;
-    let registry: StrategyRegistry = serde_json::from_str(&data)
-        .with_context(|| format!("parse strategy registry {}", path.display()))?;
-    if registry.schema_version != 1 {
-        bail!(
-            "unsupported strategy registry schema_version {}; expected 1",
-            registry.schema_version
-        );
-    }
-    Ok(registry)
-}
-
-fn write_strategy_registry_atomic(path: &Path, registry: &StrategyRegistry) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create strategy registry dir {}", parent.display()))?;
-        }
-    }
-    let mut payload = serde_json::to_vec_pretty(registry).context("serialize strategy registry")?;
-    payload.push(b'\n');
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("strategy_registry.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, payload)
-        .with_context(|| format!("write strategy registry temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename strategy registry into {}", path.display()))?;
-    Ok(())
-}
-
-fn archived_evidence_path(strategy_dir: &Path, role: &str, source_path: &str) -> PathBuf {
-    let source = Path::new(source_path);
-    let extension = source
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| format!(".{}", safe_path_component(extension)))
-        .unwrap_or_default();
-    let source_hash = stable_json_hash(&source_path);
-    strategy_dir.join(format!(
-        "{}_{}{}",
-        safe_path_component(role),
-        &source_hash[..16],
-        extension
-    ))
-}
-
-fn archive_evidence_file(
-    source: &Path,
-    out_dir: &Path,
-    strategy_dir: &Path,
-    role: &str,
-    source_path: &str,
-) -> Result<(PathBuf, u64, String)> {
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("create evidence archive dir {}", out_dir.display()))?;
-    let source_canonical = source
-        .canonicalize()
-        .with_context(|| format!("canonicalize evidence source {}", source.display()))?;
-    let out_canonical = out_dir
-        .canonicalize()
-        .with_context(|| format!("canonicalize evidence archive dir {}", out_dir.display()))?;
-    if source_canonical.starts_with(&out_canonical) {
-        let (bytes, sha256) = file_sha256(source)?;
-        return Ok((source.to_path_buf(), bytes, sha256));
-    }
-
-    let archived_path = archived_evidence_path(strategy_dir, role, source_path);
-    let (bytes, sha256) = copy_file_atomic_with_sha256(source, &archived_path)?;
-    Ok((archived_path, bytes, sha256))
-}
-
-fn copy_file_atomic_with_sha256(source: &Path, dest: &Path) -> Result<(u64, String)> {
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create evidence archive dir {}", parent.display()))?;
-    }
-    let payload =
-        std::fs::read(source).with_context(|| format!("read evidence {}", source.display()))?;
-    let sha256 = sha256_bytes(&payload);
-    let file_name = dest
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("evidence");
-    let tmp_path = dest.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
-    let mut file = std::fs::File::create(&tmp_path)
-        .with_context(|| format!("create evidence temp {}", tmp_path.display()))?;
-    file.write_all(&payload)
-        .with_context(|| format!("write evidence temp {}", tmp_path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("sync evidence temp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, dest)
-        .with_context(|| format!("rename evidence archive into {}", dest.display()))?;
-    Ok((payload.len() as u64, sha256))
-}
-
-fn file_sha256(path: &Path) -> Result<(u64, String)> {
-    let payload =
-        std::fs::read(path).with_context(|| format!("read evidence {}", path.display()))?;
-    Ok((payload.len() as u64, sha256_bytes(&payload)))
-}
-
-fn sha256_bytes(payload: &[u8]) -> String {
-    hex::encode(Sha256::digest(payload))
-}
-
-fn safe_path_component(value: &str) -> String {
-    let cleaned = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
-    }
-}
-
-fn merge_unique_strings(target: &mut Vec<String>, source: &[String]) {
-    for value in source {
-        if !target.iter().any(|existing| existing == value) {
-            target.push(value.clone());
-        }
-    }
-}
-
 fn pattern_label(tags: &BTreeMap<String, String>) -> String {
     tags.iter()
         .map(|(dimension, value)| format!("{dimension}={value}"))
@@ -8181,6 +10309,11 @@ const CAUSAL_POLICY_DIMENSIONS: &[&str] = &[
     "book_runup",
     "btc_impulse_10s",
     "outcome_overround",
+    "article_path_2m",
+    "article_path_3m",
+    "article_path_4m",
+    "article_move_2m",
+    "article_path_4m_or_move_2m_200",
 ];
 
 const PATTERN_GUARD_DIMENSIONS: &[&[&str]] = &[
@@ -9860,6 +11993,1139 @@ fn wilson_lower(wins: usize, trades: usize) -> f64 {
 mod tests {
     use super::*;
 
+    fn binary_complement_fixture(
+        tmp: &tempfile::TempDir,
+        report_start: &str,
+        condition_count: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreenInput {
+        let first_open = "2026-07-15T05:00:00Z";
+        let report_end = (parse_rfc3339(first_open, "fixture start").unwrap()
+            + ChronoDuration::seconds(condition_count as i64 * 300))
+        .to_rfc3339();
+        binary_complement_fixture_at(
+            tmp,
+            report_start,
+            &report_end,
+            first_open,
+            0,
+            condition_count,
+            missing_feature_conditions,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn binary_complement_fixture_at(
+        tmp: &tempfile::TempDir,
+        report_start: &str,
+        report_end: &str,
+        first_open: &str,
+        condition_offset: usize,
+        condition_count: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreenInput {
+        let first_open = parse_rfc3339(first_open, "fixture start")
+            .unwrap()
+            .timestamp() as f64;
+        let mut markets = Vec::new();
+        let mut rows = Vec::new();
+        for index in 0..condition_count {
+            let condition_id = format!("0x{:064x}", condition_offset + index);
+            let fixture_slot = index % 100;
+            let baseline_won = fixture_slot < 90;
+            let terminal_direction = if baseline_won { "up" } else { "down" };
+            let selected = fixture_slot < 81 || (90..93).contains(&fixture_slot);
+            let features_missing = index < missing_feature_conditions;
+            let residual = if features_missing {
+                serde_json::Value::Null
+            } else if selected {
+                serde_json::json!(0.01)
+            } else {
+                serde_json::json!(0.03)
+            };
+            let opposite_best_bid = if selected { 0.21 } else { 0.23 };
+            let opposite_best_ask = if selected { 0.23 } else { 0.25 };
+            let opposite_mid = (opposite_best_bid + opposite_best_ask) / 2.0;
+            let decision_timestamp_s = first_open + index as f64 * 300.0 + 121.0;
+            let minutes_remaining =
+                (first_open + index as f64 * 300.0 + 300.0 - decision_timestamp_s) / 60.0;
+            let fair_value_btc = 50_050.0;
+            let fair_value_open_btc = 50_000.0;
+            let decision_volatility = 0.30;
+            let fair_value = binary_option_price_with_rate(
+                fair_value_btc,
+                fair_value_open_btc,
+                minutes_remaining / 1440.0,
+                decision_volatility,
+                0.05,
+            );
+            let market_price = 0.80;
+            let entry_fee_rate = 0.07;
+            let gross_edge = fair_value - market_price;
+            let entry_fee_per_share = entry_fee_rate * market_price * (1.0 - market_price);
+            let edge = gross_edge - entry_fee_per_share;
+            let pair_value = |value: f64| {
+                if features_missing {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(value)
+                }
+            };
+            markets.push(serde_json::json!({
+                "condition_id": condition_id,
+                "open_ts_s": first_open + index as f64 * 300.0,
+                "close_ts_s": first_open + index as f64 * 300.0 + 300.0,
+                "window_seconds": 300,
+                "btc_open": 50_000.0,
+                "btc_close": if baseline_won { 50_001.0 } else { 49_999.0 },
+                "btc_direction": terminal_direction,
+                "settlement_aligned": true,
+                "official_source_matches_btc_tape": true,
+                "terminal_direction": terminal_direction,
+                "outcomes": [
+                    {
+                        "name": "Up",
+                        "token_id": format!("up-{index}"),
+                        "price": if baseline_won { 1.0 } else { 0.0 },
+                    },
+                    {
+                        "name": "Down",
+                        "token_id": format!("down-{index}"),
+                        "price": if baseline_won { 0.0 } else { 1.0 },
+                    },
+                ],
+            }));
+            let decision = serde_json::json!({
+                "direction": "up",
+                "confidence": 0.70,
+                "z_score": 1.0,
+                "zone": "primary",
+                "fair_value": fair_value,
+                "market_price": market_price,
+                "gross_edge": gross_edge,
+                "entry_fee_per_share": entry_fee_per_share,
+                "edge": edge,
+                "minutes_remaining": minutes_remaining,
+                "yes_no_vig": market_price + opposite_best_ask - 1.0,
+            });
+            let opportunity = serde_json::json!({
+                "condition_id": condition_id,
+                "token_id": format!("up-{index}"),
+                "opposite_token_id": format!("down-{index}"),
+                "decision_timestamp_s": decision_timestamp_s,
+                "evaluation_result": "low_edge",
+                "btc_price": fair_value_btc,
+                "open_btc": fair_value_open_btc,
+                "fair_value_btc": fair_value_btc,
+                "fair_value_open_btc": fair_value_open_btc,
+                "observed_volatility": 0.20,
+                "decision_volatility": decision_volatility,
+                "reversion_count": 1,
+                "actual_direction": terminal_direction,
+                "won": baseline_won,
+                "entry_fee_rate": entry_fee_rate,
+                "market_fees_enabled": true,
+                "market_taker_fee_rate": null,
+                "market_category": "Crypto",
+                "up_price": market_price,
+                "down_price": opposite_best_ask,
+                "market_tick_size": 0.01,
+                "chosen_best_bid": pair_value(0.78),
+                "chosen_best_ask": pair_value(0.80),
+                "chosen_bid_depth": pair_value(10.0),
+                "chosen_ask_depth": pair_value(10.0),
+                "chosen_book_age_ms": 1000.0,
+                "opposite_best_bid": pair_value(opposite_best_bid),
+                "opposite_best_ask": pair_value(opposite_best_ask),
+                "opposite_bid_depth": pair_value(10.0),
+                "opposite_ask_depth": pair_value(10.0),
+                "opposite_book_age_ms": 1000.0,
+                "chosen_microprice": pair_value(0.79),
+                "opposite_mid": pair_value(opposite_mid),
+                "opposite_microprice": pair_value(opposite_mid),
+                "complement_mid_sum_residual": residual.clone(),
+                "complement_microprice_sum_residual": residual,
+                "decision": decision,
+            });
+            rows.push(serde_json::json!({
+                "opportunity_index": index,
+                "strategy_name": BINARY_COMPLEMENT_CAPTURE_NAME,
+                "params_hash": BINARY_COMPLEMENT_CAPTURE_HASH,
+                "risk_profile": BINARY_COMPLEMENT_RISK_PROFILE,
+                "opportunity": opportunity,
+            }));
+        }
+
+        let manifest_path = tmp.path().join("resolution_manifest.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "a_plus_gate": {"settlement_alignment_ready": true},
+                "markets": markets,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let opportunity_path = tmp.path().join("opportunities.json");
+        std::fs::write(
+            &opportunity_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "mode": "harness_sweep_calibration_opportunities",
+                "start": report_start,
+                "end": report_end,
+                "latency_ms": 202,
+                "window_minutes": 5.0,
+                "continuous": true,
+                "sampling": "first_pre_edge_candidate_per_condition_utc_second",
+                "variant_count": 1,
+                "rows": rows,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        BinaryComplementScreenInput {
+            opportunity_paths: vec![opportunity_path.display().to_string()],
+            resolution_manifest_paths: vec![manifest_path.display().to_string()],
+            block_id: "fixture-block-1".to_string(),
+        }
+    }
+
+    fn binary_complement_reprice_fixture_opportunity(
+        opportunity: &mut serde_json::Value,
+        fair_value_btc: f64,
+    ) {
+        let direction = opportunity["decision"]["direction"].as_str().unwrap();
+        let market_price = if direction == "up" {
+            opportunity["up_price"].as_f64().unwrap()
+        } else {
+            opportunity["down_price"].as_f64().unwrap()
+        };
+        let fair_value_open_btc = opportunity["fair_value_open_btc"].as_f64().unwrap();
+        let decision_volatility = opportunity["decision_volatility"].as_f64().unwrap();
+        let minutes_remaining = opportunity["decision"]["minutes_remaining"]
+            .as_f64()
+            .unwrap();
+        let raw_fair = binary_option_price_with_rate(
+            fair_value_btc,
+            fair_value_open_btc,
+            minutes_remaining / 1440.0,
+            decision_volatility,
+            0.05,
+        );
+        let fair_value = if direction == "up" {
+            raw_fair
+        } else {
+            1.0 - raw_fair
+        };
+        let entry_fee_rate = opportunity["entry_fee_rate"].as_f64().unwrap();
+        let gross_edge = fair_value - market_price;
+        let entry_fee_per_share = entry_fee_rate * market_price * (1.0 - market_price);
+
+        opportunity["fair_value_btc"] = serde_json::json!(fair_value_btc);
+        opportunity["decision"]["fair_value"] = serde_json::json!(fair_value);
+        opportunity["decision"]["market_price"] = serde_json::json!(market_price);
+        opportunity["decision"]["gross_edge"] = serde_json::json!(gross_edge);
+        opportunity["decision"]["entry_fee_per_share"] = serde_json::json!(entry_fee_per_share);
+        opportunity["decision"]["edge"] = serde_json::json!(gross_edge - entry_fee_per_share);
+        opportunity["decision"]["yes_no_vig"] = serde_json::json!(
+            opportunity["up_price"].as_f64().unwrap() + opportunity["down_price"].as_f64().unwrap()
+                - 1.0
+        );
+    }
+
+    #[test]
+    fn binary_complement_screen_passes_frozen_forward_gates() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(screen.ok);
+        assert_eq!(screen.schema_version, 6);
+        assert_eq!(screen.counts.baseline_candidates, 750);
+        assert_eq!(screen.counts.baseline_winners, 680);
+        assert_eq!(screen.counts.baseline_losses, 70);
+        assert_eq!(screen.counts.selected_candidates, 638);
+        assert_eq!(screen.counts.selected_winners, 617);
+        assert_eq!(screen.counts.baseline_winners_retained, 617);
+        assert_eq!(screen.counts.baseline_losses_removed, 49);
+        assert_eq!(screen.rates.valid_pair_feature_coverage, Some(1.0));
+        assert_eq!(screen.rates.candidate_retention, Some(638.0 / 750.0));
+        assert_eq!(screen.rates.baseline_winner_retention, Some(617.0 / 680.0));
+        assert_eq!(screen.rates.baseline_loss_removal, Some(0.7));
+        assert!(screen.rates.selected_wilson_95_lower.unwrap() > 0.89);
+        assert_eq!(screen.diagnostics.selection_delay_seconds.p50, Some(0.0));
+        assert_eq!(
+            screen.diagnostics.selected_seconds_to_close.p50,
+            Some(179.0)
+        );
+        assert_eq!(screen.diagnostics.selected_direction_changes, 0);
+        assert_eq!(screen.diagnostics.selected_in_final_60_seconds, 0);
+        assert!(screen.unit_economics.total_pnl_usd > 100.0);
+        assert!(screen.unit_economics.profit_factor.unwrap() > 6.0);
+        assert!(
+            screen.unit_economics.payoff_ratio.unwrap() > BINARY_COMPLEMENT_MIN_UNIT_PAYOFF_RATIO
+        );
+        assert_eq!(screen.gates.len(), 11);
+        assert_eq!(screen.attribution.gating_use, "descriptive_only_non_gating");
+        assert_eq!(screen.attribution.baseline.candidates, 750);
+        assert_eq!(screen.attribution.baseline.win_rate, Some(680.0 / 750.0));
+        assert_eq!(screen.attribution.paired_book_validity.candidates, 750);
+        assert_eq!(screen.attribution.frozen_residual.candidates, 638);
+        assert_eq!(screen.attribution.paired_validity_candidate_removals, 0);
+        assert_eq!(screen.attribution.paired_validity_loss_removals, 0);
+        assert_eq!(screen.attribution.residual_candidate_removals, 112);
+        assert_eq!(screen.attribution.residual_loss_removals, 49);
+        assert_eq!(screen.attribution.residual_decision_disagreements, 112);
+        assert!(
+            screen
+                .attribution
+                .baseline
+                .unit_economics
+                .maximum_drawdown_usd
+                > 0.0
+        );
+        assert_eq!(
+            screen.attribution.baseline.unit_economics.total_pnl_usd,
+            screen
+                .attribution
+                .paired_book_validity
+                .unit_economics
+                .total_pnl_usd
+        );
+        assert_eq!(
+            screen
+                .attribution
+                .frozen_residual
+                .unit_economics
+                .total_pnl_usd,
+            screen.unit_economics.total_pnl_usd
+        );
+    }
+
+    #[test]
+    fn binary_complement_screen_reports_zero_attribution_when_residual_is_inert() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        for row in report["rows"].as_array_mut().unwrap() {
+            if row["opportunity"]["complement_mid_sum_residual"] == serde_json::json!(0.03) {
+                let opportunity = &mut row["opportunity"];
+                opportunity["down_price"] = serde_json::json!(0.23);
+                opportunity["opposite_best_bid"] = serde_json::json!(0.21);
+                opportunity["opposite_best_ask"] = serde_json::json!(0.23);
+                opportunity["opposite_mid"] = serde_json::json!(0.22);
+                opportunity["opposite_microprice"] = serde_json::json!(0.22);
+                opportunity["complement_mid_sum_residual"] = serde_json::json!(0.01);
+                opportunity["complement_microprice_sum_residual"] = serde_json::json!(0.01);
+                binary_complement_reprice_fixture_opportunity(opportunity, 50_050.0);
+            }
+        }
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(!screen.ok);
+        assert!(screen
+            .failure_reasons
+            .contains(&"gate_failed:baseline_loss_removal".to_string()));
+        assert_eq!(screen.attribution.baseline.candidates, 750);
+        assert_eq!(screen.attribution.paired_book_validity.candidates, 750);
+        assert_eq!(screen.attribution.frozen_residual.candidates, 750);
+        assert_eq!(screen.attribution.residual_candidate_removals, 0);
+        assert_eq!(screen.attribution.residual_loss_removals, 0);
+        assert_eq!(screen.attribution.residual_decision_disagreements, 0);
+        assert_eq!(
+            screen
+                .attribution
+                .paired_book_validity
+                .unit_economics
+                .total_pnl_usd,
+            screen
+                .attribution
+                .frozen_residual
+                .unit_economics
+                .total_pnl_usd
+        );
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_sparse_realized_baseline_support() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        for row in &mut report["rows"].as_array_mut().unwrap()[99..] {
+            binary_complement_reprice_fixture_opportunity(&mut row["opportunity"], 50_000.0);
+        }
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert_eq!(screen.counts.terminal_settlement_aligned_conditions, 750);
+        assert_eq!(screen.counts.baseline_candidates, 99);
+        assert_eq!(screen.counts.baseline_losses, 9);
+        assert_eq!(screen.counts.selected_candidates, 84);
+        assert_eq!(
+            screen.failure_reasons,
+            vec![
+                "gate_failed:baseline_candidates",
+                "gate_failed:baseline_losses",
+            ]
+        );
+        assert!(!screen.ok);
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_sparse_realized_selected_support() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let manifest_path = &input.resolution_manifest_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+
+        for index in 100..750 {
+            binary_complement_reprice_fixture_opportunity(
+                &mut report["rows"][index]["opportunity"],
+                50_000.0,
+            );
+        }
+        for index in 85..90 {
+            report["rows"][index]["opportunity"]["actual_direction"] = serde_json::json!("down");
+            report["rows"][index]["opportunity"]["won"] = serde_json::json!(false);
+            manifest["markets"][index]["terminal_direction"] = serde_json::json!("down");
+            manifest["markets"][index]["btc_close"] = serde_json::json!(49_999.0);
+            manifest["markets"][index]["btc_direction"] = serde_json::json!("down");
+            manifest["markets"][index]["outcomes"][0]["price"] = serde_json::json!(0.0);
+            manifest["markets"][index]["outcomes"][1]["price"] = serde_json::json!(1.0);
+        }
+        for index in [77usize, 78, 79, 80, 92] {
+            let opportunity = &mut report["rows"][index]["opportunity"];
+            opportunity["down_price"] = serde_json::json!(0.25);
+            opportunity["opposite_best_bid"] = serde_json::json!(0.23);
+            opportunity["opposite_best_ask"] = serde_json::json!(0.25);
+            opportunity["opposite_mid"] = serde_json::json!(0.24);
+            opportunity["opposite_microprice"] = serde_json::json!(0.24);
+            opportunity["complement_mid_sum_residual"] = serde_json::json!(0.03);
+            opportunity["complement_microprice_sum_residual"] = serde_json::json!(0.03);
+            binary_complement_reprice_fixture_opportunity(opportunity, 50_050.0);
+        }
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert_eq!(screen.counts.baseline_candidates, 100);
+        assert_eq!(screen.counts.baseline_losses, 15);
+        assert_eq!(screen.counts.selected_candidates, 79);
+        assert_eq!(
+            screen.failure_reasons,
+            vec!["gate_failed:selected_candidates"]
+        );
+        assert!(!screen.ok);
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_residual_not_reproduced_from_pair() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        report["rows"][0]["opportunity"]["complement_mid_sum_residual"] = serde_json::json!(0.0);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("paired-book features do not reproduce"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_reused_opposite_token() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let token_id = report["rows"][0]["opportunity"]["token_id"].clone();
+        report["rows"][0]["opportunity"]["opposite_token_id"] = token_id;
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error.to_string().contains("two distinct paired token IDs"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_swapped_direction_token_identity() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let opportunity = &mut report["rows"][0]["opportunity"];
+        let chosen = opportunity["token_id"].clone();
+        opportunity["token_id"] = opportunity["opposite_token_id"].clone();
+        opportunity["opposite_token_id"] = chosen;
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("do not match the resolution manifest's Up/Down identities"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_unreproduced_terminal_direction() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let manifest_path = &input.resolution_manifest_paths[0];
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        manifest["markets"][0]["terminal_direction"] = serde_json::json!("down");
+        std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("terminal direction does not reproduce"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_non_five_minute_resolution_window() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let manifest_path = &input.resolution_manifest_paths[0];
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        manifest["markets"][0]["close_ts_s"] =
+            serde_json::json!(manifest["markets"][0]["close_ts_s"].as_f64().unwrap() + 1.0);
+        std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("not an exact five-minute window"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_pair_ask_not_used_for_economics() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        report["rows"][0]["opportunity"]["up_price"] = serde_json::json!(0.79);
+        binary_complement_reprice_fixture_opportunity(
+            &mut report["rows"][0]["opportunity"],
+            50_050.0,
+        );
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error.to_string().contains("paired-book asks do not match"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_extreme_book_without_dynamic_tick() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let opportunity = &mut report["rows"][0]["opportunity"];
+        opportunity["down_price"] = serde_json::json!(0.03);
+        opportunity["opposite_best_bid"] = serde_json::json!(0.02);
+        opportunity["opposite_best_ask"] = serde_json::json!(0.03);
+        opportunity["opposite_mid"] = serde_json::json!(0.025);
+        opportunity["opposite_microprice"] = serde_json::json!(0.025);
+        opportunity["complement_mid_sum_residual"] = serde_json::json!(-0.185);
+        opportunity["complement_microprice_sum_residual"] = serde_json::json!(-0.185);
+        binary_complement_reprice_fixture_opportunity(opportunity, 50_050.0);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("without the causal dynamic tick transition"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_pair_prices_not_conforming_to_tick() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        report["rows"][0]["opportunity"]["market_tick_size"] = serde_json::json!(0.05);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("paired-book top prices do not conform"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_nonreproducible_baseline_decision() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        report["rows"][0]["opportunity"]["decision"]["edge"] = serde_json::json!(0.20);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("baseline decision does not reproduce"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_unreproduced_entry_fee_rate() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        report["rows"][0]["opportunity"]["entry_fee_rate"] = serde_json::json!(0.0);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("entry fee rate does not reproduce"));
+    }
+
+    #[test]
+    fn binary_complement_screen_reports_late_direction_change_without_gating_on_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let mut later = report["rows"][93].clone();
+        later["opportunity_index"] = serde_json::json!(10_000);
+        later["opportunity"]["decision_timestamp_s"] = serde_json::json!(
+            later["opportunity"]["decision_timestamp_s"]
+                .as_f64()
+                .unwrap()
+                + 58.0
+        );
+        later["opportunity"]["decision"]["minutes_remaining"] = serde_json::json!(
+            later["opportunity"]["decision"]["minutes_remaining"]
+                .as_f64()
+                .unwrap()
+                - 58.0 / 60.0
+        );
+        later["opportunity"]["decision"]["direction"] = serde_json::json!("down");
+        later["opportunity"]["won"] = serde_json::json!(true);
+        let up_token = later["opportunity"]["token_id"].clone();
+        later["opportunity"]["token_id"] = later["opportunity"]["opposite_token_id"].clone();
+        later["opportunity"]["opposite_token_id"] = up_token;
+        later["opportunity"]["up_price"] = serde_json::json!(0.42);
+        later["opportunity"]["down_price"] = serde_json::json!(0.61);
+        later["opportunity"]["chosen_best_bid"] = serde_json::json!(0.59);
+        later["opportunity"]["chosen_best_ask"] = serde_json::json!(0.61);
+        later["opportunity"]["chosen_microprice"] = serde_json::json!(0.60);
+        later["opportunity"]["opposite_best_bid"] = serde_json::json!(0.40);
+        later["opportunity"]["opposite_best_ask"] = serde_json::json!(0.42);
+        later["opportunity"]["opposite_mid"] = serde_json::json!(0.41);
+        later["opportunity"]["opposite_microprice"] = serde_json::json!(0.41);
+        later["opportunity"]["complement_mid_sum_residual"] = serde_json::json!(0.01);
+        later["opportunity"]["complement_microprice_sum_residual"] = serde_json::json!(0.01);
+        binary_complement_reprice_fixture_opportunity(&mut later["opportunity"], 49_975.0);
+        report["rows"].as_array_mut().unwrap().push(later);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(screen.ok);
+        assert_eq!(screen.diagnostics.selected_direction_changes, 1);
+        assert_eq!(
+            screen.diagnostics.selected_direction_change_rate,
+            Some(1.0 / 639.0)
+        );
+        assert_eq!(screen.diagnostics.selected_in_final_60_seconds, 0);
+        assert_eq!(screen.diagnostics.selection_delay_seconds.max, Some(58.0));
+        assert_eq!(
+            screen.diagnostics.selected_seconds_to_close.min,
+            Some(121.0)
+        );
+        assert_eq!(screen.gates.len(), 11);
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_classification_pass_with_weak_unit_payoff() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        for row in report["rows"].as_array_mut().unwrap() {
+            let residual = row["opportunity"]["complement_mid_sum_residual"]
+                .as_f64()
+                .unwrap();
+            let opposite_mid = 0.16 + residual;
+            row["opportunity"]["up_price"] = serde_json::json!(0.85);
+            row["opportunity"]["down_price"] = serde_json::json!(opposite_mid + 0.01);
+            row["opportunity"]["chosen_best_bid"] = serde_json::json!(0.83);
+            row["opportunity"]["chosen_best_ask"] = serde_json::json!(0.85);
+            row["opportunity"]["chosen_microprice"] = serde_json::json!(0.84);
+            row["opportunity"]["opposite_best_bid"] = serde_json::json!(opposite_mid - 0.01);
+            row["opportunity"]["opposite_best_ask"] = serde_json::json!(opposite_mid + 0.01);
+            row["opportunity"]["opposite_mid"] = serde_json::json!(opposite_mid);
+            row["opportunity"]["opposite_microprice"] = serde_json::json!(opposite_mid);
+            binary_complement_reprice_fixture_opportunity(&mut row["opportunity"], 50_070.0);
+        }
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(screen.rates.selected_wilson_95_lower.unwrap() > BINARY_COMPLEMENT_MIN_WILSON);
+        assert!(screen.unit_economics.profit_factor.unwrap() > 1.20);
+        assert!(screen.unit_economics.payoff_ratio.unwrap() < 0.20);
+        assert!(!screen.ok);
+        assert!(screen
+            .failure_reasons
+            .contains(&"gate_failed:selected_fee_aware_unit_payoff_margin".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_capture_artifact_matches_frozen_hash() {
+        let variant: StrategyVariant = serde_json::from_str(include_str!(
+            "../../deploy/promotions/evidence/strategy_registry/20260715_binary_complement_capture_variant.json"
+        ))
+        .unwrap();
+
+        assert_eq!(variant.name, BINARY_COMPLEMENT_CAPTURE_NAME);
+        assert_eq!(stable_json_hash(&variant), BINARY_COMPLEMENT_CAPTURE_HASH);
+        assert_eq!(variant.risk_profile(), BINARY_COMPLEMENT_RISK_PROFILE);
+    }
+
+    fn write_binary_complement_screen(
+        tmp: &tempfile::TempDir,
+        name: &str,
+        screen: &BinaryComplementScreen,
+    ) -> String {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, serde_json::to_vec_pretty(screen).unwrap()).unwrap();
+        path.display().to_string()
+    }
+
+    fn binary_complement_second_block_fixture(
+        tmp: &tempfile::TempDir,
+        condition_offset: usize,
+        missing_feature_conditions: usize,
+    ) -> BinaryComplementScreen {
+        let first_open = "2026-07-17T21:00:00Z";
+        let report_end = (parse_rfc3339(first_open, "fixture start").unwrap()
+            + ChronoDuration::seconds(750 * 300))
+        .to_rfc3339();
+        let mut input = binary_complement_fixture_at(
+            tmp,
+            first_open,
+            &report_end,
+            first_open,
+            condition_offset,
+            750,
+            missing_feature_conditions,
+        );
+        input.block_id = "fixture-block-2".to_string();
+        binary_complement_screen(input).unwrap()
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_passes_two_disjoint_blocks() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 750, 0);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(audit.ok);
+        assert_eq!(audit.status, "TWO_BLOCK_SCREEN_PASS_EXACT_REPLAY_ALLOWED");
+        assert!(audit.overlapping_condition_ids.is_empty());
+        assert!(audit.checks.iter().all(|check| check.passed));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_rejects_condition_overlap() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 0, 0);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(!audit.ok);
+        assert_eq!(audit.overlapping_condition_ids.len(), 750);
+        assert!(audit
+            .failure_reasons
+            .contains(&"check_failed:condition_sets_disjoint".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_rejects_failed_second_block() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 750, 38);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let audit = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap();
+
+        assert!(!audit.ok);
+        assert!(audit
+            .failure_reasons
+            .contains(&"check_failed:block_2_screen_passed".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_detects_tampered_counts() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let mut second = binary_complement_second_block_fixture(&second_tmp, 750, 0);
+        second.counts.selected_winners += 1;
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let error = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("count invariants are invalid"));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_detects_tampered_descriptive_diagnostics() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let mut second = binary_complement_second_block_fixture(&second_tmp, 750, 0);
+        second.diagnostics.selected_direction_changes = 1;
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let error = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("descriptive diagnostic counts or rates are invalid"));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_detects_tampered_unit_economics() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let mut second = binary_complement_second_block_fixture(&second_tmp, 750, 0);
+        let (profit_factor_margin, payoff_margin) = {
+            let economics = &mut second.unit_economics;
+            economics.gross_win_pnl_usd += 1.0;
+            economics.total_pnl_usd += 1.0;
+            economics.first_half_pnl_usd += 1.0;
+            economics.average_win_pnl_usd =
+                Some(economics.gross_win_pnl_usd / second.counts.selected_winners as f64);
+            economics.profit_factor =
+                Some(economics.gross_win_pnl_usd / economics.gross_loss_pnl_usd.abs());
+            economics.payoff_ratio = Some(
+                economics.average_win_pnl_usd.unwrap()
+                    / economics.average_loss_pnl_usd.unwrap().abs(),
+            );
+            economics.profit_factor_gate_margin_usd = economics.gross_win_pnl_usd
+                - BINARY_COMPLEMENT_MIN_UNIT_PROFIT_FACTOR * economics.gross_loss_pnl_usd.abs();
+            economics.payoff_gate_margin_usd = economics.average_win_pnl_usd.unwrap()
+                - BINARY_COMPLEMENT_MIN_UNIT_PAYOFF_RATIO
+                    * economics.average_loss_pnl_usd.unwrap().abs();
+            (
+                economics.profit_factor_gate_margin_usd,
+                economics.payoff_gate_margin_usd,
+            )
+        };
+        second
+            .gates
+            .iter_mut()
+            .find(|gate| gate.name == "selected_fee_aware_unit_profit_factor_margin")
+            .unwrap()
+            .observed = Some(profit_factor_margin);
+        second
+            .gates
+            .iter_mut()
+            .find(|gate| gate.name == "selected_fee_aware_unit_payoff_margin")
+            .unwrap()
+            .observed = Some(payoff_margin);
+        second.attribution.frozen_residual.unit_economics = second.unit_economics.clone();
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+
+        let error = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("does not exactly recompute from its pinned sources"));
+    }
+
+    #[test]
+    fn binary_complement_repeat_audit_detects_source_hash_drift() {
+        let first_tmp = tempfile::TempDir::new().unwrap();
+        let second_tmp = tempfile::TempDir::new().unwrap();
+        let first = binary_complement_screen(binary_complement_fixture(
+            &first_tmp,
+            "2026-07-15T05:00:00Z",
+            750,
+            0,
+        ))
+        .unwrap();
+        let second = binary_complement_second_block_fixture(&second_tmp, 750, 0);
+        let first_path = write_binary_complement_screen(&first_tmp, "screen.json", &first);
+        let second_path = write_binary_complement_screen(&second_tmp, "screen.json", &second);
+        let source_path = &second.sources.opportunity_reports[0];
+        let mut raw = std::fs::read_to_string(source_path).unwrap();
+        raw.push('\n');
+        std::fs::write(source_path, raw).unwrap();
+
+        let error = binary_complement_repeat_audit(BinaryComplementRepeatAuditInput {
+            screen_paths: vec![first_path, second_path],
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("source hash drifted"));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_missing_feature_coverage() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 38);
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(!screen.ok);
+        assert_eq!(
+            screen.rates.valid_pair_feature_coverage,
+            Some(712.0 / 750.0)
+        );
+        assert!(screen
+            .failure_reasons
+            .contains(&"gate_failed:valid_pair_feature_coverage".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_stale_paired_book_coverage() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        for row in report["rows"].as_array_mut().unwrap().iter_mut().take(38) {
+            row["opportunity"]["opposite_book_age_ms"] = serde_json::json!(30_001.0);
+        }
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert!(!screen.ok);
+        assert_eq!(
+            screen.rates.valid_pair_feature_coverage,
+            Some(712.0 / 750.0)
+        );
+        assert!(screen
+            .failure_reasons
+            .contains(&"gate_failed:valid_pair_feature_coverage".to_string()));
+    }
+
+    #[test]
+    fn binary_complement_screen_rejects_decisions_outside_market_window() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 750, 0);
+        let opportunity_path = &input.opportunity_paths[0];
+        let mut report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(opportunity_path).unwrap()).unwrap();
+        let decision_timestamp = report["rows"][0]["opportunity"]["decision_timestamp_s"]
+            .as_f64()
+            .unwrap();
+        report["rows"][0]["opportunity"]["decision_timestamp_s"] =
+            serde_json::json!(decision_timestamp + 300.0);
+        std::fs::write(
+            opportunity_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let error = binary_complement_screen(input).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("decision lies outside its five-minute market window"));
+    }
+
+    #[test]
+    fn binary_complement_screen_refuses_pre_registration_or_partial_blocks() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old = binary_complement_fixture(&tmp, "2026-07-15T04:00:00Z", 750, 0);
+        assert!(binary_complement_screen(old)
+            .unwrap_err()
+            .to_string()
+            .contains("starts before the preregistration boundary"));
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let partial = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 749, 0);
+        assert!(binary_complement_screen(partial)
+            .unwrap_err()
+            .to_string()
+            .contains("require at least 750 before scoring"));
+    }
+
+    #[test]
+    fn binary_complement_screen_truncates_overshoot_to_first_750_conditions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let input = binary_complement_fixture(&tmp, "2026-07-15T05:00:00Z", 751, 0);
+
+        let screen = binary_complement_screen(input).unwrap();
+
+        assert_eq!(screen.counts.terminal_settlement_aligned_conditions, 750);
+        assert_eq!(screen.aligned_condition_ids.len(), 750);
+        assert!(screen
+            .aligned_condition_ids
+            .contains(&format!("0x{:064x}", 749)));
+        assert!(!screen
+            .aligned_condition_ids
+            .contains(&format!("0x{:064x}", 750)));
+    }
+
     #[test]
     fn causal_regime_parser_keeps_evolution_quality_dimensions() {
         let tags = causal_tags_from_regime(
@@ -9875,6 +13141,15 @@ mod tests {
             tags.get("outcome_overround").map(String::as_str),
             Some("lte_0.02")
         );
+        for dimension in [
+            "article_path_2m",
+            "article_path_3m",
+            "article_path_4m",
+            "article_move_2m",
+            "article_path_4m_or_move_2m_200",
+        ] {
+            assert!(CAUSAL_POLICY_DIMENSIONS.contains(&dimension));
+        }
     }
 
     #[test]

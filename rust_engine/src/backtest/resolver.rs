@@ -4,7 +4,7 @@
 //! candle window. This module pairs each fill with the BTC open/close prices
 //! at that window and computes realized P&L.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backtest::btc_history::BTCHistory;
 use crate::backtest::l2_replay::BacktestFill;
@@ -12,6 +12,15 @@ use crate::live::breaker::{BreakerMetrics, BreakerState};
 use crate::strategy::decision::CandleDecision;
 #[cfg(test)]
 use crate::strategy::decision::DecisionRegime;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedExit {
+    pub fill: BacktestFill,
+    pub reason: String,
+    pub hold_seconds: f64,
+    pub pnl: f64,
+    pub pnl_after_fee: f64,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedTrade {
@@ -26,11 +35,16 @@ pub struct ResolvedTrade {
     pub resolution_source: String,
     #[serde(default)]
     pub resolution_disagreed: bool,
+    /// Whether this trade realized positive net P&L. For a held-to-resolution
+    /// trade this is equivalent to predicting the terminal direction; for an
+    /// early exit it reflects the executable sell result.
     pub won: bool,
     /// Realized P&L *before* fees: (1 - fill_price) * size on win, -fill_price * size on loss.
     pub pnl: f64,
     /// Realized P&L net of fees.
     pub pnl_after_fee: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<ResolvedExit>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -66,6 +80,14 @@ pub struct BacktestDiagnostics {
     #[serde(default)]
     pub adaptive_rearms: u64,
     #[serde(default)]
+    pub exit_signals: u64,
+    #[serde(default)]
+    pub exit_fills: u64,
+    #[serde(default)]
+    pub exit_failures: u64,
+    #[serde(default)]
+    pub complete_set_lock: CompleteSetLockDiagnostics,
+    #[serde(default)]
     pub trade_pnl: TradePnlDiagnostics,
     #[serde(default)]
     pub by_regime: BTreeMap<String, TradePnlDiagnostics>,
@@ -86,12 +108,76 @@ impl BacktestDiagnostics {
         self.skipped_throttled += other.skipped_throttled;
         self.breaker_paused_events += other.breaker_paused_events;
         self.adaptive_rearms += other.adaptive_rearms;
+        self.exit_signals += other.exit_signals;
+        self.exit_fills += other.exit_fills;
+        self.exit_failures += other.exit_failures;
+        self.complete_set_lock.merge_from(&other.complete_set_lock);
         self.trade_pnl.merge_from(&other.trade_pnl);
         merge_trade_pnl_maps(&mut self.by_regime, &other.by_regime);
         merge_trade_pnl_maps(&mut self.by_causal_bucket, &other.by_causal_bucket);
         for (reason, count) in other.skip_reasons {
             *self.skip_reasons.entry(reason).or_insert(0) += count;
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompleteSetLockDiagnostics {
+    pub locks: u64,
+    pub terminal_outcomes_known: u64,
+    pub terminal_winners_locked: u64,
+    pub terminal_losses_locked: u64,
+    pub total_pnl_after_fee: f64,
+    pub min_pnl_after_fee: f64,
+    pub total_delta_vs_terminal_hold: f64,
+    pub winner_delta_vs_terminal_hold: f64,
+    pub loss_delta_vs_terminal_hold: f64,
+}
+
+impl CompleteSetLockDiagnostics {
+    fn add_trade(&mut self, trade: &ResolvedTrade) {
+        self.locks += 1;
+        self.total_pnl_after_fee += trade.pnl_after_fee;
+        if self.locks == 1 || trade.pnl_after_fee < self.min_pnl_after_fee {
+            self.min_pnl_after_fee = trade.pnl_after_fee;
+        }
+
+        if !matches!(trade.actual_direction.as_str(), "up" | "down") {
+            return;
+        }
+        self.terminal_outcomes_known += 1;
+        let terminal_won = trade.decision.direction == trade.actual_direction;
+        let terminal_hold_pnl = if terminal_won {
+            (1.0 - trade.fill.fill_price) * trade.fill.filled_size - trade.fill.fee
+        } else {
+            -trade.fill.fill_price * trade.fill.filled_size - trade.fill.fee
+        };
+        let delta = trade.pnl_after_fee - terminal_hold_pnl;
+        self.total_delta_vs_terminal_hold += delta;
+        if terminal_won {
+            self.terminal_winners_locked += 1;
+            self.winner_delta_vs_terminal_hold += delta;
+        } else {
+            self.terminal_losses_locked += 1;
+            self.loss_delta_vs_terminal_hold += delta;
+        }
+    }
+
+    pub fn merge_from(&mut self, other: &Self) {
+        if other.locks == 0 {
+            return;
+        }
+        if self.locks == 0 || other.min_pnl_after_fee < self.min_pnl_after_fee {
+            self.min_pnl_after_fee = other.min_pnl_after_fee;
+        }
+        self.locks += other.locks;
+        self.terminal_outcomes_known += other.terminal_outcomes_known;
+        self.terminal_winners_locked += other.terminal_winners_locked;
+        self.terminal_losses_locked += other.terminal_losses_locked;
+        self.total_pnl_after_fee += other.total_pnl_after_fee;
+        self.total_delta_vs_terminal_hold += other.total_delta_vs_terminal_hold;
+        self.winner_delta_vs_terminal_hold += other.winner_delta_vs_terminal_hold;
+        self.loss_delta_vs_terminal_hold += other.loss_delta_vs_terminal_hold;
     }
 }
 
@@ -309,7 +395,10 @@ impl BacktestResults {
     }
 
     pub fn total_fees(&self) -> f64 {
-        self.trades.iter().map(|t| t.fill.fee).sum()
+        self.trades
+            .iter()
+            .map(|t| t.fill.fee + t.exit.as_ref().map_or(0.0, |exit| exit.fill.fee))
+            .sum()
     }
 
     pub fn avg_pnl(&self) -> f64 {
@@ -348,6 +437,18 @@ impl BacktestResults {
         let mut out = TradePnlDiagnostics::default();
         for t in &self.trades {
             out.add_trade(t);
+        }
+        out
+    }
+
+    pub fn complete_set_lock_diagnostics(&self) -> CompleteSetLockDiagnostics {
+        let mut out = CompleteSetLockDiagnostics::default();
+        for trade in self
+            .trades
+            .iter()
+            .filter(|trade| trade.resolution_source == "complete_set_lock")
+        {
+            out.add_trade(trade);
         }
         out
     }
@@ -423,19 +524,39 @@ pub fn resolve_fills(
     windows: &[CandleWindow],
     btc_history: &BTCHistory,
 ) -> BacktestResults {
+    let entry_fills: Vec<&BacktestFill> = fills
+        .iter()
+        .filter(|fill| {
+            fill.order.side.eq_ignore_ascii_case("buy")
+                && !fill.order.intent_id.contains(":complete_set_lock:")
+        })
+        .collect();
     assert_eq!(
-        fills.len(),
+        entry_fills.len(),
         decisions.len(),
-        "resolve_fills: fills and decisions must align 1:1"
+        "resolve_fills: entry fills and decisions must align 1:1"
     );
 
     let window_by_cid: BTreeMap<String, &CandleWindow> = windows
         .iter()
         .map(|w| (w.condition_id.clone(), w))
         .collect();
+    let successful_exits: Vec<&BacktestFill> = fills
+        .iter()
+        .filter(|fill| fill.success && fill.order.side.eq_ignore_ascii_case("sell"))
+        .collect();
+    let successful_complete_set_locks: Vec<&BacktestFill> = fills
+        .iter()
+        .filter(|fill| {
+            fill.success
+                && fill.order.side.eq_ignore_ascii_case("buy")
+                && fill.order.intent_id.contains(":complete_set_lock:")
+        })
+        .collect();
+    let mut matched_exit_intents = BTreeSet::new();
 
     let mut results = BacktestResults::from_fills(fills);
-    for (fill, decision) in fills.iter().zip(decisions) {
+    for (fill, decision) in entry_fills.into_iter().zip(decisions) {
         if !fill.success {
             continue;
         }
@@ -453,6 +574,100 @@ pub fn resolve_fills(
 
         let open_btc = btc_history.price_at_seconds(window.open_ts_s);
         let close_btc = btc_history.price_at_seconds(window.close_ts_s);
+        let exit_prefix = format!("{}:settlement_basis_exit:", fill.order.intent_id);
+        let exit = successful_exits.iter().copied().find(|exit| {
+            exit.order.intent_id.starts_with(&exit_prefix)
+                && exit.order.condition_id == fill.order.condition_id
+                && exit.order.token_id == fill.order.token_id
+                && exit.fill_timestamp_s + 1e-9 >= fill.fill_timestamp_s
+                && exit.fill_timestamp_s + 1e-9 < window.close_ts_s
+                && (exit.filled_size - fill.filled_size).abs() <= 1e-8
+        });
+        if let Some(exit_fill) = exit {
+            matched_exit_intents.insert(exit_fill.order.intent_id.clone());
+            let local_actual = if open_btc > 0.0 && close_btc > 0.0 {
+                if close_btc >= open_btc {
+                    "up"
+                } else {
+                    "down"
+                }
+            } else {
+                "not_available"
+            };
+            let actual = window.official_direction.as_deref().unwrap_or(local_actual);
+            let pnl = (exit_fill.fill_price - fill.fill_price) * exit_fill.filled_size;
+            let pnl_after_fee = pnl - fill.fee - exit_fill.fee;
+            results.trades.push(ResolvedTrade {
+                fill: fill.clone(),
+                decision: decision.clone(),
+                open_btc,
+                close_btc,
+                local_direction: local_actual.to_string(),
+                actual_direction: actual.to_string(),
+                resolution_source: "executable_exit".to_string(),
+                resolution_disagreed: local_actual != "not_available" && actual != local_actual,
+                won: pnl_after_fee > 0.0,
+                pnl,
+                pnl_after_fee,
+                exit: Some(ResolvedExit {
+                    fill: exit_fill.clone(),
+                    reason: "settlement_basis_invalidation".to_string(),
+                    hold_seconds: (exit_fill.fill_timestamp_s - fill.fill_timestamp_s).max(0.0),
+                    pnl,
+                    pnl_after_fee,
+                }),
+            });
+            continue;
+        }
+
+        let lock_prefix = format!("{}:complete_set_lock:", fill.order.intent_id);
+        let complete_set_lock = successful_complete_set_locks.iter().copied().find(|hedge| {
+            hedge.order.intent_id.starts_with(&lock_prefix)
+                && hedge.order.condition_id == fill.order.condition_id
+                && hedge.order.token_id != fill.order.token_id
+                && hedge.fill_timestamp_s + 1e-9 >= fill.fill_timestamp_s
+                && hedge.fill_timestamp_s + 1e-9 < window.close_ts_s
+                && (hedge.filled_size - fill.filled_size).abs() <= 1e-8
+        });
+        if let Some(hedge_fill) = complete_set_lock {
+            matched_exit_intents.insert(hedge_fill.order.intent_id.clone());
+            let local_actual = if open_btc > 0.0 && close_btc > 0.0 {
+                if close_btc >= open_btc {
+                    "up"
+                } else {
+                    "down"
+                }
+            } else {
+                "not_available"
+            };
+            let actual = window.official_direction.as_deref().unwrap_or(local_actual);
+            let pnl = fill.filled_size
+                - fill.fill_price * fill.filled_size
+                - hedge_fill.fill_price * hedge_fill.filled_size;
+            let pnl_after_fee = pnl - fill.fee - hedge_fill.fee;
+            results.trades.push(ResolvedTrade {
+                fill: fill.clone(),
+                decision: decision.clone(),
+                open_btc,
+                close_btc,
+                local_direction: local_actual.to_string(),
+                actual_direction: actual.to_string(),
+                resolution_source: "complete_set_lock".to_string(),
+                resolution_disagreed: local_actual != "not_available" && actual != local_actual,
+                won: pnl_after_fee > 0.0,
+                pnl,
+                pnl_after_fee,
+                exit: Some(ResolvedExit {
+                    fill: hedge_fill.clone(),
+                    reason: "guaranteed_complete_set".to_string(),
+                    hold_seconds: (hedge_fill.fill_timestamp_s - fill.fill_timestamp_s).max(0.0),
+                    pnl,
+                    pnl_after_fee,
+                }),
+            });
+            continue;
+        }
+
         if open_btc <= 0.0 || close_btc <= 0.0 {
             results.unresolved_fills.push(fill.clone());
             continue;
@@ -483,7 +698,19 @@ pub fn resolve_fills(
             won,
             pnl,
             pnl_after_fee,
+            exit: None,
         });
+    }
+
+    for exit_fill in successful_exits {
+        if !matched_exit_intents.contains(&exit_fill.order.intent_id) {
+            results.unresolved_fills.push(exit_fill.clone());
+        }
+    }
+    for hedge_fill in successful_complete_set_locks {
+        if !matched_exit_intents.contains(&hedge_fill.order.intent_id) {
+            results.unresolved_fills.push(hedge_fill.clone());
+        }
     }
     results
 }
@@ -556,6 +783,27 @@ mod tests {
         fill
     }
 
+    fn mk_exit_fill(cid: &str, fill_price: f64, size: f64, fee: f64) -> BacktestFill {
+        let mut fill = mk_fill(cid, fill_price, size, fee);
+        fill.order.intent_id = "test-intent:settlement_basis_exit:1700000100.000000".to_string();
+        fill.order.side = "sell".to_string();
+        fill.order.limit_price = Some(fill_price);
+        fill.order.timestamp_s = 1_700_000_100.0;
+        fill.fill_timestamp_s = 1_700_000_101.0;
+        fill.cost = -fill_price * size;
+        fill
+    }
+
+    fn mk_complete_set_fill(cid: &str, fill_price: f64, size: f64, fee: f64) -> BacktestFill {
+        let mut fill = mk_fill(cid, fill_price, size, fee);
+        fill.order.intent_id = "test-intent:complete_set_lock:1700000100.000000".to_string();
+        fill.order.token_id = "opposite".to_string();
+        fill.order.limit_price = Some(fill_price);
+        fill.order.timestamp_s = 1_700_000_100.0;
+        fill.fill_timestamp_s = 1_700_000_101.0;
+        fill
+    }
+
     fn mk_window(cid: &str, official_direction: Option<&str>) -> CandleWindow {
         CandleWindow {
             condition_id: cid.into(),
@@ -595,6 +843,108 @@ mod tests {
         assert!(!t.won);
         // pnl = -0.40 * 10 = -4.0; minus fee 0.10 = -4.10
         assert!((t.pnl_after_fee + 4.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn executable_exit_replaces_terminal_pnl_and_counts_both_fees() {
+        let h = mk_history();
+        let windows = vec![mk_window("c1", None)];
+        let fills = vec![
+            mk_fill("c1", 0.80, 10.0, 0.05),
+            mk_exit_fill("c1", 0.45, 10.0, 0.03),
+        ];
+        let decisions = vec![mk_decision("down")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.execution_attempts, 2);
+        assert_eq!(res.fills_success, 2);
+        assert_eq!(res.n_trades(), 1);
+        let trade = &res.trades[0];
+        assert!(!trade.won);
+        assert!((trade.pnl + 3.5).abs() < 1e-9);
+        assert!((trade.pnl_after_fee + 3.58).abs() < 1e-9);
+        assert!((res.total_fees() - 0.08).abs() < 1e-9);
+        let exit = trade.exit.as_ref().expect("resolved executable exit");
+        assert_eq!(exit.reason, "settlement_basis_invalidation");
+        assert!((exit.hold_seconds - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn executable_exit_does_not_require_terminal_btc_tape() {
+        let h = BTCHistory::default();
+        let windows = vec![mk_window("c1", None)];
+        let fills = vec![
+            mk_fill("c1", 0.80, 10.0, 0.05),
+            mk_exit_fill("c1", 0.45, 10.0, 0.03),
+        ];
+        let decisions = vec![mk_decision("down")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.n_trades(), 1);
+        assert!(res.unresolved_fills.is_empty());
+        assert_eq!(res.trades[0].resolution_source, "executable_exit");
+        assert_eq!(res.trades[0].local_direction, "not_available");
+        assert!((res.trades[0].pnl_after_fee + 3.58).abs() < 1e-9);
+    }
+
+    #[test]
+    fn complete_set_lock_resolves_guaranteed_payout_and_counts_both_fees() {
+        let h = BTCHistory::default();
+        let windows = vec![mk_window("c1", Some("down"))];
+        let fills = vec![
+            mk_fill("c1", 0.50, 10.0, 0.05),
+            mk_complete_set_fill("c1", 0.40, 10.0, 0.168),
+        ];
+        let decisions = vec![mk_decision("up")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.execution_attempts, 2);
+        assert_eq!(res.fills_success, 2);
+        assert_eq!(res.n_trades(), 1);
+        assert!(res.unresolved_fills.is_empty());
+        let trade = &res.trades[0];
+        assert!(trade.won);
+        assert_eq!(trade.resolution_source, "complete_set_lock");
+        assert_eq!(trade.local_direction, "not_available");
+        assert!((trade.pnl - 1.0).abs() < 1e-9);
+        assert!((trade.pnl_after_fee - 0.782).abs() < 1e-9);
+        assert!((res.total_fees() - 0.218).abs() < 1e-9);
+        let exit = trade.exit.as_ref().expect("resolved complete-set lock");
+        assert_eq!(exit.reason, "guaranteed_complete_set");
+        assert!((exit.hold_seconds - 100.0).abs() < 1e-9);
+        let audit = res.complete_set_lock_diagnostics();
+        assert_eq!(audit.locks, 1);
+        assert_eq!(audit.terminal_outcomes_known, 1);
+        assert_eq!(audit.terminal_winners_locked, 0);
+        assert_eq!(audit.terminal_losses_locked, 1);
+        assert!((audit.total_pnl_after_fee - 0.782).abs() < 1e-9);
+        assert!((audit.min_pnl_after_fee - 0.782).abs() < 1e-9);
+        assert!((audit.total_delta_vs_terminal_hold - 5.832).abs() < 1e-9);
+        assert!((audit.loss_delta_vs_terminal_hold - 5.832).abs() < 1e-9);
+    }
+
+    #[test]
+    fn failed_complete_set_lock_leaves_entry_for_terminal_resolution() {
+        let h = mk_history();
+        let windows = vec![mk_window("c1", None)];
+        let entry = mk_fill("c1", 0.40, 10.0, 0.10);
+        let mut failed_hedge = mk_complete_set_fill("c1", 0.0, 0.0, 0.0);
+        failed_hedge.success = false;
+        failed_hedge.reason = "fok_unfilled".to_string();
+        let fills = vec![entry, failed_hedge];
+        let decisions = vec![mk_decision("up")];
+
+        let res = resolve_fills(&fills, &decisions, &windows, &h);
+
+        assert_eq!(res.execution_attempts, 2);
+        assert_eq!(res.fills_failed, 1);
+        assert_eq!(res.n_trades(), 1);
+        assert!(res.unresolved_fills.is_empty());
+        assert_eq!(res.trades[0].resolution_source, "btc_close");
+        assert!((res.trades[0].pnl_after_fee - 5.9).abs() < 1e-9);
     }
 
     #[test]

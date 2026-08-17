@@ -165,6 +165,182 @@ fn clean_label(value: &str) -> String {
         .collect()
 }
 
+/// Optional research-only risk exits for an already-filled binary position.
+/// They remain disabled by default, and release/live loaders reject any
+/// enabled exit configuration until the runtime implements exact parity.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExitConfig {
+    #[serde(default)]
+    pub settlement_basis_enabled: bool,
+    /// Buy the missing outcome only when the resulting complete set has a
+    /// fee-inclusive guaranteed payout above its total executable cost.
+    #[serde(default)]
+    pub complete_set_lock_enabled: bool,
+    #[serde(default = "default_complete_set_min_profit_usd")]
+    pub complete_set_min_profit_usd: f64,
+    /// For a trailing complete-set lock, arm after the executable guaranteed
+    /// profit reaches this level and lock only after it retreats below it.
+    /// Zero preserves the immediate v1 behavior and serialization hash.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub complete_set_arm_profit_usd: f64,
+    #[serde(default = "default_exit_min_hold_seconds")]
+    pub min_hold_seconds: f64,
+    #[serde(default)]
+    pub basis_buffer_usd: f64,
+    #[serde(default = "default_exit_min_seconds_before_close")]
+    pub min_seconds_before_close: f64,
+    #[serde(default = "default_exit_retry_cooldown_seconds")]
+    pub retry_cooldown_seconds: f64,
+}
+
+impl Default for ExitConfig {
+    fn default() -> Self {
+        Self {
+            settlement_basis_enabled: false,
+            complete_set_lock_enabled: false,
+            complete_set_min_profit_usd: default_complete_set_min_profit_usd(),
+            complete_set_arm_profit_usd: 0.0,
+            min_hold_seconds: default_exit_min_hold_seconds(),
+            basis_buffer_usd: 0.0,
+            min_seconds_before_close: default_exit_min_seconds_before_close(),
+            retry_cooldown_seconds: default_exit_retry_cooldown_seconds(),
+        }
+    }
+}
+
+impl ExitConfig {
+    pub fn is_disabled(&self) -> bool {
+        !self.settlement_basis_enabled && !self.complete_set_lock_enabled
+    }
+
+    pub fn should_lock_complete_set(
+        &self,
+        locked_profit_usd: f64,
+        entry_ts_s: f64,
+        now_ts_s: f64,
+        close_ts_s: f64,
+    ) -> bool {
+        self.complete_set_lock_action(locked_profit_usd, false, entry_ts_s, now_ts_s, close_ts_s)
+            == CompleteSetLockAction::Lock
+    }
+
+    pub(crate) fn complete_set_lock_action(
+        &self,
+        locked_profit_usd: f64,
+        armed: bool,
+        entry_ts_s: f64,
+        now_ts_s: f64,
+        close_ts_s: f64,
+    ) -> CompleteSetLockAction {
+        if !self.complete_set_window_open(entry_ts_s, now_ts_s, close_ts_s)
+            || !locked_profit_usd.is_finite()
+        {
+            return CompleteSetLockAction::Wait;
+        }
+        if self.complete_set_arm_profit_usd == 0.0 {
+            return if locked_profit_usd + 1e-9 >= self.complete_set_min_profit_usd {
+                CompleteSetLockAction::Lock
+            } else {
+                CompleteSetLockAction::Wait
+            };
+        }
+        if !armed {
+            return if locked_profit_usd + 1e-9 >= self.complete_set_arm_profit_usd {
+                CompleteSetLockAction::Arm
+            } else {
+                CompleteSetLockAction::Wait
+            };
+        }
+        if locked_profit_usd + 1e-9 >= self.complete_set_arm_profit_usd {
+            CompleteSetLockAction::Wait
+        } else if locked_profit_usd + 1e-9 >= self.complete_set_min_profit_usd {
+            CompleteSetLockAction::Lock
+        } else {
+            CompleteSetLockAction::Wait
+        }
+    }
+
+    pub fn complete_set_window_open(
+        &self,
+        entry_ts_s: f64,
+        now_ts_s: f64,
+        close_ts_s: f64,
+    ) -> bool {
+        self.complete_set_lock_enabled
+            && self.complete_set_min_profit_usd.is_finite()
+            && self.complete_set_min_profit_usd >= 0.0
+            && self.complete_set_arm_profit_usd.is_finite()
+            && self.complete_set_arm_profit_usd >= 0.0
+            && (self.complete_set_arm_profit_usd == 0.0
+                || self.complete_set_arm_profit_usd + 1e-9 >= self.complete_set_min_profit_usd)
+            && self.min_hold_seconds >= 0.0
+            && self.min_seconds_before_close >= 0.0
+            && entry_ts_s.is_finite()
+            && now_ts_s.is_finite()
+            && close_ts_s.is_finite()
+            && now_ts_s - entry_ts_s >= self.min_hold_seconds
+            && close_ts_s - now_ts_s >= self.min_seconds_before_close
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn should_exit(
+        &self,
+        direction: &str,
+        open_btc: f64,
+        current_btc: f64,
+        entry_ts_s: f64,
+        now_ts_s: f64,
+        close_ts_s: f64,
+    ) -> bool {
+        if !self.settlement_basis_enabled
+            || !open_btc.is_finite()
+            || !current_btc.is_finite()
+            || !entry_ts_s.is_finite()
+            || !now_ts_s.is_finite()
+            || !close_ts_s.is_finite()
+            || open_btc <= 0.0
+            || current_btc <= 0.0
+            || self.min_hold_seconds < 0.0
+            || self.basis_buffer_usd < 0.0
+            || self.min_seconds_before_close < 0.0
+            || self.retry_cooldown_seconds < 0.0
+            || now_ts_s - entry_ts_s < self.min_hold_seconds
+            || close_ts_s - now_ts_s < self.min_seconds_before_close
+        {
+            return false;
+        }
+
+        match direction {
+            "up" => current_btc <= open_btc - self.basis_buffer_usd,
+            "down" => current_btc >= open_btc + self.basis_buffer_usd,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompleteSetLockAction {
+    Wait,
+    Arm,
+    Lock,
+}
+
+fn default_exit_min_hold_seconds() -> f64 {
+    15.0
+}
+
+fn default_complete_set_min_profit_usd() -> f64 {
+    0.10
+}
+
+fn default_exit_min_seconds_before_close() -> f64 {
+    5.0
+}
+
+fn default_exit_retry_cooldown_seconds() -> f64 {
+    1.0
+}
+
 /// Tunable knobs the harness varies. The variant name is what shows up in
 /// the report.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -174,6 +350,10 @@ pub struct StrategyVariant {
     pub skip_dead_zone: bool,
     pub min_confidence: f64,
     pub min_edge: f64,
+    /// Conservative lower bound for the annualized volatility used to price
+    /// the binary payoff. Zero preserves the observed-volatility behavior.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub decision_volatility_floor: f64,
     /// Fraction of bankroll per trade (capped by `max_per_market_usd`).
     pub position_pct: f64,
     /// Hard cap on position size (USD).
@@ -218,15 +398,34 @@ pub struct StrategyVariant {
     /// before any order/exposure side effects.
     #[serde(default, skip_serializing_if = "SelectivityFilter::is_disabled")]
     pub selectivity: SelectivityFilter,
+    /// Optional executable sell-side lifecycle. Omitted and disabled for all
+    /// legacy variants until replay evidence supports promotion.
+    #[serde(default, skip_serializing_if = "ExitConfig::is_disabled")]
+    pub exit: ExitConfig,
+}
+
+pub(crate) fn decision_volatility_with_floor(
+    observed_volatility: f64,
+    volatility_floor: f64,
+) -> f64 {
+    if !observed_volatility.is_finite()
+        || observed_volatility < 0.01
+        || !volatility_floor.is_finite()
+        || !(0.0..=5.0).contains(&volatility_floor)
+    {
+        return f64::NAN;
+    }
+    observed_volatility.max(volatility_floor)
 }
 
 impl StrategyVariant {
     pub fn risk_profile(&self) -> String {
         format!(
-            "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}{}",
+            "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4};decision_vol_floor={:.4}{}",
             self.position_pct,
             self.max_per_market_usd,
             self.max_projected_stressed_drawdown_pct,
+            self.decision_volatility_floor,
             if self.selectivity.is_disabled() {
                 String::new()
             } else {
@@ -242,6 +441,7 @@ impl StrategyVariant {
             skip_dead_zone: true,
             min_confidence: 0.60,
             min_edge: 0.07,
+            decision_volatility_floor: 0.0,
             position_pct: 0.10,
             max_per_market_usd: 20.0,
             max_projected_stressed_drawdown_pct: 0.0,
@@ -258,7 +458,12 @@ impl StrategyVariant {
             maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
             selectivity: SelectivityFilter::default(),
+            exit: ExitConfig::default(),
         }
+    }
+
+    pub fn decision_volatility(&self, observed_volatility: f64) -> f64 {
+        decision_volatility_with_floor(observed_volatility, self.decision_volatility_floor)
     }
 
     pub fn terminal_only() -> Self {
@@ -349,6 +554,7 @@ impl StrategyVariant {
             skip_dead_zone: false,
             min_confidence: 0.15,
             min_edge: 0.0,
+            decision_volatility_floor: 0.0,
             position_pct: 0.10,
             max_per_market_usd: 20.0,
             max_projected_stressed_drawdown_pct: 0.0,
@@ -365,6 +571,7 @@ impl StrategyVariant {
             maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure: MicrostructureConfig::disabled(),
             selectivity: SelectivityFilter::default(),
+            exit: ExitConfig::default(),
         }
     }
 
@@ -463,6 +670,119 @@ pub fn default_variants() -> Vec<StrategyVariant> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settlement_basis_exit_is_disabled_and_fail_closed_by_default() {
+        let cfg = ExitConfig::default();
+        assert!(cfg.is_disabled());
+        assert!(!cfg.should_exit("up", 70_000.0, 69_990.0, 0.0, 30.0, 60.0));
+    }
+
+    #[test]
+    fn settlement_basis_exit_obeys_hold_buffer_and_close_horizon() {
+        let cfg = ExitConfig {
+            settlement_basis_enabled: true,
+            min_hold_seconds: 15.0,
+            basis_buffer_usd: 5.0,
+            min_seconds_before_close: 5.0,
+            retry_cooldown_seconds: 1.0,
+            ..ExitConfig::default()
+        };
+        assert!(!cfg.should_exit("up", 70_000.0, 69_994.0, 0.0, 14.0, 60.0));
+        assert!(cfg.should_exit("up", 70_000.0, 69_994.0, 0.0, 15.0, 60.0));
+        assert!(cfg.should_exit("down", 70_000.0, 70_006.0, 0.0, 15.0, 60.0));
+        assert!(!cfg.should_exit("up", 70_000.0, 69_994.0, 0.0, 56.0, 60.0));
+        assert!(!cfg.should_exit("sideways", 70_000.0, 69_000.0, 0.0, 15.0, 60.0));
+    }
+
+    #[test]
+    fn complete_set_lock_is_disabled_and_requires_guaranteed_profit() {
+        let mut cfg = ExitConfig::default();
+        assert!(cfg.is_disabled());
+        assert!(!cfg.should_lock_complete_set(1.0, 0.0, 15.0, 60.0));
+
+        cfg.complete_set_lock_enabled = true;
+        assert!(!cfg.is_disabled());
+        assert!(!cfg.should_lock_complete_set(0.099, 0.0, 15.0, 60.0));
+        assert!(cfg.should_lock_complete_set(0.10, 0.0, 15.0, 60.0));
+        assert!(!cfg.should_lock_complete_set(0.10, 0.0, 14.9, 60.0));
+        assert!(!cfg.should_lock_complete_set(0.10, 0.0, 56.0, 60.0));
+    }
+
+    #[test]
+    fn trailing_complete_set_lock_arms_then_locks_only_inside_profit_band() {
+        let mut cfg = ExitConfig {
+            complete_set_lock_enabled: true,
+            complete_set_arm_profit_usd: 0.50,
+            ..ExitConfig::default()
+        };
+
+        assert_eq!(
+            cfg.complete_set_lock_action(0.49, false, 0.0, 15.0, 60.0),
+            CompleteSetLockAction::Wait
+        );
+        assert_eq!(
+            cfg.complete_set_lock_action(0.50, false, 0.0, 15.0, 60.0),
+            CompleteSetLockAction::Arm
+        );
+        assert_eq!(
+            cfg.complete_set_lock_action(0.70, true, 0.0, 16.0, 60.0),
+            CompleteSetLockAction::Wait
+        );
+        assert_eq!(
+            cfg.complete_set_lock_action(0.30, true, 0.0, 17.0, 60.0),
+            CompleteSetLockAction::Lock
+        );
+        assert_eq!(
+            cfg.complete_set_lock_action(0.099, true, 0.0, 18.0, 60.0),
+            CompleteSetLockAction::Wait
+        );
+
+        cfg.complete_set_arm_profit_usd = 0.05;
+        assert_eq!(
+            cfg.complete_set_lock_action(0.20, true, 0.0, 19.0, 60.0),
+            CompleteSetLockAction::Wait
+        );
+    }
+
+    #[test]
+    fn older_exit_json_defaults_complete_set_lock_to_disabled() {
+        let cfg: ExitConfig = serde_json::from_str(
+            r#"{
+                "settlement_basis_enabled": true,
+                "min_hold_seconds": 20.0,
+                "basis_buffer_usd": 3.0,
+                "min_seconds_before_close": 6.0,
+                "retry_cooldown_seconds": 2.0
+            }"#,
+        )
+        .unwrap();
+
+        assert!(cfg.settlement_basis_enabled);
+        assert!(!cfg.complete_set_lock_enabled);
+        assert_eq!(cfg.complete_set_min_profit_usd, 0.10);
+        assert_eq!(cfg.complete_set_arm_profit_usd, 0.0);
+    }
+
+    #[test]
+    fn decision_volatility_floor_is_optional_and_fail_closed() {
+        let mut variant = StrategyVariant::baseline();
+        assert_eq!(variant.decision_volatility(0.35), 0.35);
+        assert!(serde_json::to_value(&variant)
+            .unwrap()
+            .get("decision_volatility_floor")
+            .is_none());
+
+        variant.decision_volatility_floor = 0.50;
+        assert_eq!(variant.decision_volatility(0.35), 0.50);
+        assert_eq!(variant.decision_volatility(0.70), 0.70);
+        assert!(variant.decision_volatility(f64::NAN).is_nan());
+
+        variant.decision_volatility_floor = -0.01;
+        assert!(variant.decision_volatility(0.35).is_nan());
+        variant.decision_volatility_floor = 5.01;
+        assert!(variant.decision_volatility(0.35).is_nan());
+    }
 
     #[test]
     fn selectivity_filter_requires_and_denies_causal_tags() {

@@ -18,24 +18,32 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
-use crate::backtest::fill_model::{ceil_buy_price_to_tick, resting_limit_price, Side};
+use crate::backtest::fill_model::{
+    ceil_buy_price_to_tick, resting_limit_price, Side, DEFAULT_TICK,
+};
 use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
-use crate::clob::{create_shared_client, SharedClobClient};
-use crate::clob_user_ws::{polymarket_user_feed, UserChannelAuth, UserEvent};
+use crate::clob::{create_shared_client, SharedClobClient, SubmitFailureKind};
+use crate::clob_user_ws::{
+    parse_rest_trade_events, polymarket_user_feed, UserChannelAuth, UserEvent,
+};
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
 use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
 use crate::data::scanner::{scan_candle_markets, CandleContract};
+use crate::execution::fees::polymarket_fee;
 use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
 use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
-use crate::live::window::estimate_window_minutes;
+use crate::live::window::{
+    btc_updown_slug_step_seconds, btc_updown_slugs_for_live_horizon, estimate_window_minutes,
+};
 use crate::monitoring::alerter::Alerter;
 use crate::monitoring::session::{
     OrderFilled, OrderReconciled, OrderTiming, ResolutionTiming, SessionMonitor, SignalEvaluation,
@@ -51,8 +59,8 @@ use crate::strategy::decision::{
     DEFAULT_MIN_EDGE,
 };
 use crate::strategy::microstructure::{
-    bookwalk_buy_slippage, recent_mid_runup, BookLevelView, BookMicrostructure,
-    MicrostructureConfig,
+    apply_causal_dynamic_tick_transition, bookwalk_buy_slippage, recent_mid_runup, BookLevelView,
+    BookMicrostructure, MicrostructureConfig,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
@@ -86,7 +94,7 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaperPosition {
     direction: String,
     entry_price: f64,
@@ -96,8 +104,67 @@ struct PaperPosition {
     end_time: f64,
     asset: String,
     contract_id: String,
+    #[serde(default)]
     event_id: String,
+    #[serde(default)]
     shadow: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingLivePosition {
+    position: PaperPosition,
+    entry_fee_rate: f64,
+    #[serde(default)]
+    recovery_misses: u32,
+}
+
+impl PendingLivePosition {
+    fn fill_fee(&self, size: f64, price: f64) -> Option<f64> {
+        if !size.is_finite()
+            || size <= 0.0
+            || !price.is_finite()
+            || !(0.0..=1.0).contains(&price)
+            || !self.entry_fee_rate.is_finite()
+            || !(0.0..=1.0).contains(&self.entry_fee_rate)
+        {
+            return None;
+        }
+        Some(polymarket_fee(size, price, self.entry_fee_rate))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LiveOrderJournalEntry {
+    order: ManagedOrder,
+    pending: PendingLivePosition,
+    #[serde(default)]
+    reconciled_trade_ids: Vec<String>,
+}
+
+impl LiveOrderJournalEntry {
+    fn validate(&self, intent_id: &str) -> Result<(), String> {
+        if self.order.intent.intent_id != intent_id {
+            return Err("journal key does not match order intent_id".to_string());
+        }
+        if self.order.intent.market_id != self.pending.position.contract_id {
+            return Err("journal order market does not match pending contract".to_string());
+        }
+        let remaining = self.order.requested_size - self.order.filled_size;
+        if !remaining.is_finite()
+            || remaining <= 0.0
+            || (remaining - self.pending.position.size).abs() > 1e-9
+            || !self.pending.position.entry_price.is_finite()
+            || !(0.0..=1.0).contains(&self.pending.position.entry_price)
+            || !self.pending.position.open_btc.is_finite()
+            || self.pending.position.open_btc <= 0.0
+            || !self.pending.position.end_time.is_finite()
+            || !self.pending.entry_fee_rate.is_finite()
+            || !(0.0..=1.0).contains(&self.pending.entry_fee_rate)
+        {
+            return Err("journal pending economics are invalid".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl PaperPosition {
@@ -299,6 +366,56 @@ fn permanent_live_order_reject_reason(message: &str) -> Option<&'static str> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct RestOrderSnapshot {
+    status: String,
+    size_matched: f64,
+}
+
+impl RestOrderSnapshot {
+    fn is_terminal_without_more_fills(&self) -> bool {
+        matches!(
+            self.status.to_ascii_uppercase().as_str(),
+            "CANCELED" | "CANCELLED" | "INVALID" | "CANCELED_MARKET_RESOLVED"
+        )
+    }
+}
+
+fn parse_rest_order_snapshot(value: &serde_json::Value) -> Result<RestOrderSnapshot, String> {
+    let order = value.get("data").unwrap_or(value);
+    let status = order
+        .get("status")
+        .and_then(|raw| raw.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if status.is_empty() {
+        return Err("REST order response has no status".to_string());
+    }
+    let size_matched = order
+        .get("size_matched")
+        .or_else(|| order.get("sizeMatched"))
+        .and_then(json_number)
+        .unwrap_or(0.0);
+    if !size_matched.is_finite() || size_matched < 0.0 {
+        return Err("REST order size_matched is invalid".to_string());
+    }
+    Ok(RestOrderSnapshot {
+        status,
+        size_matched,
+    })
+}
+
+fn json_number(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|raw| raw.parse::<f64>().ok()))
+}
+
+fn is_rest_not_found(error: &str) -> bool {
+    error.starts_with("HTTP 404:") || error.starts_with("HTTP 404 ")
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeStrategy {
     strategy_spec: StrategySpec,
@@ -306,6 +423,7 @@ struct RuntimeStrategy {
     skip_dead_zone: bool,
     min_confidence: f64,
     min_edge: f64,
+    decision_volatility_floor: f64,
     position_pct: f64,
     max_per_market_usd: f64,
     max_projected_stressed_drawdown_pct: f64,
@@ -338,6 +456,9 @@ impl RuntimeStrategy {
         }
         let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
+        if !variant.exit.is_disabled() {
+            bail!("promoted strategy enables an exit lifecycle that live runtime does not yet implement");
+        }
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
             bail!(
@@ -390,6 +511,7 @@ impl RuntimeStrategy {
             skip_dead_zone: variant.skip_dead_zone,
             min_confidence: variant.min_confidence,
             min_edge: variant.min_edge,
+            decision_volatility_floor: variant.decision_volatility_floor,
             position_pct: variant.position_pct,
             max_per_market_usd: variant.max_per_market_usd,
             max_projected_stressed_drawdown_pct: variant.max_projected_stressed_drawdown_pct,
@@ -420,6 +542,7 @@ impl RuntimeStrategy {
             "skip_dead_zone": settings.candle_skip_dead_zone,
             "min_confidence": DEFAULT_MIN_CONFIDENCE,
             "min_edge": DEFAULT_MIN_EDGE,
+            "decision_volatility_floor": 0.0,
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
@@ -449,6 +572,7 @@ impl RuntimeStrategy {
             skip_dead_zone: settings.candle_skip_dead_zone,
             min_confidence: DEFAULT_MIN_CONFIDENCE,
             min_edge: DEFAULT_MIN_EDGE,
+            decision_volatility_floor: 0.0,
             position_pct: settings.candle_position_pct,
             max_per_market_usd: settings.max_position_per_market_usd,
             max_projected_stressed_drawdown_pct: settings
@@ -505,6 +629,13 @@ impl RuntimeStrategy {
         } else {
             self.prefer_maker
         }
+    }
+
+    fn decision_volatility(&self, observed_volatility: f64) -> f64 {
+        crate::backtest::strategies::decision_volatility_with_floor(
+            observed_volatility,
+            self.decision_volatility_floor,
+        )
     }
 }
 
@@ -579,7 +710,7 @@ pub struct Pipeline {
     momentum: Mutex<HashMap<String, MomentumDetector>>,
     contracts: RwLock<Vec<CandleContract>>,
     traded: Mutex<HashSet<String>>,
-    live_pending_positions: Mutex<HashMap<String, PaperPosition>>,
+    live_pending_positions: Mutex<HashMap<String, PendingLivePosition>>,
     paper_positions: Mutex<HashMap<String, PaperPosition>>,
     oracle_pending: Mutex<HashMap<String, OraclePending>>,
     breaker: Mutex<BreakerState>,
@@ -593,6 +724,7 @@ pub struct Pipeline {
     tracked_markets: Arc<RwLock<Vec<String>>>,
     user_resub_notify: Arc<Notify>,
     reconciled_trade_ids: Mutex<HashSet<String>>,
+    live_recovery_ready: Mutex<bool>,
     stop: Arc<Notify>,
     kill_switch_path: PathBuf,
     cycle_count: Mutex<u64>,
@@ -666,6 +798,41 @@ impl Pipeline {
         }
         if !oracle_pending.is_empty() {
             tracing::info!(n = oracle_pending.len(), "restored oracle-pending");
+        }
+        let raw_live_journal = risk
+            .load_live_pending_orders()
+            .await
+            .context("load live pending-order journal")?;
+        if matches!(mode, Mode::Paper) && !raw_live_journal.is_empty() {
+            bail!(
+                "paper startup blocked: {} unresolved live order(s) require authenticated live recovery",
+                raw_live_journal.len()
+            );
+        }
+        let mut order_manager = OrderManager::new();
+        let mut live_pending_positions = HashMap::new();
+        let mut reconciled_trade_ids = HashSet::new();
+        let mut traded = HashSet::new();
+        for (intent_id, payload) in raw_live_journal {
+            let entry: LiveOrderJournalEntry = serde_json::from_value(payload)
+                .with_context(|| format!("decode live order journal {intent_id}"))?;
+            entry
+                .validate(&intent_id)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("validate live order journal {intent_id}"))?;
+            order_manager
+                .restore(entry.order)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("restore live order {intent_id}"))?;
+            traded.insert(entry.pending.position.contract_id.clone());
+            reconciled_trade_ids.extend(entry.reconciled_trade_ids);
+            live_pending_positions.insert(intent_id, entry.pending);
+        }
+        if !live_pending_positions.is_empty() {
+            tracing::warn!(
+                n = live_pending_positions.len(),
+                "restored unresolved live orders; new trading locked pending REST recovery"
+            );
         }
         if risk.actualizes_on_open().await
             && (breaker_state.wins > 0
@@ -761,6 +928,10 @@ impl Pipeline {
             + oracle_pending
                 .values()
                 .map(pending_resolution_exposure)
+                .sum::<f64>()
+            + live_pending_positions
+                .values()
+                .map(|pending| paper_position_exposure(&pending.position))
                 .sum::<f64>();
 
         let mut momentum_map = HashMap::new();
@@ -797,14 +968,24 @@ impl Pipeline {
                 &settings.poly_api_key,
                 &settings.poly_api_secret,
                 &settings.poly_api_passphrase,
-            );
-            client.write().await.set_signing_key(&settings.private_key);
+            )
+            .map_err(anyhow::Error::msg)?;
+            client
+                .write()
+                .await
+                .set_signing_key(&settings.private_key)
+                .map_err(anyhow::Error::msg)?;
             client.write().await.warm_connection().await;
             tracing::info!("CLOB direct order placement ENABLED (live mode)");
             Some(client)
         } else {
             None
         };
+        if matches!(mode, Mode::Live) && !live_pending_positions.is_empty() && clob.is_none() {
+            bail!("live startup blocked: unresolved live orders require CLOB L2 credentials");
+        }
+
+        let live_recovery_ready = live_pending_positions.is_empty();
 
         let p = Arc::new(Self {
             kill_switch_path: PathBuf::from(&settings.kill_switch_path),
@@ -813,7 +994,7 @@ impl Pipeline {
             release_manifest,
             runtime_strategy,
             risk,
-            order_manager: Mutex::new(OrderManager::new()),
+            order_manager: Mutex::new(order_manager),
             clob,
             monitor,
             alerter,
@@ -822,8 +1003,8 @@ impl Pipeline {
             breaker_cfg,
             momentum: Mutex::new(momentum_map),
             contracts: RwLock::new(Vec::new()),
-            traded: Mutex::new(HashSet::new()),
-            live_pending_positions: Mutex::new(HashMap::new()),
+            traded: Mutex::new(traded),
+            live_pending_positions: Mutex::new(live_pending_positions),
             paper_positions: Mutex::new(paper_positions),
             oracle_pending: Mutex::new(oracle_pending),
             breaker: Mutex::new(breaker_state),
@@ -836,7 +1017,8 @@ impl Pipeline {
             resub_notify: new_subscription_notify(),
             tracked_markets: Arc::new(RwLock::new(Vec::new())),
             user_resub_notify: new_subscription_notify(),
-            reconciled_trade_ids: Mutex::new(HashSet::new()),
+            reconciled_trade_ids: Mutex::new(reconciled_trade_ids),
+            live_recovery_ready: Mutex::new(live_recovery_ready),
             stop: Arc::new(Notify::new()),
             cycle_count: Mutex::new(0),
         });
@@ -936,6 +1118,10 @@ impl Pipeline {
             });
         }
         if let Some(clob) = self.clob.clone() {
+            let recovery_pipeline = self.clone();
+            tokio::spawn(async move {
+                recovery_pipeline.live_recovery_loop().await;
+            });
             tokio::spawn(async move {
                 loop {
                     sleep(Duration::from_secs(5)).await;
@@ -1026,16 +1212,238 @@ impl Pipeline {
         Ok(())
     }
 
+    async fn live_recovery_loop(self: Arc<Self>) {
+        loop {
+            match self.reconcile_live_orders_once().await {
+                Ok(()) => {
+                    let was_locked = {
+                        let mut ready = self.live_recovery_ready.lock().await;
+                        let was_locked = !*ready;
+                        *ready = true;
+                        was_locked
+                    };
+                    if was_locked {
+                        tracing::info!("authenticated live-order recovery lock released");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "authenticated live-order recovery pass failed");
+                }
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
+
+    async fn reconcile_live_orders_once(&self) -> Result<()> {
+        let Some(clob) = self.clob.clone() else {
+            return Ok(());
+        };
+        let orders: Vec<ManagedOrder> = {
+            let manager = self.order_manager.lock().await;
+            self.live_pending_positions
+                .lock()
+                .await
+                .keys()
+                .map(|intent_id| {
+                    manager.get(intent_id).cloned().ok_or_else(|| {
+                        anyhow::anyhow!("pending order {intent_id} has no lifecycle")
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        for order in orders {
+            let venue_order_id = order
+                .venue_order_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("live order has no venue lookup id"))?;
+            let after = (order.created_ts.floor() as i64 - 1).max(0).to_string();
+            let trades_json = {
+                let client = clob.read().await;
+                client
+                    .get_trades(&[
+                        ("market", order.intent.market_id.as_str()),
+                        ("after", after.as_str()),
+                    ])
+                    .await
+                    .map_err(anyhow::Error::msg)?
+            };
+            for trade in parse_rest_trade_events(&trades_json).map_err(anyhow::Error::msg)? {
+                self.handle_user_event_from(UserEvent::Trade(trade), "clob_rest")
+                    .await?;
+            }
+
+            if !self
+                .live_pending_positions
+                .lock()
+                .await
+                .contains_key(&order.intent.intent_id)
+            {
+                continue;
+            }
+
+            let order_json = {
+                let client = clob.read().await;
+                client.get_order(venue_order_id).await
+            };
+            match order_json {
+                Ok(value) => {
+                    let snapshot = parse_rest_order_snapshot(&value).map_err(anyhow::Error::msg)?;
+                    let current = self
+                        .order_manager
+                        .lock()
+                        .await
+                        .get(&order.intent.intent_id)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("recovered order lifecycle disappeared"))?;
+                    if snapshot.size_matched - current.filled_size > 1e-9
+                        && snapshot.is_terminal_without_more_fills()
+                    {
+                        tracing::error!(
+                            intent_id = %order.intent.intent_id,
+                            venue_order_id = %short_cid(venue_order_id),
+                            venue_size_matched = snapshot.size_matched,
+                            confirmed_size = current.filled_size,
+                            "REST terminal order is missing confirmed trade evidence"
+                        );
+                        self.trip_breaker("live_rest_missing_confirmed_trade").await;
+                        self.stop.notify_one();
+                        bail!("terminal REST order has unmatched confirmed exposure");
+                    }
+                    if snapshot.is_terminal_without_more_fills() {
+                        {
+                            let mut manager = self.order_manager.lock().await;
+                            manager
+                                .cancel(&order.intent.intent_id, nonzero_ts_or_now(0.0))
+                                .map_err(anyhow::Error::msg)?;
+                        }
+                        self.live_pending_positions
+                            .lock()
+                            .await
+                            .remove(&order.intent.intent_id);
+                        self.require_live_journal("REST terminal order reconciliation")
+                            .await?;
+                        self.monitor.record_order_reconciled(&OrderReconciled {
+                            intent_id: order.intent.intent_id.clone(),
+                            order_id: venue_order_id.to_string(),
+                            source: "clob_rest.order".to_string(),
+                            venue_state: snapshot.status,
+                            filled: current.filled_size,
+                            requested: current.requested_size,
+                            fill_price: current.avg_fill_price,
+                            fee: current.total_fees,
+                            detail: "terminal_without_unconfirmed_fill".to_string(),
+                        });
+                    } else {
+                        let changed = {
+                            let mut pending = self.live_pending_positions.lock().await;
+                            pending
+                                .get_mut(&order.intent.intent_id)
+                                .is_some_and(|pending| {
+                                    let changed = pending.recovery_misses != 0;
+                                    pending.recovery_misses = 0;
+                                    changed
+                                })
+                        };
+                        if changed {
+                            self.require_live_journal("REST order recovery reset")
+                                .await?;
+                        }
+                    }
+                }
+                Err(error) if is_rest_not_found(&error) => {
+                    self.handle_missing_rest_order(&order).await?;
+                }
+                Err(error) => return Err(anyhow::anyhow!(error)),
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_missing_rest_order(&self, order: &ManagedOrder) -> Result<()> {
+        let misses = {
+            let mut pending = self.live_pending_positions.lock().await;
+            let Some(pending) = pending.get_mut(&order.intent.intent_id) else {
+                return Ok(());
+            };
+            pending.recovery_misses = pending.recovery_misses.saturating_add(1);
+            pending.recovery_misses
+        };
+        self.require_live_journal("REST order-not-found recovery")
+            .await?;
+        let age_s = (nonzero_ts_or_now(0.0) - order.created_ts).max(0.0);
+        if misses < 3 || age_s < 30.0 {
+            return Ok(());
+        }
+        let current = self
+            .order_manager
+            .lock()
+            .await
+            .get(&order.intent.intent_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing REST order lifecycle disappeared"))?;
+        if current.state != OrderState::Submitted || current.filled_size > 1e-9 {
+            self.trip_breaker("live_rest_order_disappeared").await;
+            self.stop.notify_one();
+            bail!("acked or partially filled live order returned repeated REST 404");
+        }
+        {
+            let mut manager = self.order_manager.lock().await;
+            manager
+                .reject(
+                    &order.intent.intent_id,
+                    "pre-submission journal entry not found by venue",
+                    nonzero_ts_or_now(0.0),
+                )
+                .map_err(anyhow::Error::msg)?;
+        }
+        self.live_pending_positions
+            .lock()
+            .await
+            .remove(&order.intent.intent_id);
+        self.require_live_journal("abandoned pre-submit journal entry")
+            .await?;
+        tracing::warn!(
+            intent_id = %order.intent.intent_id,
+            order_id = ?order.venue_order_id,
+            misses,
+            age_s,
+            "cleared signed order that was never accepted by venue"
+        );
+        Ok(())
+    }
+
     async fn handle_user_event(&self, event: UserEvent) -> Result<()> {
+        self.handle_user_event_from(event, "clob_user_ws").await
+    }
+
+    async fn handle_user_event_from(&self, event: UserEvent, source: &str) -> Result<()> {
         match event {
             UserEvent::Order(order) => {
                 if order.id.is_empty() {
                     return Ok(());
                 }
                 let ts = nonzero_ts_or_now(order.timestamp_s());
-                let (reconciled, canceled_intent_id) = {
+                let (reconciled, canceled_intent_id, missing_fill_evidence) = {
                     let mut orders = self.order_manager.lock().await;
-                    let res = if order.is_canceled() {
+                    let intent_id = orders.intent_id_for_venue_order_id(&order.id);
+                    let missing_fill_evidence = intent_id
+                        .as_deref()
+                        .and_then(|id| orders.get(id))
+                        .is_some_and(|managed| {
+                            order.is_canceled() && order.size_matched() - managed.filled_size > 1e-9
+                        });
+                    let res = if missing_fill_evidence {
+                        Err(format!(
+                            "venue cancellation reports {} matched but only {} confirmed locally",
+                            order.size_matched(),
+                            intent_id
+                                .as_deref()
+                                .and_then(|id| orders.get(id))
+                                .map(|managed| managed.filled_size)
+                                .unwrap_or(0.0)
+                        ))
+                    } else if order.is_canceled() {
                         orders.cancel_by_venue_order_id(&order.id, ts)
                     } else {
                         orders.reconcile_live_by_venue_order_id(&order.id, ts)
@@ -1045,7 +1453,7 @@ impl Pipeline {
                             Some(OrderReconciled {
                                 intent_id: o.intent.intent_id.clone(),
                                 order_id: order.id.clone(),
-                                source: "clob_user_ws.order".to_string(),
+                                source: format!("{source}.order"),
                                 venue_state: if order.is_canceled() {
                                     "canceled".to_string()
                                 } else {
@@ -1058,25 +1466,49 @@ impl Pipeline {
                                 detail: order.event_kind.clone(),
                             }),
                             order.is_canceled().then(|| o.intent.intent_id.clone()),
+                            false,
                         ),
                         Err(e) => {
                             tracing::debug!(order_id = %short_cid(&order.id), error = %e, "unmatched user-channel order event");
-                            (None, None)
+                            (None, None, missing_fill_evidence)
                         }
                     }
                 };
-                if let Some(evt) = reconciled {
-                    self.monitor.record_order_reconciled(&evt);
+                if missing_fill_evidence {
+                    tracing::error!(
+                        order_id = %short_cid(&order.id),
+                        venue_size_matched = order.size_matched(),
+                        "terminal order state arrived before confirmed trade evidence"
+                    );
+                    self.trip_breaker("live_terminal_order_missing_confirmed_trade")
+                        .await;
+                    self.stop.notify_one();
+                    return Ok(());
+                }
+                if let Some(ref evt) = reconciled {
+                    self.monitor.record_order_reconciled(evt);
                 }
                 if let Some(intent_id) = canceled_intent_id {
                     self.live_pending_positions.lock().await.remove(&intent_id);
+                }
+                if reconciled.is_some() {
+                    self.require_live_journal("user order reconciliation")
+                        .await?;
                 }
             }
             UserEvent::Trade(trade) => {
                 if trade.id.is_empty() {
                     return Ok(());
                 }
-                if !trade.is_fill_status() && !trade.is_failed() {
+                if trade.is_fill_status() && !trade.is_confirmed_fill() {
+                    tracing::debug!(
+                        trade_id = %trade.id,
+                        status = %trade.status,
+                        "user-channel trade awaiting terminal confirmation"
+                    );
+                    return Ok(());
+                }
+                if !trade.is_confirmed_fill() && !trade.is_failed() {
                     return Ok(());
                 }
                 {
@@ -1086,12 +1518,43 @@ impl Pipeline {
                     }
                 }
                 let ts = nonzero_ts_or_now(trade.timestamp_s());
-                for order_id in trade.candidate_order_ids() {
+                for fill in trade.candidate_order_fills() {
+                    let intent_id = {
+                        self.order_manager
+                            .lock()
+                            .await
+                            .intent_id_for_venue_order_id(&fill.order_id)
+                    };
+                    let Some(intent_id) = intent_id else {
+                        continue;
+                    };
+                    let fill_fee = if trade.is_failed() {
+                        0.0
+                    } else {
+                        let fee = self
+                            .live_pending_positions
+                            .lock()
+                            .await
+                            .get(&intent_id)
+                            .and_then(|pending| pending.fill_fee(fill.size, fill.price));
+                        let Some(fee) = fee else {
+                            tracing::error!(
+                                intent_id = %intent_id,
+                                order_id = %short_cid(&fill.order_id),
+                                trade_id = %trade.id,
+                                "live fill fee schedule unavailable or fill economics invalid"
+                            );
+                            self.trip_breaker("live_fill_fee_unavailable").await;
+                            self.stop.notify_one();
+                            return Ok(());
+                        };
+                        fee
+                    };
                     let outcome = {
                         let mut orders = self.order_manager.lock().await;
                         if trade.is_failed() {
                             match orders.reject_by_venue_order_id(
-                                &order_id,
+                                &fill.order_id,
                                 "clob trade failed",
                                 ts,
                             ) {
@@ -1099,11 +1562,16 @@ impl Pipeline {
                                 Err(_) => None,
                             }
                         } else {
+                            if let Err(error) =
+                                orders.reconcile_live_by_venue_order_id(&fill.order_id, ts)
+                            {
+                                tracing::debug!(%error, "fill pre-ack reconciliation skipped");
+                            }
                             match orders.fill_by_venue_order_id(
-                                &order_id,
-                                trade.size(),
-                                trade.price(),
-                                trade.fee(),
+                                &fill.order_id,
+                                fill.size,
+                                fill.price,
+                                fill_fee,
                                 ts,
                             ) {
                                 Ok(o) => Some((o.clone(), true)),
@@ -1116,43 +1584,45 @@ impl Pipeline {
                     };
                     self.monitor.record_order_reconciled(&OrderReconciled {
                         intent_id: order.intent.intent_id.clone(),
-                        order_id: order_id.clone(),
-                        source: "clob_user_ws.trade".to_string(),
+                        order_id: fill.order_id.clone(),
+                        source: format!("{source}.trade"),
                         venue_state: trade.status.clone(),
                         filled: order.filled_size,
                         requested: order.requested_size,
-                        fill_price: trade.price(),
+                        fill_price: fill.price,
                         fee: order.total_fees,
                         detail: trade.id.clone(),
                     });
                     if filled {
                         self.monitor.record_order_filled(&OrderFilled {
                             intent_id: order.intent.intent_id.clone(),
-                            order_id,
-                            filled: trade.size(),
+                            order_id: fill.order_id,
+                            filled: fill.size,
                             requested: order.requested_size,
                             fill_pct: order.fill_pct(),
-                            fill_price: trade.price(),
-                            cost: trade.size() * trade.price(),
-                            limit_price: order.intent.limit_price.unwrap_or(trade.price()),
+                            fill_price: fill.price,
+                            cost: fill.size * fill.price,
+                            limit_price: order.intent.limit_price.unwrap_or(fill.price),
                             slippage: 0.0,
                             slippage_bps: 0.0,
                             fill_time_s: (ts - order.created_ts).max(0.0),
-                            fee: trade.fee(),
+                            fee: fill_fee,
                             n_trades: 1,
                         });
-                        self.record_live_fill_position(&order, ts, trade.size(), trade.price())
+                        self.record_live_fill_position(&order, ts, fill.size, fill.price)
                             .await?;
                     } else {
                         self.live_pending_positions
                             .lock()
                             .await
                             .remove(&order.intent.intent_id);
+                        self.require_live_journal("failed trade reconciliation")
+                            .await?;
                         self.monitor.record_order_rejected(
                             &trade.asset_id,
                             "clob trade failed",
-                            trade.price(),
-                            trade.size(),
+                            fill.price,
+                            fill.size,
                         );
                         self.trip_breaker("live_trade_failed").await;
                         self.stop.notify_one();
@@ -1182,7 +1652,7 @@ impl Pipeline {
                 .get(&order.intent.intent_id)
                 .cloned()
         };
-        let Some(template) = template else {
+        let Some(pending) = template else {
             tracing::warn!(
                 intent_id = %order.intent.intent_id,
                 venue_order_id = ?order.venue_order_id,
@@ -1190,7 +1660,7 @@ impl Pipeline {
             );
             return Ok(());
         };
-        let Some(position) = live_position_from_fill(&template, order) else {
+        let Some(position) = live_position_from_fill(&pending.position, order) else {
             return Ok(());
         };
         {
@@ -1221,9 +1691,11 @@ impl Pipeline {
         } else {
             let mut pending = self.live_pending_positions.lock().await;
             if let Some(p) = pending.get_mut(&order.intent.intent_id) {
-                p.size = remaining_size;
+                p.position.size = remaining_size;
             }
         }
+        self.require_live_journal("confirmed fill reconciliation")
+            .await?;
         tracing::info!(
             cid = short_cid(&position.contract_id),
             size = position.size,
@@ -1302,7 +1774,7 @@ impl Pipeline {
         if !self.settings.candle_cross_asset_enabled {
             if let Some(step_s) = btc_updown_slug_step_seconds(self.settings.candle_window_minutes)
             {
-                let slugs = btc_updown_slugs_for_live_window(Utc::now(), step_s, 45);
+                let slugs = btc_updown_slugs_for_live_horizon(Utc::now(), step_s, 45);
                 tracing::info!(slugs = slugs.len(), step_s, "candle.slug_discovery");
                 return self.gamma.fetch_markets_by_slugs(&slugs, false).await;
             }
@@ -1480,7 +1952,7 @@ impl Pipeline {
                 };
 
                 // Detect momentum for the contract's own asset
-                let (signal, decision_vol) = {
+                let (signal, observed_vol) = {
                     let mut moms = self.momentum.lock().await;
                     let det = moms.entry(c.asset.clone()).or_insert_with(|| {
                         MomentumDetector::new(
@@ -1509,10 +1981,11 @@ impl Pipeline {
                         self.monitor
                             .record_signal_skip(&cid, "open_price_unavailable");
                     }
-                    let decision_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
-                    (signal, decision_vol)
+                    let observed_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
+                    (signal, observed_vol)
                 };
                 let Some(signal) = signal else { continue };
+                let decision_vol = self.runtime_strategy.decision_volatility(observed_vol);
 
                 let open_exposure = self.open_position_exposure().await;
                 let breaker_state = *self.breaker.lock().await;
@@ -1644,7 +2117,11 @@ impl Pipeline {
                         {
                             estimated_position = estimated_position.min(stress_headroom);
                         }
-                        let taker_tick = c.market.minimum_tick_size.unwrap_or(0.01).max(0.0001);
+                        let market_tick = live_market_tick_size(
+                            c.market.minimum_tick_size,
+                            [&c.up_token_id, &c.down_token_id],
+                            &books,
+                        );
                         let taker_quote = (!prefer_maker && estimated_position >= 1.0)
                             .then(|| {
                                 live_buy_book_quote(
@@ -1652,7 +2129,7 @@ impl Pipeline {
                                     &books,
                                     estimated_position,
                                     self.settings.live_min_order_size_shares,
-                                    taker_tick,
+                                    market_tick,
                                 )
                             })
                             .flatten();
@@ -1683,7 +2160,7 @@ impl Pipeline {
                                 Side::Buy,
                                 micro.best_bid,
                                 micro.best_ask,
-                                crate::backtest::fill_model::DEFAULT_TICK,
+                                market_tick,
                             )
                         } else {
                             None
@@ -1786,7 +2263,7 @@ impl Pipeline {
                                         Side::Buy,
                                         micro.best_bid,
                                         micro.best_ask,
-                                        crate::backtest::fill_model::DEFAULT_TICK,
+                                        market_tick,
                                     )
                                     .is_none())
                                 .then(|| {
@@ -1982,7 +2459,7 @@ impl Pipeline {
                             skip_detail: None,
                         });
                         if let Err(e) = self
-                            .execute_trade(c, &signal, &decision, &micro, taker_quote)
+                            .execute_trade(c, &signal, &decision, &micro, taker_quote, market_tick)
                             .await
                         {
                             tracing::warn!(error = %e, "execute_trade failed");
@@ -2022,6 +2499,7 @@ impl Pipeline {
         decision: &crate::strategy::decision::CandleDecision,
         micro: &BookMicrostructure,
         taker_quote: Option<BuyBookQuote>,
+        market_tick: f64,
     ) -> Result<()> {
         let bankroll = self.risk.effective_bankroll().await;
         let mut position = bankroll * self.runtime_strategy.position_pct;
@@ -2240,23 +2718,20 @@ impl Pipeline {
                 Ok(())
             }
             Mode::Live => {
+                if !*self.live_recovery_ready.lock().await {
+                    tracing::warn!("live order skipped: authenticated recovery lock is active");
+                    return Ok(());
+                }
                 let Some(clob) = self.clob.clone() else {
                     tracing::error!(
                         "live mode but no CLOB client (missing api keys / private key)"
                     );
                     return Ok(());
                 };
-                // Round to the market's advertised tick and keep a sane fallback
-                // for legacy metadata that does not include minimum_tick_size.
-                let tick = contract
-                    .market
-                    .minimum_tick_size
-                    .unwrap_or(0.01)
-                    .max(0.0001);
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
                 let (limit_price, shares) = if prefer_maker {
                     let Some(price) =
-                        resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, tick)
+                        resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, market_tick)
                     else {
                         tracing::warn!(
                             best_bid = micro.best_bid,
@@ -2280,7 +2755,7 @@ impl Pipeline {
                         tracing::warn!("live taker order skipped: visible L2 quote unavailable");
                         return Ok(());
                     };
-                    let limit_price = ceil_buy_price_to_tick(quote.worst_price, tick);
+                    let limit_price = ceil_buy_price_to_tick(quote.worst_price, market_tick);
                     if limit_price * quote.shares > position + 1e-8 {
                         tracing::warn!(
                             limit_price,
@@ -2316,18 +2791,53 @@ impl Pipeline {
                         contract.market.condition_id
                     ),
                 );
-                let pending_position = PaperPosition {
-                    direction: signal.direction.clone(),
-                    entry_price: limit_price,
-                    fee: 0.0,
-                    size: shares,
-                    open_btc: signal.open_price,
-                    end_time: end_ts,
-                    asset: contract.asset.clone(),
-                    contract_id: contract.market.condition_id.clone(),
-                    event_id: contract.market.event_id.clone(),
-                    shadow: false,
+                let entry_fee_rate = if prefer_maker {
+                    contract
+                        .market
+                        .effective_maker_fee_rate(self.runtime_strategy.maker_fee_rate)
+                } else {
+                    contract
+                        .market
+                        .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate)
                 };
+                let pending_position = PendingLivePosition {
+                    position: PaperPosition {
+                        direction: signal.direction.clone(),
+                        entry_price: limit_price,
+                        fee: 0.0,
+                        size: shares,
+                        open_btc: signal.open_price,
+                        end_time: end_ts,
+                        asset: contract.asset.clone(),
+                        contract_id: contract.market.condition_id.clone(),
+                        event_id: contract.market.event_id.clone(),
+                        shadow: false,
+                    },
+                    entry_fee_rate,
+                    recovery_misses: 0,
+                };
+
+                let prepared = if prefer_maker {
+                    clob.read().await.prepare_maker_order(
+                        token_id,
+                        limit_price,
+                        shares,
+                        "BUY",
+                        neg_risk,
+                        market_tick,
+                    )
+                } else {
+                    clob.read().await.prepare_taker_order(
+                        token_id,
+                        limit_price,
+                        shares,
+                        "BUY",
+                        neg_risk,
+                        market_tick,
+                    )
+                }
+                .map_err(anyhow::Error::msg)?;
+                let expected_order_id = prepared.expected_order_id().to_string();
 
                 let t_start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -2350,13 +2860,15 @@ impl Pipeline {
                         .risk_accept(&intent.intent_id, t_start)
                         .map_err(|e| anyhow::anyhow!(e))?;
                     orders
-                        .submit(&intent.intent_id, None, t_start)
+                        .submit(&intent.intent_id, Some(expected_order_id.clone()), t_start)
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
                 self.live_pending_positions
                     .lock()
                     .await
                     .insert(intent.intent_id.clone(), pending_position);
+                self.require_live_journal("pre-submit order journal")
+                    .await?;
                 self.monitor.record_order_timing(&OrderTiming {
                     intent_id: intent.intent_id.clone(),
                     condition_id: contract.market.condition_id.clone(),
@@ -2369,17 +2881,7 @@ impl Pipeline {
                     market_end_ts_s: end_ts,
                     latency_model_ms: None,
                 });
-                let result = if prefer_maker {
-                    clob.write()
-                        .await
-                        .place_maker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
-                        .await
-                } else {
-                    clob.write()
-                        .await
-                        .place_taker_order(token_id, limit_price, shares, "BUY", neg_risk, tick)
-                        .await
-                };
+                let result = clob.write().await.submit_prepared_order(prepared).await;
                 let submit_latency_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
@@ -2387,20 +2889,31 @@ impl Pipeline {
                     - t_start;
 
                 match result {
-                    Ok(order_id) => {
+                    Ok(receipt) => {
+                        let id_matches_expected = receipt.id_matches_expected();
+                        let response_expected_order_id = receipt.expected_order_id.clone();
+                        let order_id = receipt.order_id;
                         let ack_state = {
                             let mut orders = self.order_manager.lock().await;
-                            orders
-                                .ack(
+                            let order = if id_matches_expected {
+                                orders.reconcile_live_by_venue_order_id(
+                                    &order_id,
+                                    t_start + submit_latency_s,
+                                )
+                            } else {
+                                orders.ack(
                                     &intent.intent_id,
                                     Some(order_id.clone()),
                                     t_start + submit_latency_s,
                                 )
+                            };
+                            order
                                 .map_err(|e| anyhow::anyhow!(e))?
                                 .state
                                 .as_str()
                                 .to_string()
                         };
+                        self.require_live_journal("order acknowledgement").await?;
                         let order_value = limit_price * shares;
                         self.monitor.record_order_placed(
                             &crate::monitoring::session::OrderPlaced {
@@ -2426,32 +2939,56 @@ impl Pipeline {
                             submit_latency_s,
                             "candle.trade.live.accepted_unconfirmed"
                         );
-                    }
-                    Err(e) => {
-                        let truncated = if e.len() > 200 { &e[..200] } else { e.as_str() };
-                        {
-                            let mut orders = self.order_manager.lock().await;
-                            let _ = orders.reject(
-                                &intent.intent_id,
-                                truncated,
-                                t_start + submit_latency_s,
+                        if !id_matches_expected {
+                            tracing::error!(
+                                expected_order_id = %short_cid(&response_expected_order_id),
+                                actual_order_id = %short_cid(&order_id),
+                                "CLOB response order id differs from precomputed EIP-712 hash"
                             );
-                        }
-                        self.live_pending_positions
-                            .lock()
-                            .await
-                            .remove(&intent.intent_id);
-                        self.monitor.record_order_rejected(
-                            token_id,
-                            truncated,
-                            limit_price,
-                            shares,
-                        );
-                        if let Some(reason) = permanent_live_order_reject_reason(truncated) {
-                            self.trip_breaker(reason).await;
+                            self.trip_breaker("live_order_hash_mismatch").await;
                             self.stop.notify_one();
                         }
-                        tracing::warn!(error = %truncated, "candle.trade.live.failed");
+                    }
+                    Err(e) => {
+                        let truncated = if e.message.len() > 200 {
+                            &e.message[..200]
+                        } else {
+                            e.message.as_str()
+                        };
+                        if e.kind == SubmitFailureKind::DefinitiveReject {
+                            {
+                                let mut orders = self.order_manager.lock().await;
+                                let _ = orders.reject(
+                                    &intent.intent_id,
+                                    truncated,
+                                    t_start + submit_latency_s,
+                                );
+                            }
+                            self.live_pending_positions
+                                .lock()
+                                .await
+                                .remove(&intent.intent_id);
+                            self.require_live_journal("definitive order rejection")
+                                .await?;
+                            self.monitor.record_order_rejected(
+                                token_id,
+                                truncated,
+                                limit_price,
+                                shares,
+                            );
+                            if let Some(reason) = permanent_live_order_reject_reason(truncated) {
+                                self.trip_breaker(reason).await;
+                                self.stop.notify_one();
+                            }
+                            tracing::warn!(error = %truncated, "candle.trade.live.rejected");
+                        } else {
+                            *self.live_recovery_ready.lock().await = false;
+                            tracing::error!(
+                                error = %truncated,
+                                order_id = %short_cid(&expected_order_id),
+                                "candle.trade.live.submit_ambiguous; exposure retained for REST recovery"
+                            );
+                        }
                     }
                 }
                 Ok(())
@@ -2479,7 +3016,7 @@ impl Pipeline {
             .lock()
             .await
             .values()
-            .map(paper_position_exposure)
+            .map(|pending| paper_position_exposure(&pending.position))
             .sum();
         paper_exposure + pending_resolution_exposure + pending_order_exposure
     }
@@ -3050,6 +3587,54 @@ impl Pipeline {
         }
     }
 
+    async fn persist_live_pending_orders(&self) -> Result<()> {
+        let orders = self.order_manager.lock().await;
+        let pending = self.live_pending_positions.lock().await;
+        let reconciled_trade_ids: Vec<String> = self
+            .reconciled_trade_ids
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect();
+        let mut entries = Vec::with_capacity(pending.len());
+        for (intent_id, pending_position) in pending.iter() {
+            let order = orders
+                .get(intent_id)
+                .ok_or_else(|| anyhow::anyhow!("pending live order {intent_id} has no lifecycle"))?
+                .clone();
+            let entry = LiveOrderJournalEntry {
+                order,
+                pending: pending_position.clone(),
+                reconciled_trade_ids: reconciled_trade_ids.clone(),
+            };
+            entry
+                .validate(intent_id)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("validate live order journal {intent_id}"))?;
+            entries.push((
+                intent_id.clone(),
+                serde_json::to_value(entry).context("serialize live order journal")?,
+            ));
+        }
+        drop(pending);
+        drop(orders);
+        self.risk
+            .save_live_pending_orders(&entries)
+            .await
+            .context("persist live pending-order journal")
+    }
+
+    async fn require_live_journal(&self, operation: &str) -> Result<()> {
+        if let Err(error) = self.persist_live_pending_orders().await {
+            tracing::error!(%error, operation, "live order journal failed; stopping live runtime");
+            self.trip_breaker("live_order_journal_failure").await;
+            self.stop.notify_one();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     async fn persist_breaker_state(&self) {
         let bs = *self.breaker.lock().await;
         match serde_json::to_string(&bs) {
@@ -3129,6 +3714,46 @@ fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
     (age.is_finite() && (0.0..30.0).contains(&age)).then_some(age)
 }
 
+fn live_market_tick_size(
+    metadata_tick_size: Option<f64>,
+    outcome_token_ids: [&str; 2],
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+) -> f64 {
+    let mut tick_size = metadata_tick_size
+        .filter(|tick| tick.is_finite() && *tick > 0.0 && *tick < 1.0)
+        .unwrap_or(DEFAULT_TICK);
+    let mut latest_feed_tick: Option<(u64, f64)> = None;
+    for token_id in outcome_token_ids {
+        let Some(book) = books.get(token_id) else {
+            continue;
+        };
+        if let Some(feed_tick) = book
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0 && *tick < 1.0)
+        {
+            latest_feed_tick = match latest_feed_tick {
+                Some((timestamp_us, current)) if timestamp_us > book.tick_update_us => {
+                    Some((timestamp_us, current))
+                }
+                Some((timestamp_us, current)) if timestamp_us == book.tick_update_us => {
+                    Some((timestamp_us, current.min(feed_tick)))
+                }
+                _ => Some((book.tick_update_us, feed_tick)),
+            };
+        }
+    }
+    if let Some((_, feed_tick)) = latest_feed_tick {
+        tick_size = feed_tick;
+    }
+    for token_id in outcome_token_ids {
+        if let Some(book) = books.get(token_id) {
+            tick_size =
+                apply_causal_dynamic_tick_transition(tick_size, book.best_bid, book.best_ask);
+        }
+    }
+    tick_size
+}
+
 fn live_book_age_ms(
     token_id: &str,
     books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
@@ -3193,37 +3818,6 @@ fn short_cid(s: &str) -> String {
     } else {
         s[..16].to_string()
     }
-}
-
-fn btc_updown_slug_step_seconds(window_minutes: f64) -> Option<i64> {
-    if (window_minutes - 5.0).abs() <= 1e-6 {
-        Some(5 * 60)
-    } else if (window_minutes - 15.0).abs() <= 1e-6 {
-        Some(15 * 60)
-    } else {
-        None
-    }
-}
-
-fn btc_updown_slugs_for_live_window(
-    now: DateTime<Utc>,
-    step_s: i64,
-    horizon_minutes: i64,
-) -> Vec<String> {
-    let now_s = now.timestamp();
-    let mut t = (now_s - step_s).div_euclid(step_s) * step_s;
-    let end_s = now_s + horizon_minutes.max(1) * 60 + step_s;
-    let prefix = if step_s == 300 {
-        "btc-updown-5m"
-    } else {
-        "btc-updown-15m"
-    };
-    let mut slugs = Vec::new();
-    while t <= end_s {
-        slugs.push(format!("{prefix}-{t}"));
-        t += step_s;
-    }
-    slugs
 }
 
 fn nonzero_ts_or_now(ts: f64) -> f64 {
@@ -3403,8 +3997,45 @@ mod tests {
     use crate::backtest::experiment::{
         PromotionArtifact, PromotionGate, CURRENT_INVENTORY_MODEL_VERSION,
     };
-    use chrono::TimeZone;
     use tempfile::TempDir;
+
+    #[test]
+    fn live_market_tick_uses_latest_feed_change_and_causal_book_fallback() {
+        let mut books = HashMap::new();
+        books.insert(
+            "up".to_string(),
+            crate::polymarket_ws::TokenBookState {
+                best_bid: 0.95,
+                best_ask: 0.96,
+                tick_size: Some(0.001),
+                tick_update_us: 20,
+                ..Default::default()
+            },
+        );
+        books.insert(
+            "down".to_string(),
+            crate::polymarket_ws::TokenBookState {
+                best_bid: 0.04,
+                best_ask: 0.05,
+                tick_size: Some(0.01),
+                tick_update_us: 10,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            live_market_tick_size(Some(0.01), ["up", "down"], &books),
+            0.001
+        );
+
+        books.get_mut("up").unwrap().tick_size = None;
+        books.get_mut("down").unwrap().tick_size = None;
+        books.get_mut("up").unwrap().best_ask = 0.97;
+        assert_eq!(
+            live_market_tick_size(Some(0.01), ["up", "down"], &books),
+            0.001
+        );
+    }
 
     #[test]
     fn live_book_quality_populates_runtime_selectivity_inputs() {
@@ -3490,7 +4121,8 @@ mod tests {
     fn runtime_strategy_uses_promoted_variant() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("promotion.json");
-        let variant = StrategyVariant::loose_maker();
+        let mut variant = StrategyVariant::loose_maker();
+        variant.decision_volatility_floor = 0.80;
         let artifact = promotion_for_variant(&variant);
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
         let mut settings = Settings::from_env();
@@ -3507,6 +4139,9 @@ mod tests {
         assert_eq!(runtime.min_confidence, variant.min_confidence);
         assert_eq!(runtime.min_edge, variant.min_edge);
         assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
+        assert_eq!(runtime.decision_volatility(0.35), 0.80);
+        assert_eq!(runtime.decision_volatility(0.90), 0.90);
+        assert!(runtime.decision_volatility(f64::NAN).is_nan());
     }
 
     #[test]
@@ -3714,23 +4349,6 @@ mod tests {
     }
 
     #[test]
-    fn live_btc_slug_window_covers_current_and_near_future_5m_frames() {
-        let now = Utc.with_ymd_and_hms(2026, 5, 23, 12, 23, 10).unwrap();
-        let slugs = btc_updown_slugs_for_live_window(now, 300, 15);
-
-        assert!(slugs.contains(&"btc-updown-5m-1779538800".to_string()));
-        assert!(slugs.contains(&"btc-updown-5m-1779539100".to_string()));
-        assert!(slugs.len() <= 6);
-    }
-
-    #[test]
-    fn live_slug_discovery_only_targets_supported_btc_windows() {
-        assert_eq!(btc_updown_slug_step_seconds(5.0), Some(300));
-        assert_eq!(btc_updown_slug_step_seconds(15.0), Some(900));
-        assert_eq!(btc_updown_slug_step_seconds(60.0), None);
-    }
-
-    #[test]
     fn permanent_live_order_rejects_are_fail_closed() {
         assert_eq!(
             permanent_live_order_reject_reason(
@@ -3882,5 +4500,61 @@ mod tests {
         assert!(
             (paper_outcome_pnl(true, pos.entry_price, pos.size, pos.fee) - 1.71265).abs() < 1e-9
         );
+    }
+
+    #[test]
+    fn pending_live_position_prices_current_taker_fee_and_validates_fill() {
+        let pending = PendingLivePosition {
+            position: PaperPosition {
+                direction: "up".to_string(),
+                entry_price: 0.57,
+                fee: 0.0,
+                size: 10.0,
+                open_btc: 100.0,
+                end_time: 10.0,
+                asset: "BTC".to_string(),
+                contract_id: "cid".to_string(),
+                event_id: "event".to_string(),
+                shadow: false,
+            },
+            entry_fee_rate: 0.07,
+            recovery_misses: 0,
+        };
+        assert_eq!(pending.fill_fee(10.0, 0.57), Some(0.17157));
+        assert_eq!(pending.fill_fee(0.0, 0.57), None);
+        assert_eq!(pending.fill_fee(10.0, 1.1), None);
+
+        let maker = PendingLivePosition {
+            entry_fee_rate: 0.0,
+            ..pending
+        };
+        assert_eq!(maker.fill_fee(10.0, 0.57), Some(0.0));
+    }
+
+    #[test]
+    fn parses_rest_terminal_order_economics() {
+        let snapshot = parse_rest_order_snapshot(&serde_json::json!({
+            "id": "0xorder",
+            "status": "CANCELED",
+            "size_matched": "4.25"
+        }))
+        .unwrap();
+        assert_eq!(snapshot.size_matched, 4.25);
+        assert!(snapshot.is_terminal_without_more_fills());
+
+        let live = parse_rest_order_snapshot(&serde_json::json!({
+            "data": {"status": "LIVE", "sizeMatched": 0}
+        }))
+        .unwrap();
+        assert!(!live.is_terminal_without_more_fills());
+        assert!(parse_rest_order_snapshot(&serde_json::json!({"size_matched": "1"})).is_err());
+    }
+
+    #[test]
+    fn recognizes_only_explicit_rest_not_found_errors() {
+        assert!(is_rest_not_found("HTTP 404: not found"));
+        assert!(is_rest_not_found("HTTP 404 Not Found: missing"));
+        assert!(!is_rest_not_found("HTTP 500: upstream failed"));
+        assert!(!is_rest_not_found("Request failed: timeout"));
     }
 }

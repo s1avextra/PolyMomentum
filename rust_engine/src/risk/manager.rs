@@ -342,6 +342,38 @@ impl RiskManager {
         Ok(out)
     }
 
+    pub async fn save_live_pending_orders(&self, entries: &[(String, Value)]) -> Result<()> {
+        let conn = self.db.lock().await;
+        conn.execute_batch("BEGIN; DELETE FROM live_pending_orders;")?;
+        {
+            let mut stmt =
+                conn.prepare("INSERT INTO live_pending_orders (intent_id, payload) VALUES (?, ?)")?;
+            for (intent_id, payload) in entries {
+                stmt.execute(params![intent_id, payload.to_string()])?;
+            }
+        }
+        conn.execute_batch("COMMIT;")?;
+        Ok(())
+    }
+
+    pub async fn load_live_pending_orders(&self) -> Result<Vec<(String, Value)>> {
+        let conn = self.db.lock().await;
+        let mut stmt = conn.prepare("SELECT intent_id, payload FROM live_pending_orders")?;
+        let rows = stmt.query_map([], |r| {
+            let intent_id: String = r.get(0)?;
+            let payload: String = r.get(1)?;
+            Ok((intent_id, payload))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (intent_id, payload) = row?;
+            if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+                out.push((intent_id, value));
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn save_state(&self) -> Result<()> {
         let inner = self.inner.lock().await;
         let conn = self.db.lock().await;
@@ -515,6 +547,10 @@ CREATE TABLE IF NOT EXISTS oracle_pending (
     contract_id TEXT PRIMARY KEY,
     payload     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS live_pending_orders (
+    intent_id TEXT PRIMARY KEY,
+    payload   TEXT NOT NULL
+);
 ";
 
 #[cfg(test)]
@@ -661,6 +697,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_pending_orders_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let mr = RiskManager::open(tmp.path().join("s.db"), RiskConfig::default())
+            .await
+            .unwrap();
+        let entries = vec![(
+            "intent-1".to_string(),
+            serde_json::json!({"venue_order_id": "0xorder", "size": 5}),
+        )];
+        mr.save_live_pending_orders(&entries).await.unwrap();
+        let loaded = mr.load_live_pending_orders().await.unwrap();
+        assert_eq!(loaded, entries);
+    }
+
+    #[tokio::test]
     async fn simulated_session_reset_starts_fresh_without_erasing_trade_history() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("state.db");
@@ -698,6 +749,12 @@ mod tests {
         mr.save_oracle_pending(&[("c1".to_string(), serde_json::json!({"attempts": 1}))])
             .await
             .unwrap();
+        mr.save_live_pending_orders(&[(
+            "intent-live".to_string(),
+            serde_json::json!({"must_survive_paper_reset": true}),
+        )])
+        .await
+        .unwrap();
         mr.set_meta("candle_breaker_tripped", "1").await.unwrap();
 
         mr.reset_simulated_session(100.0).await.unwrap();
@@ -706,6 +763,7 @@ mod tests {
         assert!((mr.total_pnl().await).abs() < 1e-9);
         assert!(mr.load_paper_positions().await.unwrap().is_empty());
         assert!(mr.load_oracle_pending().await.unwrap().is_empty());
+        assert_eq!(mr.load_live_pending_orders().await.unwrap().len(), 1);
         assert!(mr
             .get_meta("candle_breaker_tripped")
             .await

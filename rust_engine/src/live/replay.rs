@@ -35,13 +35,21 @@ use crate::strategy::decision::{
 };
 use crate::strategy::decision::{CandleDecision, DecisionResult, ZoneConfig};
 use crate::strategy::microstructure::{
-    bookwalk_buy_slippage, recent_mid_runup, BookLevelView, BookMicrostructure,
-    MicrostructureConfig,
+    apply_causal_dynamic_tick_transition, bookwalk_buy_slippage, recent_mid_runup, BookLevelView,
+    BookMicrostructure, MicrostructureConfig,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
 const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+
+fn valid_tick_size_or_default(tick_size: f64) -> f64 {
+    if tick_size.is_finite() && tick_size > 0.0 && tick_size < 1.0 {
+        tick_size
+    } else {
+        DEFAULT_TICK
+    }
+}
 
 #[derive(Clone)]
 pub struct LiveReplayConfig {
@@ -82,6 +90,11 @@ impl ReplayStrategy {
         }
         let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
+        if !variant.exit.is_disabled() {
+            bail!(
+                "promoted strategy enables an exit lifecycle that live-replay does not yet implement"
+            );
+        }
         let params_hash = stable_json_hash(&variant);
         if params_hash != artifact.selected_strategy.params_hash {
             bail!(
@@ -390,6 +403,7 @@ struct LiveReplayStrategy {
     replay_strategy: ReplayStrategy,
     universe_by_token: BTreeMap<String, CandleContract>,
     books: BTreeMap<String, TokenBook>,
+    causal_tick_size_by_condition: BTreeMap<String, f64>,
     momentum: MomentumDetector,
     order_manager: OrderManager,
     bankroll_usd: f64,
@@ -455,6 +469,7 @@ impl LiveReplayStrategy {
             replay_strategy,
             universe_by_token: universe.by_token_id(),
             books: BTreeMap::new(),
+            causal_tick_size_by_condition: BTreeMap::new(),
             momentum: MomentumDetector::new(
                 None,
                 MomentumConfig {
@@ -525,6 +540,20 @@ impl LiveReplayStrategy {
                 );
             }
         }
+    }
+
+    fn observe_market_tick_size(
+        &mut self,
+        condition_id: &str,
+        metadata_tick_size: f64,
+        book: &TokenBook,
+    ) -> f64 {
+        let tick_size = self
+            .causal_tick_size_by_condition
+            .entry(condition_id.to_string())
+            .or_insert_with(|| valid_tick_size_or_default(metadata_tick_size));
+        *tick_size = apply_causal_dynamic_tick_transition(*tick_size, book.best_bid, book.best_ask);
+        *tick_size
     }
 
     fn open_exposure(&self) -> f64 {
@@ -796,13 +825,14 @@ impl LiveReplayStrategy {
         token_id: &str,
         now_ts: f64,
         budget_usd: f64,
+        tick_size: f64,
     ) -> Option<BuyBookQuote> {
         let asks = self
             .books
             .get(token_id)
             .filter(|book| now_ts - book.last_update_ts_s <= 30.0)?
             .ask_levels();
-        buy_book_quote_from_budget(budget_usd, &asks, self.min_order_size_shares, DEFAULT_TICK)
+        buy_book_quote_from_budget(budget_usd, &asks, self.min_order_size_shares, tick_size)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -903,6 +933,11 @@ impl Strategy for LiveReplayStrategy {
             return Vec::new();
         };
         let cid = contract.market.condition_id.clone();
+        let causal_tick_size = self.observe_market_tick_size(
+            &cid,
+            contract.market.minimum_tick_size.unwrap_or(DEFAULT_TICK),
+            book,
+        );
         if self.traded.contains(&cid) {
             return Vec::new();
         }
@@ -972,10 +1007,11 @@ impl Strategy for LiveReplayStrategy {
             &contract.down_token_id
         };
         let signal_micro = self.top_microstructure_for_token(signal_token, timestamp_s);
-        let implied_vol = self
+        let observed_vol = self
             .btc_history
             .realized_vol_at((timestamp_s * 1000.0) as i64, 3600.0);
         let variant = &self.replay_strategy.variant;
+        let implied_vol = variant.decision_volatility(observed_vol);
         let used_exposure = self.open_exposure() + self.submitted_exposure();
         let breaker_metrics = self
             .breaker_state
@@ -1071,7 +1107,14 @@ impl Strategy for LiveReplayStrategy {
             estimated_position = estimated_position.min(stress_headroom);
         }
         let taker_quote = (!prefer_maker && estimated_position >= 1.0)
-            .then(|| self.buy_book_quote_for_token(&traded_token, timestamp_s, estimated_position))
+            .then(|| {
+                self.buy_book_quote_for_token(
+                    &traded_token,
+                    timestamp_s,
+                    estimated_position,
+                    causal_tick_size,
+                )
+            })
             .flatten();
         if let Some(quote) = taker_quote {
             if let Err(skip) = decision.reprice_for_taker_execution(
@@ -1100,7 +1143,7 @@ impl Strategy for LiveReplayStrategy {
             }
         }
         let estimated_sizing_price = if prefer_maker {
-            resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+            resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, causal_tick_size)
         } else {
             None
         };
@@ -1175,7 +1218,7 @@ impl Strategy for LiveReplayStrategy {
             return Vec::new();
         }
         if prefer_maker
-            && resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
+            && resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, causal_tick_size)
                 .is_none()
         {
             self.record_skip(
@@ -1251,6 +1294,7 @@ impl Strategy for LiveReplayStrategy {
             implied_vol,
             &micro,
             taker_quote,
+            causal_tick_size,
         ) else {
             return Vec::new();
         };
@@ -1274,6 +1318,7 @@ impl LiveReplayStrategy {
         implied_vol: f64,
         micro: &BookMicrostructure,
         taker_quote: Option<BuyBookQuote>,
+        causal_tick_size: f64,
     ) -> Option<BacktestOrder> {
         let variant = self.replay_strategy.variant.clone();
         let used_exposure = self.open_exposure() + self.submitted_exposure();
@@ -1318,8 +1363,9 @@ impl LiveReplayStrategy {
             breaker_metrics.realized_drawdown_pct,
         );
         let (order_type, limit_price, sizing_price, size) = if prefer_maker {
-            let lp = resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, DEFAULT_TICK)
-                .expect("maker book preflight should run before build_order");
+            let lp =
+                resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, causal_tick_size)
+                    .expect("maker book preflight should run before build_order");
             let Some(size) = shares_from_budget(position, lp, self.min_order_size_shares) else {
                 self.record_skip(
                     timestamp_s,
@@ -1820,5 +1866,59 @@ mod tests {
         );
 
         assert!(replay.needs_l2_history());
+    }
+
+    #[test]
+    fn live_replay_persists_causal_tick_state_per_condition() {
+        let tmp = TempDir::new().unwrap();
+        let monitor = Arc::new(SessionMonitor::open(tmp.path()).unwrap());
+        let variant = StrategyVariant::maker_first();
+        let strategy = ReplayStrategy {
+            strategy_spec: StrategySpec::from_serializable_params(
+                "candle_momentum",
+                "1",
+                &variant,
+                variant.risk_profile(),
+            ),
+            variant,
+            source: "test".to_string(),
+        };
+        let mut replay = LiveReplayStrategy::new(
+            strategy,
+            &CandleUniverse { contracts: vec![] },
+            100.0,
+            80.0,
+            0.0,
+            Arc::new(BTCHistory::new()),
+            monitor,
+            true,
+        );
+        let mut crossed = TokenBook {
+            best_bid: 0.970,
+            best_ask: 0.971,
+            last_update_ts_s: 100.0,
+            ..TokenBook::default()
+        };
+        crossed.asks.insert(971_000_000, 10.0);
+        let normal = TokenBook {
+            best_bid: 0.50,
+            best_ask: 0.51,
+            ..TokenBook::default()
+        };
+
+        assert_eq!(
+            replay.observe_market_tick_size("cid", DEFAULT_TICK, &crossed),
+            0.001
+        );
+        assert_eq!(
+            replay.observe_market_tick_size("cid", DEFAULT_TICK, &normal),
+            0.001
+        );
+        replay.books.insert("token".to_string(), crossed);
+        let quote = replay
+            .buy_book_quote_for_token("token", 100.0, 9.71, 0.001)
+            .expect("causal-tick replay quote");
+        assert_eq!(quote.shares, 10.0);
+        assert!((quote.worst_price - 0.971).abs() < 1e-12);
     }
 }
