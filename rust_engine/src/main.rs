@@ -1146,6 +1146,9 @@ enum StrategyBuilderCommand {
         /// Output provenance manifest JSON.
         #[arg(long)]
         manifest: String,
+        /// Candle market family: btc-5m, eth-5m, sol-5m, xrp-5m, btc-15m, eth-15m.
+        #[arg(long, default_value = "btc-5m")]
+        family: String,
     },
     /// Compile strict outcome-free signal JSONL for one opportunity-table hour.
     OpportunitySignals {
@@ -1167,6 +1170,9 @@ enum StrategyBuilderCommand {
         /// Hard row bound for one compiled hour.
         #[arg(long, default_value_t = 1_000)]
         max_rows: usize,
+        /// Candle market family: btc-5m, eth-5m, sol-5m, xrp-5m, btc-15m, eth-15m.
+        #[arg(long, default_value = "btc-5m")]
+        family: String,
     },
     /// Build an outcome-free cache of both complementary books per opportunity.
     OpportunityPairFeatures {
@@ -3067,7 +3073,16 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             gamma_url,
             output,
             manifest,
+            family,
         } => {
+            let family = match strategy_builder::opportunity_signals::MarketFamily::from_key(&family)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("--family: {e:#}");
+                    std::process::exit(2);
+                }
+            };
             let result = strategy_builder::opportunity_signals::fetch_market_catalog(
                 strategy_builder::opportunity_signals::OpportunityMarketCatalogInput {
                     hours: hour,
@@ -3075,6 +3090,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     gamma_url,
                     output_path: std::path::PathBuf::from(output),
                     manifest_path: std::path::PathBuf::from(manifest),
+                    family,
                 },
             )
             .await;
@@ -3097,7 +3113,16 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             output,
             manifest,
             max_rows,
+            family,
         } => {
+            let family = match strategy_builder::opportunity_signals::MarketFamily::from_key(&family)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("--family: {e:#}");
+                    std::process::exit(2);
+                }
+            };
             let result = strategy_builder::opportunity_signals::create(
                 strategy_builder::opportunity_signals::OpportunitySignalInput {
                     hour,
@@ -3106,6 +3131,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     output_path: std::path::PathBuf::from(output),
                     manifest_path: std::path::PathBuf::from(manifest),
                     max_rows,
+                    family,
                 },
             );
             match result {

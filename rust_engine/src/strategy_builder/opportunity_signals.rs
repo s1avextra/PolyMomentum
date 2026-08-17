@@ -25,6 +25,54 @@ pub const OPPORTUNITY_MARKET_CATALOG_SCHEMA_VERSION: &str =
 const VOLATILITY_LOOKBACK_SECONDS: i64 = 4 * 60 * 60;
 const VOLATILITY_MIN_RETURNS: usize = 20;
 
+/// A Polymarket candle market family the funnel can target. Every family
+/// confirmed live in Gamma on 2026-08-17; the slug pattern is
+/// `<prefix><window_start_epoch>` and windows tile each hour exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarketFamily {
+    pub key: &'static str,
+    pub slug_prefix: &'static str,
+    pub window_seconds: i64,
+}
+
+pub const MARKET_FAMILIES: &[MarketFamily] = &[
+    MarketFamily { key: "btc-5m", slug_prefix: "btc-updown-5m-", window_seconds: 300 },
+    MarketFamily { key: "eth-5m", slug_prefix: "eth-updown-5m-", window_seconds: 300 },
+    MarketFamily { key: "sol-5m", slug_prefix: "sol-updown-5m-", window_seconds: 300 },
+    MarketFamily { key: "xrp-5m", slug_prefix: "xrp-updown-5m-", window_seconds: 300 },
+    MarketFamily { key: "btc-15m", slug_prefix: "btc-updown-15m-", window_seconds: 900 },
+    MarketFamily { key: "eth-15m", slug_prefix: "eth-updown-15m-", window_seconds: 900 },
+];
+
+impl MarketFamily {
+    pub fn from_key(key: &str) -> Result<Self> {
+        MARKET_FAMILIES
+            .iter()
+            .copied()
+            .find(|f| f.key == key)
+            .with_context(|| {
+                let known = MARKET_FAMILIES
+                    .iter()
+                    .map(|f| f.key)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("unknown market family {key:?}; known: {known}")
+            })
+    }
+
+    pub fn windows_per_hour(&self) -> i64 {
+        3600 / self.window_seconds
+    }
+}
+
+impl Default for MarketFamily {
+    /// btc-5m — the historical target; every pre-2026-08-17 artifact was
+    /// produced under it.
+    fn default() -> Self {
+        MARKET_FAMILIES[0]
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OpportunitySignalInput {
     pub hour: String,
@@ -33,6 +81,7 @@ pub struct OpportunitySignalInput {
     pub output_path: PathBuf,
     pub manifest_path: PathBuf,
     pub max_rows: usize,
+    pub family: MarketFamily,
 }
 
 #[derive(Debug, Clone)]
@@ -42,12 +91,17 @@ pub struct OpportunityMarketCatalogInput {
     pub gamma_url: String,
     pub output_path: PathBuf,
     pub manifest_path: PathBuf,
+    pub family: MarketFamily,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpportunityMarketCatalogManifest {
     pub schema_version: String,
     pub generated_at: String,
+    /// Which candle family this catalog targets ("btc-5m", "eth-15m", ...).
+    /// Pre-2026-08-17 manifests lack the field and default to btc-5m.
+    #[serde(default = "default_market_family_key")]
+    pub market_family: String,
     pub requested_hours: Vec<String>,
     pub requested_slugs: usize,
     pub fetched_markets: usize,
@@ -56,6 +110,10 @@ pub struct OpportunityMarketCatalogManifest {
     pub output: HashedSource,
     pub gamma_outcome_prices_retained: bool,
     pub identity_semantics: String,
+}
+
+fn default_market_family_key() -> String {
+    MarketFamily::default().key.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -139,10 +197,17 @@ pub async fn fetch_market_catalog(
         .iter()
         .map(|hour| hour.to_rfc3339_opts(SecondsFormat::Secs, true))
         .collect::<Vec<_>>();
+    let family = input.family;
     let slugs = parsed_hours
         .iter()
         .flat_map(|hour| {
-            (0..12).map(move |index| format!("btc-updown-5m-{}", hour.timestamp() + index * 300))
+            (0..family.windows_per_hour()).map(move |index| {
+                format!(
+                    "{}{}",
+                    family.slug_prefix,
+                    hour.timestamp() + index * family.window_seconds
+                )
+            })
         })
         .collect::<Vec<_>>();
 
@@ -202,6 +267,7 @@ pub async fn fetch_market_catalog(
     let manifest = OpportunityMarketCatalogManifest {
         schema_version: OPPORTUNITY_MARKET_CATALOG_SCHEMA_VERSION.to_string(),
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        market_family: family.key.to_string(),
         requested_hours,
         requested_slugs: slugs.len(),
         fetched_markets,
@@ -229,7 +295,7 @@ pub fn create(input: OpportunitySignalInput) -> Result<OpportunitySignalManifest
     let causal_windows_sha256 = sha256_file(&input.causal_windows_path)?;
     let market_catalog_sha256 = sha256_file(&input.market_catalog_path)?;
     let windows = load_causal_windows(&input.causal_windows_path)?;
-    let markets = load_market_identities(&input.market_catalog_path)?;
+    let markets = load_market_identities(&input.market_catalog_path, input.family)?;
     let sanitized_market_identity_sha256 = stable_json_hash(&markets);
     let signals = compile_signals(hour, &windows, &markets, input.max_rows)?;
     write_jsonl_atomic(&input.output_path, &signals)?;
@@ -374,7 +440,7 @@ fn validate_window(row: &CausalWindow) -> Result<()> {
     Ok(())
 }
 
-fn load_market_identities(path: &Path) -> Result<Vec<MarketIdentity>> {
+fn load_market_identities(path: &Path, family: MarketFamily) -> Result<Vec<MarketIdentity>> {
     let file = File::open(path).with_context(|| format!("open catalog {}", path.display()))?;
     let catalog: BTreeMap<String, GammaMarket> =
         serde_json::from_reader(file).context("parse Gamma market cache")?;
@@ -383,17 +449,18 @@ fn load_market_identities(path: &Path) -> Result<Vec<MarketIdentity>> {
         if key != market.condition_id {
             bail!("Gamma catalog key does not match condition_id");
         }
-        let Some(raw_start) = market.slug.strip_prefix("btc-updown-5m-") else {
+        let Some(raw_start) = market.slug.strip_prefix(family.slug_prefix) else {
             continue;
         };
         let window_start = raw_start
             .parse::<i64>()
             .with_context(|| format!("parse market epoch from {}", market.slug))?;
         let close = parse_timestamp(&market.end_date)?;
-        if close.timestamp() != window_start + 300 {
+        if close.timestamp() != window_start + family.window_seconds {
             bail!(
-                "market {} is not an exact five-minute window",
-                market.condition_id
+                "market {} is not an exact {}-second window",
+                market.condition_id,
+                family.window_seconds,
             );
         }
         let mut up_token_id = None;
@@ -602,9 +669,57 @@ mod tests {
         std::fs::write(&first, serde_json::to_vec(&market(1.0, 0.0)).unwrap()).unwrap();
         std::fs::write(&second, serde_json::to_vec(&market(0.0, 1.0)).unwrap()).unwrap();
         assert_eq!(
-            load_market_identities(&first).unwrap(),
-            load_market_identities(&second).unwrap()
+            load_market_identities(&first, MarketFamily::default()).unwrap(),
+            load_market_identities(&second, MarketFamily::default()).unwrap()
         );
+    }
+
+    #[test]
+    fn family_registry_parses_known_keys_and_rejects_unknown() {
+        for f in MARKET_FAMILIES {
+            let parsed = MarketFamily::from_key(f.key).unwrap();
+            assert_eq!(parsed, *f);
+            assert_eq!(3600 % f.window_seconds, 0, "windows must tile the hour");
+        }
+        assert!(MarketFamily::from_key("doge-2m").is_err());
+        assert_eq!(MarketFamily::default().key, "btc-5m");
+    }
+
+    #[test]
+    fn load_market_identities_filters_by_family_prefix_and_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("catalog.json");
+        // A btc-5m market and an eth-15m market in one catalog: each family
+        // must see only its own, with the correct window-length check.
+        let catalog = serde_json::json!({
+            "0xbtc": {
+                "condition_id": "0xbtc",
+                "slug": "btc-updown-5m-1785585600",
+                "end_date": "2026-08-01T12:05:00Z",
+                "outcomes": [
+                    {"token_id":"u1", "name":"Up", "price":0.5},
+                    {"token_id":"d1", "name":"Down", "price":0.5}
+                ]
+            },
+            "0xeth": {
+                "condition_id": "0xeth",
+                "slug": "eth-updown-15m-1785585600",
+                "end_date": "2026-08-01T12:15:00Z",
+                "outcomes": [
+                    {"token_id":"u2", "name":"Up", "price":0.5},
+                    {"token_id":"d2", "name":"Down", "price":0.5}
+                ]
+            }
+        });
+        std::fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let btc = load_market_identities(&path, MarketFamily::from_key("btc-5m").unwrap()).unwrap();
+        assert_eq!(btc.len(), 1);
+        assert_eq!(btc[0].condition_id, "0xbtc");
+        let eth =
+            load_market_identities(&path, MarketFamily::from_key("eth-15m").unwrap()).unwrap();
+        assert_eq!(eth.len(), 1);
+        assert_eq!(eth[0].condition_id, "0xeth");
+        assert_eq!(eth[0].window_start + 900, parse_timestamp("2026-08-01T12:15:00Z").unwrap().timestamp());
     }
 
     #[test]
