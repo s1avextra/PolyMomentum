@@ -54,3 +54,19 @@ jobs:
       - name: Release build
         working-directory: rust_engine
         run: cargo build --release --locked --bin polymomentum-engine
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Pytest (research loop)
+        run: uv run --group dev pytest tests/ -q
