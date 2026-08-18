@@ -616,6 +616,94 @@ impl ClobClient {
             Err(e) => Err(SubmitOrderError::ambiguous(format!("Request failed: {e}"))),
         }
     }
+
+    /// Cancel one resting order (`DELETE /order`). The transport/venue
+    /// uncertainty split mirrors submission: a definitive venue "not
+    /// canceled" reason is distinguishable from an ambiguous outcome where
+    /// the order may or may not still rest — callers must treat ambiguous
+    /// results as "possibly still live" and reconcile via the user channel
+    /// or REST lookup, never as a completed cancel.
+    ///
+    /// This is the primitive required before `LIVE_ALLOW_MAKER_ORDERS` can
+    /// ever be enabled; the resting-order timeout policy that drives it is
+    /// separate work in the pipeline.
+    pub async fn cancel_order(&mut self, order_id: &str) -> Result<CancelReceipt, SubmitOrderError> {
+        if order_id.trim().is_empty() {
+            return Err(SubmitOrderError::definitive("empty order id".to_string()));
+        }
+        let body = serde_json::to_string(&CancelPayload {
+            order_id: order_id.to_string(),
+        })
+        .map_err(|e| SubmitOrderError::definitive(format!("Serialize cancel: {e}")))?;
+        let headers = self
+            .auth_headers("DELETE", "/order", &body)
+            .map_err(SubmitOrderError::ambiguous)?;
+        let url = format!("{}/order", self.base_url);
+        let mut req = self.client.delete(&url);
+        for (k, v) in &headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        req = req.header("Content-Type", "application/json").body(body);
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    let message = format!("HTTP {}: {}", status, &body[..100.min(body.len())]);
+                    return if status.is_client_error()
+                        && status != reqwest::StatusCode::REQUEST_TIMEOUT
+                        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        Err(SubmitOrderError::definitive(message))
+                    } else {
+                        Err(SubmitOrderError::ambiguous(message))
+                    };
+                }
+                match serde_json::from_str::<CancelResponse>(&body) {
+                    Ok(cancel_resp) => {
+                        if cancel_resp.canceled.iter().any(|id| id == order_id) {
+                            return Ok(CancelReceipt {
+                                order_id: order_id.to_string(),
+                            });
+                        }
+                        if let Some(reason) = cancel_resp.not_canceled.get(order_id) {
+                            return Err(SubmitOrderError::definitive(format!(
+                                "venue refused cancel: {reason}"
+                            )));
+                        }
+                        Err(SubmitOrderError::ambiguous(
+                            "cancel response listed neither canceled nor a refusal reason"
+                                .to_string(),
+                        ))
+                    }
+                    Err(e) => Err(SubmitOrderError::ambiguous(format!("Parse error: {e}"))),
+                }
+            }
+            Err(e) => Err(SubmitOrderError::ambiguous(format!("Request failed: {e}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CancelPayload {
+    #[serde(rename = "orderID")]
+    order_id: String,
+}
+
+/// `DELETE /order` response: ids actually canceled plus per-id refusal
+/// reasons for the rest.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct CancelResponse {
+    #[serde(default)]
+    canceled: Vec<String>,
+    #[serde(default)]
+    not_canceled: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CancelReceipt {
+    pub order_id: String,
 }
 
 fn path_with_query(path: &str, params: &[(&str, &str)]) -> String {
@@ -764,5 +852,30 @@ mod tests {
             expected_order_id: "0xabcd".to_string(),
         };
         assert!(receipt.id_matches_expected());
+    }
+
+    #[test]
+    fn cancel_payload_uses_venue_field_name() {
+        let body = serde_json::to_string(&CancelPayload {
+            order_id: "0xabc".to_string(),
+        })
+        .unwrap();
+        assert_eq!(body, r#"{"orderID":"0xabc"}"#);
+    }
+
+    #[test]
+    fn cancel_response_distinguishes_refusal_from_silence() {
+        let ok: CancelResponse =
+            serde_json::from_str(r#"{"canceled":["0xabc"],"not_canceled":{}}"#).unwrap();
+        assert!(ok.canceled.iter().any(|id| id == "0xabc"));
+
+        let refused: CancelResponse =
+            serde_json::from_str(r#"{"canceled":[],"not_canceled":{"0xabc":"order not found"}}"#)
+                .unwrap();
+        assert_eq!(refused.not_canceled.get("0xabc").unwrap(), "order not found");
+
+        // Neither listed -> the caller must treat the order as possibly live.
+        let silent: CancelResponse = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(silent.canceled.is_empty() && silent.not_canceled.is_empty());
     }
 }

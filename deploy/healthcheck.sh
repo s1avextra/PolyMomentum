@@ -114,8 +114,21 @@ fi
 FLOOR_DIR="${FLOOR_DIR:-$APP_DIR/logs/forward-captures/binary-complement-block1-floor}"
 FLOOR_STATUS="$FLOOR_DIR/floor_collection_status.json"
 RESEARCH_STALL_HOURS="${RESEARCH_STALL_HOURS:-12}"
-if systemctl list-units --state=failed --plain --no-legend 'polymomentum-binary-complement-*' 2>/dev/null | grep -q .; then
-    alert "research_collector_failed" "binary-complement collector unit is in failed state — restart required"
+if systemctl list-units --state=failed --plain --no-legend 'polymomentum-binary-complement-*' 'polymomentum-twap-era-*' 2>/dev/null | grep -q .; then
+    alert "research_collector_failed" "a research capture/collector unit is in failed state — restart required"
+fi
+# Generic capture-progress check: any active capture unit must keep producing
+# artifacts under forward-captures/.
+CAPTURES_ROOT="${CAPTURES_ROOT:-$APP_DIR/logs/forward-captures}"
+if systemctl list-units --state=active --plain --no-legend 'polymomentum-twap-era-*' 'polymomentum-binary-complement-*' 2>/dev/null | grep -q . \
+    && [ -d "$CAPTURES_ROOT" ]; then
+    NEWEST_CAP_TS=$(find "$CAPTURES_ROOT" -mindepth 1 -maxdepth 3 -printf '%T@\n' 2>/dev/null | sort -nr | head -1 | cut -d. -f1)
+    if [ -n "$NEWEST_CAP_TS" ]; then
+        CAP_AGE_H=$(( (now - NEWEST_CAP_TS) / 3600 ))
+        if [ "$CAP_AGE_H" -ge "$RESEARCH_STALL_HOURS" ]; then
+            alert "research_stalled" "a capture unit is active but forward-captures produced no new artifact for ${CAP_AGE_H}h (limit ${RESEARCH_STALL_HOURS}h)"
+        fi
+    fi
 fi
 if [ -f "$FLOOR_STATUS" ] && command -v jq >/dev/null 2>&1; then
     FLOOR_STATE=$(jq -r '.state // empty' "$FLOOR_STATUS" 2>/dev/null)
