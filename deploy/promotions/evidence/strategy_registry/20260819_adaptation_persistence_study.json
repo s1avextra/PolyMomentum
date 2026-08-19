@@ -1,0 +1,4986 @@
+{
+ "schema_version": 1,
+ "registration": "adaptation_persistence_study_20260819",
+ "method": "executed-trade entry proxy (data-api), Binance-1s TWAP labels, fixed calendar hours",
+ "decision_offset_s": 240,
+ "entry_window_s": 30,
+ "study_hours_utc": [
+  1,
+  5,
+  9,
+  13,
+  17,
+  21
+ ],
+ "days": [
+  "2026-08-09",
+  "2026-08-10",
+  "2026-08-11",
+  "2026-08-12",
+  "2026-08-13",
+  "2026-08-14",
+  "2026-08-15",
+  "2026-08-16",
+  "2026-08-17",
+  "2026-08-18"
+ ],
+ "usable_rows": 510,
+ "skipped": {
+  "no_executable_trade_in_entry_window": 183
+ },
+ "per_day_buckets": [
+  {
+   "day": "2026-08-09",
+   "n": 54,
+   "b0.0_0.55": {
+    "n": 16,
+    "wins": 15,
+    "win_rate": 0.9375,
+    "avg_break_even": 0.2785,
+    "point_edge": 0.659,
+    "wilson_lo": 0.7167
+   },
+   "b0.55_0.75": {
+    "n": 2,
+    "wins": 2,
+    "win_rate": 1.0,
+    "avg_break_even": 0.7053,
+    "point_edge": 0.2947,
+    "wilson_lo": 0.3424
+   },
+   "b0.75_0.92": {
+    "n": 10,
+    "wins": 8,
+    "win_rate": 0.8,
+    "avg_break_even": 0.8661,
+    "point_edge": -0.0661,
+    "wilson_lo": 0.4902
+   },
+   "b0.92_1.0": {
+    "n": 26,
+    "wins": 26,
+    "win_rate": 1.0,
+    "avg_break_even": 0.9743,
+    "point_edge": 0.0257,
+    "wilson_lo": 0.8713
+   }
+  },
+  {
+   "day": "2026-08-10",
+   "n": 55,
+   "b0.0_0.55": {
+    "n": 5,
+    "wins": 3,
+    "win_rate": 0.6,
+    "avg_break_even": 0.2684,
+    "point_edge": 0.3316,
+    "wilson_lo": 0.2307
+   },
+   "b0.55_0.75": {
+    "n": 4,
+    "wins": 4,
+    "win_rate": 1.0,
+    "avg_break_even": 0.6849,
+    "point_edge": 0.3151,
+    "wilson_lo": 0.5101
+   },
+   "b0.75_0.92": {
+    "n": 12,
+    "wins": 11,
+    "win_rate": 0.9167,
+    "avg_break_even": 0.8551,
+    "point_edge": 0.0616,
+    "wilson_lo": 0.6461
+   },
+   "b0.92_1.0": {
+    "n": 34,
+    "wins": 34,
+    "win_rate": 1.0,
+    "avg_break_even": 0.976,
+    "point_edge": 0.024,
+    "wilson_lo": 0.8985
+   }
+  },
+  {
+   "day": "2026-08-11",
+   "n": 48,
+   "b0.0_0.55": {
+    "n": 5,
+    "wins": 4,
+    "win_rate": 0.8,
+    "avg_break_even": 0.2873,
+    "point_edge": 0.5127,
+    "wilson_lo": 0.3755
+   },
+   "b0.55_0.75": {
+    "n": 5,
+    "wins": 4,
+    "win_rate": 0.8,
+    "avg_break_even": 0.7267,
+    "point_edge": 0.0733,
+    "wilson_lo": 0.3755
+   },
+   "b0.75_0.92": {
+    "n": 13,
+    "wins": 11,
+    "win_rate": 0.8462,
+    "avg_break_even": 0.883,
+    "point_edge": -0.0369,
+    "wilson_lo": 0.5777
+   },
+   "b0.92_1.0": {
+    "n": 25,
+    "wins": 24,
+    "win_rate": 0.96,
+    "avg_break_even": 0.9798,
+    "point_edge": -0.0198,
+    "wilson_lo": 0.8046
+   }
+  },
+  {
+   "day": "2026-08-12",
+   "n": 50,
+   "b0.0_0.55": {
+    "n": 3,
+    "wins": 2,
+    "win_rate": 0.6667,
+    "avg_break_even": 0.2902,
+    "point_edge": 0.3765,
+    "wilson_lo": 0.2077
+   },
+   "b0.55_0.75": {
+    "n": 6,
+    "wins": 3,
+    "win_rate": 0.5,
+    "avg_break_even": 0.7187,
+    "point_edge": -0.2187,
+    "wilson_lo": 0.1876
+   },
+   "b0.75_0.92": {
+    "n": 14,
+    "wins": 12,
+    "win_rate": 0.8571,
+    "avg_break_even": 0.8581,
+    "point_edge": -0.0009,
+    "wilson_lo": 0.6006
+   },
+   "b0.92_1.0": {
+    "n": 27,
+    "wins": 25,
+    "win_rate": 0.9259,
+    "avg_break_even": 0.9752,
+    "point_edge": -0.0492,
+    "wilson_lo": 0.7663
+   }
+  },
+  {
+   "day": "2026-08-13",
+   "n": 48,
+   "b0.0_0.55": {
+    "n": 5,
+    "wins": 3,
+    "win_rate": 0.6,
+    "avg_break_even": 0.3811,
+    "point_edge": 0.2189,
+    "wilson_lo": 0.2307
+   },
+   "b0.55_0.75": {
+    "n": 5,
+    "wins": 4,
+    "win_rate": 0.8,
+    "avg_break_even": 0.6818,
+    "point_edge": 0.1182,
+    "wilson_lo": 0.3755
+   },
+   "b0.75_0.92": {
+    "n": 10,
+    "wins": 8,
+    "win_rate": 0.8,
+    "avg_break_even": 0.8932,
+    "point_edge": -0.0932,
+    "wilson_lo": 0.4902
+   },
+   "b0.92_1.0": {
+    "n": 28,
+    "wins": 28,
+    "win_rate": 1.0,
+    "avg_break_even": 0.98,
+    "point_edge": 0.02,
+    "wilson_lo": 0.8794
+   }
+  },
+  {
+   "day": "2026-08-14",
+   "n": 49,
+   "b0.0_0.55": {
+    "n": 6,
+    "wins": 3,
+    "win_rate": 0.5,
+    "avg_break_even": 0.2656,
+    "point_edge": 0.2344,
+    "wilson_lo": 0.1876
+   },
+   "b0.55_0.75": {
+    "n": 6,
+    "wins": 4,
+    "win_rate": 0.6667,
+    "avg_break_even": 0.7045,
+    "point_edge": -0.0378,
+    "wilson_lo": 0.3
+   },
+   "b0.75_0.92": {
+    "n": 8,
+    "wins": 8,
+    "win_rate": 1.0,
+    "avg_break_even": 0.8662,
+    "point_edge": 0.1338,
+    "wilson_lo": 0.6756
+   },
+   "b0.92_1.0": {
+    "n": 29,
+    "wins": 27,
+    "win_rate": 0.931,
+    "avg_break_even": 0.9753,
+    "point_edge": -0.0442,
+    "wilson_lo": 0.7804
+   }
+  },
+  {
+   "day": "2026-08-15",
+   "n": 58,
+   "b0.0_0.55": {
+    "n": 12,
+    "wins": 10,
+    "win_rate": 0.8333,
+    "avg_break_even": 0.3482,
+    "point_edge": 0.4852,
+    "wilson_lo": 0.552
+   },
+   "b0.55_0.75": {
+    "n": 6,
+    "wins": 6,
+    "win_rate": 1.0,
+    "avg_break_even": 0.7158,
+    "point_edge": 0.2842,
+    "wilson_lo": 0.6097
+   },
+   "b0.75_0.92": {
+    "n": 10,
+    "wins": 9,
+    "win_rate": 0.9,
+    "avg_break_even": 0.8509,
+    "point_edge": 0.0491,
+    "wilson_lo": 0.5958
+   },
+   "b0.92_1.0": {
+    "n": 30,
+    "wins": 29,
+    "win_rate": 0.9667,
+    "avg_break_even": 0.9745,
+    "point_edge": -0.0078,
+    "wilson_lo": 0.8333
+   }
+  },
+  {
+   "day": "2026-08-16",
+   "n": 59,
+   "b0.0_0.55": {
+    "n": 22,
+    "wins": 18,
+    "win_rate": 0.8182,
+    "avg_break_even": 0.2226,
+    "point_edge": 0.5956,
+    "wilson_lo": 0.6148
+   },
+   "b0.55_0.75": {
+    "n": 0,
+    "wins": 0,
+    "win_rate": null,
+    "avg_break_even": null,
+    "point_edge": null,
+    "wilson_lo": null
+   },
+   "b0.75_0.92": {
+    "n": 3,
+    "wins": 3,
+    "win_rate": 1.0,
+    "avg_break_even": 0.8844,
+    "point_edge": 0.1156,
+    "wilson_lo": 0.4385
+   },
+   "b0.92_1.0": {
+    "n": 34,
+    "wins": 33,
+    "win_rate": 0.9706,
+    "avg_break_even": 0.9816,
+    "point_edge": -0.011,
+    "wilson_lo": 0.8508
+   }
+  },
+  {
+   "day": "2026-08-17",
+   "n": 45,
+   "b0.0_0.55": {
+    "n": 6,
+    "wins": 4,
+    "win_rate": 0.6667,
+    "avg_break_even": 0.2378,
+    "point_edge": 0.4289,
+    "wilson_lo": 0.3
+   },
+   "b0.55_0.75": {
+    "n": 3,
+    "wins": 2,
+    "win_rate": 0.6667,
+    "avg_break_even": 0.6995,
+    "point_edge": -0.0328,
+    "wilson_lo": 0.2077
+   },
+   "b0.75_0.92": {
+    "n": 10,
+    "wins": 8,
+    "win_rate": 0.8,
+    "avg_break_even": 0.8699,
+    "point_edge": -0.0699,
+    "wilson_lo": 0.4902
+   },
+   "b0.92_1.0": {
+    "n": 26,
+    "wins": 25,
+    "win_rate": 0.9615,
+    "avg_break_even": 0.9774,
+    "point_edge": -0.0158,
+    "wilson_lo": 0.8111
+   }
+  },
+  {
+   "day": "2026-08-18",
+   "n": 44,
+   "b0.0_0.55": {
+    "n": 5,
+    "wins": 3,
+    "win_rate": 0.6,
+    "avg_break_even": 0.2054,
+    "point_edge": 0.3946,
+    "wilson_lo": 0.2307
+   },
+   "b0.55_0.75": {
+    "n": 1,
+    "wins": 1,
+    "win_rate": 1.0,
+    "avg_break_even": 0.6566,
+    "point_edge": 0.3434,
+    "wilson_lo": 0.2065
+   },
+   "b0.75_0.92": {
+    "n": 4,
+    "wins": 1,
+    "win_rate": 0.25,
+    "avg_break_even": 0.8661,
+    "point_edge": -0.6161,
+    "wilson_lo": 0.0456
+   },
+   "b0.92_1.0": {
+    "n": 34,
+    "wins": 33,
+    "win_rate": 0.9706,
+    "avg_break_even": 0.9837,
+    "point_edge": -0.0131,
+    "wilson_lo": 0.8508
+   }
+  }
+ ],
+ "fresh_discipline": "Aug 19+ capture remains the untouched fresh source; this study is diagnostic",
+ "rows": [
+  {
+   "window_start": 1786237200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9791725988,
+   "break_even": 0.98064,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786237500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786237800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.2899998666,
+   "break_even": 0.30482,
+   "won": false,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786238100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1299998986,
+   "break_even": 0.13814,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786238700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9988216388,
+   "break_even": 0.99891,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786239000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999951,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786239300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.12,
+   "break_even": 0.1276,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786239600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.2,
+   "break_even": 0.21152,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786239900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.66,
+   "break_even": 0.67616,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786240200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786251600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8299998589,
+   "break_even": 0.84016,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786252500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.2799998432,
+   "break_even": 0.29452,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786252800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7852235528,
+   "break_even": 0.79737,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786253400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.5499999949,
+   "break_even": 0.56782,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786254000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.82,
+   "break_even": 0.83063,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786254300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786254600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786254900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786266000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.969999998,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786266300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.12,
+   "break_even": 0.1276,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786266600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8299999557,
+   "break_even": 0.84016,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786266900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999995,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786267500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786268700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.2899999072,
+   "break_even": 0.30482,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786269000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786269300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9199999816,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786280700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786281000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1899998784,
+   "break_even": 0.20108,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786281300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786281600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786281900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786282200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786282500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8699999913,
+   "break_even": 0.87814,
+   "won": false,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786282800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9859999984,
+   "break_even": 0.98699,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786283100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.29999982,
+   "break_even": 0.31512,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786283400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7799999257,
+   "break_even": 0.79236,
+   "won": false,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786294800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786296000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786296300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.45,
+   "break_even": 0.46782,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786296600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9603959997,
+   "break_even": 0.96313,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786297200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7199999965,
+   "break_even": 0.73452,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786297500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786297800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786309200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786309500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1399998824,
+   "break_even": 0.14867,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786309800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9399999624,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786310100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3499999615,
+   "break_even": 0.36638,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786310400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1299998986,
+   "break_even": 0.13814,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786310700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.26,
+   "break_even": 0.27385,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786311300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.998,
+   "break_even": 0.99814,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786311600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.4499999689,
+   "break_even": 0.46782,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786311900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786312200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999376,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786312500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-09"
+  },
+  {
+   "window_start": 1786323600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786323900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8,
+   "break_even": 0.81152,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786324200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.89,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786324500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786324800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786325100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7299999638,
+   "break_even": 0.74419,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786325400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786325700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786326000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.5872187254,
+   "break_even": 0.60467,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786326300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786326900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786338000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.86,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786338300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786338600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786338900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999951,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786339200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786339500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8799999965,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786340100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9399999962,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786340400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9299999949,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786340700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786341000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786352400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786353300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9199999939,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786353600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786353900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786354500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786354800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786355400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8299999898,
+   "break_even": 0.84016,
+   "won": false,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786355700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8299999975,
+   "break_even": 0.84016,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786367100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.32,
+   "break_even": 0.33567,
+   "won": false,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786368300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9299996438,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786368600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786368900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.08,
+   "break_even": 0.0853,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786369200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786369500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786370100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9599996544,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786381200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786381800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786382700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.43,
+   "break_even": 0.44765,
+   "won": false,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786383000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9878267784,
+   "break_even": 0.98869,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786383300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7899999242,
+   "break_even": 0.80194,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786383600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9399997556,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786383900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786384200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8699999664,
+   "break_even": 0.87814,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786384500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786395900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786396200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786396500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.3399998211,
+   "break_even": 0.35616,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786396800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.61,
+   "break_even": 0.62713,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786397100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9399999962,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786397400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.76,
+   "break_even": 0.77313,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786397700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786398300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9989995517,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786398600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8099999757,
+   "break_even": 0.82108,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786398900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.11,
+   "break_even": 0.11705,
+   "won": true,
+   "day": "2026-08-10"
+  },
+  {
+   "window_start": 1786410000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786410300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999951,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786410600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786411500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.719999856,
+   "break_even": 0.73452,
+   "won": false,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786411800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786412400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786412700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786413000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9899998099,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786413300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786424400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8699999983,
+   "break_even": 0.87814,
+   "won": false,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786424700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.889999911,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786425000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.83,
+   "break_even": 0.84016,
+   "won": false,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786425300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786425600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786426200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786426500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786427100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.32,
+   "break_even": 0.33567,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786427400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786427700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9099997513,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786439400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1855,
+   "break_even": 0.19638,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786440000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786440300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.0699999363,
+   "break_even": 0.07469,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786440900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.76,
+   "break_even": 0.77313,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786441500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786441800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.78,
+   "break_even": 0.79236,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786453500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786454400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786454700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786455000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.73,
+   "break_even": 0.74419,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786455300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7,
+   "break_even": 0.71512,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786455600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786456200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786467600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.2868516249,
+   "break_even": 0.30158,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786467900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.969999998,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786468500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.68,
+   "break_even": 0.69567,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786468800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786469100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.5099999987,
+   "break_even": 0.52799,
+   "won": false,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786469700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999879,
+   "break_even": 0.9721,
+   "won": false,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786470600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786470900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.87,
+   "break_even": 0.87814,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786483200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786483500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7299999794,
+   "break_even": 0.74419,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786483800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786484100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786484400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786484700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786485000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786485300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-11"
+  },
+  {
+   "window_start": 1786496400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786496700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9138559244,
+   "break_even": 0.91952,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786497300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786497600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786498200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786498500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786498800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786499100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786499700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999972,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786510800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786511100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8799995072,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786511700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786512000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.88,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786512600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786513200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3799999012,
+   "break_even": 0.39696,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786513800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786525200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.67,
+   "break_even": 0.68592,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786525800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8799999707,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786526100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786526400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1199999797,
+   "break_even": 0.1276,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786527000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786527300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786527600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.85,
+   "break_even": 0.85918,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786527900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786539600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786539900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.88,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786540500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786540800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786541100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786542000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7399999457,
+   "break_even": 0.75385,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786542300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786542900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.6723266667,
+   "break_even": 0.68819,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786554000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786554300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786554600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7799999766,
+   "break_even": 0.79236,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786555500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.78,
+   "break_even": 0.79236,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786555800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786557000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7531057086,
+   "break_even": 0.76649,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786557300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3299999296,
+   "break_even": 0.34592,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786568400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7,
+   "break_even": 0.71512,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786568700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786569000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786569300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9399999624,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786569600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.6899999952,
+   "break_even": 0.7054,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786569900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786570200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.84,
+   "break_even": 0.84968,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786570500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": false,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786570800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.76,
+   "break_even": 0.77313,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786571100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8599999656,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786571400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-12"
+  },
+  {
+   "window_start": 1786582800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786583100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.34,
+   "break_even": 0.35616,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786583400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786584300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8799999648,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786584600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786584900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786585500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786586100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786597200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786597800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786598400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8599999986,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786598700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.84,
+   "break_even": 0.84968,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786611600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786612200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999995,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786612500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786614000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786614300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786614600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786614900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786626600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786626900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786627500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.51,
+   "break_even": 0.52799,
+   "won": false,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786627800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786628100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786628400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.69,
+   "break_even": 0.7054,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786628700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.5899998466,
+   "break_even": 0.60742,
+   "won": false,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786629300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786640400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9599998618,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786640700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.66,
+   "break_even": 0.67616,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786641000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786641300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3599998704,
+   "break_even": 0.37659,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786641600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786641900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786642200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786642500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786642800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786643100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.449999955,
+   "break_even": 0.46782,
+   "won": false,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786643700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.969999996,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786655100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9199999977,
+   "break_even": 0.9253,
+   "won": false,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786655400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9299999986,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786655700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.889999911,
+   "break_even": 0.89705,
+   "won": false,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786656000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1671200456,
+   "break_even": 0.17714,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786656300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786656600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786657200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786657500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.64,
+   "break_even": 0.65659,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786657800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786658100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8099999931,
+   "break_even": 0.82108,
+   "won": true,
+   "day": "2026-08-13"
+  },
+  {
+   "window_start": 1786669200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9036742785,
+   "break_even": 0.90994,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786669800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.24,
+   "break_even": 0.25313,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786671000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.6250219726,
+   "break_even": 0.6419,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786671300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786671900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8599999986,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786672200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.73055576,
+   "break_even": 0.74473,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786683600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786684200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1499999318,
+   "break_even": 0.15918,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786684500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786685400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786685700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.929999995,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786686000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7769714286,
+   "break_even": 0.78945,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786686300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9899999486,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786686600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.73,
+   "break_even": 0.74419,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786686900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.919999919,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786698300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786698600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786698900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786699200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786699800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999942,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786700100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786700400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1,
+   "break_even": 0.10648,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786700700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786701000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9409401649,
+   "break_even": 0.94494,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786701300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786712700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786713300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786713600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786714500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786714800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.6,
+   "break_even": 0.61728,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786715100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.4399999824,
+   "break_even": 0.45774,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786715400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8099999977,
+   "break_even": 0.82108,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786715700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786726800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.88,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786727100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786727400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786728000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786728300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786728600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.809999991,
+   "break_even": 0.82108,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786729500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786741200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786741800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9399999996,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786742100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.699999993,
+   "break_even": 0.71512,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786742400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1499999684,
+   "break_even": 0.15918,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786742700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.4399999898,
+   "break_even": 0.45774,
+   "won": false,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786743000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9399999962,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786743300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786743900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786744200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-14"
+  },
+  {
+   "window_start": 1786755600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786755900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": false,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786756200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.5,
+   "break_even": 0.518,
+   "won": false,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786756500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.86,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786756800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786757100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.44,
+   "break_even": 0.45774,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786757400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9601143939,
+   "break_even": 0.96287,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786757700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.21,
+   "break_even": 0.22194,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786758000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8,
+   "break_even": 0.81152,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786758300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786758600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.5099998317,
+   "break_even": 0.52799,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786758900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9030231628,
+   "break_even": 0.90933,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786770000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786770300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786770600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786770900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7363184026,
+   "break_even": 0.7503,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786771500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786771800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7299999841,
+   "break_even": 0.74419,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786772100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786772400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786773000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.23,
+   "break_even": 0.24275,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786773300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786784400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786785300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786785600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786785900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786786200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786786800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9899992062,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786787400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.925311,
+   "break_even": 0.93029,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786787700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9399999624,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786798800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8399999395,
+   "break_even": 0.84968,
+   "won": false,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786799400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.0815101289,
+   "break_even": 0.0869,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786799700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786800000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.919999996,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786800300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.5,
+   "break_even": 0.518,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786800600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8899999975,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786800900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3699999563,
+   "break_even": 0.38678,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786801200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786801500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.13,
+   "break_even": 0.13814,
+   "won": false,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786801800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.75,
+   "break_even": 0.7635,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786802100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9357282722,
+   "break_even": 0.94006,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786813200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.2106964883,
+   "break_even": 0.22267,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786813500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3921568627,
+   "break_even": 0.40932,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786814100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.89,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786814400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786814700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9299997117,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786815000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.5599999507,
+   "break_even": 0.57774,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786815900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.4299999871,
+   "break_even": 0.44765,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786816200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7624418224,
+   "break_even": 0.77548,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786816500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786828200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786829100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786829400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786829700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786830000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786830300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.77,
+   "break_even": 0.78275,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786830600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7799999984,
+   "break_even": 0.79236,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786830900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.68,
+   "break_even": 0.69567,
+   "won": true,
+   "day": "2026-08-15"
+  },
+  {
+   "window_start": 1786842000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786842300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.49,
+   "break_even": 0.50799,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786842600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786842900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786843200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786843500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786843800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.25,
+   "break_even": 0.2635,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786844100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786844400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999942,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786844700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.06,
+   "break_even": 0.06406,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786845300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1399998824,
+   "break_even": 0.14867,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786856400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.929999998,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786856700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.2360513644,
+   "break_even": 0.24904,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786857600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1099999032,
+   "break_even": 0.11705,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786857900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.0695652174,
+   "break_even": 0.07423,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786858200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.07,
+   "break_even": 0.07469,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786858500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999981,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786858800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786859100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8799999965,
+   "break_even": 0.8876,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786859400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786859700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786870800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.3648894809,
+   "break_even": 0.38158,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786871700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786872000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.94,
+   "break_even": 0.94406,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786872300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786872900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.03,
+   "break_even": 0.0321,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786873500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1199998992,
+   "break_even": 0.1276,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786873800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786874100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786885200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1899999637,
+   "break_even": 0.20108,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786885500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.997999808,
+   "break_even": 0.99814,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786885800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786886100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786886400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.859999914,
+   "break_even": 0.86867,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786886700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.2299999396,
+   "break_even": 0.24275,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786887000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786887300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9979999338,
+   "break_even": 0.99814,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786887600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786887900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.4399998064,
+   "break_even": 0.45774,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786888500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786899900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.02,
+   "break_even": 0.02141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786900800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1699999139,
+   "break_even": 0.18016,
+   "won": false,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786901100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786901700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.998,
+   "break_even": 0.99814,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786902300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786902600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786902900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9799999935,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786914000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1326720455,
+   "break_even": 0.14096,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786914300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8899999555,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786914600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.36,
+   "break_even": 0.37659,
+   "won": false,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786914900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786915200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786915500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3099999364,
+   "break_even": 0.3254,
+   "won": false,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786915800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3076923077,
+   "break_even": 0.32303,
+   "won": false,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786916100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786916400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.997,
+   "break_even": 0.99722,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786916700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": false,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786917000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.39,
+   "break_even": 0.40713,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786917300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.17,
+   "break_even": 0.18016,
+   "won": true,
+   "day": "2026-08-16"
+  },
+  {
+   "window_start": 1786928700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786929000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.79,
+   "break_even": 0.80194,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786929300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.17,
+   "break_even": 0.18016,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786929900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8499999248,
+   "break_even": 0.85918,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786930200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786930500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8199999734,
+   "break_even": 0.83063,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786930800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7,
+   "break_even": 0.71512,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786931100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.14,
+   "break_even": 0.14867,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786931700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786942800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.7399999886,
+   "break_even": 0.75385,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786943700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786944600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.7948046889,
+   "break_even": 0.80655,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786944900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786945200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.92,
+   "break_even": 0.9253,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786945500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786946100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786957200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.93,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786957500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786957800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786959300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786959600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786959900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786960500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.32,
+   "break_even": 0.33567,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786971900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.97,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786972200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699999981,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786972800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786973100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786973400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.998,
+   "break_even": 0.99814,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786973700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.89,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786974000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.612289782,
+   "break_even": 0.62938,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786974300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8599997543,
+   "break_even": 0.86867,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786974600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9699999981,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786974900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9699998332,
+   "break_even": 0.9721,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786986000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.8899999858,
+   "break_even": 0.89705,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786986300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1786989000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.11,
+   "break_even": 0.11705,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787000400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.5099998317,
+   "break_even": 0.52799,
+   "won": false,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787000700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.11,
+   "break_even": 0.11705,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787001600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787001900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787002200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787002500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9223807692,
+   "break_even": 0.92754,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787002800,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787003100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787003700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-17"
+  },
+  {
+   "window_start": 1787015700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787016000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787016300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787016600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787016900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787018100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.96,
+   "break_even": 0.96276,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787029200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787029800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787030100,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.31,
+   "break_even": 0.3254,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787030400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.95,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787030700,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.3022222222,
+   "break_even": 0.31741,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787031300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787031900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787032200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.1499999723,
+   "break_even": 0.15918,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787032500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.8099999741,
+   "break_even": 0.82108,
+   "won": false,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787043900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.949999962,
+   "break_even": 0.95342,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787044200,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9299999843,
+   "break_even": 0.93469,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787044500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787044800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787045100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.0636363069,
+   "break_even": 0.06793,
+   "won": false,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787045400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": false,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787045700,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787046300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787046600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.81,
+   "break_even": 0.82108,
+   "won": false,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787046900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787058300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.1481615978,
+   "break_even": 0.15725,
+   "won": false,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787058600,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787058900,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.999,
+   "break_even": 0.99907,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787059500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9751194991,
+   "break_even": 0.97687,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787060400,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.64,
+   "break_even": 0.65659,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787061000,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787073000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787073300,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787073900,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787074200,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.98,
+   "break_even": 0.98141,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787074500,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9909999976,
+   "break_even": 0.99164,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787075400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787087400,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787088000,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787088300,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.9318953664,
+   "break_even": 0.93646,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787088600,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787089500,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.99,
+   "break_even": 0.99071,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787089800,
+   "status": "ok",
+   "signal": "down",
+   "entry_executed_price": 0.9,
+   "break_even": 0.90648,
+   "won": true,
+   "day": "2026-08-18"
+  },
+  {
+   "window_start": 1787090100,
+   "status": "ok",
+   "signal": "up",
+   "entry_executed_price": 0.91,
+   "break_even": 0.9159,
+   "won": false,
+   "day": "2026-08-18"
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-19T05:02:43.403100+00:00",
+  "updated_at": "2026-08-19T05:44:33.772566+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -128,6 +128,38 @@
           ],
           "notes": [
             "Raw capture frames remain rule-agnostic and valid; only alignment verdicts fail under the old model. Watchdog and restart-on-failure added 2026-08-17 remain in place for the successor collection."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "cheap_side_twap_v1",
+      "version_id": "sv_42c7693b554ee030",
+      "parent_id": "partial_twap_lock_v2",
+      "status": "candidate",
+      "reason": "First candidate-status entry in registry history. 10-day executed-trade reconstruction of the PMXT gap (public Gamma closed-market identity + data-api trade prints + Binance-1s TWAP labels): cheap-bucket (ask<=0.55) signal-side entries at the 240s decision show n=85, WR 76.5%, break-even 27.2%, point edge +0.493, Wilson edge +0.392, positive EVERY day Aug 9-18 with no adaptation decay. Clears the power-corrected discovery gate ~30x over. NOT promoted: one-shot fresh gate on untouched Aug 19+ capture data (>=40 selected entries), exact L2 replay at measured latency, and Chainlink parity remain ahead.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260819_adaptation_persistence_study.json",
+        "deploy/promotions/evidence/strategy_registry/20260819_cheap_side_twap_v1_preregistration.md"
+      ],
+      "notes": [
+        "Fresh-gate mechanics: opportunity-fresh-gate with consumed marker; terminal rule fail->tombstone, no retuning. Economics/capacity study is a promotion prerequisite."
+      ],
+      "first_seen_at": "2026-08-19T05:44:33.772566+00:00",
+      "updated_at": "2026-08-19T05:44:33.772566+00:00",
+      "events": [
+        {
+          "at": "2026-08-19T05:44:33.772566+00:00",
+          "status": "candidate",
+          "reason": "First candidate-status entry in registry history. 10-day executed-trade reconstruction of the PMXT gap (public Gamma closed-market identity + data-api trade prints + Binance-1s TWAP labels): cheap-bucket (ask<=0.55) signal-side entries at the 240s decision show n=85, WR 76.5%, break-even 27.2%, point edge +0.493, Wilson edge +0.392, positive EVERY day Aug 9-18 with no adaptation decay. Clears the power-corrected discovery gate ~30x over. NOT promoted: one-shot fresh gate on untouched Aug 19+ capture data (>=40 selected entries), exact L2 replay at measured latency, and Chainlink parity remain ahead.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260819_adaptation_persistence_study.json",
+            "deploy/promotions/evidence/strategy_registry/20260819_cheap_side_twap_v1_preregistration.md"
+          ],
+          "notes": [
+            "Fresh-gate mechanics: opportunity-fresh-gate with consumed marker; terminal rule fail->tombstone, no retuning. Economics/capacity study is a promotion prerequisite."
           ]
         }
       ]
