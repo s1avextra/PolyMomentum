@@ -13,6 +13,8 @@ use crate::strategy::momentum::MomentumSignal;
 use crate::sweep::strategy::Strategy;
 use crate::sweep::SweepRun;
 
+const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+
 #[derive(Debug, Clone)]
 pub struct EvaluationRow {
     pub ts_ms: i64,
@@ -30,6 +32,10 @@ pub struct EvaluationRow {
     pub open_price: f64,
     pub up_price: f64,
     pub down_price: f64,
+    pub book_spread: f64,
+    pub book_bid_depth: f64,
+    pub book_ask_depth: f64,
+    pub book_pressure: f64,
     pub implied_vol: f64,
     pub cross_boost: f64,
 }
@@ -39,7 +45,11 @@ impl EvaluationRow {
         Some(Self {
             ts_ms: v.get("ts_ms")?.as_i64()?,
             cid: v.get("cid")?.as_str()?.to_string(),
-            asset: v.get("asset").and_then(|x| x.as_str()).unwrap_or("BTC").to_string(),
+            asset: v
+                .get("asset")
+                .and_then(|x| x.as_str())
+                .unwrap_or("BTC")
+                .to_string(),
             direction: v.get("dir")?.as_str()?.to_string(),
             confidence: v.get("conf")?.as_f64()?,
             z_score: v.get("z")?.as_f64()?,
@@ -52,6 +62,19 @@ impl EvaluationRow {
             open_price: v.get("open").and_then(|x| x.as_f64()).unwrap_or(0.0),
             up_price: v.get("up_price").and_then(|x| x.as_f64()).unwrap_or(0.5),
             down_price: v.get("down_price").and_then(|x| x.as_f64()).unwrap_or(0.5),
+            book_spread: v.get("book_spread").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            book_bid_depth: v
+                .get("book_bid_depth")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
+            book_ask_depth: v
+                .get("book_ask_depth")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
+            book_pressure: v
+                .get("book_pressure")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
             implied_vol: v.get("implied_vol").and_then(|x| x.as_f64()).unwrap_or(0.5),
             cross_boost: v.get("cross_boost").and_then(|x| x.as_f64()).unwrap_or(0.0),
         })
@@ -74,6 +97,11 @@ impl EvaluationRow {
             open_price: self.open_price,
             z_score: self.z_score,
             reversion_count: 0,
+            directional_impulse_10s_bps: None,
+            article_path_2m: None,
+            article_path_3m: None,
+            article_path_4m: None,
+            article_move_2m_usd: None,
         }
     }
 }
@@ -91,12 +119,32 @@ pub struct ResolutionRow {
     pub close_btc: f64,
 }
 
+struct ReplayCandidate<'a> {
+    entry: &'a EvaluationRow,
+    resolution: &'a ResolutionRow,
+    zone: String,
+}
+
+struct OpenReplayPosition {
+    close_ts_ms: i64,
+    exposure: f64,
+    pnl: f64,
+}
+
 impl ResolutionRow {
     pub fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
             cid: v.get("cid")?.as_str()?.to_string(),
-            predicted: v.get("predicted").and_then(|x| x.as_str()).unwrap_or("up").to_string(),
-            actual: v.get("actual").and_then(|x| x.as_str()).unwrap_or("up").to_string(),
+            predicted: v
+                .get("predicted")
+                .and_then(|x| x.as_str())
+                .unwrap_or("up")
+                .to_string(),
+            actual: v
+                .get("actual")
+                .and_then(|x| x.as_str())
+                .unwrap_or("up")
+                .to_string(),
             won: v.get("won").and_then(|x| x.as_bool()).unwrap_or(false),
             open_btc: v.get("open_btc").and_then(|x| x.as_f64()).unwrap_or(0.0),
             close_btc: v.get("close_btc").and_then(|x| x.as_f64()).unwrap_or(0.0),
@@ -109,6 +157,8 @@ pub fn run_strategy(
     resolutions: &[ResolutionRow],
     strat: &Strategy,
     bankroll_usd: f64,
+    position_pct: f64,
+    max_per_market_usd: f64,
 ) -> SweepRun {
     // Group evaluations by cid in time order.
     let mut by_cid: HashMap<String, Vec<&EvaluationRow>> = HashMap::new();
@@ -129,9 +179,12 @@ pub fn run_strategy(
 
     let mut run = SweepRun {
         strategy_name: strat.name.clone(),
+        position_pct,
+        max_per_market_usd,
         ..Default::default()
     };
     let mut total_entry_price = 0.0;
+    let mut candidates: Vec<ReplayCandidate<'_>> = Vec::new();
 
     for (cid, evals) in by_cid.iter() {
         // Find the first evaluation that would trade under this strategy.
@@ -155,6 +208,9 @@ pub fn run_strategy(
                 e.cross_boost,
             );
             if let DecisionResult::Trade(decision) = res {
+                if !logged_microstructure_passes(e, strat) {
+                    continue;
+                }
                 hit = Some((e, decision.zone));
                 break;
             }
@@ -168,10 +224,44 @@ pub fn run_strategy(
             continue;
         };
 
-        // Position sizing — same shape as the live pipeline.
-        let position_pct = 0.10_f64;
-        let max_per_market = 20.0_f64;
-        let position = (bankroll_usd * position_pct).min(max_per_market);
+        candidates.push(ReplayCandidate {
+            entry,
+            resolution,
+            zone,
+        });
+    }
+    candidates.sort_by_key(|c| c.entry.ts_ms);
+
+    let mut realized_for_sizing = 0.0;
+    let mut locked_exposure = 0.0;
+    let mut open_positions: Vec<OpenReplayPosition> = Vec::new();
+
+    for candidate in candidates {
+        let entry = candidate.entry;
+        let resolution = candidate.resolution;
+        let zone = candidate.zone;
+        let entry_ts_ms = entry.ts_ms;
+        let mut still_open = Vec::with_capacity(open_positions.len());
+        for pos in open_positions.drain(..) {
+            if pos.close_ts_ms <= entry_ts_ms {
+                locked_exposure = (locked_exposure - pos.exposure).max(0.0);
+                realized_for_sizing += pos.pnl;
+            } else {
+                still_open.push(pos);
+            }
+        }
+        open_positions = still_open;
+
+        // Position sizing — same cash-locking shape as the live pipeline.
+        let active_bankroll = (bankroll_usd + realized_for_sizing).max(0.0);
+        let exposure_cap = active_bankroll * DEFAULT_EXPOSURE_RATIO;
+        let available = (exposure_cap - locked_exposure).max(0.0);
+        let position = (active_bankroll * position_pct)
+            .min(max_per_market_usd)
+            .min(available);
+        if position < 1.0 {
+            continue;
+        }
         let market_price = if entry.direction == "up" {
             entry.up_price
         } else {
@@ -187,6 +277,15 @@ pub fn run_strategy(
         } else {
             -fill.fill_price * fill.shares - fill.fee
         };
+        let exposure = fill.fill_price * fill.shares + fill.fee;
+        locked_exposure += exposure;
+        let close_ts_ms =
+            entry.ts_ms + (entry.minutes_remaining.max(0.0) * 60_000.0).round() as i64;
+        open_positions.push(OpenReplayPosition {
+            close_ts_ms,
+            exposure,
+            pnl,
+        });
 
         // Aggregate
         run.trades += 1;
@@ -228,6 +327,20 @@ pub fn run_strategy(
     run
 }
 
+fn logged_microstructure_passes(entry: &EvaluationRow, strat: &Strategy) -> bool {
+    let cfg = strat.microstructure;
+    if !cfg.is_active() {
+        return true;
+    }
+    if entry.book_spread > cfg.max_spread {
+        return false;
+    }
+    if entry.book_bid_depth.min(entry.book_ask_depth) < cfg.min_book_depth {
+        return false;
+    }
+    entry.book_pressure >= cfg.min_book_pressure
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,12 +356,16 @@ mod tests {
             consistency: 0.8,
             price_change: 100.0,
             price_change_pct: 0.001,
-            minutes_elapsed: 4.95,
-            minutes_remaining: 0.05,
+            minutes_elapsed: 14.6,
+            minutes_remaining: 0.4,
             current_price: 70_500.0,
             open_price: 70_000.0,
             up_price: 0.30,
             down_price: 0.70,
+            book_spread: 0.01,
+            book_bid_depth: 100.0,
+            book_ask_depth: 100.0,
+            book_pressure: 0.0,
             implied_vol: 0.5,
             cross_boost: 0.0,
         }
@@ -268,7 +385,7 @@ mod tests {
     #[test]
     fn empty_inputs_produce_zero_trades() {
         let strat = crate::sweep::strategy::baseline();
-        let run = run_strategy(&[], &[], &strat, 100.0);
+        let run = run_strategy(&[], &[], &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
     }
 
@@ -277,7 +394,7 @@ mod tests {
         let evals = vec![mk_eval("c1", 1, 0.75, 2.0, "up")];
         let res = vec![mk_res("c1", "up")];
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 1);
         assert_eq!(run.wins, 1);
         assert!(run.realized_pnl > 0.0);
@@ -289,7 +406,7 @@ mod tests {
         let evals = vec![mk_eval("missing", 1, 0.75, 2.0, "up")];
         let res = vec![];
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 0);
     }
 
@@ -298,9 +415,42 @@ mod tests {
         let evals = vec![mk_eval("c1", 1, 0.75, 2.0, "up")];
         let res = vec![mk_res("c1", "down")]; // we predicted up, actual down → loss
         let strat = crate::sweep::strategy::terminal_only();
-        let run = run_strategy(&evals, &res, &strat, 100.0);
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
         assert_eq!(run.trades, 1);
         assert_eq!(run.losses, 1);
         assert!(run.realized_pnl < 0.0);
+    }
+
+    #[test]
+    fn logged_microstructure_gate_can_skip_trade() {
+        let evals = vec![EvaluationRow {
+            book_spread: 0.05,
+            book_bid_depth: 100.0,
+            book_ask_depth: 100.0,
+            book_pressure: 0.5,
+            ..mk_eval("c1", 1, 0.75, 2.0, "up")
+        }];
+        let res = vec![mk_res("c1", "up")];
+        let mut strat = crate::sweep::strategy::ev_off();
+        strat.microstructure.max_spread = 0.02;
+        let run = run_strategy(&evals, &res, &strat, 100.0, 0.10, 20.0);
+        assert_eq!(run.trades, 0);
+    }
+
+    #[test]
+    fn replay_sizing_locks_capital_until_resolution() {
+        let evals = vec![
+            mk_eval("c1", 1, 0.75, 2.0, "up"),
+            mk_eval("c2", 1, 0.75, 2.0, "up"),
+            mk_eval("c3", 30_001, 0.75, 2.0, "up"),
+        ];
+        let res = vec![mk_res("c1", "up"), mk_res("c2", "up"), mk_res("c3", "up")];
+        let strat = crate::sweep::strategy::terminal_only();
+
+        let run = run_strategy(&evals, &res, &strat, 10.0, 1.0, 20.0);
+
+        assert_eq!(run.trades, 2);
+        assert_eq!(run.wins, 2);
+        assert!(run.realized_pnl > 0.0);
     }
 }

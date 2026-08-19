@@ -2,7 +2,7 @@
 
 Single-strategy bot trading **"Up or Down" 5/15-min crypto candle markets on Polymarket**, written in Rust. Multi-exchange momentum signal → BS-binary fair-value mispricing → CLOB execution.
 
-> **Status (2026-04-26):** Rust port complete. The Python implementation has been removed. Paper mode is production-ready and reaches 0.4-0.9 ms per cycle on a single binary. Live execution is wired through EIP-712 signed CLOB orders but gated behind `--i-understand-live`. Wallet ($6.03 USDC.e + ~5.37 POL) untouched throughout the port.
+> **Status (2026-07-14):** Rust-only engine. Offline execution, inventory, preflight, diagnostics, and strategy-builder gates are strong, but no strategy registry entry is live-ready. Live trading remains fail-closed behind explicit preflight, CLOB v2, reconciliation, wallet, and operator confirmation gates.
 
 ## What it does
 
@@ -13,9 +13,9 @@ For each active candle window:
 3. **Detect momentum** via `MomentumDetector`: z-score of the move from window-open against EWMA fast/slow realized vol, weighted with consistency + reversion penalty.
 4. **Compute BS fair value** of the binary "above strike" using observed Deribit IV + window time-to-expiry.
 5. **Decide** through `decide_candle_trade`: 4-zone gates (early / primary / late / terminal) with independent confidence/z/edge thresholds, dead-zone filter, entry-price EV gate, and an `edge_cap` brake against stale-data signals (relaxed in terminal zone).
-6. **Hold to resolution**, mark won/lost vs our BTC tape, and cross-check against Polymarket's on-chain CTF resolution (UMA's optimistic oracle).
+6. **Hold to resolution**, mark won/lost vs our BTC tape, and cross-check against Polymarket's on-chain CTF resolution.
 
-Zone gates split the window into bands with independent thresholds. The post-audit reality is that **only terminal-zone (last 5%) entries showed profit** in our backtests; the other zones are break-even or losing.
+Zone gates split the window into bands with independent thresholds. Current registry evidence is fail-closed: tail-guard and primary-only challengers are useful research hypotheses, but none has passed full chronological, tail-risk, and freshest-window promotion gates.
 
 ## Layout
 
@@ -23,8 +23,9 @@ Zone gates split the window into bands with independent thresholds. The post-aud
 PolyMomentum/
 ├── rust_engine/             # the entire bot
 │   ├── src/
-│   │   ├── main.rs          # clap subcommand dispatch
+│   │   ├── main.rs          # CLI parsing and command orchestration
 │   │   ├── lib.rs           # module re-exports
+│   │   ├── strategy_builder.rs # replay-first strategy research and promotion gates
 │   │   ├── config.rs        # env-driven Settings
 │   │   ├── data/            # gamma client, scanner, ctf reader, wallet, models
 │   │   ├── strategy/        # momentum detector, decide_candle_trade
@@ -46,11 +47,16 @@ PolyMomentum/
 
 ## Subcommands
 
+Run `polymomentum-engine --help` or `polymomentum-engine <command> --help` for the
+complete, authoritative command surface. Primary operational commands include:
+
 ```bash
 polymomentum-engine live --mode paper           # main runtime (default)
-polymomentum-engine live --mode live --i-understand-live   # real money
+polymomentum-engine preflight --mode paper      # startup/deploy checks
+polymomentum-engine release-manifest --mode paper
+polymomentum-engine live --mode live --i-understand-live   # real money; also requires VENUE/compliance env
 polymomentum-engine scan                        # Gamma + scanner smoke test
-polymomentum-engine wallet                      # USDC.e + POL balances
+polymomentum-engine wallet                      # pUSD/USDC diagnostics + POL balance
 polymomentum-engine ctf <condition_id>          # on-chain CTF resolution read
 polymomentum-engine validate-replay <session.jsonl>   # parity check
 ```
@@ -68,9 +74,9 @@ ssh vps 'journalctl -u polymomentum-engine -f -n 5 | grep candle.cycle'
 ssh vps 'journalctl -u polymomentum-engine | grep -E "candle.trade|candle.resolved"'
 
 # Kill switch (halts trading within ~100ms)
-ssh vps 'touch /tmp/polymomentum/KILL'
+ssh vps 'sudo touch /opt/polymomentum/KILL'
 # resume:
-ssh vps 'rm /tmp/polymomentum/KILL && \
+ssh vps 'sudo rm /opt/polymomentum/KILL && \
          sqlite3 /opt/polymomentum/logs/candle/state.db \
                  "DELETE FROM meta WHERE key=\"candle_breaker_tripped\"" && \
          systemctl restart polymomentum-engine'
@@ -78,10 +84,9 @@ ssh vps 'rm /tmp/polymomentum/KILL && \
 # Deploy (build, ship, restart) — paper mode default
 bash deploy/deploy.sh vps --enable-service --mode paper
 
-# Switch to live (real money) without redeploying
-ssh vps 'sudo sed -i "s/--mode paper/--mode live --i-understand-live/" \
-            /etc/systemd/system/polymomentum-engine.service && \
-         sudo systemctl daemon-reload && sudo systemctl restart polymomentum-engine'
+# Live deployment is intentionally fail-closed. Do not sed the unit by hand:
+# configure VENUE/OPERATOR_COUNTRY/compliance env first, then redeploy.
+bash deploy/deploy.sh vps --enable-service --mode live --i-understand-live
 ```
 
 ## Replay-grade data collection
@@ -104,17 +109,19 @@ Exit 0 = clean, 1 = decision drift.
 
 ```bash
 cd rust_engine
-cargo test                # 51 unit tests
-cargo build --release     # ./target/release/polymomentum-engine
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked       # full library and CLI suite
+cargo build --release --locked --bin polymomentum-engine
 ```
 
 ## Multibot etiquette
 
-PolyMomentum shares the VPS (`193.24.234.202`, alias `vps`) with **adgts** (XRP/USDT futures grid, port 9092) and **polyarbitrage** (port 127.0.0.1:9090). Don't touch their `/opt/<name>`, `/etc/<name>`, or systemd units. Coexistence caps applied via `polymomentum-engine.service`: `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`. Use `nice -n 10 cargo build --release` for builds on the VPS. See [docs/cross_bot_note_mexc_hardening.md](docs/cross_bot_note_mexc_hardening.md) for the cross-Claude coordination protocol.
+PolyMomentum shares the VPS (`193.24.234.202`, alias `vps`) with **adgts** (XRP/USDT futures grid, port 9092) and **polyarbitrage** (port 127.0.0.1:9090). Don't touch their `/opt/<name>`, `/etc/<name>`, or systemd units. Coexistence caps applied via `polymomentum-engine.service`: `Nice=5`, `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`, and read-only `/opt/shared` access for the live service. `deploy/deploy.sh --enable-service` checks peer service state before restarting PolyMomentum and refuses to restart while a peer unit is deactivating. Use `nice -n 10 cargo build --release` for builds on the VPS. See [docs/cross_bot_note_mexc_hardening.md](docs/cross_bot_note_mexc_hardening.md) for the cross-Claude coordination protocol.
 
 ## Strategy reality check
 
-Post-audit (after fixing 4 lookahead/precision bugs in 2026-04-25): backtests showed **break-even to losing** across baseline, ewma_15min, regime variants. The terminal-zone-only sub-strategy had +$7.66 on 13 trades in one window — promising but tiny sample. **Going live with capital today would be premature.** The current play is to collect 24h+ of Rust paper data, then iterate before flipping any live switch.
+Current strategy-builder evidence is stronger than the original April paper loop, but still not sufficient for capital. The latest registry marks the live candidates as `rejected`, `questionable`, or `dead_end`; the next productive work is strict backtest/live-replay research on fresh fully resolved windows, not paper validation unless the question is live venue plumbing.
 
 ---
 

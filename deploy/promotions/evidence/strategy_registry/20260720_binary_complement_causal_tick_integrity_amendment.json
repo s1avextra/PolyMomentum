@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T14:38:45Z",
+  "last_updated_at": "2026-07-20T15:42:39Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_CAUSAL_TICK_INPUT_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Can the frozen two-tick coherence rule rely on static Gamma tick metadata, or must replay reconstruct a dynamic tick transition causally before scoring?",
+  "integrity_boundary": {
+    "forward_strategy_metrics_seen": false,
+    "opportunity_reports_generated": false,
+    "screen_artifacts_generated": false,
+    "candidate_outcomes_rates_or_economics_seen": false,
+    "observations_used": "unlabeled venue metadata and raw tick-size-change event timing only",
+    "fixed_rule_expression_changed": false,
+    "residual_multiplier_changed": false,
+    "classification_or_economic_gate_changed": false,
+    "feature_input_contract_changed": true
+  },
+  "primary_source_contract": {
+    "market_channel": "https://docs.polymarket.com/market-data/websocket/market-channel",
+    "tick_event_rule": "tick_size_change is emitted when a book price is greater than 0.96 or less than 0.04; the documented transition is 0.01 to 0.001",
+    "order_tick_contract": "https://docs.polymarket.com/trading/orders/overview",
+    "execution_implication": "an order price that does not conform to the current market tick is rejected"
+  },
+  "observed_forward_capture": {
+    "observed_at": "2026-07-20T14:38:45Z",
+    "host": "PolyMomentum VPS",
+    "session": "binary-complement-block1-floor-011",
+    "segment": "segment_001",
+    "gamma_markets": 24,
+    "gamma_distinct_minimum_tick_sizes": [
+      null
+    ],
+    "static_fallback_tick_size": 0.01,
+    "raw_tick_size_change_rows": 24,
+    "distinct_markets_with_tick_change": 6,
+    "old_tick_sizes": [
+      "0.01"
+    ],
+    "new_tick_sizes": [
+      "0.001"
+    ],
+    "minimum_event_offset_from_market_open_seconds": 254.18700003623962,
+    "maximum_event_offset_from_market_open_seconds": 399.19600009918213,
+    "events_before_240_seconds": 0,
+    "bounded_scan_elapsed_seconds": 4,
+    "interpretation": "Dynamic tick changes are real and static Gamma metadata is absent, but every observed change occurred after the frozen candidate window. This segment is not contaminated; future segments still need a causal guarantee rather than an empirical assumption."
+  },
+  "direct_reconstruction_spot_check": {
+    "observed_at": "2026-07-20T15:01:00Z",
+    "condition_id": "0x965e76f7c7ab0926f4da55064240657ac8a1b8879fb77e956dff2e1f8c31dd96",
+    "first_explicit_tick_event_ts_ms": 1784554574588,
+    "first_subsequent_preserved_price_change_ts_ms": 1784554574591,
+    "reconstruction_delay_ms": 3,
+    "preserved_outcome_tops": [
+      {"best_bid": 0.999, "best_ask": 1.0},
+      {"best_bid": 0.0, "best_ask": 0.001}
+    ],
+    "threshold_crossing_preserved": true,
+    "scope": "unlabeled single-market raw-to-v1 spot check; measurement v5 makes the equivalent check exhaustive and fail closed for every selected market during conversion"
+  },
+  "candidate_timing_proof": {
+    "market_window_seconds": 300,
+    "primary_zone_elapsed_fraction": "[0.40, 0.80)",
+    "primary_zone_elapsed_seconds": "[120, 240)",
+    "settlement_cutoff_minutes": 2.0,
+    "baseline_eligible_elapsed_seconds": "[120, 180)",
+    "earliest_observed_tick_change_seconds": 254.18700003623962,
+    "observed_overlap_with_eligible_window": false
+  },
+  "defect": {
+    "before": "CalibrationOpportunity.market_tick_size used Gamma minimum_tick_size or DEFAULT_TICK=0.01 for every replay row. The v1 distilled stream intentionally omits explicit tick_size_change events.",
+    "risk": "An unusually early 0.01-to-0.001 transition could make the frozen two-tick tolerance ten times too wide at a later decision and admit a row that is not coherent under the contemporaneous venue tick.",
+    "why_existing_converted_data_is_recoverable": "The distilled replay retains causal book snapshots and price changes, including best bid and best ask, so the documented threshold crossing can be reconstructed without terminal labels or deleted raw frames."
+  },
+  "implementation": {
+    "file": "rust_engine/src/backtest/harness.rs",
+    "source_sha256": "2558f0888c1bf6a4df050b10de372ae320f5c98ebb321733572128c504b4f916",
+    "shared_tick_policy_file": "rust_engine/src/strategy/microstructure.rs",
+    "shared_tick_policy_source_sha256": "023dacb644760a0e958ec7d4b7316b01f5fffa0347436cf935397f9584a13c0d",
+    "converter_file": "rust_engine/src/main.rs",
+    "converter_source_sha256": "fc7e2aa4f0c2544c6dd4ff77bc7e157d0378a9056a9085237eb656e70d2472b2",
+    "capture_preflight_file": "deploy/capture-forward-segments.sh",
+    "capture_preflight_sha256": "1fa91e95e7f7dee7cdcb8f0c025375ffab944c79011c56fceef7030b560c5359",
+    "scorer_file": "rust_engine/src/strategy_builder.rs",
+    "scorer_source_sha256_unchanged": "6e661887245634c8085009bcb17506d3fa13a16939334fb2ce6c810d9cae7312",
+    "initial_state": "valid causal Gamma minimum_tick_size, otherwise DEFAULT_TICK=0.01",
+    "transition": "when a replayed top-of-book bid or ask is positive and less than 0.04 or greater than 0.96, persist the condition tick at min(current, 0.001)",
+    "reversion": "forbidden; a later normal-looking book cannot erase an earlier causal transition",
+    "opportunity_field": "CalibrationOpportunity.market_tick_size now uses the causal per-condition state",
+    "shared_distilled_schema_changed": false,
+    "measurement_recorder_changed": false,
+    "measurement_converter_changed": true,
+    "conversion_manifest_tick_audit_added": true,
+    "conversion_fail_closed_conditions": [
+      "selected tick_size_change row is malformed",
+      "observed transition is not numerically 0.01 to 0.001",
+      "no preserved book or price-change event reconstructs the threshold crossing at or after the explicit tick event"
+    ],
+    "deployed_collector_restart_required": false,
+    "deployment_boundary": "completed session 011 sealed under v4 without interruption; the collector switched to v5 before session 013"
+  },
+  "deployed_measurement_v5": {
+    "binary_path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "binary_sha256": "13db9884e6a1ee5d6b21bac640f62bc40124e8b4bbe01de342cc7dcbf10e6b5a",
+    "runner_path": "/opt/polymomentum/tools/capture-forward-segments-v5.sh",
+    "runner_sha256": "1fa91e95e7f7dee7cdcb8f0c025375ffab944c79011c56fceef7030b560c5359",
+    "collector_path": "/opt/polymomentum/tools/collect-binary-complement-floor-v5.sh",
+    "collector_sha256": "bebbe2a2b0c45d225a4b63f206116190781189ec084b1a0706b5ce5412f31b19",
+    "linux_linkage_verified": true,
+    "record_and_convert_help_verified_as_polymomentum": true,
+    "bounded_dry_run_verified": true,
+    "active_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_session": "binary-complement-block1-floor-013",
+    "active_session_binary": "measurement-v5",
+    "collector_switched_to_v5_at": "2026-07-20T15:42:38Z",
+    "collector_switched_to_v5": true,
+    "completed_session_011_interrupted": false,
+    "partial_v4_session_012_stopped_during_preroll": true,
+    "partial_session_012_has_status_or_promotion_evidence": false,
+    "partial_session_012_data_deleted": false,
+    "active_unit_restarts": 0,
+    "active_unit_memory_max_bytes": 3221225472
+  },
+  "validation": {
+    "tests": [
+      "backtest::harness::tests::causal_tick_size_tracks_extreme_book_transition_without_lookahead",
+      "backtest::harness::tests::causal_tick_state_persists_per_condition_across_outcome_tokens",
+      "strategy::microstructure::tests::dynamic_tick_transition_uses_strict_venue_boundaries_and_persists",
+      "replay_validation_tests::recorded_book_converter_manifest_uses_exact_replay_contract",
+      "replay_validation_tests::recorded_book_converter_rejects_unreconstructable_tick_transition",
+      "deploy/capture-forward-segments-test.sh"
+    ],
+    "targeted_test_result": "PASS",
+    "cargo_fmt_check": "PASS",
+    "clippy_result": "PASS: all targets with warnings denied after allowing two pre-existing unrelated lints (cmd_harness_sweep too_many_arguments; RTDS constant assertion)",
+    "full_suite_result": "PASS: cargo test; 497 passed (446 library + 51 binary), 0 failed; doc-tests 0"
+  },
+  "decision": {
+    "current_block_remains_usable": true,
+    "strategy_score_remains_sealed": true,
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue the active measurement-v5 collector outcome-blind to 750 conditions, require passing tick-integrity manifests for new segments, then use the pinned causal-tick harness for the one-time block score."
+  }
+}

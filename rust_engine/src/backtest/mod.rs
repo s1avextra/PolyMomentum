@@ -1,9 +1,14 @@
+pub mod allocation_lock;
 pub mod btc_history;
 pub mod distill;
+pub mod eval_cache;
+pub mod experiment;
 pub mod fill_model;
 pub mod harness;
 pub mod l2_replay;
 pub mod pmxt;
 pub mod resolver;
+pub mod settlement_anchor;
 pub mod strategies;
 pub mod sweep;
+pub mod variant_io;

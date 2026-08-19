@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T14:10:00Z",
+  "status": "DIAGNOSTIC_ONLY_ACTIVE_FORWARD_RULE_UNCHANGED",
+  "decision_question": "Why does the strict-42 strategy remain below A+, and is the frozen paired-book gate aimed at the measured failure mechanism without reusing outcome labels?",
+  "source_authority": {
+    "strict42_exact_aggregate": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+    "strict42_exact_aggregate_sha256": "a0a2b811af91c25c0c494cc1811f629b368fd3c8855fa7489e488998cc865951",
+    "opportunity_calibration": "deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json",
+    "opportunity_calibration_sha256": "e0910ca812d6d2fe5ab664d02127b24fb832953127efaf93814d080631a9832c",
+    "binary_complement_scorer": "rust_engine/src/strategy_builder.rs",
+    "binary_complement_scorer_sha256": "6e661887245634c8085009bcb17506d3fa13a16939334fb2ce6c810d9cae7312"
+  },
+  "population": {
+    "window": "42 strict chronological 8-hour folds from 2026-05-28 through 2026-06-10",
+    "latency_ms": 202,
+    "fee_inclusive": true,
+    "trades": 102,
+    "wins": 79,
+    "losses": 23
+  },
+  "verified_driver": {
+    "finding": "The strategy is profitable in aggregate but materially overconfident at entry; the market probability is closer to the realized outcome rate than the internal fair value.",
+    "realized_win_rate": 0.7745098039215687,
+    "internal_fair_mean_probability": 0.8547921921148325,
+    "internal_fair_probability_minus_outcome": 0.08028238819326383,
+    "market_mean_probability": 0.7474264612319257,
+    "market_probability_minus_outcome": -0.027083342689642964,
+    "internal_fair_brier": 0.1749675168826506,
+    "market_brier": 0.16819945281277385,
+    "market_brier_improvement_fraction": 0.03868183186491725,
+    "internal_fair_log_loss": 0.5415025217084939,
+    "market_log_loss": 0.5132287148659073,
+    "market_log_loss_improvement_fraction": 0.05221361989853708,
+    "interpretation": "The internal fair value overstates confidence by 8.03 percentage points on executed candidates. Copying the market would remove the claimed edge, so the actionable need is a causal uncertainty filter that can reject unreliable model edges rather than another calibration blend."
+  },
+  "payoff_geometry": {
+    "gross_win_pnl_usd": 132.07512,
+    "gross_loss_pnl_usd": -118.53426,
+    "average_win_pnl_usd": 1.6718369620253164,
+    "average_loss_pnl_usd": -5.153663478260869,
+    "profit_factor": 1.1142358335893776,
+    "payoff_ratio": 0.3243977743361479,
+    "required_profit_factor": 1.2,
+    "gross_loss_reduction_needed_if_winner_dollars_are_unchanged_usd": 8.47166,
+    "average_loss_equivalent": 1.6438131895369321,
+    "minimum_whole_average_losses_equivalent": 2,
+    "registered_count_effect": {
+      "minimum_winners_retained": 72,
+      "maximum_losses_retained": 16,
+      "minimum_losses_removed": 7,
+      "wilson_95_lower_at_72_wins_16_losses": 0.7248774097917623
+    },
+    "interpretation": "Profit factor alone is close enough that removing two average losses while preserving winner dollars would clear 1.20, but A+ requires the stronger preregistered effect: at least 90% winner retention and 30% loss removal, plus fee-aware unit economics, breadth, halves, burst, and tail gates."
+  },
+  "chronology_and_concentration": {
+    "first_21_fold_pnl_usd": 17.87934,
+    "last_21_fold_pnl_usd": -4.33848,
+    "first_21_losses": 12,
+    "last_21_losses": 11,
+    "up_losses": 10,
+    "down_losses": 13,
+    "price_0_75_to_0_90_losses": 9,
+    "low_confidence_losses": 7,
+    "maximum_losses_in_five_reports": 4,
+    "interpretation": "Loss count is not confined to one chronological half or one direction. The second-half failure comes from insufficient winner dollars relative to persistent full-loss events, not a simple one-sided label that can be removed safely."
+  },
+  "mechanism_fit": {
+    "active_mechanism": "binary_complement_coherence_v1",
+    "fixed_rule": "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size",
+    "fit_to_driver": "Both outcome books are claims on one fully collateralized dollar. Large causal disagreement between their midpoint and depth-weighted microprice sums is therefore a market-state uncertainty signal that is independent of the terminal label and can veto an overconfident single-book edge.",
+    "does_not_claim": [
+      "paired-book coherence is free arbitrage",
+      "coherence proves the chosen direction",
+      "classification gates prove executable profitability",
+      "public-feed trade direction is authoritative"
+    ],
+    "why_no_strategy_change_now": "The rule and all thresholds were frozen before forward scoring. Changing them while block 1 is collecting would invalidate the prospective test and create sequential-peeking bias."
+  },
+  "external_research": [
+    {
+      "title": "Polymarket Positions & Tokens",
+      "url": "https://docs.polymarket.com/concepts/positions-tokens",
+      "verified_use": "Each Yes/No pair is backed by exactly one dollar and equal pairs can be merged back to collateral, which supplies the complement identity behind the gate."
+    },
+    {
+      "title": "Polymarket Prices & Orderbook",
+      "url": "https://docs.polymarket.com/concepts/prices-orderbook",
+      "verified_use": "Displayed midpoint is not executable; a buyer pays the ask. This supports recorded-ask rather than midpoint unit economics."
+    },
+    {
+      "title": "Polymarket Fees",
+      "url": "https://docs.polymarket.com/trading/fees",
+      "verified_use": "Crypto taker fees use fee = shares * 0.07 * price * (1-price), rounded to five decimals; the scorer records and applies the per-market entry rate."
+    },
+    {
+      "title": "Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book",
+      "url": "https://arxiv.org/abs/1512.03492",
+      "verified_use": "Depth imbalance can carry short-horizon information, supporting a depth-weighted microprice as a state descriptor rather than a terminal-outcome guarantee."
+    },
+    {
+      "title": "The Anatomy of a Decentralized Prediction Market: Microstructure Evidence from the Polymarket Order Book",
+      "url": "https://papers.ssrn.com/sol3/Delivery.cfm/6658364.pdf?abstractid=6658364&mirid=1&type=2",
+      "verified_use": "The reported low agreement between public-feed and on-chain trade-direction inference reinforces keeping the active gate on contemporaneous book state; it does not rely on inferred aggressor direction."
+    }
+  ],
+  "decision": {
+    "current_grade": "A-",
+    "live_ready": false,
+    "live_trading": "OFF",
+    "strategy_adjustment": "NO_PARAMETER_CHANGE_DURING_FROZEN_FORWARD_BLOCK",
+    "next_evidence": "Score binary_complement_coherence_v1 exactly once after 750 unique terminal settlement-aligned conditions, then reject on any registered classification or fee-aware economic gate failure.",
+    "a_plus_claim": false,
+    "profitability_claim": false
+  }
+}

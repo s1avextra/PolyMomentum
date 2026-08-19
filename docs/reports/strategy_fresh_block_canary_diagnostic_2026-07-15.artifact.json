@@ -1,0 +1,603 @@
+{
+  "surface": "report",
+  "manifest": {
+    "surface": "report",
+    "version": 1,
+    "title": "Both canaries measured the VPS successfully, but all strategy windows are inadmissible",
+    "description": "Technical diagnostic of the July 15 and July 18 PolyMomentum measurement-only VPS canaries, real-data condition-level causal-history validation, the forward-screen pipeline, paired-book execution-path instrumentation, and the preregistered complete-set lock candidate.",
+    "generatedAt": "2026-07-18T09:44:36Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# Both canaries measured the VPS successfully, but all strategy windows are inadmissible"
+      },
+      {
+        "id": "summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Technical summary\n\nTwo separate measurement-only Linux captures have now produced 24 complete five-minute BTC conditions each without replacing the production binary. The July 15 segment has zero exact-replay-admissible conditions because its retained windows lack valid causal Binance history. The first July 18 replacement included the full one-hour pre-roll and passed CLOB token coverage, continuity, and latency for all 24 conditions, but five 22–26 second Binance outages intersect every rolling causal hour; seven settlement windows also intersect Chainlink gaps. It therefore also has zero admissible conditions and was rejected before conversion, terminal alignment, or scoring. The RTDS recorder has since been hardened and validated by a clean two-minute VPS smoke; a second July 18 replacement is running across 24 windows from 10:40Z through 12:40Z. **No binary-complement or complete-set score is admissible:** the immutable forward screen requires at least 100 terminal official-source-aligned conditions, and the sealed complete-set comparison requires at least 100 exact-replay trades. `primary_v6_volfloor_300` remains A-, `KEEP_REPLAY_RESEARCH`, and `LIVE_TRADING_OFF`."
+      },
+      {
+        "id": "finding_capture",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Capture isolation and service recovery worked\n\nThe July 15 canary recorded 4,107,504 frames across 24 conditions and all 48 outcome tokens. The July 18 replacement recorded another 2,878,466 frames across 24 conditions with no CLOB reconnect. After the VPS returned, the enabled paper-only engine, Telegram monitor, healthcheck timer, and soak-report timer were restarted. At 09:01:46Z the engine and monitor were active with PIDs 3013 and 3014, zero restarts, and no warning-or-higher journal entries since restart. The measurement binary remains isolated under `/opt/polymomentum/tools`."
+      },
+      {
+        "id": "replacement_capture",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "replacement_collection",
+        "body": "## The first replacement failed closed; a hardened second segment is running\n\nThe bounded transient unit `polymomentum-binary-complement-block1-seg001-20260718.service` recorded 24 windows from 06:50Z through 08:50Z with the full 3,600-second causal Binance pre-roll. At 08:50:30Z its installed runner rejected the Binance tape and exited 1, preserving the 2,482,154,440-byte raw frame log. The complete session was copied intact to the dev box. The latest local audit passed CLOB coverage and continuity for all 24 conditions and returned `LATENCY_READY` with p50 9 ms, p95 17 ms, p99 48 ms, and a 50 ms replay recommendation. However, five Binance gaps of 22–26 seconds intersect every required causal hour; 12 Chainlink gaps affect seven settlement windows. Final result: 24 captured, 24 CLOB-ready, zero replay-admissible, zero groups. Conversion, terminal finalization, and all strategy scoring were intentionally skipped.\n\nThe recorder now reconnects after three seconds without a post-acquisition source tick while retaining the documented five-second heartbeat and never synthesizing observations. A two-minute VPS smoke recorded 120 Binance ticks with a one-second maximum gap and 117 Chainlink ticks with a two-second maximum gap, one connection, zero reconnects, and both provenance flags ready. Measurement binary `481dc2f2…f3cf68` and runner `be992ae9…5a12b` are installed with rollback copies. Segment 002 started at 09:34:55Z and is collecting 24 windows from 10:40Z through 12:40Z. It remains measurement-only and unscored."
+      },
+      {
+        "id": "replacement_gate_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "replacement_gate_table_spec"
+      },
+      {
+        "id": "strategy_driver",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "window_admissibility_pipeline",
+        "body": "## Loss selectivity—not headline win rate—is the strategy bottleneck\n\nThe retained strategy wins 79 of 102 trades and is profitable after fees, but its payoff ratio is only 0.324 and one worst loss costs roughly 3.35 average wins. The second 21-fold half loses $4.34. The frozen paired-book mechanism therefore asks a narrow prospective question: can simultaneous binary-book incoherence remove at least 30% of losses while retaining at least 90% of winners? At the baseline counts, the minimum passing count case is 72 winners and 16 losses; that implies an 81.82% win rate and a 0.7249 Wilson lower bound. This arithmetic shows the registered count gates are strong enough to address Wilson confidence if achieved. It is not a PnL forecast and does not satisfy fold-breadth, loss-burst, payoff, or tail gates."
+      },
+      {
+        "id": "screen_geometry_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "screen_geometry_table_spec"
+      },
+      {
+        "id": "paired_execution_path",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "paired_execution_instrumentation",
+        "body": "## Paired-book execution is now measurable, not yet a strategy rule\n\nThe 40-trade tail cohort lost $16.07 at baseline. A chosen-token profit lock improved it by $2.91 but harmed three terminal winners; the fixed 30-second loss cut improved it by $7.08 but harmed two. That makes classification the binding failure: buying the opposite token may offer different executable payoff and depth, but liquidity alone cannot identify which underwater trades later recover. Calibration opportunities now preserve both tokens' exact top-of-book prices, displayed depths, and book ages. These ten fields are diagnostic only; the frozen binary-complement selector, every registered gate, production decisions, and live behavior are unchanged."
+      },
+      {
+        "id": "paired_execution_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "paired_execution_table_spec"
+      },
+      {
+        "id": "complete_set_candidate",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "complete_set_preregistration",
+        "body": "## A single-order complete-set lock is frozen for exact replay\n\n`primary_v6_volfloor_300_complete_set_lock_v1` preserves every baseline entry rule and changes only the post-fill lifecycle. After 15 seconds, it may buy exactly the held share quantity of the opposite outcome with one taker FOK. Eligibility prices all shares at the submitted worst-ask ceiling—not signal-time VWAP—and reserves the maximum binary fee at any permitted fill price; because that fee peaks at 0.50, the fee bound uses `min(ceiling, 0.50)`. It requires at least $0.10 of terminal fee-inclusive locked profit and enough uncommitted cash for the maximum hedge cost. Both legs' capital remains locked until market close because immediate merge is not assumed. These strict pre-score corrections did not alter the candidate hash. Missing depth, stale books, partial quantity, and failed FOK attempts fail closed; a fill-reconciliation mismatch also trips the backtest breaker. The exact variant hash is `c25aa94a…c01363`. This is a preregistered replay candidate, not a forward result: the current bounded capture can diagnose execution, but the comparison wrapper requires 100 post-correction terminal conditions and keeps candidate reports sealed until the candidate reaches 100 exact-replay trades. Live preflight rejects the lifecycle until runtime parity exists."
+      },
+      {
+        "id": "complete_set_contract_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "complete_set_contract_table_spec"
+      },
+      {
+        "id": "condition_pipeline",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "window_admissibility_pipeline",
+        "body": "## Each five-minute condition now receives an independent causal-data verdict\n\nThe auditor requires both CLOB outcome tokens and no receive gap above 2,000 ms during the market. It separately requires Binance coverage from one hour before open through close and Chainlink coverage from open through close; both tapes use the harness rule max(5,000 ms, three times median cadence). Only adjacent passing conditions are grouped. The code passes 480 Rust tests and both runner suites. It reproduced the July 15 exclusion sequence exactly, then independently quantified the first July 18 replacement as 24 CLOB-ready conditions, 24 Binance-gap exclusions, seven overlapping Chainlink exclusions, and zero admissible groups. Terminal finalization accepts an exact condition-ID allowlist and rejects unknown IDs, while replay consumes only fully ready groups. The installed monolithic-gate failure preserved raw data for this validated local re-audit rather than erasing the segment."
+      },
+      {
+        "id": "gate_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "canary_gate_table"
+      },
+      {
+        "id": "finding_gap",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## The original gap failure mixed decision time with capture padding\n\nThe VPS audit reported a 3,082 ms maximum receive gap, but that gap occurred at 08:50:24Z—08:50:27Z, after the last market closed at 08:50:00Z. The auditor now evaluates continuity over the registered active market interval and retains the full-capture maximum only as a diagnostic. The corrected active-window maximum is still 2,154 ms at 07:43:10Z, so the 07:40Z market remains excluded under the unchanged 2,000 ms limit."
+      },
+      {
+        "id": "finding_segments",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Fifteen windows survive both independent continuity gates\n\nEight markets cross official Chainlink gaps above the unchanged five-second reference limit. One additional market crosses the 2,154 ms CLOB gap. The remaining 15 markets form five contiguous subsegments. This is salvage by pre-existing gate, not threshold search: no tolerance or strategy parameter changed after outcomes."
+      },
+      {
+        "id": "finding_signal_history",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Gate-clean does not mean exact-replay ready\n\nThe frozen replay needs continuous Binance RTDS from one full hour before each selected market through its close. The recovered tape spans 1784098172000–1784105429000 ms. Segments 001–003 (six continuity-clean conditions) fail because their required histories begin before that tape. Segments 004–005 (nine conditions) pass outer bounds but include 21,000 ms and 25,000 ms Binance outages; median cadence is 1,000 ms and the harness limit is 5,000 ms. The upgraded per-condition auditor independently reproduces this 6+9 partition and certifies zero admissible conditions and zero groups. Capture and replay preflights now enforce both the one-hour outer bound and the identical internal-gap rule before harness execution."
+      },
+      {
+        "id": "condition_progress_chart",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "condition_progress_chart_spec"
+      },
+      {
+        "id": "segments_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "segments_table_spec"
+      },
+      {
+        "id": "scope",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Scope, data, and decision definitions\n\nThe audited unit is one recorded BTC five-minute binary condition. Binance RTDS is the causal signal/volatility source; official Chainlink RTDS is the settlement-alignment source. A gate-clean condition avoids every CLOB receive gap above 2,000 ms and every reference observation gap above the finalizer's five-second minimum limit. An exact-replay condition additionally needs a continuous causal Binance hour before its first market, with maximum gap no larger than max(5,000 ms, three times median cadence), reference coverage through final close, terminal Gamma metadata, and official-source settlement agreement."
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Methodology\n\nThe measurement binary recorded CLOB frames plus both RTDS tapes in one bounded 7,260-second session. The preserved VPS payload was copied without compression to the dev box; source tapes were hashed and checked in timestamp order. The raw CLOB capture had already converted once to three exact-replay gzip hours with zero conversion errors. The upgraded release auditor then streamed the same raw frames, evaluated CLOB, Binance, and Chainlink readiness independently for every five-minute condition, and formed groups only from adjacent all-pass conditions. Its result was reconciled against the prior manual segmentation and matched every stage exactly. The chart compares condition counts only; latency, event volume, and profitability remain in exact audit tables because they use incompatible units."
+      },
+      {
+        "id": "baseline",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "body": "## The retained strategy is still profitable but below A+\n\nThe measured-latency strict 42-fold baseline retains 102 trades and +$13.54 after fees. It still fails the 0.70 Wilson floor, 20-profitable-report breadth, five-report loss-burst limit, and positive second-half PnL requirement. The canary has not changed any of those results."
+      },
+      {
+        "id": "baseline_table",
+        "type": "table",
+        "layout": "full",
+        "tableId": "baseline_gate_table"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "canary_diagnostic",
+        "body": "## Limitations and robustness\n\nThe VPS is reachable again and the preserved 3,483,427,156-byte raw frame file plus authoritative Binance and Chainlink tapes were recovered. The automated condition-level re-audit matches the independent manual diagnosis, which materially raises confidence in the exclusion logic; it does not make any window admissible. Terminal labels were not refreshed or inferred because all 15 continuity-clean conditions fail signal-history admissibility, and terminal outcomes cannot repair an invalid causal tape. The sample is also far below the registered 100-condition disclosure floor. This is valid measurement-pipeline evidence, not profitability evidence."
+      },
+      {
+        "id": "next",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Next steps\n\n1. Let the hardened segment 002 finish, then verify its exact CLOB latency, per-condition Binance/Chainlink continuity, and ownership-safe post-processing without changing any gate.\n2. Preserve and audit the block exactly as segment 001, and convert/finalize only all-pass condition groups.\n3. Replay the exact frozen complete-set variant only through its sealed wrapper at measured latency; reconcile all missing-leg attempts, fills, fees, locked-profit floors, and unresolved exposure against the identical-entry baseline.\n4. Continue bounded segments until the binary-complement preflight has at least 100 terminal aligned conditions and the sealed complete-set candidate has at least 100 exact-replay trades. More than 100 conditions will probably be required. Keep CPU-heavy replay on the dev box.\n5. Score `binary_complement_coherence_v1` and `complete_set_lock_v1` only under their separate preregistered contracts; a mechanism that passes block 1 still needs an unchanged second disjoint block at the same respective condition/trade floor.\n6. Preserve `LIVE_TRADING_OFF` unless two fresh blocks and exact measured-latency replay pass the full A+ contract, live lifecycle parity is implemented, and a fresh registry audit returns `live_ready=true`."
+      },
+      {
+        "id": "questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Will the three-second source watchdog prevent long RTDS gaps throughout a full three-hour collection, or will it correctly expose a true upstream outage?\n- Will enough future conditions survive unchanged continuity gates to reach the 100-condition disclosure floor without changing the frozen mechanism?\n- The preserved July 15 and first July 18 raw frame files remain available; when should they be retired under the runbook's ownership rule after durable diagnostics are complete?"
+      }
+    ],
+    "charts": [
+      {
+        "id": "condition_progress_chart_spec",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "condition_progress",
+        "title": "July 18 condition evidence stages versus the disclosure floor",
+        "subtitle": "Replacement-segment counts at capture, after CLOB gates, after reference-tape admissibility, and at the immutable minimum.",
+        "question": "How far is the latest bounded segment from the registered forward-screen minimum?",
+        "rationale": "All four values use conditions, so a compact bar comparison shows the passing market stream, complete reference-tape attrition, and the remaining sample requirement without mixing latency or profitability metrics.",
+        "maxRows": 4,
+        "palette": {"kind": "single", "name": "blue"},
+        "comparisonContext": {
+          "baseline": "100-condition disclosure floor",
+          "grain": "canary evidence stage",
+          "unit": "conditions"
+        },
+        "referenceLines": [
+          {"axis": "y", "value": 100, "label": "Disclosure floor", "color": "neutral", "lineStyle": "dashed"}
+        ],
+        "encodings": {
+          "x": {"field": "stage", "type": "nominal", "label": "Evidence stage"},
+          "y": {"field": "conditions", "type": "quantitative", "label": "Conditions", "format": "number"},
+          "tooltip": [{"field": "interpretation", "type": "nominal", "label": "Meaning"}]
+        },
+        "sourceId": "replacement_collection"
+      }
+    ],
+    "tables": [
+      {
+        "id": "replacement_gate_table_spec",
+        "dataset": "replacement_gates",
+        "title": "July 18 replacement-segment gates",
+        "subtitle": "Latest local audit values versus unchanged collection, continuity, and disclosure requirements.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "replacement_collection",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "gate", "label": "Gate", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "required", "label": "Required", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      },
+      {
+        "id": "canary_gate_table",
+        "dataset": "canary_gates",
+        "title": "Canary pipeline gates",
+        "subtitle": "Observed values versus unchanged measurement and forward-screen requirements.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "canary_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "gate", "label": "Gate", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "required", "label": "Required", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      },
+      {
+        "id": "segments_table_spec",
+        "dataset": "retained_segments",
+        "title": "Gate-clean retained subsegments",
+        "subtitle": "Windows retained after excluding all reference gaps above 5 seconds and CLOB gaps above 2 seconds.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "canary_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "segment", "label": "Segment", "type": "text"},
+          {"field": "windows", "label": "Window opens (UTC)", "type": "text"},
+          {"field": "conditions", "label": "Conditions", "format": "number"},
+          {"field": "replay_status", "label": "Replay status", "type": "text"},
+          {"field": "terminal_status", "label": "Terminal status", "type": "text"}
+        ]
+      },
+      {
+        "id": "screen_geometry_table_spec",
+        "dataset": "screen_geometry",
+        "title": "Frozen screen count arithmetic",
+        "subtitle": "Strict 42-fold baseline versus the minimum registered retention/removal case; the prospective result remains unknown.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "window_admissibility_pipeline",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "metric", "label": "Metric", "type": "text"},
+          {"field": "baseline", "label": "Baseline", "type": "text"},
+          {"field": "registered_minimum_case", "label": "Registered minimum case", "type": "text"},
+          {"field": "interpretation", "label": "Interpretation", "type": "text"}
+        ]
+      },
+      {
+        "id": "paired_execution_table_spec",
+        "dataset": "paired_execution_screens",
+        "title": "Why alternate execution needs fresh causal classification evidence",
+        "subtitle": "Fixed tail-cohort lifecycle screens; PnL improvement was rejected when an exit made eventual winners negative.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "paired_execution_instrumentation",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "path", "label": "Execution path", "type": "text"},
+          {"field": "tail_pnl", "label": "Tail PnL", "type": "text"},
+          {"field": "delta", "label": "Delta", "type": "text"},
+          {"field": "harmed_winners", "label": "Harmed winners", "type": "text"},
+          {"field": "verdict", "label": "Verdict", "type": "text"}
+        ]
+      },
+      {
+        "id": "baseline_gate_table",
+        "dataset": "baseline_gates",
+        "title": "Retained strategy versus unchanged A+ requirements",
+        "subtitle": "Measured-latency strict 42-fold aggregate; the fresh canary has not altered these metrics.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "strict_baseline",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "metric", "label": "Metric", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "required", "label": "Required", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      },
+      {
+        "id": "complete_set_contract_table_spec",
+        "dataset": "complete_set_contract",
+        "title": "Frozen complete-set lock contract",
+        "subtitle": "Exact replay rules and current evidence boundary; no profitability result has been observed.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "complete_set_preregistration",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "component", "label": "Component", "type": "text"},
+          {"field": "frozen_rule", "label": "Frozen rule", "type": "text"},
+          {"field": "current_status", "label": "Current status", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "canary_diagnostic",
+        "label": "July 15 fresh-block canary diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_fresh_block_canary_diagnostic.json",
+        "query": {
+          "description": "Capture, latency, gap localization, conversion integrity, clean segmentation, and terminal-readiness evidence.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_fresh_block_canary_diagnostic.json');",
+          "filters": ["July 15 bounded canary", "active-window continuity", "unchanged gap gates"],
+          "metric_definitions": [
+            "Active-window receive gap excludes the pre/post capture pads but includes boundary coverage to the first and last active frame.",
+            "Retained conditions exclude every five-minute window intersecting a CLOB gap above 2,000 ms or a reference gap above 5,000 ms."
+          ]
+        }
+      },
+      {
+        "id": "replacement_collection",
+        "label": "July 18 binary-complement block 1 collection status",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_block1_collection_status.json",
+        "query": {
+          "description": "Completed replacement-segment contract, fail-closed reference-tape diagnostic, service health, installed hashes, and pending evidence gates.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_block1_collection_status.json');",
+          "filters": ["July 18 segment 001 rejected", "segment 002 running", "measurement-only", "zero scored"],
+          "metric_definitions": ["A captured condition contributes to no strategy metric unless CLOB, causal Binance, official Chainlink, terminal alignment, and preregistered sample gates all pass."]
+        }
+      },
+      {
+        "id": "window_admissibility_pipeline",
+        "label": "Condition-level forward admissibility pipeline",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json",
+        "query": {
+          "description": "Baseline loss-geometry diagnosis, registered minimum count arithmetic, condition-level causal tape contract, implementation state, tests, and exact reconciliation against the preserved July 15 raw capture.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json');",
+          "filters": ["202 ms strict baseline", "frozen forward-only screen", "preserved July 15 real-canary validation"],
+          "metric_definitions": [
+            "The registered minimum count case is arithmetic on baseline counts, not an observed counterfactual or PnL forecast.",
+            "A condition is admissible only when its CLOB, causal Binance, and official Chainlink ranges all pass unchanged continuity rules."
+          ]
+        }
+      },
+      {
+        "id": "binary_preregistration",
+        "label": "Binary-complement forward-only pre-registration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+        "query": {
+          "description": "Frozen mechanism, two-tick rule, minimum sample, and two-block decision contract.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json');",
+          "filters": ["forward-only", "minimum 100 terminal conditions", "no threshold search"],
+          "metric_definitions": ["A block score remains undisclosed below 100 terminal official-source-aligned conditions."]
+        }
+      },
+      {
+        "id": "paired_execution_instrumentation",
+        "label": "Paired-book execution-path instrumentation decision",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_paired_book_execution_path_instrumentation.json",
+        "query": {
+          "description": "Tail lifecycle failure diagnosis, measurement-only paired-book fields, unchanged strategy boundary, and the preregistered future execution-path comparison.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_paired_book_execution_path_instrumentation.json');",
+          "filters": ["40-trade tail lifecycle cohort", "202 ms executable paths", "measurement-only instrumentation"],
+          "metric_definitions": [
+            "Harmed winners are terminal-winning baseline trades made negative by measured-latency executable exit logic.",
+            "Exact execution-path comparison is intentionally shown as a table because aggregate PnL deltas cannot be interpreted without the harmed-winner counts."
+          ]
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold retained strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for primary_v6_volfloor_300 at 202 ms.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+          "filters": ["42 strict folds", "202 ms replay latency", "volatility floor 0.30"],
+          "metric_definitions": ["Loss burst is the maximum losing-report count in any five-report window."]
+        }
+      },
+      {
+        "id": "complete_set_preregistration",
+        "label": "Complete-set lock v1 replay-only pre-registration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_preregistration.json",
+        "query": {
+          "description": "Frozen missing-leg execution rule, worst-ceiling cost bound, exact variant identity, no-peeking evaluation contract, live boundary, and known operational risks.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_preregistration.json');",
+          "filters": ["replay-only", "202 ms latency", "$0.10 minimum locked profit", "minimum 100 post-registration trades"],
+          "metric_definitions": [
+            "Locked-profit floor subtracts entry cost, entry fee, maximum hedge spend at the submitted FOK ceiling, and the maximum hedge fee at any fill price at or below that ceiling from the $1-per-pair payout.",
+            "A preregistered candidate has no empirical strategy credit until its exact replay blocks satisfy every frozen gate."
+          ]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "datasets": {
+      "condition_progress": [
+        {"stage": "Captured", "conditions": 24, "interpretation": "Complete five-minute conditions recorded"},
+        {"stage": "CLOB-ready", "conditions": 24, "interpretation": "Conditions with both tokens and continuous market-stream delivery"},
+        {"stage": "Replay-admissible", "conditions": 0, "interpretation": "Conditions also passing causal Binance and official Chainlink continuity"},
+        {"stage": "Disclosure floor", "conditions": 100, "interpretation": "Minimum terminal aligned conditions before the immutable scorer reveals metrics"}
+      ],
+      "replacement_gates": [
+        {"order": 1, "gate": "Complete capture", "observed": "24 conditions; 2,878,466 frames; 0 CLOB reconnects", "required": "24 complete windows and both tokens", "status": "pass"},
+        {"order": 2, "gate": "CLOB coverage and continuity", "observed": "24 of 24 ready", "required": "both tokens and no active gap above 2,000 ms", "status": "pass"},
+        {"order": 3, "gate": "CLOB p99 latency", "observed": "48 ms; 50 ms replay recommendation", "required": "timestamp, coverage, and stream latency ready", "status": "pass"},
+        {"order": 4, "gate": "Causal Binance history", "observed": "5 gaps of 22–26 s; all 24 conditions affected", "required": "max gap <= 5 s at 1 Hz median cadence", "status": "fail closed"},
+        {"order": 5, "gate": "Official Chainlink continuity", "observed": "12 gaps above 5 s; 7 conditions affected", "required": "no selected settlement window crosses a gap", "status": "fail closed"},
+        {"order": 6, "gate": "Exact conversion and terminal alignment", "observed": "not run after zero admissible conditions", "required": "zero-error conversion and official-source terminal agreement", "status": "not applicable after prior gate"},
+        {"order": 7, "gate": "Forward-screen disclosure floor", "observed": "0 admissible conditions", "required": ">= 100 terminal aligned conditions", "status": "closed"}
+      ],
+      "canary_gates": [
+        {"order": 1, "gate": "Complete capture", "observed": "24 conditions; 48 tokens; 4,107,504 frames", "required": "24 complete windows and all tokens", "status": "pass"},
+        {"order": 2, "gate": "CLOB timestamp integrity", "observed": "0 missing; 0 negative", "required": "0 missing and 0 negative", "status": "pass"},
+        {"order": 3, "gate": "CLOB p99 latency", "observed": "99 ms", "required": "<= 500 ms", "status": "pass"},
+        {"order": 4, "gate": "Active-window CLOB continuity", "observed": "2,154 ms", "required": "<= 2,000 ms", "status": "fail; exclude one window"},
+        {"order": 5, "gate": "Official Chainlink continuity", "observed": "8 gaps above 5,000 ms", "required": "no retained window crosses a gap", "status": "fail monolithic; exclude eight windows"},
+        {"order": 6, "gate": "Exact conversion", "observed": "7,682,029 book/change events; 0 malformed/missing/unknown", "required": "non-zero events; all skip-error counts 0", "status": "pass"},
+        {"order": 7, "gate": "Causal Binance history", "observed": "6 fail outer bounds; 9 fail 21–25 s internal gaps; 0 certified", "required": "continuous causal hour; max gap <= max(5 s, 3x median cadence)", "status": "fail closed"},
+        {"order": 8, "gate": "Terminal official-source alignment", "observed": "not run after signal-tape rejection", "required": "all retained conditions terminal and aligned", "status": "not applicable after prior gate"},
+        {"order": 9, "gate": "Forward-screen disclosure floor", "observed": "0 replay-certified; 15 continuity-clean", "required": ">= 100", "status": "closed"}
+      ],
+      "retained_segments": [
+        {"order": 1, "segment": "segment_001", "windows": "06:55, 07:00, 07:05, 07:10", "conditions": 4, "replay_status": "fails: causal hour predates tape", "terminal_status": "not evaluated after signal rejection"},
+        {"order": 2, "segment": "segment_002", "windows": "07:20", "conditions": 1, "replay_status": "fails: causal hour predates tape", "terminal_status": "not evaluated after signal rejection"},
+        {"order": 3, "segment": "segment_003", "windows": "07:30", "conditions": 1, "replay_status": "fails: causal hour predates tape", "terminal_status": "not evaluated after signal rejection"},
+        {"order": 4, "segment": "segment_004", "windows": "07:55, 08:00, 08:05, 08:10", "conditions": 4, "replay_status": "fails: 25 s Binance gap > 5 s limit", "terminal_status": "not evaluated after signal rejection"},
+        {"order": 5, "segment": "segment_005", "windows": "08:20, 08:25, 08:30, 08:35, 08:40", "conditions": 5, "replay_status": "fails: 25 s Binance gap > 5 s limit", "terminal_status": "not evaluated after signal rejection"}
+      ],
+      "screen_geometry": [
+        {"order": 1, "metric": "Winners retained", "baseline": "79", "registered_minimum_case": "72 (>= 90%)", "interpretation": "Prospective screen must preserve nearly all known winners"},
+        {"order": 2, "metric": "Losses retained", "baseline": "23", "registered_minimum_case": "16 (>= 30% removed)", "interpretation": "At least seven baseline losses must be rejected"},
+        {"order": 3, "metric": "Win rate", "baseline": "77.45%", "registered_minimum_case": "81.82%", "interpretation": "Derived count case; not an observed forward rate"},
+        {"order": 4, "metric": "Wilson 95% lower", "baseline": "0.6843 (fail)", "registered_minimum_case": "0.7249 (pass)", "interpretation": "Would clear the 0.70 confidence gate if the counts occur"}
+      ],
+      "paired_execution_screens": [
+        {"order": 1, "path": "Terminal hold baseline", "tail_pnl": "-$16.06650", "delta": "$0.00000", "harmed_winners": "0", "verdict": "reference"},
+        {"order": 2, "path": "Chosen-token profit lock", "tail_pnl": "-$13.15413", "delta": "+$2.91237", "harmed_winners": "3", "verdict": "reject"},
+        {"order": 3, "path": "Chosen-token 30 s loss cut", "tail_pnl": "-$8.98572", "delta": "+$7.08078", "harmed_winners": "2", "verdict": "reject"},
+        {"order": 4, "path": "Opposite-token complete-set hedge", "tail_pnl": "not measured", "delta": "not measured", "harmed_winners": "not measured", "verdict": "instrument only"}
+      ],
+      "complete_set_contract": [
+        {"order": 1, "component": "Position state", "frozen_rule": "One directional outcome position already filled", "current_status": "baseline entry behavior unchanged"},
+        {"order": 2, "component": "Missing-leg order", "frozen_rule": "Buy exact held shares of opposite outcome; taker FOK", "current_status": "exact replay implemented"},
+        {"order": 3, "component": "Cost guarantee", "frozen_rule": "Shares priced at FOK ceiling; fee bounded at min(ceiling, 0.50)", "current_status": "fails closed below $0.10 or without available cash"},
+        {"order": 4, "component": "Timing", "frozen_rule": "202 ms latency; 15 s hold; 5 s close stop; 1 s retry", "current_status": "fixed; no search allowed"},
+        {"order": 5, "component": "Forward evidence", "frozen_rule": "Two disjoint blocks of at least 100 admissible trades", "current_status": "not scored"},
+        {"order": 6, "component": "Collateral", "frozen_rule": "Full pair cost remains committed until close; no immediate merge assumed", "current_status": "implemented before scoring"},
+        {"order": 7, "component": "Live boundary", "frozen_rule": "Runtime parity and exact FOK reconciliation required", "current_status": "release preflight rejects"}
+      ],
+      "baseline_gates": [
+        {"order": 1, "metric": "Trades", "observed": "102", "required": ">= 80", "status": "pass"},
+        {"order": 2, "metric": "Fee-inclusive PnL", "observed": "+$13.54086", "required": "> $0", "status": "pass"},
+        {"order": 3, "metric": "Wilson lower bound", "observed": "0.684308", "required": ">= 0.70", "status": "fail"},
+        {"order": 4, "metric": "Profitable reports", "observed": "19", "required": ">= 20", "status": "fail"},
+        {"order": 5, "metric": "Five-report loss burst", "observed": "4", "required": "<= 2", "status": "fail"},
+        {"order": 6, "metric": "Last 21-fold PnL", "observed": "-$4.33848", "required": "> $0", "status": "fail"}
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "canary_diagnostic",
+      "label": "July 15 fresh-block canary diagnostic",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_fresh_block_canary_diagnostic.json",
+      "query": {
+        "description": "Capture, latency, gap localization, conversion integrity, clean segmentation, and terminal-readiness evidence.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_fresh_block_canary_diagnostic.json');",
+        "filters": ["July 15 bounded canary", "active-window continuity", "unchanged gap gates"],
+        "metric_definitions": ["Retained conditions exclude every window intersecting an unchanged continuity violation."]
+      }
+    },
+    {
+      "id": "replacement_collection",
+      "label": "July 18 binary-complement block 1 collection status",
+      "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_block1_collection_status.json",
+      "query": {
+        "description": "Completed replacement-segment contract, fail-closed reference-tape diagnostic, service health, installed hashes, and pending evidence gates.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_block1_collection_status.json');",
+        "filters": ["July 18 segment 001 rejected", "segment 002 running", "measurement-only", "zero scored"],
+        "metric_definitions": ["No strategy score is emitted when the reference-tape admissibility gate leaves zero conditions."]
+      }
+    },
+    {
+      "id": "window_admissibility_pipeline",
+      "label": "Condition-level forward admissibility pipeline",
+      "path": "deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json",
+      "query": {
+        "description": "Baseline loss-geometry diagnosis, registered minimum count arithmetic, condition-level causal tape contract, implementation state, tests, and exact reconciliation against the preserved July 15 raw capture.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json');",
+        "filters": ["202 ms strict baseline", "frozen forward-only screen", "preserved July 15 real-canary validation"],
+        "metric_definitions": [
+          "Registered screen arithmetic is a feasibility check, not a forward result.",
+          "The preserved-canary reconciliation compares identical unchanged gates at the condition grain: 24 captured -> 15 continuity-clean -> 6 outer-bound failures plus 9 internal-gap failures -> 0 exact-replay-admissible."
+        ]
+      }
+    },
+    {
+      "id": "binary_preregistration",
+      "label": "Binary-complement forward-only pre-registration",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+      "query": {
+        "description": "Frozen mechanism, two-tick rule, minimum sample, and two-block decision contract.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json');",
+        "filters": ["forward-only", "minimum 100 terminal conditions"],
+        "metric_definitions": ["No partial score is disclosed below the registered sample floor."]
+      }
+    },
+    {
+      "id": "paired_execution_instrumentation",
+      "label": "Paired-book execution-path instrumentation decision",
+      "path": "deploy/promotions/evidence/strategy_registry/20260718_paired_book_execution_path_instrumentation.json",
+      "query": {
+        "description": "Tail lifecycle failure diagnosis, measurement-only paired-book fields, unchanged strategy boundary, and the preregistered future execution-path comparison.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_paired_book_execution_path_instrumentation.json');",
+        "filters": ["40-trade tail lifecycle cohort", "202 ms executable paths", "measurement-only instrumentation"],
+        "metric_definitions": [
+          "Harmed winners are terminal-winning baseline trades made negative by measured-latency executable exit logic.",
+          "The alternate complete-set path remains unmeasured and cannot be treated as a strategy adjustment."
+        ]
+      }
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict 42-fold retained strategy aggregate",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {
+        "description": "Exact executable replay aggregate for primary_v6_volfloor_300 at 202 ms.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');",
+        "filters": ["42 strict folds", "202 ms replay latency"],
+        "metric_definitions": ["Loss burst is the maximum losing-report count in any five-report window."]
+      }
+    },
+    {
+      "id": "complete_set_preregistration",
+      "label": "Complete-set lock v1 replay-only pre-registration",
+      "path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_preregistration.json",
+      "query": {
+        "description": "Frozen missing-leg execution rule, worst-ceiling cost bound, exact variant identity, no-peeking evaluation contract, live boundary, and known operational risks.",
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_preregistration.json');",
+        "filters": ["replay-only", "202 ms latency", "$0.10 minimum locked profit", "minimum 100 post-registration trades"],
+        "metric_definitions": [
+          "Locked-profit floor subtracts entry cost, entry fee, maximum hedge spend at the submitted FOK ceiling, and the maximum hedge fee at any fill price at or below that ceiling from the $1-per-pair payout.",
+          "A preregistered candidate has no empirical strategy credit until its exact replay blocks satisfy every frozen gate."
+        ]
+      }
+    }
+  ]
+}

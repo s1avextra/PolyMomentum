@@ -1,0 +1,1453 @@
+{
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "A+ remains unproven—three probability-model challengers are rejected",
+    "description": "Technical decision report on PolyMomentum strategy evidence, fresh-block power, and the path to A+.",
+    "generatedAt": "2026-07-21T11:20:23Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# A+ remains unproven—three probability-model challengers are rejected"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Technical Summary\n\n- **PolyMomentum remains A- and paper-only.** The strict-42 baseline earns `+$13.54`, but profit factor is only `1.114`, the second half loses `-$4.34`, Wilson is `0.684`, breadth is `19` profitable reports, and the five-report loss burst is `4`. The lifecycle alternatives remain rejected and unprofitable.\n- **The measured strategy failure is overconfidence, but three distinct probability-model challengers now fail fixed evidence gates.** Fast volatility improved public-proxy log loss by `0.001040` but missed its Brier floor. DVOL covered only `33.33%` of registered forecasts under the frozen two-hour freshness rule versus `99%` required and was rejected before labels. The causal empirical-return CDF cleared aggregate Brier by `+0.000521`, yet improved log loss by only `+0.000302`, moved `93.84%` of forecasts farther from 0.5, and failed uncertainty, chronology, offset, and overconfidence-tail gates. All three families are rejected without retuning.\n- **Binary-complement coherence has a negative structural prior.** In the registered interval, paired validity blocked `0 / 2,880` otherwise-valid orientations and caused no observable wait or ask erosion; residual magnitude, opposite pressure, and matched depth also added no observed selectivity. Actual candidate outcomes remain sealed.\n- **Official settlement anchoring is mechanically correct but not yet supported by outcomes.** The label-free screen changed `215 / 2,778` fee-aware edge classifications across `21 / 24` markets. In the only retained signal-gated historical diagnostic, however, just `3 / 24` conditions produced opportunities: baseline selected one winner worth `+0.314523` in decision-time one-share payoff, while the official anchor filtered it and selected nothing, a paired delta of `-0.314523`. This is directionally negative and far too sparse for rejection, promotion, profitability, or A+ credit.\n- **The active canary remains sealed at `310 / 750` with zero strategy scores disclosed.** Session 018 contributed 20 admissible conditions. Session 019 was interrupted by the VPS outage and remains fail-closed and unscored; bounded measurement-v5 session 020 is collecting after the service restart. The settlement-anchor candidate is frozen only for two later, disjoint `750`-condition blocks if it is pursued; it is forbidden from using the active block. No production runtime, paper, or live strategy change is authorized."
+      },
+      {
+        "id": "headline_metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": [
+          "grade_card",
+          "hypothesis_card",
+          "floor_card",
+          "score_card"
+        ]
+      },
+      {
+        "id": "portfolio_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "lifecycle_v2",
+        "body": "## Lifecycle changes reduced known losses but did not create a profitable strategy\n\nTrailing v2 is the stronger lifecycle result, improving the tail baseline by `+$10.30`, but it still loses `-$2.29`, has profit factor `0.944`, payoff `0.157`, a four-loss burst, and a negative first half. Its apparent improvement is also concentrated in two folds. Immediate v1 is worse. These are mechanism rejections, not invitations to search neighboring thresholds."
+      },
+      {
+        "id": "lifecycle_chart_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "lifecycle_pnl_chart"
+      },
+      {
+        "id": "portfolio_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "portfolio_table"
+      },
+      {
+        "id": "calibration_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "strategy_diagnostic",
+        "body": "## Entry confidence is the dominant economic defect\n\nAcross the 102 strict-42 trades, internal fair value exceeded the realized win rate by `8.03` percentage points. Market price was only `2.71` points below outcomes and improved Brier score by `3.87%` and log loss by `5.22%` relative to the internal estimate. Because simply copying the market removes the claimed edge, the strategy needs independent causal information that rejects unreliable edges. The paired-book gate fits that job: it uses contemporaneous complement consistency and no terminal labels."
+      },
+      {
+        "id": "calibration_chart_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "calibration_gap_chart"
+      },
+      {
+        "id": "fast_volatility_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "fast_volatility_evidence",
+        "body": "## Fast volatility improves calibration too little to justify a strategy change\n\nBefore downloading or inspecting the registered public-window labels, the analysis froze a single mechanism: candidate volatility is the maximum of the existing `0.30` floor, rolling one-hour realized volatility, and the existing causal 15-minute-half-life EWMA volatility; baseline volatility is the maximum of the floor and rolling one-hour volatility. Across `8,633` complete five-minute BTC conditions and `25,899` forecasts at 120, 150, and 179 seconds, the candidate improved Brier score by `0.000177` and log loss by `0.001040`. Both chronological halves, all three offsets, the overconfidence tail, and both day-bootstrap lower bounds were positive. However, the preregistered overall Brier gate required at least `0.000500`; this was the only failed gate and it is decisive. The family is rejected without retuning. This public Binance direction screen establishes neither Polymarket opportunity selectivity nor executable PnL, and it authorizes no strategy, runtime, paper, live, profitability, or A+ change."
+      },
+      {
+        "id": "fast_volatility_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "fast_volatility_table"
+      },
+      {
+        "id": "dvol_source_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "dvol_source_feasibility",
+        "body": "## DVOL cannot support the registered causal volatility test\n\nThe Deribit DVOL source contained `1,460` observations at exact six-hour cadence. Under the preregistered two-hour maximum age, only `10,080 / 30,240` fixed-offset forecasts—`33.33%`—could receive a fresh value, versus the frozen `99%` minimum. The source-feasibility gate therefore rejected `dvol_volatility_max_v1` before any Binance evaluation labels were downloaded. No staleness window, interpolation rule, date range, or threshold was widened after inspection, and no strategy, replay, runtime, paper/live, profitability, or A+ change is authorized."
+      },
+      {
+        "id": "empirical_cdf_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "empirical_cdf_evidence",
+        "body": "## A causal empirical return law sharpens forecasts but fails robustness\n\nThe frozen candidate replaced the Gaussian residual law with a seven-day empirical distribution of exactly `2,016` strictly prior, fully terminal same-offset standardized returns. Across `10,062` non-tied five-minute conditions and `30,186` forecasts, aggregate Brier improvement was `+0.000521`, narrowly above the `+0.000500` floor, while log-loss improvement was only `+0.000302` versus `+0.001000` required. The candidate moved `93.84%` of forecasts farther from 0.5 and worsened the registered high-confidence tail. Both paired day-bootstrap lower bounds crossed zero; the first older subwindow lost on both scores; and 120-second log loss was slightly negative. Eight fixed checks failed, so `empirical_standardized_return_cdf_v1` is rejected without changing its lookback, smoothing, windows, offsets, or gates."
+      },
+      {
+        "id": "empirical_cdf_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "empirical_cdf_table"
+      },
+      {
+        "id": "probability_model_decision",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "probability_model_validation",
+        "body": "## The next decision remains the sealed canary\n\nThe probability-model branch has now tested a faster causal volatility scale, an external option-implied volatility source, and a non-Gaussian causal residual distribution without finding a gate-complete improvement. The exact table is retained instead of a new chart because the empirical decision is conjunctive across magnitude, chronology, offset, tail, and uncertainty checks; a visual aggregate would obscure the failures. Preserve the registered rejections and do not search neighboring parameters on these windows. Continue the active binary-complement block outcome-blind to `750` conditions, then build and hash-pin the separate measurement-only Linux scorer and evaluate the frozen rule once."
+      },
+      {
+        "id": "mechanism_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "binary_preregistration",
+        "body": "## The paired-book gate is structurally plausible but still only a hypothesis\n\nPolymarket's Yes/No pair is fully backed by one dollar, while complementary orders can settle through transfer, mint, or merge paths and actual execution occurs at bid or ask. Coherence is therefore partly a market-mechanics constraint, not independent directional alpha. The mechanism only treats disagreement between both books' midpoints and depth-weighted microprices as uncertainty—not as free arbitrage or direct PnL. The fixed two-tick rule was frozen before forward scoring and is distinct from chosen-token pressure, calibration, delayed-entry, passive-entry, derivatives, and lifecycle families."
+      },
+      {
+        "id": "pressure_redundancy_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "paired_pressure_diagnostic",
+        "body": "## Opposite-book pressure adds no observed feature information\n\nA label-free reconstruction tested a proposed backup rule requiring `chosen pressure > 0` and `opposite pressure < 0`. Across `6,465` valid one-second paired states from all `24` markets, that paired predicate and chosen-positive pressure each fired `6,464` times and disagreed `0 / 12,930` orientation comparisons. Cross-touch mirror error was exactly zero and pressure correlation was `-0.999999`. The opposite-book clause is therefore rejected as a separate feature family in this observed population. This does **not** establish that chosen-token pressure predicts settlement or profitability. Coverage was `89.79%`, `735` states were invalid, native timestamps regressed `865` times, and the reference tapes contain internal gaps; the result is mechanism-screen evidence only and cannot change the sealed rule, grade, or promotion state."
+      },
+      {
+        "id": "pressure_redundancy_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "pressure_redundancy_table"
+      },
+      {
+        "id": "residual_independence_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "residual_attribution_amendment",
+        "body": "## Residual magnitude has no observed selectivity after paired-top validity\n\nThe frozen two-tick residual rejected `0 / 6,465` valid one-second states in the 24-market BTC diagnostic and `0 / 1,403` valid states in its registered 120–180 second interval. All `735` unavailable full-window states failed the valid-top check; none failed for staleness or a missing snapshot. An independent public replication then captured five batches across 100 current non-candle binary markets: `490 / 500` paired states were valid, the registered Rust-equivalent threshold rejected zero, and even a fixed `0.002` threshold rejected zero. All seven nonzero cross-market microprice residuals coincided with depth mismatch and millisecond timestamp skew; midpoint residuals were always zero. This is label-free structural evidence, not settlement or PnL evidence. It means a future pass cannot be credited to residual magnitude without decision disagreements. A three-way post-block attribution—baseline eligibility, paired-book validity, and the frozen residual—was preregistered before opening any sealed outcome and is now implemented as descriptive-only schema-6 output. The current rule, thresholds, grade, and paper-only state remain unchanged."
+      },
+      {
+        "id": "residual_independence_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "residual_independence_table"
+      },
+      {
+        "id": "paired_wait_cost_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "paired_wait_cost_diagnostic",
+        "body": "## Paired validity caused no incremental wait in the retained candidate interval\n\nThe registered 120–180 second interval contained `1,403 / 1,440` valid pair states. Its `37` invalid seconds formed two episodes of `10` and `27` seconds in one market, but both outcome books were invalid throughout both episodes. Across the two possible orientations per second, the opposite-book requirement therefore blocked `0 / 2,880` otherwise-valid chosen sides. No pair-only recovery delay or executable-ask erosion was observable. This answers the structural wait-cost question negatively, but it is not a candidate or outcome result: signal, edge, state, labels, and the active forward block were intentionally absent. The sealed schema-6 score remains the only authority on actual decision disagreements and economic attribution."
+      },
+      {
+        "id": "paired_wait_cost_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "paired_wait_cost_table"
+      },
+      {
+        "id": "settlement_anchor_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "settlement_anchor_diagnostic",
+        "body": "## The fair-value anchor does not match the market's settlement source\n\nThe current model sends Binance RTDS current price and Binance window-open price into the binary fair-value formula even though these BTC five-minute markets resolve against Chainlink BTC/USD. A causal, label-free reconstruction held Binance momentum, Binance realized volatility with its `0.30` floor, the option formula, asks, fees, price band, and `0.07` minimum edge fixed; only fair spot and strike moved to Chainlink current/open. On `1,389` source-fresh paired states, the absolute fair-probability change was `2.02` percentage points at the median, `5.51` at p90, and `23.35` at maximum. That changed `215 / 2,778` orientation-level edge classifications: `112` proxy-only and `103` official-only, spanning `21 / 24` markets, `124` UP orientations, and `91` DOWN orientations. All `24 / 24` published prices to beat matched the captured Chainlink open to floating precision. This is distinct model-specification evidence, not trade or profit evidence: disagreements were concentrated `30 / 185` across chronological halves, terminal labels and strategy outcomes were excluded, and the active block is ineligible. An explicit offline-only evaluator now changes just fair spot/strike, enforces the frozen `10 s` current and `2 s` open bounds, rejects non-Chainlink inputs, pins the exact baseline hash, forbids grid/adaptive runs, and leaves the default harness and runtime unchanged. Its enforced allocation wrapper pins exactly 750 IDs, a fixed contiguous report partition with public strikes, the registered boundary's complete prior-block shape, every source hash, strict five-minute chronology, zero overlap, and three single-use report, trade, and paired-audit paths before replay data access. A separate label-free source audit verifies at least `95%` official-anchor coverage and the public prices to beat. The implemented paired scorer rehashes the PMXT, signal, settlement, fair-value, allocation, source-audit, report, and trade inputs; permits only the fair-value source to differ; and recomputes every registered economic, breadth, tail, latency, execution, and parity gate from raw fills. Synthetic pass, source-drift, path-reuse, and recomputed-failure tests prove the enforcement path without creating promotion evidence; all `545` Rust tests pass. No concrete future allocation lock can be issued until the controlling binary-complement condition set seals, so no anchor outcome, profitability, or A+ claim exists."
+      },
+      {
+        "id": "settlement_anchor_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "settlement_anchor_table"
+      },
+      {
+        "id": "settlement_anchor_historical_outcome_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "settlement_anchor_historical_outcome",
+        "body": "## The only signal-gated historical outcome check is negative and underpowered\n\nA bounded retrospective replay of the same immutable 24-market July 15 capture exported `81` first opportunities after every non-edge strategy gate, representing only `3` independent conditions. All `81 / 81` official-source rows passed the frozen freshness limits. Under the existing Binance anchor, one condition barely cleared the fee-aware `0.07` edge floor at `0.072011`; it resolved as a winner and produced `+0.314523` of decision-time one-share payoff. Replacing only fair spot and strike with captured Chainlink values moved that edge to `0.001399`, selected zero conditions, and reduced paired payoff across all 24 captured markets by `0.314523`. This weakens the candidate's prior but does not reject it: the signal tape required official Binance one-second preroll and 44 bounded gap-fill seconds, the Chainlink tape could not satisfy the harness five-second settlement-continuity rule, repeated opportunity seconds are not independent, and decision-time one-share payoff omits latency, depth, fills, sizing, and state. The hash-pinned notebook reproduces the engine fair value exactly and revalidates every compressed and decompressed input. The forward contract remains frozen and unchanged; no retuning, runtime change, profitability claim, or promotion follows."
+      },
+      {
+        "id": "settlement_anchor_historical_outcome_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "settlement_anchor_historical_outcome_table"
+      },
+      {
+        "id": "paired_depth_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "paired_depth_diagnostic",
+        "body": "## Paired depth is mirrored, not a new uncertainty signal\n\nA source-pinned, outcome-blind check reconstructed the nearest three levels of `490 / 500` current non-candle paired states. Every valid state passed a fixed `0.25` matched-depth ratio; the median ratio was exactly `1.0` and the minimum was `0.845`. A `$10` both-entry capacity reference rejected `20` states, but every failure came from the YES-side book: it added `0` rejections when YES was treated as chosen and `20` when NO was chosen. The four-side version rejected `30` states and was stable across the five snapshots, but that is generic liquidity selection already substantially represented by chosen-book depth and executable FOK checks. The paired-depth challenger is rejected as non-distinct and is not preregistered or implemented."
+      },
+      {
+        "id": "paired_depth_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "paired_depth_table"
+      },
+      {
+        "id": "economic_diagnostic_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "economic_diagnostics_amendment",
+        "body": "## A late-selection/payoff confound is visible without becoming a tuning lever\n\nThe registered screen may wait beyond the first baseline-eligible row until paired-book coherence appears, and that later row may reverse direction. This is causal, but a terminal classification win can occur near resolution at a top ask that leaves poor payoff after latency, depth, and fees. Before any forward score, schema 3 was frozen to publish selection delay, time to close, decision asks, final-minute selections, and direction changes. Those summaries remain descriptive only in schema 6: they cannot tune the rule, bypass the second block, or replace exact replay."
+      },
+      {
+        "id": "economic_alignment_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "unit_economics_amendment",
+        "body": "## Classification strength is no longer allowed to substitute for economics\n\nThe historical baseline's profit factor is only `1.114`. If winner and loss dollars followed the registered count minima exactly—`90%` winner retention and at most `70%` loss retention—the implied profit factor would be `1.433`. That leaves only `16.24%` deterioration in retained winner dollars before falling below the A+ `1.20` floor. Count retention cannot guarantee that dollar relationship. Schema 6 retains schema 5's normalized `$1` recorded-ask entry pricing, recorded entry fee, realized-support gates, unit profit-factor floor of `1.20`, and payoff floor of `0.20`; its new comparator attribution is descriptive only. This optimistic screen is necessary but not sufficient: latency, depth, fills, sizing, breadth, and tails still belong to exact replay."
+      },
+      {
+        "id": "economic_alignment_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "economic_alignment_table"
+      },
+      {
+        "id": "power_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "power_amendment",
+        "body": "## A 100-condition block would be statistically misleading\n\nThe baseline executed only `102` trades across `631` historical terminal conditions. At that nuisance rate, `100` conditions imply about `16.16` baseline candidates and `3.65` losses; the Wilson gate then requires an almost perfect selected record, and one loss moves the removal rate dramatically. At `750` conditions, the expected support is `121.24` baseline candidates, `27.34` losses, and `103.65` selected candidates at the registered effect. That is large enough for the existing gates to become decision-useful without changing the trading rule."
+      },
+      {
+        "id": "power_chart_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "power_support_chart"
+      },
+      {
+        "id": "realized_support_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "realized_support_amendment",
+        "body": "## Decision-useful support is now a hard gate, not an expectation\n\nThe blinded power amendment chose `750` conditions because that implied a `98.61%` chance of at least `100` baseline candidates, a `99.66%` chance of at least `15` baseline losses, and about `103.65` selected candidates at the registered effect. Schema 4 enforced only the 750-condition floor and ratio/economic gates, so an unusually sparse but nearly perfect sample could still pass. Before any forward strategy metric was inspected, schema 5 registered the realized minima explicitly: `100` baseline candidates, `15` baseline losses, and `80` selected candidates, matching the standing A+ minimum-trade policy where applicable. Schema 6 retains those gates exactly while adding non-gating attribution. The block is rejected at its fixed score if any support gate fails; collection cannot be extended adaptively. Measurement-v11 remains separately installed as the schema-5 predecessor with SHA-256 `07a386c7…4f00b89`, while the active v5 collector and production engine remain unchanged."
+      },
+      {
+        "id": "collection_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "support_only_status_310",
+        "body": "## Collection is progressing again, but still contains no strategy result\n\nEleven completed segments were terminal-only pending because the runner stopped checking Gamma after 60 seconds and the first refresh pass covered only the newest source root. A measurement-pipeline repair now uses a bounded 15-minute finalization wait and scans every registered source root. The repaired support audit reconciled 241 manifest rows to 241 unique IDs with no accounting or source failures. Subsequent bounded segments have lifted certified support to `310 / 750` without opening strategy metrics. Session 018 captured 24 conditions, admitted 20, excluded 4 under unchanged gates, sealed all five admissible groups, and deleted only its owned raw frames; its measured latency recommendation of `108 ms` does not lower the registered `202 ms` replay floor. Session 019 was interrupted by the VPS outage and remains fail-closed and unscored. After all PolyMomentum services restarted cleanly, bounded measurement-v5 session 020 resumed collection from the unchanged sealed support floor. No opportunity report, screen, candidate score, or promotion credit exists."
+      },
+      {
+        "id": "tick_integrity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "tick_integrity_amendment",
+        "body": "## Dynamic tick changes are real, but the frozen entry window remains causal\n\nThe current raw segment contained `24` tick-change rows across `6` markets, all changing from `0.01` to `0.001`; the earliest arrived `254.187` seconds after market open. Registered baseline-eligible rows end before `180` seconds, so the observed events do not overlap the strategy window. Gamma supplied no usable minimum tick for these markets, however, so a static `0.01` fallback was not safe for future segments. Before any score, the harness was amended to persist `0.001` only after a replayed top-of-book threshold crossing that occurred before the decision. A direct raw-to-v1 spot check found the preserved extreme book update `3 ms` after its explicit tick event. Measurement v5 now makes that check exhaustive and fail closed during conversion: raw frames cannot pass deletion preflight if a selected transition is malformed, differs from `0.01` to `0.001`, or lacks a reconstructable preserved book event. Completed v4 session 011 was not interrupted; active collection resumed as session 013 under v5 with zero restarts. The shared v1 format, fixed equation, two-tick multiplier, classification gates, and economic gates remain unchanged."
+      },
+      {
+        "id": "pair_reproduction_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "pair_reproduction_amendment",
+        "body": "## A coherent score must now reproduce from the two recorded books\n\nThe schema-4 scorer previously trusted stored complement residuals without redoing the book arithmetic. That was an evidence defect: a token-wiring, serialization, microprice, or ask-alignment error could look like a successful uncertainty filter. Before any forward score, the scorer was hardened to require two distinct and stable token IDs, validate both raw books, recompute both microprices and residuals, align each best ask with the executable up/down ask used for unit economics, and reject extreme prices without the causal `0.001` tick. Four tamper tests now fail closed, while the full suite passes `501` tests. Scorer v6 is installed separately on the VPS; the active v5 recorder was not interrupted because its capture format already contains every required raw field. The rule, multiplier, schema, gates, and sealed sample remain unchanged."
+      },
+      {
+        "id": "execution_tick_parity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "execution_tick_parity_amendment",
+        "body": "## Exact replay now uses the same causal tick as the signal\n\nThe paired-book feature path already persisted a condition's dynamic tick, but executable replay still sized taker entries, quoted makers, stored positions, and rounded sells with metadata or a static `0.01` fallback. After a causal move to `0.001`, a visible `0.971` ask could therefore become a `0.98` FOK ceiling, changing both share count and edge; a `0.029` sell could be rounded down to `0.02`. That defect is now closed in both the research harness and cached live-replay, including an exit transition that occurs after entry. Three regression tests cover persistent condition state plus entry and exit quote rounding, and the full suite passes `504` tests. Measurement-v7 is installed as a separate Linux binary with the unchanged v6 scorer hash; production and the active v5 capture were not replaced or restarted. The current fee formula and crypto rate match the venue contract. Applying the fee once at multi-level VWAP is conservative before rounding, but aggregate L2 cannot reproduce match-by-match five-decimal rounding; that remains an explicit exact-replay limitation. No forward metric, fixed rule, screen gate, or capture row changed."
+      },
+      {
+        "id": "live_tick_parity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live_tick_parity_amendment",
+        "body": "## Future live orders now retain the venue's current tick end to end\n\nThe live market feed previously discarded Polymarket's official `tick_size_change` event, while the order path reread Gamma metadata or used `0.01`. A promoted runtime could therefore disagree with exact replay or submit an invalid price after a dynamic transition. The source now keeps the latest timestamped tick per token, does not let a tick-only event refresh book age, resolves one causal condition tick across both outcomes, and uses it for visible-depth sizing, maker preflight, FOK rounding, signing, and submission. Two red-first regressions cover stale-event rejection, freshness separation, latest-feed selection, and causal book fallback; the complete suite passes `506` tests. Measurement-v8 is installed separately with the unchanged scorer, replay, and strategy rule. The production binary was not replaced or restarted, and active measurement-v5 session 013 stayed on PID `240334` with zero restarts."
+      },
+      {
+        "id": "live_reconciliation_parity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live_reconciliation_parity_amendment",
+        "body": "## Future V2 fills now retain fee and lifecycle semantics\n\nThe authenticated live path still trusted a legacy top-level `fee_rate_bps`, sent `{}` instead of the documented `PING`, applied aggregate taker economics to managed maker legs, and booked at nonterminal `MATCHED` before deduplicating later status updates. A future live taker fill could therefore carry zero fee, a maker partial could be overstated, or a later `FAILED` transition could be hidden. The source now parses current Gamma `feeSchedule.rate` and `orderPriceMinTickSize`, snapshots the effective maker/taker fee with each pending order, computes the official five-decimal fee from the terminal confirmed fill, reconciles maker-specific legs, sends literal `PING`, and trips the breaker when fee or fill inputs are invalid. Four focused regressions and the full `510`-test suite pass. Measurement-v9 was installed separately; production and the active v5 canary were not restarted."
+      },
+      {
+        "id": "rest_recovery_parity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "rest_recovery_parity_amendment",
+        "body": "## Restart-safe authenticated recovery closes the last known live reconciliation gap\n\nA venue could previously accept an order before the HTTP response reached the process, leaving no durable order id after a crash; WebSocket trade ids and pending position economics were also memory-only. Measurement-v10 now computes and atomically journals the V2 EIP-712 order hash before submission, restores only validated nonterminal orders, blocks new live orders until authenticated recovery succeeds, and polls confirmed trades plus order status every five seconds. Ambiguous submissions retain exposure. A terminal order may prove that confirmed trade evidence is missing but cannot invent fill price or fees from `size_matched`; the breaker stops instead. The complete suite passes `517` tests, and the separately installed Linux binary matches SHA-256 `03073aef…e08585f`. This closes the recovery implementation blocker but does not change the A- grade or authorize live trading."
+      },
+      {
+        "id": "evidence_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "evidence_table"
+      },
+      {
+        "id": "capacity_finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "fixed_support_plan",
+        "body": "## The fixed-support path remains bounded and outcome-blind\n\nSegment 003 used `2.64 GB` of raw frames over 10,860 seconds and retained `120.1 MB` for 12 admitted conditions. Converting only already-admitted condition IDs projects about `6.99 GiB` of selected replay data at the full 750-condition floor. The VPS had about `12 GiB` free during the active segment-011 raw capture, while the collector preserves a `5 GiB` reserve and refuses a new segment if projected raw capture would breach it. This is operational capacity evidence only; it does not improve or reveal strategy performance."
+      },
+      {
+        "id": "capacity_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "capacity_table"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Methodology and source authority\n\nExact fee-inclusive replays and per-trade reconciliations are authoritative for historical strategy behavior. Each preregistration controls its own forward rule, condition allocation, and gates. The power, realized-support, residual-attribution, descriptive-diagnostic, unit-economics, causal-tick, paired-book reproduction, exact-replay, live-tick, live-reconciliation, and REST-recovery amendments were registered before any binary-complement forward strategy metric or screen existed. VPS service state establishes collector health only. The schema-6 scorer retains the schema-5 gates, requires both paired books to satisfy the existing 30-second replay freshness contract, pins every opportunity and resolution input by SHA-256, reproduces pair features and executable asks from raw serialized fields, prices normalized entries with the recorded fee rate, rejects inadequate realized support, and serializes descriptive comparator attribution including fee-aware PnL, profit factor, and maximum drawdown before any block can pass. Measurement v5 records explicit-to-preserved tick-transition integrity during conversion; measurement-v11 remains the separately installed schema-5 predecessor. A new hash-pinned schema-6 Linux scorer is intentionally deferred until the fixed floor authorizes scoring. The collector counts only fully sealed segments with complete resolution manifests and never reads strategy outcomes. The portfolio notebook rechecks file hashes, gate arithmetic, exact binomial support probabilities, Wilson calculations, economic alignment, and storage capacity. Separate executed label-free notebooks reconstruct paired-book pressure, residual, wait-cost, depth, and settlement-source anchoring; each is authoritative only for its bounded structural screen. The settlement-anchor page manifest independently pins all 24 public market pages and confirms their published Chainlink prices to beat against the captured open. The offline evaluator amendment now pins a default-off harness path, Chainlink-only provenance and causal-coverage audit, exact 750-condition/report allocation, public strikes, streaming SHA-256 verification for PMXT and every raw source, and three reserved single-use outputs. Its paired scorer recomputes the registered gates and requires exact catalog, strategy, execution, raw-input, and non-fair-source parity without changing the live or paper strategy. The fast-volatility screen was separately preregistered before its 31 official Binance one-second archives were downloaded or their labels inspected. It uses every complete five-minute condition in the fixed June 11–July 10 population, three fixed decision offsets, the engine's exact normal-CDF approximation, two chronological halves, a fixed overconfidence tail, and 10,000 UTC-day bootstrap resamples. The executed notebook and independent raw-archive validator reproduce all source checksums, `2,678,400` one-second rows, probabilities, scores, confidence intervals, and the single failed gate; repository-owned evidence paths are canonicalized so CLI and notebook outputs are byte-identical."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Caveats, assumptions, and robustness\n\nThe `102 / 631` firing rate uses executed trades as a conservative proxy for reconstructed screen eligibility; exposure and state gates can suppress executions, so the forward screen may contain more candidates. Historical rates may drift, which is why the `750`-condition count and realized-support minima are fixed rather than adapted after collection. A sparse block is rejected rather than extended. The measurement-v11 build overlapped the first minutes of session 018's core window; zero restarts and zero new recorder warnings do not prove measurement neutrality, so that segment receives support only if the existing source-continuity and admissibility audits pass. The pressure, residual, wait-cost, depth, and initial settlement-anchor results are label-free mechanism screens. The BTC capture has incomplete one-hour warm-up, `865` native CLOB timestamp regressions, and reference-tape gaps; one-hertz reconstruction can miss sub-second transitions. Settlement-anchor orientations are edge-classification possibilities, not strategy candidates or trades. Fourteen otherwise-valid seconds failed the frozen 10-second Chainlink freshness limit, the sample contains only 24 markets, and disagreements were concentrated `30 / 185` across chronological halves. The retrospective outcome diagnostic improves relevance but not support: only three conditions reached the non-edge strategy gate, the Binance signal tape required official one-second preroll plus 44 bounded gap-fill seconds, and the captured Chainlink tape failed the harness five-second settlement-continuity check. Its one-share payoff excludes latency, depth, fills, sizing, exposure feedback, and tail clustering. The candidate deliberately retains Binance momentum and volatility, so it tests settlement-source alignment rather than a fully Chainlink-derived forecasting process. The independent public replication covers only five batches over roughly nine seconds; `10 / 500` pairs lacked one book side, pair timestamp skew reached `2 ms`, and observed REST arrays contradicted the documented best-first sort direction, so best prices were derived by extrema. The fast-volatility population is a public Binance terminal-direction proxy, not the strategy's gated Polymarket opportunities or official Chainlink settlement source. Proper-score gains do not establish edge selectivity, fills, fees, breadth, tail stability, or PnL. Seven exactly flat terminal conditions were excluded, yielding `8,633 / 8,640` conditions; forecast completeness was `99.919%` because those terminal ties have no binary label. Fifteen forecasts became negligibly more confident despite higher volatility because of the Black–Scholes variance term; the maximum confidence increase was `0.0000467`, and a post-score integrity amendment records the wording correction without changing the formula, dates, gates, or rejection. None of these diagnostics can support promotion, execution parity, settlement prediction, or profitability. Schema 6 applies recorded-ask entry fees, the existing A+ profit-factor/payoff floors, explicit realized support, and descriptive comparator attribution, but it still does not model latency, depth traversal, fill failure, stateful sizing, entry-state feedback, chronological breadth, or tail clustering. Those dimensions remain mandatory after two disjoint forward passes."
+      },
+      {
+        "id": "recommendation",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Recommended next steps\n\n1. Keep production in paper-only mode and preserve all existing A+ gates.\n2. Continue the active bounded measurement-v5 binary-complement canary from `310 / 750`; retain the `5 GiB` disk reserve and 96-segment hard cap.\n3. Count support only from fully sealed segments with complete ready resolution groups and passing tick-integrity manifests. Do not inspect strategy candidates, outcomes, rates, or economics before the floor.\n4. Reject `fast_volatility_max_v1` permanently on its registered June 11–July 10 windows. Do not retune its half-life, floor, combination rule, dates, offsets, or thresholds, and do not implement it in the runtime.\n5. Treat the zero pair-only exposure and zero residual selectivity as a negative structural prior for binary-complement coherence. Do not add neighboring coherence or paired-depth challengers.\n6. When the fixed floor authorizes scoring, build and hash-pin a separate schema-6 Linux measurement binary; do not replace the collector or production binary. Score the frozen binary-complement rule exactly once and apply every support and A+ gate without retuning.\n7. Preserve the frozen settlement-source-anchor contract without retuning: only fair spot and strike move from Binance to causal Chainlink current/open; every other input, threshold, fee, and gate remains unchanged. Treat the `-0.314523` three-condition retrospective result as a negative, underpowered prior with zero gate credit. Never score the candidate on the active block. If binary-complement block 1 fails and the anchor is still pursued, begin anchor block 1 strictly after that condition set is sealed and published; if binary complement passes, reserve the next disjoint block for its replication before starting the anchor.\n8. For each future anchor block, issue one passing allocation lock that pins the exact 750 condition IDs, fixed report partition, public strikes, complete boundary-specific prior-block history, source hashes, zero overlap, and unused report, trade, and pair-audit paths. Run the label-free source audit, then evaluate with `--fair-value-btc-csv`, `--pin-input-artifacts`, `--settlement-anchor-allocation-lock`, and `--settlement-anchor-source-audit`. After both reports exist, invoke the paired scorer exactly once; accept only its raw-fill recomputation of at least `95%` official-anchor coverage, at least `80` candidate trades, every absolute gate, and exact non-fair source and execution parity. Reject the family on any failed gate and do not search neighbors.\n9. Only two anchor-block passes may authorize one default-off runtime implementation and exact replay at at least `202 ms`. Do not reuse the existing broad live Chainlink switch, which also changes momentum. Promotion still requires positive executable fee-inclusive PnL in both halves, profit factor `>= 1.20`, payoff `>= 0.30`, Wilson `>= 0.70`, breadth, loss-burst, tail, causal-source, fill, fee, state, recovery, and live/replay-parity gates."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Does actual candidate timing create any binary-complement decision disagreements despite zero pair-only exposures in the retained label-free interval?\n- Does official Chainlink anchoring keep material decision selectivity across two disjoint chronological blocks, or was the `30 / 185` half split transient?\n- Was filtering the sole historical baseline winner a sparse-sample accident, or does the same negative direction recur in fresh signal-gated conditions?\n- Do official-anchor disagreements remove losses without sacrificing payoff, breadth, or either half of fee-inclusive PnL?\n- Can causal Chainlink coverage remain above `95%` while preserving the frozen 10-second current and 2-second open bounds?\n- Will source admissibility remain high enough to reach the active 750-condition floor before the fixed 96-segment cap?"
+      }
+    ],
+    "cards": [
+      {
+        "id": "grade_card",
+        "dataset": "headline",
+        "description": "Current promotion grade; live trading remains off.",
+        "sourceId": "strict42_baseline",
+        "metrics": [{"field": "grade", "format": "text", "label": "Current grade"}]
+      },
+      {
+        "id": "hypothesis_card",
+        "dataset": "headline",
+        "description": "Strategy mechanisms still eligible for new forward evidence.",
+        "sourceId": "power_amendment",
+        "metrics": [{"field": "active_hypotheses", "format": "number", "label": "Active hypotheses"}]
+      },
+      {
+        "id": "floor_card",
+        "dataset": "headline",
+        "description": "Fixed terminal-condition floor per prospective block.",
+        "sourceId": "power_amendment",
+        "metrics": [{"field": "conditions_per_block", "format": "number", "label": "Conditions per block"}]
+      },
+      {
+        "id": "score_card",
+        "dataset": "headline",
+        "description": "Forward binary-complement scores disclosed so far.",
+        "sourceId": "collection_status",
+        "metrics": [{"field": "forward_scores", "format": "number", "label": "Forward scores"}]
+      }
+    ],
+    "charts": [
+      {
+        "id": "calibration_gap_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "calibration_gap",
+        "title": "Predicted probability versus realized win rate",
+        "subtitle": "102 strict-42 fee-inclusive trades; probabilities are entry-time cohort means.",
+        "question": "Is internal fair value or market price closer to realized outcomes on executed candidates?",
+        "rationale": "Three common-scale bars show the direction and magnitude of entry overconfidence without implying causality.",
+        "maxRows": 3,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "comparisonContext": {"baseline": "realized terminal win rate", "grain": "102-trade strict-42 cohort", "unit": "probability"},
+        "referenceLines": [{"axis": "y", "value": 0.7745098039215687, "label": "Realized win rate", "color": "neutral", "lineStyle": "dashed"}],
+        "encodings": {
+          "x": {"field": "estimate", "type": "nominal", "label": "Estimate"},
+          "y": {"field": "probability", "type": "quantitative", "label": "Mean probability / outcome rate", "format": "percent"},
+          "tooltip": [
+            {"field": "gap_to_outcome", "type": "quantitative", "label": "Gap to outcome", "format": "percent"},
+            {"field": "sample_size", "type": "quantitative", "label": "Trades", "format": "number"}
+          ]
+        },
+        "sourceId": "strategy_diagnostic"
+      },
+      {
+        "id": "lifecycle_pnl_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "lifecycle_pnl",
+        "title": "Neither lifecycle policy makes the 14-fold tail profitable",
+        "subtitle": "Exact 202 ms replay of folds 29–42; USD after fees.",
+        "question": "Do complete-set lifecycle changes make the known tail profitable?",
+        "rationale": "Three bars preserve the common tail window and break-even boundary.",
+        "maxRows": 3,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "comparisonContext": {"baseline": "primary_v6_volfloor_300 tail", "grain": "14-fold aggregate", "unit": "USD after fees"},
+        "referenceLines": [{"axis": "y", "value": 0, "label": "Break-even", "color": "neutral", "lineStyle": "dashed"}],
+        "encodings": {
+          "x": {"field": "policy", "type": "nominal", "label": "Policy"},
+          "y": {"field": "pnl_usd", "type": "quantitative", "label": "PnL after fees, USD", "format": "number"},
+          "color": {"field": "policy", "type": "nominal", "label": "Policy"},
+          "tooltip": [
+            {"field": "profit_factor", "type": "quantitative", "label": "Profit factor", "format": "number"},
+            {"field": "payoff_ratio", "type": "quantitative", "label": "Payoff ratio", "format": "number"}
+          ]
+        },
+        "sourceId": "lifecycle_v2"
+      },
+      {
+        "id": "power_support_chart",
+        "type": "line",
+        "intent": "trend",
+        "layout": "full",
+        "dataset": "power_support",
+        "title": "The amended block floor produces decision-useful support",
+        "subtitle": "Expected observations from historical nuisance rates; the trading rule and rate gates are unchanged.",
+        "question": "How much candidate and loss support is expected as terminal conditions accumulate?",
+        "rationale": "A multi-series line chart makes the sparse-event scaling and fixed 750-condition boundary visible.",
+        "maxRows": 24,
+        "palette": {"kind": "categorical", "name": "blue-gold"},
+        "legend": {"position": "top", "title": "Expected cohort", "interactive": true, "sort": "labelAsc"},
+        "comparisonContext": {"baseline": "historical 102 trades / 631 terminal conditions", "grain": "fixed prospective block", "unit": "expected observations"},
+        "referenceLines": [
+          {"axis": "x", "value": 750, "label": "Amended block floor", "color": "danger", "lineStyle": "dashed"},
+          {"axis": "y", "value": 100, "label": "100-observation support", "color": "neutral", "lineStyle": "dotted"}
+        ],
+        "encodings": {
+          "x": {"field": "terminal_conditions", "type": "quantitative", "label": "Terminal aligned conditions", "format": "number"},
+          "y": {"field": "expected_observations", "type": "quantitative", "label": "Expected observations", "format": "number"},
+          "color": {"field": "cohort", "type": "nominal", "label": "Cohort"},
+          "tooltip": [{"field": "expected_wilson_lower", "type": "quantitative", "label": "Expected Wilson lower", "format": "number"}]
+        },
+        "sourceId": "power_amendment"
+      }
+    ],
+    "tables": [
+      {
+        "id": "portfolio_table",
+        "dataset": "portfolio",
+        "title": "Strategy portfolio decision",
+        "subtitle": "Historical diagnostics cannot earn promotion credit; the forward hypothesis remains sealed.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "decision_notebook",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "mechanism", "label": "Mechanism", "type": "text"},
+          {"field": "evidence", "label": "Evidence", "type": "text"},
+          {"field": "pnl_usd", "label": "PnL, USD", "format": "number"},
+          {"field": "profit_factor", "label": "Profit factor", "format": "number"},
+          {"field": "wilson_lower", "label": "Wilson lower", "format": "number"},
+          {"field": "decision", "label": "Decision", "type": "text"}
+        ]
+      },
+      {
+        "id": "evidence_table",
+        "dataset": "evidence_state",
+        "title": "Fresh evidence state",
+        "subtitle": "Operational success and strategy evidence are deliberately separated.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "collection_status",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "stage", "label": "Stage", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "required", "label": "Required", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      },
+      {
+        "id": "capacity_table",
+        "dataset": "fixed_support_capacity",
+        "title": "Fixed-support capacity checks",
+        "subtitle": "Conservative measurement-only sizing for the 750-condition block and one active raw segment.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "fixed_support_plan",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed or modeled", "type": "text"},
+          {"field": "guardrail", "label": "Guardrail", "type": "text"},
+          {"field": "status", "label": "Status", "type": "text"}
+        ]
+      },
+      {
+        "id": "economic_alignment_table",
+        "dataset": "economic_alignment",
+        "title": "Classification-to-economics alignment",
+        "subtitle": "Historical sanity envelope only; schema 6 will compute the actual forward unit economics and attribution once per sealed block.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "unit_economics_amendment",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "measure", "label": "Measure", "type": "text"},
+          {"field": "value", "label": "Value", "format": "number"},
+          {"field": "unit", "label": "Unit", "type": "text"},
+          {"field": "interpretation", "label": "Interpretation", "type": "text"}
+        ]
+      },
+      {
+        "id": "pressure_redundancy_table",
+        "dataset": "pressure_redundancy",
+        "title": "Paired-pressure mechanism screen",
+        "subtitle": "Label-free structural evidence only; no settlement outcomes, backtest PnL, or promotion credit.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "paired_pressure_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Evidence boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "residual_independence_table",
+        "dataset": "residual_independence",
+        "title": "Complement-residual mechanism replication",
+        "subtitle": "Label-free BTC reconstruction and independent current non-candle market snapshots; no settlement outcomes or promotion credit.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "residual_attribution_amendment",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "population", "label": "Population or check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "paired_wait_cost_table",
+        "dataset": "paired_wait_cost",
+        "title": "Paired-validity wait-cost screen",
+        "subtitle": "Twenty-four retained BTC markets, preregistered 120–179 second interval, two potential orientations per second, and no strategy outcomes.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "paired_wait_cost_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "settlement_anchor_table",
+        "dataset": "settlement_anchor",
+        "title": "Official settlement-anchor mechanism screen",
+        "subtitle": "Twenty-four retained BTC markets; causal Chainlink versus Binance anchoring with all other inputs fixed and no terminal outcomes.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "settlement_anchor_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "settlement_anchor_historical_outcome_table",
+        "dataset": "settlement_anchor_historical_outcome",
+        "title": "Retrospective signal-gated anchor outcome diagnostic",
+        "subtitle": "Twenty-four captured markets, 81 opportunity rows, three independent conditions, earliest qualifying decision per condition, and non-executable one-share payoff.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "settlement_anchor_historical_outcome",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "fast_volatility_table",
+        "dataset": "fast_volatility",
+        "title": "Preregistered fast-volatility calibration screen",
+        "subtitle": "June 11–July 10 public BTC proxy; 8,633 complete conditions and 25,899 fixed-offset forecasts; positive values favor the candidate.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "fast_volatility_evidence",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "empirical_cdf_table",
+        "dataset": "empirical_return_cdf",
+        "title": "Preregistered empirical-return CDF calibration screen",
+        "subtitle": "April 16–May 15 older population plus July 16–20 fresh holdout; 10,062 conditions and 30,186 fixed-offset forecasts; positive score deltas favor the candidate.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "empirical_cdf_evidence",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      },
+      {
+        "id": "paired_depth_table",
+        "dataset": "paired_depth_capacity",
+        "title": "Paired-depth structural screen",
+        "subtitle": "Five source-pinned public snapshots across 100 non-candle binary markets; 490 valid paired states and no settlement labels.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "sourceId": "paired_depth_diagnostic",
+        "columns": [
+          {"field": "order", "label": "Order", "format": "number"},
+          {"field": "check", "label": "Check", "type": "text"},
+          {"field": "observed", "label": "Observed", "type": "text"},
+          {"field": "interpretation", "label": "Decision boundary", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "strict42_baseline",
+        "label": "Strict-42 baseline and fresh-window admissibility analysis",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json",
+        "query": {
+          "description": "Authoritative 202 ms strict-42 baseline performance and fresh capture admissibility context.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json');",
+          "filters": ["strict 42-fold aggregate", "fee-inclusive", "202 ms"],
+          "metric_definitions": ["Profit factor is gross positive PnL divided by absolute gross negative PnL.", "Wilson lower is the two-sided 95 percent Wilson lower confidence bound."]
+        }
+      },
+      {
+        "id": "lifecycle_v1",
+        "label": "Immediate complete-set v1 historical-tail diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_historical_tail_diagnostic.json",
+        "query": {
+          "description": "Exact 202 ms replay and reconciliation of immediate lifecycle locking on folds 29–42.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_historical_tail_diagnostic.json');",
+          "filters": ["historical diagnostic only", "no promotion credit"],
+          "metric_definitions": ["PnL includes entry and exit fees."]
+        }
+      },
+      {
+        "id": "lifecycle_v2",
+        "label": "Trailing complete-set v2 historical-tail diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_trailing_complete_set_lock_v2_historical_tail_diagnostic.json",
+        "query": {
+          "description": "Exact 202 ms replay and reconciliation of trailing lifecycle locking on folds 29–42.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_trailing_complete_set_lock_v2_historical_tail_diagnostic.json');",
+          "filters": ["historical diagnostic only", "no retuning", "no promotion credit"],
+          "metric_definitions": ["Loss burst is the maximum number of negative folds in a rolling five-fold window."]
+        }
+      },
+      {
+        "id": "strategy_diagnostic",
+        "label": "Strict-42 overconfidence and paired-book mechanism audit",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_strategy_overconfidence_and_microstructure_audit.json",
+        "query": {
+          "description": "Reconciled strict-42 entry confidence, payoff geometry, loss distribution, and the label-free fit of the frozen paired-book mechanism.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_strategy_overconfidence_and_microstructure_audit.json');",
+          "filters": ["42 strict folds", "102 fee-inclusive trades", "202 ms", "diagnostic only", "forward rule unchanged"],
+          "metric_definitions": ["Probability gap is cohort mean probability minus realized win rate.", "Brier and log loss are lower-is-better proper scoring rules."]
+        }
+      },
+      {
+        "id": "fast_volatility_preregistration",
+        "label": "Fast-volatility maximum preregistration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_preregistration.json",
+        "query": {
+          "description": "Outcome-independent registration of the single fast-volatility maximum formula, public proxy windows, offsets, bootstrap, pass gates, exclusions, and failure action.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_preregistration.json');",
+          "filters": ["registered before archive download or label inspection", "June 11–June 25 older half", "June 26–July 10 holdout half", "120, 150, and 179 second offsets", "no threshold grid", "active and sealed forward windows excluded"],
+          "metric_definitions": ["The candidate passes only if every registered support, aggregate, bootstrap, chronological-half, offset, and tail gate passes.", "Failure rejects the family without retuning on the registered windows."]
+        }
+      },
+      {
+        "id": "fast_volatility_evidence",
+        "label": "Fast-volatility maximum public calibration evidence",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json",
+        "query": {
+          "description": "Checksum-pinned public BTC one-second proxy evaluation of the preregistered volatility formula using the engine's exact normal-CDF approximation.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json');",
+          "filters": ["31 official daily archives", "2,678,400 contiguous one-second rows", "8,633 complete non-tied five-minute conditions", "25,899 fixed-offset forecasts", "10,000 UTC-day bootstrap resamples", "known strict-42, July 14, July 15, and active forward windows excluded"],
+          "metric_definitions": ["Brier improvement is baseline mean squared probability error minus candidate error; positive values favor the candidate.", "Log-loss improvement is baseline binary cross-entropy minus candidate cross-entropy; positive values favor the candidate.", "This proxy calibration cannot establish Polymarket opportunity selectivity or executable profitability.", "A table replaces a chart because the decision turns on exact multidimensional gate lookup rather than a trend or distribution shape."]
+        }
+      },
+      {
+        "id": "fast_volatility_integrity_amendment",
+        "label": "Fast-volatility post-score integrity amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_integrity_amendment.json",
+        "query": {
+          "description": "Post-score correction of a qualitative confidence claim plus repository-path canonicalization; the registered formula, data windows, thresholds, bootstrap, and rejection remain unchanged.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_integrity_amendment.json');",
+          "filters": ["formula unchanged", "dates unchanged", "gates unchanged", "failure action unchanged", "CLI and notebook evidence byte-identical"],
+          "metric_definitions": ["Fifteen of 25,899 forecasts became slightly farther from 0.5; the maximum absolute confidence increase was 0.0000467221.", "The correction has no decision impact because the preregistered Brier gate failed."]
+        }
+      },
+      {
+        "id": "fast_volatility_notebook",
+        "label": "Executed fast-volatility public calibration notebook",
+        "path": "docs/notebooks/strategy_fast_volatility_max_public_calibration_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed end-to-end archive audit, probability reconstruction, scoring, bootstrap, gate evaluation, integrity check, and atomic evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (31, 2678400, 8633, 25899, 0.00017704880919652607, 0.0010404508337223364, false)) AS t(archives, source_rows, conditions, forecasts, brier_improvement, log_loss_improvement, gate_passed);",
+          "filters": ["executed top to bottom", "no cell errors", "engine CDF parity", "fixed seed and resample count", "no retuning"],
+          "metric_definitions": ["The notebook regenerates byte-identical evidence and forecast snapshots from absolute or repository-relative invocation paths.", "An independent validator separately streams and checks every raw archive row and recomputes every probability and score."]
+        }
+      },
+      {
+        "id": "dvol_preregistration",
+        "label": "DVOL volatility-maximum preregistration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_preregistration.json",
+        "query": {
+          "description": "Outcome-independent registration of the single DVOL maximum formula, two-hour freshness rule, source gate, public proxy windows, and failure action.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_preregistration.json');",
+          "filters": ["registered before DVOL values or evaluation labels were downloaded", "7200-second maximum age", "99 percent source coverage minimum", "no interpolation or neighboring age rule", "active and sealed forward windows excluded"],
+          "metric_definitions": ["Failure of the source gate rejects the candidate before label acquisition.", "The candidate would use the maximum of the baseline realized-volatility estimate and DVOL divided by 100."]
+        }
+      },
+      {
+        "id": "dvol_source_feasibility",
+        "label": "DVOL volatility-maximum source-feasibility evidence",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_source_feasibility.json",
+        "query": {
+          "description": "Source-only cadence and freshness audit of the checksum-pinned official Deribit DVOL response, performed before any evaluation labels were downloaded.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_source_feasibility.json');",
+          "filters": ["1460 DVOL observations", "21600-second exact cadence", "30240 possible registered forecasts", "7200-second maximum age", "zero evaluation labels downloaded"],
+          "metric_definitions": ["Fresh coverage is the number of possible fixed-offset forecasts with a DVOL observation no older than 7200 seconds divided by all possible registered forecasts.", "Observed coverage was 0.3333333333333333 versus the fixed 0.99 minimum."]
+        }
+      },
+      {
+        "id": "empirical_cdf_preregistration",
+        "label": "Empirical standardized-return CDF preregistration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_preregistration.json",
+        "query": {
+          "description": "Outcome-independent registration of a single causal seven-day same-offset empirical residual distribution and conjunctive proper-score gates.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_preregistration.json');",
+          "filters": ["exact seven-day trailing history", "exactly 2016 strictly prior terminal residuals", "120, 150, and 179 second offsets kept separate", "April 16 to May 15 older evaluation", "July 16 to July 20 fresh holdout", "no parameter grid or alternate smoothing"],
+          "metric_definitions": ["The candidate passes only if aggregate, bootstrap, chronological-window, offset, tail, and data-quality gates all pass.", "Failure rejects the family without retuning on the registered windows."]
+        }
+      },
+      {
+        "id": "empirical_cdf_evidence",
+        "label": "Empirical standardized-return CDF public calibration evidence",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_public_calibration.json",
+        "query": {
+          "description": "Checksum-pinned causal public BTC one-second proxy evaluation of the preregistered empirical residual law against the engine-equivalent Gaussian baseline.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_public_calibration.json');",
+          "filters": ["49 official daily archives", "4233600 contiguous one-second rows within two registered segments", "10062 complete non-tied five-minute conditions", "30186 fixed-offset forecasts", "10000 UTC-day bootstrap resamples", "strict-42, prior proxy screens, retained July 14-15 captures, and active forward windows excluded"],
+          "metric_definitions": ["Brier and log-loss improvements are baseline proper-score loss minus candidate loss; positive values favor the candidate.", "Moved-away-from-half is the fraction whose candidate probability is farther from 0.5 than baseline.", "A table replaces a chart because exact multidimensional gate lookup, not visual trend shape, determines the decision."]
+        }
+      },
+      {
+        "id": "empirical_cdf_notebook",
+        "label": "Executed empirical standardized-return CDF notebook",
+        "path": "docs/notebooks/strategy_empirical_return_cdf_public_calibration_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed end-to-end archive audit, causal residual reconstruction, scoring, bootstrap, gate evaluation, evidence export, and independent validation.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (49, 4233600, 10062, 30186, 0.0005205290753615272, 0.00030154935441539864, 0.938382031405286, false)) AS t(archives, source_rows, conditions, forecasts, brier_improvement, log_loss_improvement, moved_away_fraction, gate_passed);",
+          "filters": ["executed top to bottom", "five code cells executed", "no cell errors", "fixed seed and resample count", "no retuning"],
+          "metric_definitions": ["The notebook regenerates byte-identical evidence and forecast snapshots.", "The independent validator does not import the analyzer and separately reconstructs rolling variance, residual histories, probabilities, scores, uncertainty, and failed gates from the raw archives."]
+        }
+      },
+      {
+        "id": "probability_model_validation",
+        "label": "Probability-model challenger immutable validation pins",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_probability_model_challenger_validation.json",
+        "query": {
+          "description": "SHA-256 manifest binding the two preregistrations, source evidence, analysis scripts, independent validators, forecast snapshots, and executed notebook to their rejected decisions.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_probability_model_challenger_validation.json');",
+          "filters": ["DVOL rejected before labels", "empirical CDF rejected without retuning", "no runtime or trading authorization", "active binary-complement score remains sealed"],
+          "metric_definitions": ["Artifact hashes are validation boundaries, not performance metrics.", "Neither public-proxy result establishes opportunity selectivity or executable PnL."]
+        }
+      },
+      {
+        "id": "binary_preregistration",
+        "label": "Binary-complement coherence preregistration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+        "query": {
+          "description": "Frozen forward-only paired-book rule, identities, and screen gates.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json');",
+          "filters": ["forward-only", "two-tick fixed rule", "no neighbor search"],
+          "metric_definitions": ["Selected Wilson lower must be at least 0.70 after the disclosure floor."]
+        }
+      },
+      {
+        "id": "paired_pressure_diagnostic",
+        "label": "Paired-book pressure redundancy diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_paired_book_pressure_redundancy_diagnostic.json",
+        "query": {
+          "description": "Label-free one-second paired-book reconstruction testing whether opposite pressure adds decision information beyond chosen-positive pressure.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_paired_book_pressure_redundancy_diagnostic.json');",
+          "filters": ["24 July 15 markets", "terminal labels excluded", "valid paired books only", "diagnostic only", "no promotion credit"],
+          "metric_definitions": ["A disagreement occurs when the paired predicate and chosen-positive predicate return different booleans for one chosen-token orientation.", "Coverage is valid paired one-second states divided by 7,200 possible condition-seconds."]
+        }
+      },
+      {
+        "id": "paired_pressure_notebook",
+        "label": "Executed paired-book pressure diagnostic notebook",
+        "path": "docs/notebooks/strategy_paired_book_pressure_redundancy_2026-07-21.ipynb",
+        "query": {
+          "description": "Reproducible source hashing, native-order book reconstruction, data-quality checks, structural assertions, and evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (6465, 7200, 12930, 0, false)) AS t(valid_states, possible_states, orientation_comparisons, disagreements, terminal_labels_used);",
+          "filters": ["executed top to bottom", "no cell errors", "terminal labels excluded"],
+          "metric_definitions": ["The notebook output is diagnostic-only and writes the cited registry artifact atomically."]
+        }
+      },
+      {
+        "id": "residual_independence_diagnostic",
+        "label": "BTC complement-residual independence diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_independence_diagnostic.json",
+        "query": {
+          "description": "Label-free native-order reconstruction testing residual-magnitude selectivity beyond paired-top validity in 24 BTC candle markets.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_independence_diagnostic.json');",
+          "filters": ["terminal labels excluded", "one-hertz causal states", "registered 120-to-180-second interval", "no threshold search"],
+          "metric_definitions": ["A residual rejection requires the larger absolute midpoint or microprice complement residual to exceed two causal ticks.", "Paired-top validity is reported separately from staleness and missing-snapshot checks."]
+        }
+      },
+      {
+        "id": "residual_independence_notebook",
+        "label": "Executed BTC residual-independence notebook",
+        "path": "docs/notebooks/strategy_complement_residual_independence_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed source-pinned reconstruction, timestamp sensitivity, driver decomposition, and evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (6465, 1403, 0, 0, 735)) AS t(valid_full, valid_registered_interval, full_residual_rejections, interval_residual_rejections, invalid_top_states);",
+          "filters": ["executed top to bottom", "no cell errors", "terminal labels excluded"],
+          "metric_definitions": ["The notebook is a mechanism screen and cannot estimate settlement prediction or profitability."]
+        }
+      },
+      {
+        "id": "residual_cross_market_replication",
+        "label": "Current non-candle residual cross-market replication",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_cross_market_replication.json",
+        "query": {
+          "description": "Independent public replication across five batch snapshots of 100 active non-candle binary markets.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_cross_market_replication.json');",
+          "filters": ["active accepting non-negative-risk binary markets", "crypto and candle text excluded", "outcomes excluded", "no threshold search"],
+          "metric_definitions": ["The effective live tick starts from the pair-declared tick and applies the same causal 0.001 price-band tightening as Rust.", "Batch atomicity is not assumed; pair timestamp skew is measured."]
+        }
+      },
+      {
+        "id": "residual_cross_market_notebook",
+        "label": "Executed non-candle residual replication notebook",
+        "path": "docs/notebooks/strategy_complement_residual_cross_market_replication_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed source-hash validation, robust best-price reconstruction, Rust-equivalent tick comparison, and driver checks.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (500, 490, 0, 0, 2)) AS t(possible_pairs, valid_pairs, registered_rejections, fixed_0002_rejections, max_timestamp_skew_ms);",
+          "filters": ["executed top to bottom", "no cell errors", "public market data only"],
+          "metric_definitions": ["Observed REST array position is not trusted; best prices are price extrema."]
+        }
+      },
+      {
+        "id": "non_candle_snapshot_manifest",
+        "label": "Public non-candle order-book snapshot manifest",
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books_manifest.json",
+        "query": {
+          "description": "SHA-256, selection, timing, and response-count manifest for the compressed public source snapshot.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books_manifest.json');",
+          "filters": ["five bounded public batches", "100 markets", "200 books per round"],
+          "metric_definitions": ["The manifest pins both compressed and canonical uncompressed snapshot hashes."]
+        }
+      },
+      {
+        "id": "paired_wait_cost_diagnostic",
+        "label": "Paired-book wait-cost diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_book_wait_cost_diagnostic.json",
+        "query": {
+          "description": "Label-free causal reconstruction of pair-only availability exposure, recovery delay, and chosen-side ask change in the registered candidate interval.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_book_wait_cost_diagnostic.json');",
+          "filters": ["24 retained BTC markets", "120-to-179-second interval", "terminal labels excluded", "active forward block excluded"],
+          "metric_definitions": ["Pair-only exposure requires an individually valid chosen side and an invalid opposite side.", "Recovery is the first later one-second state where both books are valid and the frozen residual rule passes."]
+        }
+      },
+      {
+        "id": "paired_wait_cost_notebook",
+        "label": "Executed paired-book wait-cost notebook",
+        "path": "docs/notebooks/strategy_paired_book_wait_cost_diagnostic_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed source-hash validation, paired-state reconstruction, pair-only exposure attribution, recovery timing, ask-change calculation, and atomic evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (1440, 1403, 37, 2, 0, false)) AS t(condition_seconds, valid_pairs, invalid_pairs, invalid_episodes, pair_only_exposures, terminal_labels_used);",
+          "filters": ["executed top to bottom", "no cell errors", "resolution manifest excluded", "strategy outcomes excluded"],
+          "metric_definitions": ["The notebook is a structural feasibility bound and cannot estimate candidate frequency, loss removal, or profitability."]
+        }
+      },
+      {
+        "id": "settlement_anchor_diagnostic",
+        "label": "Official settlement-source anchor diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_diagnostic.json",
+        "query": {
+          "description": "Label-free causal reconstruction comparing Binance proxy anchoring with the Chainlink settlement anchor while holding every other model input and threshold fixed.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_diagnostic.json');",
+          "filters": ["24 retained BTC markets", "120-to-179-second interval", "Chainlink current age at most 10 seconds", "terminal labels excluded", "active forward block excluded"],
+          "metric_definitions": ["An edge disagreement means exactly one of the proxy-anchor and official-anchor fair values clears the same fee-aware 0.07 edge threshold.", "Orientation-level decisions are structural possibilities rather than stateful strategy trades."]
+        }
+      },
+      {
+        "id": "settlement_anchor_notebook",
+        "label": "Executed settlement-source anchor notebook",
+        "path": "docs/notebooks/strategy_settlement_source_anchor_diagnostic_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed source-hash validation, causal Binance and Chainlink reconstruction, paired-book alignment, fair-value comparison, and atomic evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (1440, 1403, 1389, 2778, 215, 112, 103, false)) AS t(condition_seconds, valid_pairs, official_fresh_states, orientations, edge_disagreements, proxy_only, official_only, terminal_labels_used);",
+          "filters": ["executed top to bottom", "no cell errors", "no alternate thresholds", "resolution manifest excluded", "strategy outcomes excluded"],
+          "metric_definitions": ["The notebook establishes model-specification selectivity only and cannot estimate profitability."]
+        }
+      },
+      {
+        "id": "settlement_anchor_price_manifest",
+        "label": "Published Chainlink price-to-beat manifest",
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_settlement_anchor_price_to_beat_manifest.json",
+        "query": {
+          "description": "Source-pinned public Polymarket pages and captured Chainlink open values for all 24 diagnostic markets.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_settlement_anchor_price_to_beat_manifest.json');",
+          "filters": ["24 historical market pages", "page contents SHA-256 pinned", "no outcome fields used"],
+          "metric_definitions": ["Published price-to-beat difference is the absolute page value minus the captured Chainlink open at the five-minute boundary."]
+        }
+      },
+      {
+        "id": "settlement_anchor_preregistration",
+        "label": "Disjoint settlement-source anchor preregistration",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_preregistration.json",
+        "query": {
+          "description": "Frozen source, freshness, allocation, sample-size, economics, and promotion contract for a future official-anchor evaluation.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_preregistration.json');",
+          "filters": ["active block forbidden", "two disjoint 750-condition blocks", "one score per block", "no threshold neighbors", "no runtime authorization"],
+          "metric_definitions": ["The current binary-complement block cannot score the later-registered source-anchor candidate.", "Every failed block rejects the mechanism family without adaptive extension or retuning."]
+        }
+      },
+      {
+        "id": "settlement_anchor_evaluator_amendment",
+        "label": "Outcome-blind settlement-anchor offline evaluator amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_offline_evaluator_amendment.json",
+        "query": {
+          "description": "Hash-pinned default-off harness, allocation, source-audit, and paired-scoring path that isolates fair-value Chainlink anchoring from unchanged Binance momentum and volatility.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_offline_evaluator_amendment.json');",
+          "filters": ["offline harness only", "active block excluded", "no forward outcomes", "Chainlink-only provenance", "10-second current and 2-second open freshness", "exact 750-condition report partition", "three single-use outputs", "PMXT and raw-input hashes pinned"],
+          "metric_definitions": ["The flag changes only fair-value spot and strike; the absent-flag baseline remains unchanged.", "The paired scorer recomputes all gates from raw fills and requires exact non-fair-source and execution parity.", "The amendment authorizes no live, paper, active-collector, or active-block change."]
+        }
+      },
+      {
+        "id": "settlement_anchor_historical_outcome",
+        "label": "Retrospective signal-gated settlement-anchor outcome diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_historical_outcome_diagnostic.json",
+        "query": {
+          "description": "Hash-pinned retrospective comparison of the frozen Binance and official Chainlink fair-value anchors at the earliest qualifying strategy opportunity per condition.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_historical_outcome_diagnostic.json');",
+          "filters": ["24 captured BTC markets", "81 post-non-edge-gate rows", "three independent strategy opportunity conditions", "fixed 0.07 fee-aware edge floor", "10-second current and 2-second open source freshness", "earliest qualifying row per condition", "active forward block excluded"],
+          "metric_definitions": ["Primary paired payoff assigns decision-time one-share terminal payoff to the earliest qualifying row per condition under each anchor and zero to non-selected conditions.", "The payoff excludes latency, depth traversal, fill failure, sizing, state feedback, and portfolio risk and is not executable PnL.", "This retrospective diagnostic carries zero promotion credit and cannot reject or promote the candidate with only three independent opportunity conditions.", "A table replaces a chart because three independent conditions are too sparse for an honest distribution or relationship visual and exact audit lookup is the decision-useful form."]
+        }
+      },
+      {
+        "id": "settlement_anchor_historical_outcome_notebook",
+        "label": "Executed retrospective settlement-anchor outcome notebook",
+        "path": "docs/notebooks/strategy_settlement_source_anchor_historical_outcome_diagnostic_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed validation of seven compressed and decompressed source hashes, Rust fair-value parity, fixed-source freshness, condition-level selection, payoff arithmetic, and atomic evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (24, 81, 3, 1, 0, 0.314523, 0.0, -0.314523)) AS t(captured_conditions, opportunity_rows, opportunity_conditions, baseline_selected, official_selected, baseline_one_share_pnl, official_one_share_pnl, paired_delta);",
+          "filters": ["executed top to bottom", "no cell errors", "baseline fair value reproduced exactly", "captured Chainlink inputs only for candidate fair value", "no threshold neighbors", "active forward block excluded"],
+          "metric_definitions": ["Repeated opportunity seconds share a terminal label, so the condition—not the row—is the independent outcome unit.", "The executed notebook is reproducible support for a directionally negative retrospective diagnostic, not promotion evidence."]
+        }
+      },
+      {
+        "id": "paired_depth_diagnostic",
+        "label": "Paired-depth capacity diagnostic",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_depth_capacity_diagnostic.json",
+        "query": {
+          "description": "Executed label-free reconstruction testing matched complement depth and a fixed maximum-exposure capacity reference.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_depth_capacity_diagnostic.json');",
+          "filters": ["five public snapshot rounds", "490 valid pairs", "terminal labels excluded", "active forward block excluded", "diagnostic only"],
+          "metric_definitions": ["Matched-depth ratio is the smaller divided by the larger top-three share depth for YES-bid versus NO-ask and YES-ask versus NO-bid.", "The $10 reference equals standing maximum per-market exposure but is not a fitted strategy threshold."]
+        }
+      },
+      {
+        "id": "paired_depth_notebook",
+        "label": "Executed paired-depth diagnostic notebook",
+        "path": "docs/notebooks/strategy_paired_depth_capacity_diagnostic_2026-07-21.ipynb",
+        "query": {
+          "description": "Executed source-hash validation, extrema-safe top-three reconstruction, capacity and symmetry calculations, stability checks, and atomic evidence export.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (490, 490, 470, 460, 0, 20, false)) AS t(valid_pairs, symmetry_passes, both_entry_capacity_passes, four_side_capacity_passes, incremental_if_yes_chosen, incremental_if_no_chosen, terminal_labels_used);",
+          "filters": ["executed top to bottom", "no cell errors", "public market data only", "terminal labels excluded"],
+          "metric_definitions": ["The notebook is a structural rejection screen and cannot estimate settlement prediction or profitability."]
+        }
+      },
+      {
+        "id": "residual_attribution_amendment",
+        "label": "Pre-score residual attribution amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json",
+        "query": {
+          "description": "Outcome-blind registration of the baseline, paired-validity, and frozen-residual attribution comparison.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json');",
+          "filters": ["registered before block-1 scoring", "active rule unchanged", "no outcome access", "no parameter search"],
+          "metric_definitions": ["Residual decision disagreements isolate selectivity from residual magnitude after paired-book validity.", "Zero disagreements cannot receive loss-removal or PnL credit."]
+        }
+      },
+      {
+        "id": "tick_integrity_amendment",
+        "label": "Binary-complement causal tick integrity amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json",
+        "query": {
+          "description": "Pre-score venue-contract audit, bounded unlabeled tick-event timing scan, and causal replay input hardening.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json');",
+          "filters": ["forward metrics sealed", "raw tick events only", "fixed rule and gates unchanged"],
+          "metric_definitions": ["Event offset is raw tick-size-change timestamp minus the market's registered open timestamp.", "Observed overlap compares event offsets with the baseline-eligible 120-to-180-second interval."]
+        }
+      },
+      {
+        "id": "pair_reproduction_amendment",
+        "label": "Binary-complement paired-book reproduction amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_paired_book_reproduction_amendment.json",
+        "query": {
+          "description": "Pre-score token-pair, feature-arithmetic, dynamic-tick, and executable-ask reproduction hardening.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_binary_complement_paired_book_reproduction_amendment.json');",
+          "filters": ["forward metrics sealed", "raw paired-book fields only", "fixed rule, schema, and gates unchanged"],
+          "metric_definitions": ["Recomputed microprice weights the ask by bid depth and the bid by ask depth.", "Ask alignment compares the serialized chosen/opposite best asks with the same up/down asks used by normalized entry economics."]
+        }
+      },
+      {
+        "id": "execution_tick_parity_amendment",
+        "label": "Binary-complement exact-replay tick parity amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_execution_tick_parity_amendment.json",
+        "query": {
+          "description": "Pre-score causal-tick propagation, FOK entry and exit pricing, cached live-replay parity, and fee/order contract audit.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_binary_complement_execution_tick_parity_amendment.json');",
+          "filters": ["forward metrics sealed", "execution contract only", "fixed rule, schema, and gates unchanged"],
+          "metric_definitions": ["Causal execution parity means that one persistent per-condition tick determines signal features, executable quote rounding, order limits, position state, and exits.", "A multi-level fee charged at aggregate VWAP is conservative before match-level rounding because the binary fee curve is concave."]
+        }
+      },
+      {
+        "id": "live_tick_parity_amendment",
+        "label": "Binary-complement live-runtime tick parity amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_live_tick_parity_amendment.json",
+        "query": {
+          "description": "Pre-score official tick-event ingestion, book-freshness separation, causal condition-tick resolution, and live order-path parity hardening.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_binary_complement_live_tick_parity_amendment.json');",
+          "filters": ["forward metrics sealed", "live execution contract only", "fixed rule, schema, and gates unchanged"],
+          "metric_definitions": ["A tick-only event updates tick state but not last_update_us, so it cannot make a stale order book admissible.", "One condition tick is passed unchanged from execution quoting through signing and venue submission."]
+        }
+      },
+      {
+        "id": "live_reconciliation_parity_amendment",
+        "label": "Binary-complement live reconciliation parity amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_live_reconciliation_parity_amendment.json",
+        "query": {
+          "description": "Pre-score current-fee parsing, authenticated heartbeat, maker-leg, and terminal trade-lifecycle reconciliation hardening.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_live_reconciliation_parity_amendment.json');",
+          "filters": ["forward metrics sealed", "live reconciliation contract only", "fixed rule, schema, and gates unchanged"],
+          "metric_definitions": ["Pending orders retain the market's effective entry fee rate until a terminal confirmed fill is reconciled.", "Managed maker fills use their own matched_amount and price leg rather than aggregate taker economics."]
+        }
+      },
+      {
+        "id": "rest_recovery_parity_amendment",
+        "label": "Binary-complement authenticated REST recovery amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_rest_recovery_parity_amendment.json",
+        "query": {
+          "description": "Pre-score durable order journal, pre-submit V2 hash, and authenticated REST recovery hardening.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_rest_recovery_parity_amendment.json');",
+          "filters": ["forward metrics sealed", "recovery contract only", "fixed rule, schema, and gates unchanged"],
+          "metric_definitions": ["The EIP-712 order hash is persisted before HTTP submission so accepted orders remain addressable after ambiguous responses or restarts.", "Only confirmed trade evidence supplies fill economics; order size_matched can trigger a fail-closed gap but cannot invent price or fees."]
+        }
+      },
+      {
+        "id": "realized_support_amendment",
+        "label": "Binary-complement realized-support amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_realized_support_amendment.json",
+        "query": {
+          "description": "Pre-score hardening that turns the blinded power analysis's realized-support assumptions into explicit fail-closed gates.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_realized_support_amendment.json');",
+          "filters": ["forward strategy metrics sealed", "preexisting power thresholds only", "fixed rule and rate/economic thresholds unchanged"],
+          "metric_definitions": ["A schema-6 block retains the schema-5 minima of at least 100 baseline candidates, 15 baseline losses, and 80 selected candidates.", "A support failure rejects the family at the fixed score and cannot trigger adaptive collection."]
+        }
+      },
+      {
+        "id": "power_amendment",
+        "label": "Blinded binary-complement power amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_blinded_power_amendment.json",
+        "query": {
+          "description": "Outcome-blind sample-size strengthening based on historical firing and loss nuisance rates.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_blinded_power_amendment.json');",
+          "filters": ["registered before forward scoring", "750 conditions per block", "strategy rule unchanged"],
+          "metric_definitions": ["Support probabilities use exact binomial upper tails.", "Expected Wilson uses the registered retention and removal effect."]
+        }
+      },
+      {
+        "id": "collection_status",
+        "label": "Binary-complement block 1 repaired collection status",
+        "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_floor_recovery_status.json",
+        "query": {
+          "description": "Current VPS measurement-only capture state, exclusions, and service health.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260720_binary_complement_floor_recovery_status.json');",
+          "filters": ["measurement-only", "fail-closed source continuity", "no strategy score"],
+          "metric_definitions": ["A condition contributes only after capture, reference continuity, conversion, and official settlement alignment pass."]
+        }
+      },
+      {
+        "id": "support_only_status_310",
+        "label": "Binary-complement sealed support-only status at 310 conditions",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_support_only_status_310.json",
+        "query": {
+          "description": "Exact historical support-only snapshot after session 018 and while bounded session 019 was collecting.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_binary_complement_support_only_status_310.json');",
+          "filters": ["support and operational health only", "all strategy outcomes, candidates, rates, and economics sealed", "no strategy score"],
+          "metric_definitions": ["Certified support includes only unique ready terminal conditions.", "A measured latency recommendation cannot reduce the preregistered 202 ms replay floor."]
+        }
+      },
+      {
+        "id": "vps_restart_status",
+        "label": "PolyMomentum VPS restart and bounded collection status",
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_polymomentum_vps_restart_status.json",
+        "query": {
+          "description": "Read-only service and process observation after the authorized PolyMomentum restart and measurement-v5 session 020 launch.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260721_polymomentum_vps_restart_status.json');",
+          "filters": ["PolyMomentum services only", "support and operational health only", "interrupted session 019 fail-closed", "session 020 measurement-only", "no strategy score"],
+          "metric_definitions": ["The restart observation changes no strategy rule or threshold.", "Sealed support remains 310 until a later session is fully finalized and audited."]
+        }
+      },
+      {
+        "id": "fixed_support_plan",
+        "label": "Binary-complement fixed-support collection plan",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_fixed_support_collection_plan.json",
+        "query": {
+          "description": "Outcome-blind support-count integrity, conservative storage model, verified cleanup, and deployed measurement-v4 collector state.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_fixed_support_collection_plan.json');",
+          "filters": ["measurement-only", "no strategy outcomes or rates", "750-condition target", "96-segment cap"],
+          "metric_definitions": ["Capacity cushion is available VPS bytes after subtracting the full 750-condition selected-data projection, the 5 GiB reserve, and one configured-rate raw segment."]
+        }
+      },
+      {
+        "id": "economic_diagnostics_amendment",
+        "label": "Pre-score economic diagnostics amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_economic_diagnostics_amendment.json",
+        "query": {
+          "description": "Outcome-blind registration of descriptive selection-timing, direction-change, and decision-time ask summaries.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_economic_diagnostics_amendment.json');",
+          "filters": ["registered before forward scoring", "descriptive only", "no rule or gate change"],
+          "metric_definitions": ["Decision ask is the fresh top ask before latency, depth traversal, fills, and fees.", "Diagnostic summaries cannot change a block verdict."]
+        }
+      },
+      {
+        "id": "unit_economics_amendment",
+        "label": "Pre-score fee-aware unit-economics amendment",
+        "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_unit_economics_amendment.json",
+        "query": {
+          "description": "Pre-score registration of fee-aware equal-dollar profit-factor and payoff gates aligned to the existing A+ contract.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_unit_economics_amendment.json');",
+          "filters": ["registered before forward scoring", "recorded decision ask and fee", "no strategy-rule change"],
+          "metric_definitions": ["Unit profit factor uses gross positive normalized terminal PnL divided by absolute gross negative normalized terminal PnL.", "Unit payoff is average normalized winner PnL divided by absolute average normalized loser PnL."]
+        }
+      },
+      {
+        "id": "decision_notebook",
+        "label": "Executed strategy portfolio and power notebook",
+        "path": "docs/notebooks/strategy_portfolio_power_decision_2026-07-18.ipynb",
+        "query": {
+          "description": "Reproducible source hashing, portfolio gate comparison, exact binomial support calculation, Wilson analysis, and fixed-support storage validation.",
+          "engine": "duckdb",
+          "language": "sql",
+          "sql": "SELECT * FROM (VALUES (1, 'Strict-42 baseline', '42-fold exact replay', 13.54086, 1.114236, 0.684308, 'A- / paper-only'), (2, 'Immediate complete-set v1', '14-fold tail diagnostic', -8.15098, 0.679497, 0.834608, 'Reject; no retuning'), (3, 'Trailing complete-set v2', '14-fold tail diagnostic', -2.28929, 0.944057, 0.742641, 'Reject; no retuning'), (4, 'Binary-complement coherence v1', 'Prospective capture only', NULL, NULL, NULL, 'Continue sealed')) AS t(order_id, mechanism, evidence, pnl_usd, profit_factor, wilson_lower, decision);",
+          "filters": ["no forward score", "historical diagnostics separated from prospective evidence"],
+          "metric_definitions": ["Displayed A+ gate pass requires all displayed gates simultaneously, not cherry-picked metrics."]
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "accessIssues": [],
+    "datasets": {
+      "headline": [
+        {"grade": "A-", "active_hypotheses": 1, "conditions_per_block": 750, "forward_scores": 0}
+      ],
+      "lifecycle_pnl": [
+        {"policy": "Tail baseline", "pnl_usd": -12.58816, "profit_factor": 0.754868, "payoff_ratio": 0.228748},
+        {"policy": "Immediate lock v1", "pnl_usd": -8.15098, "profit_factor": 0.679497, "payoff_ratio": 0.055696},
+        {"policy": "Trailing lock v2", "pnl_usd": -2.28929, "profit_factor": 0.944057, "payoff_ratio": 0.157343}
+      ],
+      "calibration_gap": [
+        {"estimate": "Internal fair value", "probability": 0.8547921921148325, "gap_to_outcome": 0.08028238819326383, "brier": 0.1749675168826506, "log_loss": 0.5415025217084939, "sample_size": 102},
+        {"estimate": "Market price", "probability": 0.7474264612319257, "gap_to_outcome": -0.027083342689642964, "brier": 0.16819945281277385, "log_loss": 0.5132287148659073, "sample_size": 102},
+        {"estimate": "Realized outcomes", "probability": 0.7745098039215687, "gap_to_outcome": 0.0, "brier": null, "log_loss": null, "sample_size": 102}
+      ],
+      "pressure_redundancy": [
+        {"order": 1, "check": "Valid paired states", "observed": "6,465 / 7,200 (89.79%) across 24 / 24 markets", "interpretation": "Mechanism screen has broad but incomplete state coverage"},
+        {"order": 2, "check": "Paired versus chosen-positive predicate", "observed": "0 disagreements / 12,930 orientations", "interpretation": "Opposite-pressure clause adds no observed decisions"},
+        {"order": 3, "check": "Cross-touch mirroring", "observed": "Median, p99, and max error = 0", "interpretation": "Observed top-of-book prices are exact complements"},
+        {"order": 4, "check": "Pressure opposition", "observed": "6,464 / 6,465 non-neutral states; correlation -0.999999", "interpretation": "Observed pressure is nearly the negative image across books"},
+        {"order": 5, "check": "Data-quality boundary", "observed": "735 invalid states; 865 timestamp regressions; reference-tape gaps", "interpretation": "Not exact replay, terminal prediction, or profitability evidence"}
+      ],
+      "residual_independence": [
+        {"order": 1, "population": "BTC diagnostic full windows", "observed": "6,465 / 7,200 valid; 0 registered residual rejections", "interpretation": "Residual magnitude adds no observed selection after valid paired tops"},
+        {"order": 2, "population": "BTC registered 120–180 s interval", "observed": "1,403 / 1,440 valid; 0 residual rejections; max utilization 0.097%", "interpretation": "The frozen candidate interval independently remains far inside two ticks"},
+        {"order": 3, "population": "Current non-candle replication", "observed": "490 / 500 valid across 100 markets × 5 rounds; 0 registered rejections", "interpretation": "Independent current public sample replicates zero selectivity"},
+        {"order": 4, "population": "Fixed 0.002 robustness threshold", "observed": "0 / 490 rejections; minimum headroom 0.001882", "interpretation": "Negative result does not depend on the looser 0.01-tick states"},
+        {"order": 5, "population": "Residual drivers", "observed": "5 / 5 BTC and 7 / 7 public nonzero micro residuals coincide with depth mismatch", "interpretation": "Observed exceptions are book-update/depth races; midpoint residual never changes"},
+        {"order": 6, "population": "Pre-score attribution", "observed": "Baseline → paired validity → frozen residual; outcomes still sealed", "interpretation": "Only actual post-floor decision disagreements may earn residual credit"}
+      ],
+      "paired_wait_cost": [
+        {"order": 1, "check": "Registered interval coverage", "observed": "1,403 / 1,440 valid pair condition-seconds (97.43%)", "interpretation": "Pair invalidity is sparse in this retained interval"},
+        {"order": 2, "check": "Invalid episodes", "observed": "37 seconds in two episodes: 10 s and 27 s; one market", "interpretation": "Observed unavailability is concentrated rather than broad"},
+        {"order": 3, "check": "Pair-only exposure", "observed": "0 / 2,880 otherwise-valid orientation-seconds", "interpretation": "Both books were invalid together; the complement requirement added no wait"},
+        {"order": 4, "check": "Recovery and ask cost", "observed": "0 observable pair-only recoveries; 0 ask-deterioration cases", "interpretation": "No incremental wait-cost sample exists because there was no pair-only block"},
+        {"order": 5, "check": "Decision boundary", "observed": "Labels, outcomes, signal, edge, and active block excluded", "interpretation": "Negative structural prior only; schema-6 sealed attribution remains authoritative"}
+      ],
+      "settlement_anchor": [
+        {"order": 1, "check": "Model versus settlement contract", "observed": "Fair value uses Binance current/open; market resolves on Chainlink BTC/USD", "interpretation": "A source-alignment defect is plausible and mechanically distinct"},
+        {"order": 2, "check": "Published strike integrity", "observed": "24 / 24 prices to beat reproduce; max difference $0.0000000000073", "interpretation": "Captured Chainlink opens match the public contract values"},
+        {"order": 3, "check": "Official-source coverage", "observed": "1,389 / 1,403 paired states fresh; 14 exceed 10 seconds", "interpretation": "Candidate fails closed on stale official current data"},
+        {"order": 4, "check": "Fair-probability displacement", "observed": "Median 2.02 pp; p90 5.51 pp; maximum 23.35 pp", "interpretation": "Changing only the anchor materially moves the priced probability"},
+        {"order": 5, "check": "Fee-aware edge decisions", "observed": "215 / 2,778 disagreements: 112 proxy-only and 103 official-only", "interpretation": "The candidate has nonzero, two-sided decision selectivity"},
+        {"order": 6, "check": "Breadth", "observed": "21 / 24 markets; 124 UP and 91 DOWN disagreements", "interpretation": "Observed effect is not confined to one market or direction"},
+        {"order": 7, "check": "Chronological stability", "observed": "30 first-half versus 185 second-half disagreements", "interpretation": "Concentration requires prospective disjoint replication"},
+        {"order": 8, "check": "Decision boundary", "observed": "Evaluator, label-free source audit, allocation wrapper, and paired scorer ready; concrete future lock pending; two future disjoint 750-condition blocks; active block forbidden", "interpretation": "No profitability, A+, runtime, paper, or live authorization"}
+      ],
+      "settlement_anchor_historical_outcome": [
+        {"order": 1, "check": "Independent support", "observed": "81 opportunity rows from 3 / 24 captured conditions", "interpretation": "Severely underpowered; repeated seconds are not independent outcomes"},
+        {"order": 2, "check": "Official-source coverage", "observed": "81 / 81 rows fresh under the fixed current/open bounds", "interpretation": "No decision changed because candidate source data was stale"},
+        {"order": 3, "check": "Baseline selection", "observed": "1 condition; edge 0.072011; 1 winner; +0.314523 one-share payoff", "interpretation": "The only baseline-selected condition resolved favorably"},
+        {"order": 4, "check": "Official-anchor selection", "observed": "0 conditions; changed edge 0.001399; 0.000000 one-share payoff", "interpretation": "Official anchoring filtered the sole baseline winner and added no replacement"},
+        {"order": 5, "check": "Paired effect across all captured conditions", "observed": "Official minus baseline = -0.314523", "interpretation": "Directionally negative retrospective evidence, not executable PnL"},
+        {"order": 6, "check": "Decision", "observed": "Keep frozen contract unchanged; no reject, promote, retune, runtime change, or profit claim", "interpretation": "Two disjoint 750-condition blocks remain mandatory if the mechanism is pursued"}
+      ],
+      "fast_volatility": [
+        {"order": 1, "check": "Population and integrity", "observed": "31 checksum-pinned archives; 2,678,400 contiguous one-second rows; 8,633 conditions; 25,899 forecasts", "interpretation": "No checksum, schema, timestamp-order, gap, duration, price, duplicate-offset, or probability-quality failure"},
+        {"order": 2, "check": "Overall Brier improvement", "observed": "+0.000177 versus +0.000500 minimum", "interpretation": "Fail: the only failed gate is decisive"},
+        {"order": 3, "check": "Overall log-loss improvement", "observed": "+0.001040 versus +0.001000 minimum", "interpretation": "Pass, but cannot override the failed Brier gate"},
+        {"order": 4, "check": "Chronological and offset stability", "observed": "Both halves and 120 s, 150 s, and 179 s offsets positive on both scores", "interpretation": "Directionally consistent proper-score evidence"},
+        {"order": 5, "check": "UTC-day bootstrap and tail", "observed": "Brier 95% interval +0.000094 to +0.000268; log-loss +0.000646 to +0.001473; overconfidence tail positive", "interpretation": "Uncertainty checks favor the candidate but remain below the fixed aggregate magnitude gate"},
+        {"order": 6, "check": "Decision", "observed": "Reject fast_volatility_max_v1 without retuning", "interpretation": "No strategy implementation, runtime change, paper/live authorization, profitability claim, or A+ credit"}
+      ],
+      "empirical_return_cdf": [
+        {"order": 1, "check": "Population and integrity", "observed": "49 checksum-pinned archives; 4,233,600 one-second rows; 10,062 conditions; 30,186 forecasts; 18 terminal ties excluded", "interpretation": "No checksum, schema, timestamp-order, within-segment gap, duration, price, duplicate-offset, or probability-quality failure"},
+        {"order": 2, "check": "Causal history", "observed": "Exactly 2,016 strictly prior fully terminal same-offset residuals per forecast", "interpretation": "Fixed seven-day histories clear the 1,800-sample support floor without horizon mixing"},
+        {"order": 3, "check": "Overall Brier improvement", "observed": "+0.000521 versus +0.000500 minimum", "interpretation": "Pass: narrow aggregate squared-error gain"},
+        {"order": 4, "check": "Overall log-loss improvement", "observed": "+0.000302 versus +0.001000 minimum", "interpretation": "Fail: aggregate confidence-sensitive gain is too small"},
+        {"order": 5, "check": "Chronological stability", "observed": "Older first: Brier -0.000069, log loss -0.001545; older second and fresh positive", "interpretation": "Fail: both scores deteriorate in the first older subwindow"},
+        {"order": 6, "check": "Offset stability", "observed": "120 s log loss -0.000010; 150 s and 179 s positive", "interpretation": "Fail: every registered offset must be nonnegative"},
+        {"order": 7, "check": "UTC-day bootstrap", "observed": "Brier 95% interval -0.000773 to +0.001886; log loss -0.003229 to +0.004003", "interpretation": "Fail: both lower bounds cross zero"},
+        {"order": 8, "check": "Overconfidence tail", "observed": "Brier -0.000261; log loss -0.002589; 93.84% of all forecasts move farther from 0.5", "interpretation": "Fail: the proposed uncertainty correction worsens its registered high-confidence tail"},
+        {"order": 9, "check": "Decision", "observed": "Reject empirical_standardized_return_cdf_v1 without retuning", "interpretation": "Eight fixed checks fail; no strategy, replay, runtime, paper/live, profitability, or A+ authorization"}
+      ],
+      "paired_depth_capacity": [
+        {"order": 1, "check": "Matched complement-side depth", "observed": "490 / 490 pass fixed 0.25 ratio; median 1.0; minimum 0.845", "interpretation": "Symmetry clause is inert and adds no observed pair-specific selection"},
+        {"order": 2, "check": "$10 both-entry capacity", "observed": "470 / 490 pass", "interpretation": "Nontrivial rejection exists, but it is not direction-neutral"},
+        {"order": 3, "check": "Outcome-label asymmetry", "observed": "0 incremental rejections if YES chosen; 20 if NO chosen", "interpretation": "Failures come entirely from YES-side dollar capacity"},
+        {"order": 4, "check": "$10 four-side capacity", "observed": "460 / 490 pass; 92 markets always pass and 6 always fail", "interpretation": "Stable generic liquidity veto, not demonstrated paired-book alpha"},
+        {"order": 5, "check": "Decision", "observed": "No challenger preregistration or implementation", "interpretation": "Avoid hypothesis multiplication; preserve sealed primary attribution"}
+      ],
+      "power_support": [
+        {"terminal_conditions": 100, "cohort": "Baseline candidates", "expected_observations": 16.1648, "expected_wilson_lower": 0.5241},
+        {"terminal_conditions": 100, "cohort": "Selected candidates", "expected_observations": 13.8193, "expected_wilson_lower": 0.5241},
+        {"terminal_conditions": 100, "cohort": "Baseline losses", "expected_observations": 3.6450, "expected_wilson_lower": 0.5241},
+        {"terminal_conditions": 300, "cohort": "Baseline candidates", "expected_observations": 48.4945, "expected_wilson_lower": 0.6874},
+        {"terminal_conditions": 300, "cohort": "Selected candidates", "expected_observations": 41.4580, "expected_wilson_lower": 0.6874},
+        {"terminal_conditions": 300, "cohort": "Baseline losses", "expected_observations": 10.9350, "expected_wilson_lower": 0.6874},
+        {"terminal_conditions": 500, "cohort": "Baseline candidates", "expected_observations": 80.8241, "expected_wilson_lower": 0.7039},
+        {"terminal_conditions": 500, "cohort": "Selected candidates", "expected_observations": 69.0967, "expected_wilson_lower": 0.7039},
+        {"terminal_conditions": 500, "cohort": "Baseline losses", "expected_observations": 18.2250, "expected_wilson_lower": 0.7039},
+        {"terminal_conditions": 600, "cohort": "Baseline candidates", "expected_observations": 96.9889, "expected_wilson_lower": 0.7230},
+        {"terminal_conditions": 600, "cohort": "Selected candidates", "expected_observations": 82.9160, "expected_wilson_lower": 0.7230},
+        {"terminal_conditions": 600, "cohort": "Baseline losses", "expected_observations": 21.8700, "expected_wilson_lower": 0.7230},
+        {"terminal_conditions": 700, "cohort": "Baseline candidates", "expected_observations": 113.1537, "expected_wilson_lower": 0.7256},
+        {"terminal_conditions": 700, "cohort": "Selected candidates", "expected_observations": 96.7353, "expected_wilson_lower": 0.7256},
+        {"terminal_conditions": 700, "cohort": "Baseline losses", "expected_observations": 25.5151, "expected_wilson_lower": 0.7256},
+        {"terminal_conditions": 750, "cohort": "Baseline candidates", "expected_observations": 121.2361, "expected_wilson_lower": 0.7322},
+        {"terminal_conditions": 750, "cohort": "Selected candidates", "expected_observations": 103.6450, "expected_wilson_lower": 0.7322},
+        {"terminal_conditions": 750, "cohort": "Baseline losses", "expected_observations": 27.3376, "expected_wilson_lower": 0.7322}
+      ],
+      "portfolio": [
+        {"order": 1, "mechanism": "Strict-42 baseline", "evidence": "42-fold exact replay", "pnl_usd": 13.54086, "profit_factor": 1.114236, "wilson_lower": 0.684308, "decision": "A- / paper-only"},
+        {"order": 2, "mechanism": "Immediate complete-set v1", "evidence": "14-fold tail diagnostic", "pnl_usd": -8.15098, "profit_factor": 0.679497, "wilson_lower": 0.834608, "decision": "Reject; no retuning"},
+        {"order": 3, "mechanism": "Trailing complete-set v2", "evidence": "14-fold tail diagnostic", "pnl_usd": -2.28929, "profit_factor": 0.944057, "wilson_lower": 0.742641, "decision": "Reject; no retuning"},
+        {"order": 4, "mechanism": "Binary-complement coherence v1", "evidence": "Prospective capture only", "pnl_usd": null, "profit_factor": null, "wilson_lower": null, "decision": "Continue sealed"}
+      ],
+      "evidence_state": [
+        {"order": 1, "stage": "Production services", "observed": "Engine, Telegram monitor, health and soak timers active", "required": "Stable paper-only runtime", "status": "pass"},
+        {"order": 2, "stage": "Terminal refresh recovery", "observed": "11 of 11 pending segments resolved on one eligible refresh; no metrics opened", "required": "Only terminal-only pending segments may be refreshed", "status": "pass"},
+        {"order": 3, "stage": "Measurement artifacts", "observed": "Measurement-v5 recorder and measurement-v11 schema-5 predecessor hashes verified; schema-6 attribution implementation hash-pinned locally", "required": "Build a separate schema-6 Linux scorer only at the authorized floor; no production binary replacement or order placement", "status": "pass"},
+        {"order": 4, "stage": "Operational continuation", "observed": "Bounded measurement-v5 recorder active with zero canary restarts", "required": "Each segment independently seals or fails closed", "status": "in progress"},
+        {"order": 5, "stage": "Block 1 disclosure", "observed": "310 of 750 terminal aligned conditions; metrics undisclosed", "required": ">= 750 terminal aligned conditions", "status": "sealed"},
+        {"order": 6, "stage": "Strategy promotion", "observed": "No forward score", "required": "Two block passes plus exact A+ replay and parity", "status": "closed"}
+      ],
+      "fixed_support_capacity": [
+        {"order": 1, "check": "Raw capture rate", "observed": "243,414 bytes/s observed", "guardrail": "350,000 bytes/s configured", "status": "headroom"},
+        {"order": 2, "check": "Selected replay storage", "observed": "6.99 GiB projected at 750 conditions", "guardrail": "Admissible IDs only", "status": "modeled"},
+        {"order": 3, "check": "Disk cushion", "observed": "4.77 GiB after projection, reserve, and peak raw segment", "guardrail": "Must remain above zero", "status": "pass"},
+        {"order": 4, "check": "Collection bound", "observed": "At most 96 new 24-window segments", "guardrail": "Stop without scoring if 750 is not reached", "status": "bounded"}
+      ],
+      "economic_alignment": [
+        {"order": 1, "measure": "Strict-42 baseline profit factor", "value": 1.114236, "unit": "ratio", "interpretation": "Below the existing A+ 1.20 floor"},
+        {"order": 2, "measure": "PF if dollars followed 90% winner / 70% loss retention", "value": 1.432589, "unit": "ratio", "interpretation": "Count minima clear A+ only under proportional dollar retention"},
+        {"order": 3, "measure": "Existing A+ profit-factor floor", "value": 1.20, "unit": "ratio", "interpretation": "Mirrored exactly by schema 5 and unchanged in schema 6"},
+        {"order": 4, "measure": "Winner-dollar deterioration budget", "value": 0.162356, "unit": "fraction", "interpretation": "16.24% before proportional PF falls below A+"}
+      ]
+    }
+  },
+  "sources": [
+    {"id": "strict42_baseline", "label": "Strict-42 baseline", "path": "deploy/promotions/evidence/strategy_registry/20260718_forward_window_admissibility_pipeline.json"},
+    {"id": "lifecycle_v1", "label": "Immediate complete-set v1", "path": "deploy/promotions/evidence/strategy_registry/20260718_complete_set_lock_v1_historical_tail_diagnostic.json"},
+    {"id": "lifecycle_v2", "label": "Trailing complete-set v2", "path": "deploy/promotions/evidence/strategy_registry/20260718_trailing_complete_set_lock_v2_historical_tail_diagnostic.json"},
+    {"id": "strategy_diagnostic", "label": "Strict-42 overconfidence and mechanism audit", "path": "deploy/promotions/evidence/strategy_registry/20260720_strategy_overconfidence_and_microstructure_audit.json"},
+    {"id": "fast_volatility_preregistration", "label": "Fast-volatility maximum preregistration", "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_preregistration.json"},
+    {"id": "fast_volatility_evidence", "label": "Fast-volatility maximum public calibration evidence", "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_public_calibration.json"},
+    {"id": "fast_volatility_integrity_amendment", "label": "Fast-volatility post-score integrity amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_fast_volatility_max_integrity_amendment.json"},
+    {"id": "fast_volatility_notebook", "label": "Executed fast-volatility public calibration notebook", "path": "docs/notebooks/strategy_fast_volatility_max_public_calibration_2026-07-21.ipynb"},
+    {"id": "dvol_preregistration", "label": "DVOL volatility-maximum preregistration", "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_preregistration.json"},
+    {"id": "dvol_source_feasibility", "label": "DVOL volatility-maximum source-feasibility evidence", "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_source_feasibility.json"},
+    {"id": "empirical_cdf_preregistration", "label": "Empirical standardized-return CDF preregistration", "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_preregistration.json"},
+    {"id": "empirical_cdf_evidence", "label": "Empirical standardized-return CDF public calibration evidence", "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_public_calibration.json"},
+    {"id": "empirical_cdf_notebook", "label": "Executed empirical standardized-return CDF notebook", "path": "docs/notebooks/strategy_empirical_return_cdf_public_calibration_2026-07-21.ipynb"},
+    {"id": "probability_model_validation", "label": "Probability-model challenger immutable validation pins", "path": "deploy/promotions/evidence/strategy_registry/20260721_probability_model_challenger_validation.json"},
+    {"id": "binary_preregistration", "label": "Binary-complement preregistration", "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json"},
+    {"id": "paired_pressure_diagnostic", "label": "Paired-book pressure redundancy diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_paired_book_pressure_redundancy_diagnostic.json"},
+    {"id": "paired_pressure_notebook", "label": "Executed paired-book pressure diagnostic notebook", "path": "docs/notebooks/strategy_paired_book_pressure_redundancy_2026-07-21.ipynb"},
+    {"id": "residual_independence_diagnostic", "label": "BTC complement-residual independence diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_independence_diagnostic.json"},
+    {"id": "residual_independence_notebook", "label": "Executed BTC residual-independence notebook", "path": "docs/notebooks/strategy_complement_residual_independence_2026-07-21.ipynb"},
+    {"id": "residual_cross_market_replication", "label": "Current non-candle residual cross-market replication", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_cross_market_replication.json"},
+    {"id": "residual_cross_market_notebook", "label": "Executed non-candle residual replication notebook", "path": "docs/notebooks/strategy_complement_residual_cross_market_replication_2026-07-21.ipynb"},
+    {"id": "non_candle_snapshot_manifest", "label": "Public non-candle order-book snapshot manifest", "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books_manifest.json"},
+    {"id": "paired_wait_cost_diagnostic", "label": "Paired-book wait-cost diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_book_wait_cost_diagnostic.json"},
+    {"id": "paired_wait_cost_notebook", "label": "Executed paired-book wait-cost notebook", "path": "docs/notebooks/strategy_paired_book_wait_cost_diagnostic_2026-07-21.ipynb"},
+    {"id": "settlement_anchor_diagnostic", "label": "Official settlement-source anchor diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_diagnostic.json"},
+    {"id": "settlement_anchor_notebook", "label": "Executed settlement-source anchor notebook", "path": "docs/notebooks/strategy_settlement_source_anchor_diagnostic_2026-07-21.ipynb"},
+    {"id": "settlement_anchor_price_manifest", "label": "Published Chainlink price-to-beat manifest", "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_settlement_anchor_price_to_beat_manifest.json"},
+    {"id": "settlement_anchor_preregistration", "label": "Disjoint settlement-source anchor preregistration", "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_preregistration.json"},
+    {"id": "settlement_anchor_evaluator_amendment", "label": "Outcome-blind settlement-anchor offline evaluator amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_offline_evaluator_amendment.json"},
+    {"id": "settlement_anchor_historical_outcome", "label": "Retrospective signal-gated settlement-anchor outcome diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_historical_outcome_diagnostic.json"},
+    {"id": "settlement_anchor_historical_outcome_notebook", "label": "Executed retrospective settlement-anchor outcome notebook", "path": "docs/notebooks/strategy_settlement_source_anchor_historical_outcome_diagnostic_2026-07-21.ipynb"},
+    {"id": "paired_depth_diagnostic", "label": "Paired-depth capacity diagnostic", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_paired_depth_capacity_diagnostic.json"},
+    {"id": "paired_depth_notebook", "label": "Executed paired-depth diagnostic notebook", "path": "docs/notebooks/strategy_paired_depth_capacity_diagnostic_2026-07-21.ipynb"},
+    {"id": "residual_attribution_amendment", "label": "Pre-score residual attribution amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json"},
+    {"id": "tick_integrity_amendment", "label": "Causal tick integrity amendment", "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json"},
+    {"id": "pair_reproduction_amendment", "label": "Paired-book reproduction amendment", "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_paired_book_reproduction_amendment.json"},
+    {"id": "execution_tick_parity_amendment", "label": "Exact-replay tick parity amendment", "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_execution_tick_parity_amendment.json"},
+    {"id": "live_tick_parity_amendment", "label": "Live-runtime tick parity amendment", "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_live_tick_parity_amendment.json"},
+    {"id": "live_reconciliation_parity_amendment", "label": "Live reconciliation parity amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_live_reconciliation_parity_amendment.json"},
+    {"id": "rest_recovery_parity_amendment", "label": "Authenticated REST recovery amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_rest_recovery_parity_amendment.json"},
+    {"id": "realized_support_amendment", "label": "Realized-support amendment", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_realized_support_amendment.json"},
+    {"id": "power_amendment", "label": "Blinded power amendment", "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_blinded_power_amendment.json"},
+    {"id": "collection_status", "label": "Fresh-block repaired collection status", "path": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_floor_recovery_status.json"},
+    {"id": "support_only_status_310", "label": "Sealed support-only status at 310 conditions", "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_support_only_status_310.json"},
+    {"id": "vps_restart_status", "label": "PolyMomentum VPS restart and bounded collection status", "path": "deploy/promotions/evidence/strategy_registry/20260721_polymomentum_vps_restart_status.json"},
+    {"id": "fixed_support_plan", "label": "Fixed-support collection plan", "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_fixed_support_collection_plan.json"},
+    {"id": "economic_diagnostics_amendment", "label": "Pre-score economic diagnostics amendment", "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_economic_diagnostics_amendment.json"},
+    {"id": "unit_economics_amendment", "label": "Pre-score fee-aware unit-economics amendment", "path": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_unit_economics_amendment.json"},
+    {"id": "decision_notebook", "label": "Executed decision notebook", "path": "docs/notebooks/strategy_portfolio_power_decision_2026-07-18.ipynb"}
+  ],
+  "surface": "report"
+}

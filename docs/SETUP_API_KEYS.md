@@ -10,6 +10,9 @@ This is a **one-time** setup needed only for **live mode**. Paper mode and the `
 | `POLY_API_KEY` | UUID identifying your API access | Authenticating CLOB POSTs |
 | `POLY_API_SECRET` | Base64 HMAC signing key | Signing CLOB request headers |
 | `POLY_API_PASSPHRASE` | Random string | Additional auth factor |
+| `CLOB_V2_READY` | Explicit live-order guard | Must stay `0` until the CLOB V2 order path is verified |
+| `POLYMOMENTUM_LIVE_RECONCILIATION_READY` | Explicit reconciliation guard | Must stay `0` until accepted orders reconcile from CLOB user-channel/REST evidence |
+| `CANDLE_SETTLEMENT_ALIGNMENT_READY` | Explicit settlement guard | Must stay `false` until feed-forward live-replay oracle checks agree |
 
 The API key, secret, and passphrase are **derived from your private key**. Polymarket's CLOB exposes a `POST /auth/api-key` endpoint that returns deterministic creds tied to a wallet — running the derivation twice yields the same values.
 
@@ -17,21 +20,26 @@ The API key, secret, and passphrase are **derived from your private key**. Polym
 
 **Do NOT use your main wallet.** Spin up a fresh one (MetaMask → "Create Account", or any wallet generator). Export the private key — it should start with `0x` and be 32 bytes / 64 hex chars.
 
-## Step 2 — Fund with USDC.e + a little POL
+## Step 2 — Fund with pUSD + a little POL
 
-Polymarket settles in **USDC.e** (the bridged variant) on Polygon. Withdraw USDC to your new wallet on the Polygon network, plus ~0.1 POL for gas.
+Polymarket CLOB V2 settles in **pUSD** on Polygon. API-only traders must wrap
+USDC.e into pUSD through the Collateral Onramp before live trading. Keep a small
+amount of POL for gas and keep USDC.e/native USDC readings as diagnostics only.
 
 Verify with the bot:
 
 ```bash
 PRIVATE_KEY=0x...your_key... \
-POLYGON_RPC_URL=https://polygon-rpc.com \
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com \
 ./target/release/polymomentum-engine wallet
 ```
 
 ## Step 3 — Derive API credentials
 
-Polymarket's CLOB derivation is documented in their official SDK (Python `py-clob-client` or TypeScript `@polymarket/clob-client`). Run their `create_or_derive_api_creds` once with your private key — it's a single one-time HTTP call. You'll get back the three values to paste into `.env`:
+Polymarket's CLOB derivation is documented in their official SDKs. CLOB V2 keeps
+L1/L2 API auth compatible, so existing API key derivation still applies. Run
+`create_or_derive_api_creds` once with your private key. You'll get back the
+three values to paste into `.env`:
 
 ```
 POLY_API_KEY=<uuid>
@@ -43,12 +51,16 @@ Easiest path: clone the official Polymarket TypeScript example, plug in your `PR
 
 ## Step 4 — Set token allowances
 
-Before your first live trade you must approve Polymarket's exchange contracts to spend your USDC.e and outcome tokens. Polymarket's UI does this automatically the first time you place a manual order at `polymarket.com`. Alternatively, you can call `approve` on:
+Before your first live trade you must approve the CLOB V2 contracts to spend
+the correct collateral and outcome tokens. Polymarket's UI handles wrapping for
+site users, but API-only wallets must explicitly prepare pUSD and allowances.
 
-- USDC.e: `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`
-- CTF Exchange: `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
-- Neg Risk Exchange: `0xC5d563A36AE78145C45a50134d48A1215220f80a`
-- CTF Adapter: `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296`
+- pUSD: `0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`
+- CTF Exchange V2: `0xE111180000d2663C0091e4f400237545B87B996B`
+- Neg Risk CTF Exchange V2: `0xe2222d279d744050d28e00520010520000310F59`
+- Collateral Onramp: `0x93070a847efEf7F70739046A929D47a521F5B8ee`
+- CtfCollateralAdapter: `0xAdA100Db00Ca00073811820692005400218FcE1f`
+- NegRiskCtfCollateralAdapter: `0xadA2005600Dec949baf300f4C6120000bDB6eAab`
 
 with `cast send` (Foundry) or any Polygon explorer "Write Contract" UI.
 
@@ -61,9 +73,19 @@ PRIVATE_KEY=0x...
 POLY_API_KEY=...
 POLY_API_SECRET=...
 POLY_API_PASSPHRASE=...
-POLYGON_RPC_URL=https://polygon-rpc.com
+POLY_BASE_URL=https://clob.polymarket.com
+POLY_GAMMA_URL=https://gamma-api.polymarket.com
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
 ALERT_REQUIRED=1
+VENUE=paper_only
+OPERATOR_COUNTRY=
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
+POLYMARKET_US_API_ENABLED=0
+CLOB_V2_READY=0
+POLYMOMENTUM_LIVE_RECONCILIATION_READY=0
+CANDLE_SETTLEMENT_ALIGNMENT_READY=false
 ```
 
 Verify the bot can read your wallet and the on-chain view of an old market:
@@ -75,12 +97,34 @@ Verify the bot can read your wallet and the on-chain view of an old market:
 
 ## Step 6 — First live trade
 
-When you're ready (paper validated, $1-sized stake), flip the systemd unit:
+When you're ready (feed-forward replay validation passed, venue/account
+compliance cleared, CLOB V2 order signing verified, pUSD/allowances ready,
+$1-sized stake), do not edit the unit with `sed`. For the international CLOB,
+configure the venue env first.
+`OPERATOR_COUNTRY` must reflect the approved operator/account jurisdiction, not
+the VPS location:
 
 ```bash
-ssh vps 'sudo sed -i "s/--mode paper/--mode live --i-understand-live/" \
-            /etc/systemd/system/polymomentum-engine.service && \
-         sudo systemctl daemon-reload && sudo systemctl restart polymomentum-engine'
+VENUE=polymarket_international
+OPERATOR_COUNTRY=<approved_non_us_operator_country>
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=1
+POLYMARKET_US_API_ENABLED=0
+CLOB_V2_READY=1
+POLYMOMENTUM_LIVE_RECONCILIATION_READY=1
+CANDLE_SETTLEMENT_ALIGNMENT_READY=true
+```
+
+Do not set `CLOB_V2_READY=1` until the code path has migrated away from V1 raw
+order signing. Do not set `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1` until the
+user-channel/REST reconciliation path has been verified. Do not set
+`CANDLE_SETTLEMENT_ALIGNMENT_READY=true` until feed-forward live-replay and
+diagnostics show zero actionable oracle drift on resolved candidates. Use paper
+mode only for venue behavior that cannot be reproduced offline.
+
+Then deploy through the guarded path:
+
+```bash
+bash deploy/deploy.sh vps --enable-service --mode live --i-understand-live
 ```
 
 Watch the next trade tape:
@@ -89,4 +133,8 @@ Watch the next trade tape:
 ssh vps 'journalctl -u polymomentum-engine -f -n 0 | grep candle.trade.live'
 ```
 
-Roll back to paper by reversing the `sed` and restarting.
+Roll back by setting `VENUE=paper_only` and redeploying paper mode:
+
+```bash
+bash deploy/deploy.sh vps --enable-service --mode paper
+```

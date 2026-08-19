@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T16:49:55Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_LIVE_RUNTIME_DYNAMIC_TICK_PARITY_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Can a future promoted live order consume the venue's current dynamic tick consistently from market-channel receipt through sizing, FOK or maker pricing, signing, and submission?",
+  "defect": {
+    "before": "The production market WebSocket accepted book, price_change, and best_bid_ask events but discarded tick_size_change. The live pipeline then used Gamma metadata or a static 0.01 default for taker sizing, maker preflight, final order rounding, signing, and submission.",
+    "risk": "After the venue changes a market from 0.01 to 0.001, a future promoted live order could use a stale tick and be rejected or could diverge from the exact replay that justified promotion.",
+    "severity": "promotion_blocking_live_replay_parity",
+    "forward_strategy_metrics_inspected": false,
+    "forward_trade_or_screen_metrics_disclosed": false,
+    "active_capture_data_invalidated": false
+  },
+  "repair_contract": {
+    "market_channel": "Parse the official tick_size_change event, require a valid source timestamp, asset_id, and positive sub-unit new_tick_size, and ignore an older tick event for the same token.",
+    "freshness": "Store tick_update_us separately; a tick-only event must not make an old order book appear fresh.",
+    "condition_tick": "Initialize from valid Gamma metadata or 0.01, prefer the latest valid feed tick across the two outcome tokens, break simultaneous conflicts toward the finer tick, then apply the same causal extreme-top transition used by replay as a fail-safe.",
+    "order_path": "Use one computed condition tick for visible-depth taker sizing, maker preflight and sizing, FOK ceiling rounding, order signing, and final venue submission.",
+    "production_source_behavior_changed": true,
+    "production_binary_replaced_or_restarted": false,
+    "capture_format_changed": false,
+    "scorer_rule_schema_gate_or_threshold_changed": false,
+    "recollection_required": false
+  },
+  "implementation": {
+    "market_feed_file": "rust_engine/src/polymarket_ws.rs",
+    "market_feed_sha256": "90d05537a03ab4cca40c6b2350ec4d38b15d85b15d576ccc87e56c89f570e480",
+    "live_pipeline_file": "rust_engine/src/live/pipeline.rs",
+    "live_pipeline_sha256": "a78abd0dbe6d92bb571a42c664f12d8e68c714d54f5a90c5ba6531bed918fd6e",
+    "shared_tick_policy_file": "rust_engine/src/strategy/microstructure.rs",
+    "shared_tick_policy_sha256": "023dacb644760a0e958ec7d4b7316b01f5fffa0347436cf935397f9584a13c0d",
+    "exact_harness_sha256": "5ea335ce79c9a0c061b44ee1479da2a6e06ae8d2365902f264df3f6f61372216",
+    "cached_live_replay_sha256": "29d120c6d01a533ed83e3d55e02714a9f29e2c646f5f84e362daf406004de0d4",
+    "scorer_sha256_unchanged": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "tests_added": [
+      "applies_latest_tick_size_change_without_refreshing_book_age",
+      "live_market_tick_uses_latest_feed_change_and_causal_book_fallback"
+    ]
+  },
+  "deployed_measurement_v8": {
+    "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v8",
+    "sha256": "ee9886d80838ec5b4e5bde96795362c46061623f5a98e369c405f192b63e44be",
+    "linux_x86_64_linkage_verified": true,
+    "strategy_builder_help_verified": true,
+    "production_binary_replaced": false,
+    "production_service_restarted": false,
+    "active_v5_capture_interrupted": false,
+    "active_v5_capture_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_v5_capture_main_pid": 240334,
+    "active_v5_capture_restarts": 0,
+    "active_recorder_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "scoring_requirement": "v8 retains the reproduction-hardened schema-4 scorer and may score the sealed block only after the fixed floor.",
+    "promotion_requirement": "Any future promoted runtime build must retain these market-feed, pipeline, shared-tick, exact-replay, and scorer contracts."
+  },
+  "validation": {
+    "red_test": "PASS: both new tests initially failed because TokenBookState had no tick state and the live pipeline had no condition-tick resolver.",
+    "cargo_test": "PASS: 506 passed (455 library + 51 binary), 0 failed; doc-tests 0",
+    "cargo_clippy": "PASS: all targets with warnings denied after allowing the two documented pre-existing unrelated lints",
+    "cargo_fmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "linux_binary_hash_match": true,
+    "forward_scores_disclosed": 0
+  },
+  "external_sources": [
+    {
+      "title": "Polymarket Market Channel",
+      "url": "https://docs.polymarket.com/market-data/websocket/market-channel",
+      "use": "The market channel emits tick_size_change with asset_id, market, old_tick_size, new_tick_size, and timestamp when price crosses the dynamic threshold."
+    },
+    {
+      "title": "Polymarket Order Book",
+      "url": "https://docs.polymarket.com/market-data/orderbook",
+      "use": "Tick-size changes are critical to order validity; submitted prices must respect the current market tick."
+    },
+    {
+      "title": "Polymarket Get Tick Size",
+      "url": "https://docs.polymarket.com/api-reference/market-data/get-tick-size",
+      "use": "The CLOB tick-size endpoint is token-addressed and returns the current minimum_tick_size."
+    }
+  ],
+  "decision": {
+    "safe_to_continue_sealed_collection": true,
+    "safe_to_score_below_750": false,
+    "fixed_strategy_rule_or_gate_changed": false,
+    "live_runtime_parity_contract_changed": true,
+    "current_grade": "A-",
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue the sealed first block to 750 unique officially aligned terminal conditions and score exactly once with measurement-v8 or a later hash-pinned equivalent. Do not promote a production runtime unless two disjoint blocks and exact measured-latency replay pass every registered A+ gate."
+  }
+}

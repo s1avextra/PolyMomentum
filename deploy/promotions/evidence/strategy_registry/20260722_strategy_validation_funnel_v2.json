@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T06:57:02Z",
+  "status": "EXPLORATION_FUNNEL_ACTIVE_PROMOTION_GATES_UNCHANGED",
+  "purpose": "Separate cheap hypothesis triage from expensive execution validation and final forward confirmation.",
+  "stages": [
+    {
+      "stage": 0,
+      "name": "mechanism_definition",
+      "cost": "minutes",
+      "input": "A causal rule with a fixed decision timestamp, direction, and terminal label.",
+      "output": "A bounded family registration and explicit leakage boundary.",
+      "stopping_rule": "Reject only rules that are non-causal, undefined, duplicate an existing mechanism, or cannot be measured."
+    },
+    {
+      "stage": 1,
+      "name": "public_directional_screen",
+      "cost": "minutes",
+      "input": "Checksum-verified public BTC data with no Polymarket execution model.",
+      "output": "Coverage, terminal-direction accuracy, chronological and directional stability, and mechanism decomposition.",
+      "stopping_rule": "Remove clearly directionless or unsupported rules; sample floors are warnings for the next stage, not promotion claims.",
+      "does_not_establish": [
+        "executable edge",
+        "fills",
+        "net PnL",
+        "promotion eligibility"
+      ]
+    },
+    {
+      "stage": 2,
+      "name": "economic_opportunity_screen",
+      "cost": "one historical replay pass",
+      "input": "Causal signal timestamps plus contemporaneous chosen-token asks and fee metadata.",
+      "output": "Opportunity count, price distribution, fee-aware break-even margin, direction, and chronology.",
+      "stopping_rule": "Shortlist at most two rules whose observed hit-rate cushion is not already consumed by the executable ask and fee."
+    },
+    {
+      "stage": 3,
+      "name": "exact_l2_replay",
+      "cost": "bounded historical replay",
+      "input": "The stage-2 shortlist only.",
+      "output": "202 ms causal insertion, visible-depth FOK book walk, exact fees, fills, sizing, exposure, breaker, resolution, and net PnL.",
+      "stopping_rule": "Require positive net expectancy and chronology/direction robustness before fresh validation; do not require 750 conditions here."
+    },
+    {
+      "stage": 4,
+      "name": "fresh_resolved_holdout",
+      "cost": "one newest fully resolved, non-overlapping replay window",
+      "input": "Frozen rule and parameters from stage 3.",
+      "output": "Fresh economic replication without retuning.",
+      "stopping_rule": "A negative or economically empty holdout rejects the candidate; a positive holdout only authorizes final confirmation."
+    },
+    {
+      "stage": 5,
+      "name": "fixed_forward_confirmation",
+      "cost": "slowest",
+      "input": "One promotion candidate with a frozen runtime identity.",
+      "output": "Decision-grade forward evidence under a predeclared support and stopping rule.",
+      "stopping_rule": "Use a power-derived condition floor, such as the current 750-condition binary-complement blocks, only here."
+    }
+  ],
+  "governance": {
+    "historical_exploration_may_continue_while_an_unrelated_forward_block_is_sealed": true,
+    "active_forward_population_outcomes_may_be_opened_for_exploration": false,
+    "failed_confirmatory_gate_may_be_rewritten_after_results": false,
+    "a_failed_confirmatory_gate_blocks_cheap_disjoint_research": false,
+    "maximum_exact_l2_shortlist_per_family": 2,
+    "runtime_paper_or_live_change_before_stage_5": false
+  },
+  "current_application": {
+    "active_confirmatory_mechanism": "binary_complement_coherence_v1",
+    "active_confirmatory_floor_conditions": 750,
+    "new_exploratory_family": "late_window_article_family_v1",
+    "relationship": "disjoint research paths; the article family cannot inspect or use the active binary-complement population before its seal"
+  }
+}

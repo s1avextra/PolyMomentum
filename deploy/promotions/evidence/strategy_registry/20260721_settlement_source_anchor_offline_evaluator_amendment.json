@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T09:37:45Z",
+  "mechanism_id": "settlement_source_anchor_v1",
+  "status": "OUTCOME_BLIND_EVALUATOR_ALLOCATION_SOURCE_AUDIT_AND_PAIRED_SCORER_READY_RUNTIME_UNCHANGED",
+  "authority": {
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "active_binary_complement_terminal_outcomes_accessed": false,
+    "settlement_anchor_forward_outcomes_exist": false,
+    "diagnostic_terminal_labels_loaded": false,
+    "diagnostic_strategy_outcomes_loaded": false,
+    "active_collector_changed": false,
+    "production_or_paper_runtime_changed": false
+  },
+  "registered_contract_preserved": {
+    "preregistration": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_preregistration.json",
+    "preregistration_sha256": "b322a0243c148f3f70f64bbac1433707fc908ee8a60a92e3cdbed2261dcd937d",
+    "signal_direction_confidence_and_momentum_source": "unchanged Binance causal tape",
+    "realized_volatility_source": "unchanged Binance causal tape with the registered 0.30 decision floor",
+    "only_changed_decision_inputs": [
+      "fair-value current spot uses the latest causal Chainlink tick at or before the decision",
+      "fair-value strike uses the latest causal Chainlink tick at or before the five-minute window open"
+    ],
+    "official_current_max_age_ms": 10000,
+    "official_open_max_age_ms": 2000,
+    "missing_stale_or_wrong_source_action": "fail closed",
+    "alternate_thresholds_added": 0
+  },
+  "implementation": {
+    "surface": "offline harness-sweep only",
+    "activation": "explicit --fair-value-btc-csv <path>, --pin-input-artifacts, a passing --settlement-anchor-allocation-lock <path>, and a passing --settlement-anchor-source-audit <path>",
+    "default_behavior": "unchanged proxy-anchor fair value when the flag is absent",
+    "source_guard": "the optional fair-value CSV must classify as chainlink_btc_usd_data_stream",
+    "multiplicity_guards": [
+      "requires exactly one explicit frozen variant JSON",
+      "requires primary_v6_volfloor_300 with exact stable hash a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+      "requires an exact 750-ID allowlist equal to the immutable allocation lock",
+      "pins preregistration file hash, frozen variant file hash, and stable variant parameter hash",
+      "requires complete prior binary-complement block shape for the registered allocation boundary and every prior settlement-anchor block",
+      "requires source-hash integrity, 5-minute alignment, strict chronology, and sealing after the final condition window for every block set",
+      "requires a fixed contiguous report partition with at least 20 reports, at most 24 conditions per report, and a published public price to beat for every anchor condition",
+      "requires zero condition-ID overlap across the candidate and all prior blocks",
+      "requires continuous stateful replay",
+      "forbids adaptive health rearm",
+      "requires explicit hash-pinned Binance signal and settlement CSVs plus a byte-revalidated PMXT input-artifact list",
+      "requires both report and trade evidence outputs plus one reserved paired-audit output",
+      "pins all three output paths in the allocation lock and rejects existing, identical, reused, or alternate paths",
+      "recomputes trade summaries, report breadth, Wilson lower bound, fee-inclusive PnL, profit factor, payoff, fold tail, CVaR, loss bursts, worst-loss ratio, drawdown, and chronological halves from raw trade rows",
+      "requires exact catalog, token, primary-window fill-time, frozen-parameter, latency, replay-semantics, and all non-fair source parity"
+    ],
+    "state_isolation": "baseline and candidate run in separate stateful harness invocations; the implemented paired scorer rejects any condition-ID, catalog, strategy, report/trade summary, fill-time, execution-semantic, or non-fair-source mismatch and rehashes every pinned input before accepting gates",
+    "manifest_contract": {
+      "source_name": "btc_fair_value_price_tape",
+      "role": "fair_value_spot_and_strike_only",
+      "current_max_age_ms": 10000,
+      "open_max_age_ms": 2000,
+      "source_audit_minimum_coverage": 0.95,
+      "published_price_max_difference_usd": 0.01
+    },
+    "files": [
+      {
+        "path": "rust_engine/src/backtest/btc_history.rs",
+        "sha256": "cffad4b944d5ab1c1c26dbcf661494c8f164431360140900d6b347a7b8418be5"
+      },
+      {
+        "path": "rust_engine/src/backtest/harness.rs",
+        "sha256": "6579c455ae504567bb0355829ff68897a99530cb68676ab96f4d6bd918871ae4"
+      },
+      {
+        "path": "rust_engine/src/backtest/experiment.rs",
+        "sha256": "fdcfb18de918c4c90ca32617fc657b72dfe09b17f54e1a6592edaf878e47fd78"
+      },
+      {
+        "path": "rust_engine/src/backtest/variant_io.rs",
+        "sha256": "43c5c833c7f6f5e41c4f0eb7b21a6ce6f803fdd55a09b406fbaf8e327393359d"
+      },
+      {
+        "path": "rust_engine/src/backtest/allocation_lock.rs",
+        "sha256": "8433d758e7a882a7513c91658fc0dc1067dffd8e7852dbf375a04ae0cb5c83b6"
+      },
+      {
+        "path": "rust_engine/src/backtest/settlement_anchor.rs",
+        "sha256": "04ba732511297dba08b882c5a5a87cb7de02d0811feb236fafa8632f8c963997"
+      },
+      {
+        "path": "rust_engine/src/backtest/pmxt.rs",
+        "sha256": "b49419357c7f051299a1cba73f167a087e6da7a649ae016d03800608ba08adc0"
+      },
+      {
+        "path": "rust_engine/src/backtest/mod.rs",
+        "sha256": "ca5d1cc0af8eeb7ee7be5917bf4f05b204d970a72ce2cc90dd32c5376ecf8cdd"
+      },
+      {
+        "path": "rust_engine/src/main.rs",
+        "sha256": "99e93c04ec2d5fcd1fafff09f2fa3379c0cd6022fd680bd69327550cbad17d66"
+      },
+      {
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_baseline_variant.json",
+        "sha256": "50ffad389f08f44fe18c4914c438542f413045df869302cce81b4a621325e6cf"
+      },
+      {
+        "path": "rust_engine/src/strategy/decision.rs",
+        "sha256": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0",
+        "changed": false
+      }
+    ]
+  },
+  "validation": {
+    "cargo_test": "PASS: 545 passed; 0 failed",
+    "cargo_fmt_check": "PASS",
+    "cargo_clippy_all_targets_deny_warnings": "PASS",
+    "git_diff_check_touched_files": "PASS",
+    "targeted_tests": [
+      "max_age_lookup_is_causal_and_fail_closed",
+      "fair_value_tape_changes_only_fair_inputs_and_enforces_freshness",
+      "fair_value_tape_rejects_stale_window_open",
+      "report_identifies_separate_fair_value_tape_and_frozen_freshness",
+      "harness_sweep_parses_separate_signal_fair_and_settlement_tapes",
+      "settlement_anchor_preflight_forbids_grid_unbounded_and_adaptive_runs",
+      "settlement_anchor_evaluator_accepts_only_the_frozen_baseline_variant",
+      "registered_settlement_anchor_baseline_is_exactly_parseable",
+      "allocation_lock_passes_exact_disjoint_750_condition_block",
+      "allocation_lock_rejects_condition_overlap",
+      "allocation_lock_rejects_incomplete_binary_boundary",
+      "allocation_lock_rejects_nonchronological_or_unsealed_candidate",
+      "allocation_lock_rejects_mutable_report_partition_or_missing_public_strike",
+      "allocation_lock_validation_detects_condition_set_tampering",
+      "allocation_lock_validation_rejects_duplicate_or_different_allowlist",
+      "settlement_anchor_outputs_are_single_use_and_distinct",
+      "settlement_anchor_allocation_lock_command_parses_pinned_inputs_and_outputs",
+      "source_audit_passes_full_causal_coverage_and_published_prices",
+      "source_audit_rejects_coverage_below_frozen_95_percent",
+      "source_audit_rejects_published_price_mismatch",
+      "paired_audit_passes_recomputed_absolute_gates_but_never_claims_a_plus",
+      "paired_audit_rejects_non_fair_source_hash_drift",
+      "paired_audit_rejects_reuse_of_its_locked_output_path",
+      "paired_audit_recomputes_and_rejects_negative_second_half",
+      "settlement_anchor_pair_audit_command_parses_all_immutable_artifacts"
+    ],
+    "cli_help_verified": true,
+    "cli_multiplicity_guard_verified": "PASS: a two-variant file exits 2 before data access",
+    "cli_allocation_guard_verified": "PASS: an otherwise complete settlement-anchor invocation without --settlement-anchor-allocation-lock exits 2 before data access",
+    "cli_flags": [
+      "--fair-value-btc-csv",
+      "--pin-input-artifacts",
+      "--settlement-anchor-allocation-lock",
+      "--settlement-anchor-source-audit"
+    ],
+    "paired_scorer_cli": "strategy-builder settlement-anchor-pair-audit",
+    "forward_strategy_scores_disclosed": 0
+  },
+  "known_runtime_gap": {
+    "finding": "The existing settlement-aligned live path uses Chainlink for the whole BTC momentum detector as well as fair value, which is broader than the frozen candidate.",
+    "action": "Do not reuse that live switch as evidence for settlement_source_anchor_v1. A dedicated default-off runtime implementation may be considered only after two disjoint forward block passes."
+  },
+  "next_authorized_use": {
+    "active_binary_complement_block": "forbidden",
+    "historical_outcome_search": "forbidden for promotion credit",
+    "future_settlement_anchor_block": "allowed only after the preregistered disjoint allocation rule selects its first condition",
+    "score_frequency": "once per sealed block",
+    "threshold_changes": "forbidden"
+  },
+  "remaining_allocation_control": {
+    "status": "IMPLEMENTED_AWAITING_FUTURE_CONDITION_SET",
+    "reason": "The candidate block cannot be allocated until the binary-complement hierarchy seals its controlling condition set.",
+    "implemented_control": "The wrapper hash-pins the exact 750 allowed IDs, fixed report partition, public strikes, candidate and prior condition-set artifacts, preregistration, frozen variant, boundary-specific prior-block shape, and three single-use score outputs; it revalidates all source hashes, chronology, sealing, and overlap before replay data access.",
+    "required_before_first_candidate_score": "Issue one concrete passing lock from the future sealed condition set; no lock exists while the active binary-complement block controls allocation."
+  },
+  "remaining_pairing_control": {
+    "status": "IMPLEMENTED_AWAITING_FUTURE_LOCKED_ARTIFACTS",
+    "required_before_first_candidate_score": "Run the implemented scorer only after the future block is sealed, its label-free source audit passes, and the allocation lock's reserved report/trade paths exist while its reserved pair-audit path remains unused. The scorer then verifies exact condition, report-partition, catalog, raw-input, latency, fill, fee, and replay parity; only the fair-value tape may differ."
+  },
+  "decision": {
+    "offline_evaluator_ready": true,
+    "block_allocation_wrapper_ready": true,
+    "future_block_allocation_lock_issued": false,
+    "label_free_source_audit_ready": true,
+    "paired_block_scorer_ready": true,
+    "runtime_implementation_authorized": false,
+    "active_collector_change_authorized": false,
+    "active_block_score_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T12:35:00Z",
+  "purpose": "Attach Binance BTC tape to a resolved forward BTC book capture and test settlement alignment against finalized Gamma outcomes.",
+  "verdict": {
+    "promotion_ready": false,
+    "live_ready": false,
+    "status": "KEEP_REPLAY_RESEARCH",
+    "summary": "Forward captures now have official terminal outcomes and BTC tape coverage, but the first smoke includes one local BTC tie against a Gamma Up resolution, so A+ remains blocked pending settlement-basis review and larger repeated samples."
+  },
+  "change": {
+    "command": "finalize-recorded-btc-books",
+    "new_capability": "Loads a BTC reference tape from --btc-csv or Binance public klines, derives each btc-updown window open/close, and writes BTC direction plus settlement alignment into resolution_manifest.json.",
+    "a_plus_gate_outputs": [
+      "resolution_manifest_ready",
+      "btc_tape_ready",
+      "settlement_alignment_ready",
+      "oracle_checks",
+      "oracle_disagreements",
+      "oracle_ties"
+    ]
+  },
+  "smoke_input": {
+    "record_dir": "/private/tmp/polymomentum_record_btc_books_a_plus_smoke_20260701",
+    "distilled_dir": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701",
+    "resolution_manifest": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701/resolution_manifest.json"
+  },
+  "smoke_result": {
+    "btc_source": {
+      "kind": "binance_public_klines",
+      "symbol": "BTCUSDT",
+      "interval": "1s",
+      "rows": 911,
+      "first_timestamp_ms": 1782904495999,
+      "last_timestamp_ms": 1782905405999
+    },
+    "markets": 3,
+    "terminal": 3,
+    "btc_tape_covered": 3,
+    "oracle_checks": 3,
+    "oracle_disagreements": 0,
+    "oracle_ties": 1,
+    "a_plus_gate": {
+      "resolution_manifest_ready": true,
+      "btc_tape_ready": true,
+      "settlement_alignment_ready": false,
+      "verdict": "BTC_TIE_NEEDS_REVIEW"
+    },
+    "market_alignment": [
+      {
+        "slug": "btc-updown-5m-1782904500",
+        "terminal_direction": "up",
+        "btc_open": 58706.01,
+        "btc_close": 58706.01,
+        "btc_direction": "tie",
+        "settlement_aligned": false
+      },
+      {
+        "slug": "btc-updown-5m-1782904800",
+        "terminal_direction": "up",
+        "btc_open": 58706.01,
+        "btc_close": 58711.99,
+        "btc_direction": "up",
+        "settlement_aligned": true
+      },
+      {
+        "slug": "btc-updown-5m-1782905100",
+        "terminal_direction": "down",
+        "btc_open": 58711.99,
+        "btc_close": 58698.23,
+        "btc_direction": "down",
+        "settlement_aligned": true
+      }
+    ]
+  },
+  "interpretation": "The forward data path is now end-to-end for orderbook, terminal Gamma outcome, and BTC tape coverage. The tie case is a useful A+ blocker: exact Binance close-to-close can be flat while Polymarket resolves Up, so the next promotion-grade step is settlement-basis policy and larger repeated resolved samples, not live promotion.",
+  "verification": {
+    "cargo_fmt_check": "passed",
+    "targeted_tests": [
+      "recorded_btc_slug_window_parses_supported_windows",
+      "recorded_btc_direction_is_fail_closed_for_missing_prices",
+      "terminal_direction_requires_closed_terminal_market"
+    ],
+    "debug_build": "passed",
+    "release_build": "passed",
+    "live_finalize_smoke": "passed with BTC_TIE_NEEDS_REVIEW fail-closed verdict"
+  }
+}

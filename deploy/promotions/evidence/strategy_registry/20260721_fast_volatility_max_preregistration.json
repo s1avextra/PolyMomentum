@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T10:22:53Z",
+  "status": "PREREGISTERED_BEFORE_PUBLIC_WINDOW_DOWNLOAD_OR_LABEL_INSPECTION",
+  "mechanism_id": "fast_volatility_max_v1",
+  "decision_question": "Does replacing the plug-in one-hour volatility with a conservative maximum of the existing floor, one-hour realized volatility, and the engine's existing causal fast volatility reduce short-horizon probability overconfidence without fitting a new coefficient?",
+  "motivation": {
+    "measured_failure": "The retained strategy's internal fair probability is more overconfident and less calibrated than the executable market, while simple calibration, sizing, filters, delayed entry, exits, order flow, cross-venue paths, and derivatives features have already failed their causal gates.",
+    "structural_rationale": "A one-hour estimator can lag an abrupt volatility increase. The engine already maintains a causal 15-minute-half-life EWMA variance for signal normalization. Taking the maximum can only retain or widen the remaining-price distribution; it never makes the model more confident than the current volatility input.",
+    "scope": "Probability-model research only. This registration does not authorize a strategy variant, exact replay, paper trading, live trading, or use of the active binary-complement block."
+  },
+  "frozen_formula": {
+    "baseline_annualized_volatility": "max(0.30, rolling_one_hour_realized_volatility)",
+    "candidate_annualized_volatility": "max(0.30, rolling_one_hour_realized_volatility, causal_fast_ewma_volatility)",
+    "fast_variance_update": "alpha = 1 - exp(-delta_seconds / tau_seconds); variance = (1 - alpha) * prior_variance + alpha * log_return_squared / delta_seconds",
+    "fast_half_life_minutes": 15.0,
+    "fast_tau_seconds": 1298.425536800067,
+    "annualization_seconds": 31557600.0,
+    "probability": "clamp(N((ln(spot/strike) + (0.05 - 0.5 * sigma^2) * years_remaining) / (sigma * sqrt(years_remaining))), 0.01, 0.99)",
+    "risk_free_rate": 0.05,
+    "volatility_floor": 0.30,
+    "coefficient_or_threshold_grid": false,
+    "alternate_half_lives": 0,
+    "alternate_aggregation_intervals": 0
+  },
+  "public_data_contract": {
+    "source": "Official Binance public BTCUSDT spot one-second kline daily archives and adjacent SHA-256 checksum files",
+    "base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/",
+    "download_after_registration": true,
+    "older_window_utc": "2026-06-11T00:00:00Z through 2026-06-26T00:00:00Z",
+    "fresh_holdout_window_utc": "2026-06-26T00:00:00Z through 2026-07-11T00:00:00Z",
+    "excluded_known_strategy_windows": [
+      "2026-05-28T00:00:00Z through 2026-06-11T00:00:00Z",
+      "2026-07-14T15:00:00Z through 2026-07-14T16:30:00Z",
+      "2026-07-15T06:50:00Z through 2026-07-15T08:50:00Z",
+      "all active or sealed forward-block conditions"
+    ],
+    "five_minute_window_alignment": "UTC Unix timestamps divisible by 300 seconds",
+    "decision_offsets_seconds": [120, 150, 179],
+    "strike": "open price of the first one-second Binance kline in the five-minute window",
+    "causal_spot": "close price of the one-second kline ending at or before the registered decision offset",
+    "terminal_label": "last one-second close before the five-minute boundary is greater than the registered strike; exact ties are excluded",
+    "minimum_causal_preroll_seconds": 3600,
+    "maximum_internal_gap_seconds": 2,
+    "checksum_required": true,
+    "label_inspected_before_registration": false
+  },
+  "frozen_estimands": {
+    "primary_grain": "one forecast per five-minute condition and registered decision offset",
+    "primary_metrics": [
+      "condition-offset-weighted Brier score",
+      "condition-offset-weighted log loss"
+    ],
+    "secondary_metrics": [
+      "calibration-in-the-large",
+      "mean absolute probability displacement",
+      "fraction of rows where candidate volatility exceeds baseline",
+      "Brier and log loss for baseline probabilities at least 0.75 or at most 0.25"
+    ],
+    "uncertainty": "Paired block bootstrap by UTC day with 10000 deterministic resamples and seed 20260721",
+    "comparison_sign": "positive baseline-minus-candidate proper-score deltas favor the candidate"
+  },
+  "fixed_pass_gates": {
+    "data_quality": {
+      "checksum_failures": 0,
+      "timestamp_duplicates": 0,
+      "timestamp_regressions": 0,
+      "invalid_prices": 0,
+      "minimum_retained_conditions_per_chronological_half": 3500,
+      "minimum_complete_registered_forecasts_fraction": 0.99
+    },
+    "overall": {
+      "minimum_brier_improvement": 0.0005,
+      "minimum_log_loss_improvement": 0.001,
+      "brier_bootstrap_lower_bound_strictly_positive": true,
+      "log_loss_bootstrap_lower_bound_strictly_positive": true
+    },
+    "stability": {
+      "older_window_brier_improvement_strictly_positive": true,
+      "older_window_log_loss_improvement_strictly_positive": true,
+      "fresh_holdout_brier_improvement_strictly_positive": true,
+      "fresh_holdout_log_loss_improvement_strictly_positive": true,
+      "each_registered_decision_offset_brier_improvement_nonnegative": true,
+      "each_registered_decision_offset_log_loss_improvement_nonnegative": true
+    },
+    "overconfidence_tail": {
+      "brier_improvement_nonnegative": true,
+      "log_loss_improvement_nonnegative": true
+    }
+  },
+  "decision_rules": {
+    "pass": "Register one default-off opportunity-capture field and require an independent Polymarket opportunity-level screen before any exact strategy replay or runtime implementation.",
+    "fail": "Reject fast_volatility_max_v1 and do not tune the half-life, floor, maximum operator, decision offsets, or score thresholds on these windows.",
+    "inconclusive": "Treat missing or invalid public data as a failed research screen; do not substitute the active forward block or lower a gate.",
+    "promotion_credit": false,
+    "profitability_claim_permitted": false,
+    "a_plus_claim_permitted": false
+  },
+  "source_pins_before_evaluation": {
+    "fair_value_rs": {
+      "path": "rust_engine/src/fair_value.rs",
+      "sha256": "660a91f43c3b77e26c16cb370cf887c93c1d0e562e26156a865c0310f6356585"
+    },
+    "momentum_rs": {
+      "path": "rust_engine/src/strategy/momentum.rs",
+      "sha256": "4459cfa840f486c5763731d983d8c1bbe931d348b7648ee2cb78d208b6bf49ea"
+    },
+    "decision_rs": {
+      "path": "rust_engine/src/strategy/decision.rs",
+      "sha256": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0"
+    },
+    "strict42_baseline": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "sha256": "a0a2b811af91c25c0c494cc1811f629b368fd3c8855fa7489e488998cc865951"
+    }
+  },
+  "integrity": {
+    "active_forward_block_loaded": false,
+    "active_forward_metrics_seen": false,
+    "registered_public_window_labels_seen": false,
+    "strategy_code_changed": false,
+    "paper_or_live_behavior_changed": false
+  }
+}

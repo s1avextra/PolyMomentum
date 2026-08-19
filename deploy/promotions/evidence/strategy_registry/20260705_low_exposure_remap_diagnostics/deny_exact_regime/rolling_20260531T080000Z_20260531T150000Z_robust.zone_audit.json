@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "report_count": 1,
+  "variant_name": "all_c0.50_z0.90_e0.07_ev-1.00_p0.10-0.85_sc2.0_minrv1_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL1d0.00z1.10p0.75tk_seldenyregime-zone_primary_dir_down_price_0.50_0.75_edge_gte_0.15_z_0.7_1.1_conf_0.50_0.70_vol_lt_0.40_rev_1_2_min_2_4_book_spread_0.01_0.03_book_min_depth_50_100_book_pressure_strong_positive_book_imbalance_strong_positive_bookwalk_slippage_zero_book_age_lte_100ms_tk",
+  "params_hash": "073afe8dff366cea61046dd861975537fbb5495fcc0b064c50abf93038664c73",
+  "max_zone_trade_share": 0.7,
+  "min_zone_trades": 0,
+  "min_zone_pnl": 0.0,
+  "total": {
+    "trades": 2,
+    "wins": 1,
+    "losses": 1,
+    "win_rate": 0.5,
+    "total_pnl": -4.437060000000001,
+    "total_fees": 0.17415999999999998,
+    "dominant_zone": "primary",
+    "dominant_zone_trade_share": 1.0,
+    "wilson_win_rate_lower": 0.09452865480086611
+  },
+  "zones": [
+    {
+      "zone": "primary",
+      "trades": 2,
+      "wins": 1,
+      "losses": 1,
+      "win_rate": 0.5,
+      "pnl": -4.437060000000001,
+      "trade_share": 1.0,
+      "passes_min_trades": true,
+      "passes_min_pnl": false
+    }
+  ],
+  "folds": [
+    {
+      "label": "harness_sweep",
+      "start": "2026-05-31T08:00:00+00:00",
+      "end": "2026-05-31T15:00:00+00:00",
+      "trades": 2,
+      "wins": 1,
+      "losses": 1,
+      "total_pnl": -4.437060000000001,
+      "total_fees": 0.17415999999999998,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 1.0,
+      "zones": [
+        {
+          "zone": "primary",
+          "trades": 2,
+          "wins": 1,
+          "losses": 1,
+          "win_rate": 0.5,
+          "pnl": -4.437060000000001,
+          "trade_share": 1.0,
+          "passes_min_trades": true,
+          "passes_min_pnl": false
+        }
+      ]
+    }
+  ],
+  "pass": false,
+  "rejections": [
+    "zone primary trade share 1.0000 above maximum 0.7000",
+    "zone primary pnl -4.4371 below minimum 0.0000"
+  ]
+}

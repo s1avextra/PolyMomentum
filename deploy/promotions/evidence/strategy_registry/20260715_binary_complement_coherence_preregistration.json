@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T04:49:14Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_REGISTERED_FORWARD_ONLY_NOT_SCORED_POWER_SUPPORT_ECONOMIC_CAUSAL_TICK_PAIR_REPRODUCTION_EXACT_REPLAY_AND_LIVE_RUNTIME_PARITY_AMENDED",
+  "blinded_power_amendment": {
+    "amended_at": "2026-07-18T16:14:37Z",
+    "metrics_seen_before_amendment": false,
+    "original_minimum_terminal_conditions": 100,
+    "amended_minimum_terminal_conditions": 750,
+    "strategy_rule_changed": false,
+    "screen_rates_or_thresholds_changed": false,
+    "historical_nuisance_parameters": {
+      "terminal_conditions": 631,
+      "baseline_candidates": 102,
+      "baseline_winners": 79,
+      "baseline_losses": 23,
+      "candidate_rate_per_condition": 0.16164817749603805,
+      "loss_rate_per_condition": 0.036450079239302696
+    },
+    "power_basis": {
+      "expected_baseline_candidates_at_750": 121.23613312202853,
+      "expected_baseline_losses_at_750": 27.33755942947702,
+      "probability_of_at_least_100_baseline_candidates": 0.9861,
+      "probability_of_at_least_15_baseline_losses": 0.9966,
+      "expected_selected_candidates_at_registered_effect": 103.64500792393027,
+      "expected_selected_win_rate_at_registered_effect": 0.8153669724770642,
+      "expected_wilson_95_lower_at_registered_effect": 0.7322
+    },
+    "reason": "At the historical baseline firing rate, 100 terminal conditions imply only 16.16 baseline candidates and 3.65 losses. That makes the Wilson and loss-removal gates too discrete to distinguish the registered effect from sampling noise. The fixed 750-condition floor is a blinded sample-size strengthening made before any forward opportunity or outcome metric was generated."
+  },
+  "realized_support_amendment": {
+    "amended_at": "2026-07-21T05:44:36Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_realized_support_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "support_count_seen": 290,
+    "block_scored": false,
+    "strategy_rule_changed": false,
+    "rate_or_economic_threshold_changed": false,
+    "minimum_baseline_candidates": 100,
+    "minimum_baseline_losses": 15,
+    "minimum_selected_candidates": 80,
+    "reason": "The blinded power analysis selected 750 conditions because it made at least 100 baseline candidates and 15 baseline losses overwhelmingly likely, while the standing A+ policy requires at least 80 trades where applicable. Enforcing those realized counts prevents a small perfect sample from passing rate gates that were described as decision-useful."
+  },
+  "residual_attribution_amendment": {
+    "registered_at": "2026-07-21T06:40:00Z",
+    "implemented_at": "2026-07-21T06:58:46Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "sealed_block_outcomes_seen": false,
+    "strategy_rule_changed": false,
+    "screen_gate_or_threshold_changed": false,
+    "reason": "Schema 6 records baseline, paired-book-validity, and frozen-residual comparators on identical sealed rows so residual magnitude cannot receive PnL or loss-removal credit without actual decision disagreements."
+  },
+  "causal_tick_input_amendment": {
+    "amended_at": "2026-07-20T14:38:45Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "fixed_rule_expression_or_multiplier_changed": false,
+    "feature_input_contract_changed": true,
+    "reason": "Official venue documentation and unlabeled raw capture events establish a dynamic 0.01-to-0.001 tick transition. Reconstructing that transition causally from replayed top-of-book threshold crossings prevents a future early transition from making the frozen two-tick residual tolerance ten times too wide."
+  },
+  "paired_book_reproduction_amendment": {
+    "amended_at": "2026-07-20T16:03:12Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_paired_book_reproduction_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "fixed_rule_expression_or_multiplier_changed": false,
+    "feature_input_contract_changed": false,
+    "scorer_input_verification_changed": true,
+    "reason": "The scorer must reproduce token-pair identity, microprices, complement residuals, dynamic-tick consistency, and executable-ask alignment from the serialized paired books instead of trusting derived residual fields."
+  },
+  "execution_tick_parity_amendment": {
+    "amended_at": "2026-07-20T16:35:30Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_execution_tick_parity_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "fixed_rule_expression_or_multiplier_changed": false,
+    "screen_gate_or_threshold_changed": false,
+    "exact_replay_execution_contract_changed": true,
+    "reason": "Signal features, taker and maker entry prices, position state, exits, and cached live-replay must all consume the same persistent causal condition tick before executable profitability can be trusted."
+  },
+  "live_runtime_tick_parity_amendment": {
+    "amended_at": "2026-07-20T16:49:55Z",
+    "artifact": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_live_tick_parity_amendment.json",
+    "forward_strategy_metrics_seen": false,
+    "fixed_rule_expression_or_multiplier_changed": false,
+    "screen_gate_or_threshold_changed": false,
+    "live_runtime_execution_contract_changed": true,
+    "reason": "A future promoted runtime must ingest the venue's tick_size_change event without refreshing book age and propagate one causal condition tick through sizing, order rounding, signing, and submission."
+  },
+  "pre_score_integrity_hardening": {
+    "recorded_at": "2026-07-18T16:44:19Z",
+    "forward_metrics_seen": false,
+    "initial_screen_schema_version": 2,
+    "screen_schema_version": 6,
+    "descriptive_diagnostics_recorded_at": "2026-07-18T18:05:51Z",
+    "unit_economics_gates_recorded_at": "2026-07-18T18:37:07Z",
+    "causal_tick_input_recorded_at": "2026-07-20T14:38:45Z",
+    "paired_book_reproduction_recorded_at": "2026-07-20T16:03:12Z",
+    "execution_tick_parity_recorded_at": "2026-07-20T16:35:30Z",
+    "live_runtime_tick_parity_recorded_at": "2026-07-20T16:49:55Z",
+    "realized_support_gates_recorded_at": "2026-07-21T05:44:36Z",
+    "residual_attribution_recorded_at": "2026-07-21T06:40:00Z",
+    "changes": [
+      "require both paired-book ages to satisfy the existing 30000 ms replay freshness bound",
+      "pin every opportunity and resolution source by SHA-256 and revalidate it in the repeat audit",
+      "reject decision timestamps outside the condition's five-minute market window",
+      "make the replay wrapper reject any capture report whose frozen capture variant emits a trade",
+      "make the replay wrapper enforce the 750-condition floor before creating labeled opportunity artifacts",
+      "report non-gating selection delay, time-to-close, decision-time ask, and direction-change summaries so a late-selection payoff confound is visible before exact replay",
+      "reject classification passes whose fee-aware equal-dollar decision-ask economics fail the existing A+ profit-factor 1.20 or payoff 0.20 thresholds",
+      "derive market_tick_size causally from replayed top-of-book threshold crossings and persist a 0.001 transition before evaluating any later opportunity row",
+      "before deleting raw frames, require the conversion manifest to prove every selected explicit tick transition is reconstructable from the preserved v1 replay stream",
+      "inside the scorer, reproduce token-pair identity, microprices, complement residuals, dynamic-tick consistency, and both executable asks from the serialized paired-book fields",
+      "use the same persistent causal condition tick for taker sizing, FOK ceilings, maker prices, stored position state, exits, and cached live-replay",
+      "ingest official live tick_size_change events without altering book freshness, and pass one causal condition tick through live sizing, order rounding, signing, and submission",
+      "reject a completed 750-condition block unless it realizes at least 100 baseline candidates, 15 baseline losses, and 80 selected candidates",
+      "serialize descriptive, non-gating baseline, paired-book-validity, and frozen-residual comparator economics so post-block attribution cannot credit residual magnitude without decision disagreements"
+    ],
+    "strategy_rule_or_rate_gate_changed": false,
+    "feature_input_contract_changed": true,
+    "descriptive_diagnostics_change_screen_verdict": false,
+    "economic_gate_set_changed": true,
+    "realized_support_gate_set_changed": true,
+    "economic_thresholds_fitted_to_forward_data": false
+  },
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "measured_latency_ms": 202,
+    "grade": "A-",
+    "live_ready": false,
+    "live_trading": "OFF"
+  },
+  "capture_contract": {
+    "variant_path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_capture_variant.json",
+    "strategy_name": "primary_v6_calibration_capture_edge1000",
+    "params_hash": "34aa177f7ae8614814208cdd81ed74e09199007b924ee16b6e18dfa62fd49aa9",
+    "risk_profile": "position_pct=0.0500;max_per_market_usd=10.00;stress_dd_cap=0.1200;decision_vol_floor=0.3000",
+    "minimum_latency_ms": 202,
+    "window_minutes": 5.0,
+    "mode": "single-variant continuous calibration opportunity capture",
+    "recorded_replay_source": "PMXT_DISTILLED_DIR with --require-shared-distilled; fallback to sidecar, parquet, or network is forbidden",
+    "baseline_eligibility": "evaluation_result=low_edge and decision.zone=primary and decision.edge>=0.07",
+    "reason": "The capture variant preserves every non-edge baseline gate but uses impossible final edge thresholds so it emits no trades and does not truncate later counterfactual opportunities."
+  },
+  "novelty_boundary": {
+    "new_information": "simultaneous causal state of both fully collateralized outcome books",
+    "not_equivalent_to": [
+      "chosen-token snapshot pressure or imbalance",
+      "Cont-style chosen-token temporal OFI",
+      "ask_up + ask_down - 1 outcome overround",
+      "chosen-token midpoint runup",
+      "cross-venue BTC/token path confirmation"
+    ],
+    "historical_outcome_use": "none; the rule and threshold were frozen before scoring the next forward block",
+    "historical_42_fold_score_allowed": false
+  },
+  "feature_contract": {
+    "sampling": "decision-time state captured in the existing one-Hz pre-edge opportunity report",
+    "book_depth_levels": 3,
+    "chosen_mid": "(chosen_best_bid + chosen_best_ask) / 2",
+    "opposite_mid": "(opposite_best_bid + opposite_best_ask) / 2",
+    "microprice": "(best_ask * bid_depth + best_bid * ask_depth) / (bid_depth + ask_depth)",
+    "mid_sum_residual": "chosen_mid + opposite_mid - 1",
+    "microprice_sum_residual": "chosen_microprice + opposite_microprice - 1",
+    "tick_size": "initialize from a valid causal Gamma minimum_tick_size or 0.01; before each decision persist 0.001 for the condition after any replayed top-of-book bid or ask is positive and less than 0.04 or greater than 0.96",
+    "book_freshness": "chosen_book_age_ms and opposite_book_age_ms must each be finite and in [0, 30000], matching the existing replay book-freshness contract",
+    "invalid_book": "null feature and fail closed",
+    "causality": "only book events at or before decision_timestamp_s"
+  },
+  "fixed_rule": {
+    "name": "two_tick_binary_complement_coherence",
+    "eligible": "max(abs(mid_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size",
+    "missing_feature": "reject",
+    "parameter_search": "forbidden",
+    "neighbor_search": "forbidden",
+    "rationale": "two venue ticks is a market-structure tolerance, not a label-fitted threshold"
+  },
+  "forward_screen": {
+    "block_1": {
+      "minimum_terminal_settlement_aligned_conditions": 750,
+      "minimum_baseline_candidates": 100,
+      "minimum_baseline_losses": 15,
+      "minimum_selected_candidates": 80,
+      "minimum_valid_pair_feature_coverage": 0.95,
+      "candidate_sampling": "first chronological capture row per condition that reconstructs the registered baseline final edge pass: evaluation_result=low_edge, decision.zone=primary, and decision.edge>=0.07; the mechanism selects the first such row also passing the fixed rule",
+      "minimum_candidate_retention": 0.70,
+      "minimum_baseline_winner_retention": 0.90,
+      "minimum_baseline_loss_removal": 0.30,
+      "minimum_wilson_95_lower_bound": 0.70,
+      "minimum_fee_aware_unit_profit_factor": 1.20,
+      "minimum_fee_aware_unit_payoff_ratio": 0.20,
+      "unit_economics_basis": "one dollar of entry cost at each selected row's recorded decision ask, including the recorded Polymarket entry fee; this is an optimistic necessary screen before latency, depth, and fill simulation",
+      "threshold_changes_after_score": "forbidden",
+      "failure_action": "reject the family"
+    },
+    "block_2": {
+      "required": true,
+      "disjoint_from_block_1": true,
+      "rule_and_gates": "identical to block_1, including minimum realized support, fee-aware unit profit factor >= 1.20, and payoff >= 0.20",
+      "minimum_terminal_settlement_aligned_conditions": 750,
+      "failure_action": "reject the family"
+    }
+  },
+  "promotion_boundary": {
+    "screen_pass_is_promotion": false,
+    "next_if_both_blocks_pass": "materialize exactly one runtime gate and run exact measured-latency replay with the schema-6 scorer plus a separately hash-pinned Linux measurement binary retaining causal execution, durable-order recovery, and live-runtime parity",
+    "required_exact_gates": [
+      "positive fee-inclusive OOS PnL in both chronological halves",
+      "profit factor >= 1.20 and payoff ratio >= 0.20",
+      "Wilson lower bound >= 0.70",
+      "profitable eligible reports >= 20",
+      "five-report loss burst <= 2",
+      "tail CVaR and payoff gates",
+      "neighbor stability",
+      "fresh registry audit live_ready=true"
+    ],
+    "current_verdict": "KEEP_REPLAY_RESEARCH"
+  },
+  "instrumentation": {
+    "decision_behavior_changed": false,
+    "live_behavior_changed": false,
+      "files": [
+      "rust_engine/src/strategy/microstructure.rs",
+      "rust_engine/src/backtest/harness.rs",
+      "rust_engine/src/live/replay.rs",
+        "rust_engine/src/main.rs",
+        "rust_engine/src/strategy_builder.rs",
+        "deploy/replay-binary-complement-block.sh",
+        "deploy/replay-binary-complement-block-test.sh",
+        "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_capture_variant.json"
+      ],
+    "new_opportunity_fields": [
+      "opposite_token_id",
+      "market_tick_size",
+      "chosen_best_bid",
+      "chosen_best_ask",
+      "chosen_bid_depth",
+      "chosen_ask_depth",
+      "chosen_book_age_ms",
+      "opposite_best_bid",
+      "opposite_best_ask",
+      "opposite_bid_depth",
+      "opposite_ask_depth",
+      "opposite_book_age_ms",
+      "chosen_microprice",
+      "opposite_mid",
+      "opposite_microprice",
+      "complement_mid_sum_residual",
+      "complement_microprice_sum_residual"
+    ],
+    "causal_tick_input": {
+      "registered_at": "2026-07-20T14:38:45Z",
+      "audit": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_causal_tick_integrity_amendment.json",
+      "forward_strategy_metrics_seen_before_registration": false,
+      "harness_source_sha256": "2558f0888c1bf6a4df050b10de372ae320f5c98ebb321733572128c504b4f916",
+      "shared_tick_policy_source_sha256": "023dacb644760a0e958ec7d4b7316b01f5fffa0347436cf935397f9584a13c0d",
+      "converter_source_sha256": "fc7e2aa4f0c2544c6dd4ff77bc7e157d0378a9056a9085237eb656e70d2472b2",
+      "capture_preflight_sha256": "1fa91e95e7f7dee7cdcb8f0c025375ffab944c79011c56fceef7030b560c5359",
+      "measurement_v5_binary_sha256": "13db9884e6a1ee5d6b21bac640f62bc40124e8b4bbe01de342cc7dcbf10e6b5a",
+      "fixed_rule_expression_or_multiplier_changed": false,
+      "shared_distilled_schema_changed": false,
+      "conversion_manifest_audit_required_for_v5_segments": true,
+      "v5_switch_boundary": "completed session 011 sealed under v4; active collection resumed as session 013 under v5 at 2026-07-20T15:42:38Z"
+    },
+    "scorer": {
+      "schema_version": 6,
+      "source_sha256": "65459ba41de8c4b62c9bc597e5c198f021e9c6350de5e947841134e1d77f11e4",
+      "paired_book_reproduction_audit": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_paired_book_reproduction_amendment.json",
+      "realized_support_audit": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_realized_support_amendment.json",
+      "residual_attribution_audit": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_attribution_amendment.json",
+      "previous_schema_5_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v11",
+      "previous_schema_5_binary_sha256": "07a386c748d3756462cb3a654c5999936b929f9be93f8190ebbfb80c34f00b89",
+      "schema_6_linux_binary_status": "NOT_BUILT_OR_INSTALLED_BLOCK_REMAINS_SEALED_BELOW_FLOOR",
+      "command": "polymomentum-engine strategy-builder binary-complement-screen --opportunity <opportunities.json> --resolution-manifest <resolution_manifest.json> --block-id <id> --output <screen.json>",
+      "threshold_arguments": "none",
+      "precondition": "refuses to reveal metrics until opportunity-report windows contain at least 750 post-registration terminal official-source settlement-aligned conditions under the blinded 2026-07-18 power amendment",
+      "realized_support_integrity": "a completed block also rejects unless it contains at least 100 baseline candidates, 15 baseline losses, and 80 selected candidates; these thresholds were fixed before any forward strategy metric was inspected",
+      "label_policy": "recomputes each selected row's win from the terminal manifest direction and rejects label mismatches",
+      "feature_integrity": "recomputes paired token identity, both microprices, both complement residuals, dynamic-tick consistency, and executable-ask alignment from serialized raw fields before applying the frozen rule",
+      "attribution_integrity": "publishes descriptive, non-gating baseline, paired-book-validity, and frozen-residual counts, win rates, fee-aware PnL, profit factor, maximum drawdown, incremental removals, and decision disagreements on identical sealed rows",
+      "source_integrity": "records SHA-256 for every opportunity report and resolution manifest; repeat audit rereads each source and rejects any hash drift",
+      "wrapper_preflight": "the replay wrapper counts unique post-registration terminal official-source-aligned conditions and refuses below 750 before generating any labeled opportunity report",
+      "failure_exit": 1,
+      "input_or_provenance_error_exit": 2
+    },
+    "exact_replay_execution": {
+      "registered_at": "2026-07-20T16:35:30Z",
+      "audit": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_execution_tick_parity_amendment.json",
+      "forward_strategy_metrics_seen_before_registration": false,
+      "harness_source_sha256": "5ea335ce79c9a0c061b44ee1479da2a6e06ae8d2365902f264df3f6f61372216",
+      "live_replay_source_sha256": "29d120c6d01a533ed83e3d55e02714a9f29e2c646f5f84e362daf406004de0d4",
+      "sizing_source_sha256": "3c656cb6e17637e8986a7d83ca01018db2561c439dbd51d8bc687f7f3b901691",
+      "fee_source_sha256": "bfcfbd5d77acda12b38e0a2d86878898e262f3797fb83d7366e5e5625a9956d6",
+      "fill_model_source_sha256": "02570bc1895e98bb1f33aaadf5c5282645c7d3a715febab97dc32acd9dade4e2",
+      "measurement_v7_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v7",
+      "measurement_v7_binary_sha256": "5f89c797c0e5eb0ca4758a89eaa4a16e00b1480894b17cf5c9926878175277a0",
+      "fixed_rule_or_screen_gate_changed": false,
+      "capture_or_recollection_changed": false,
+      "requirement": "post-two-block exact replay must use this causal execution contract or a later hash-pinned equivalent"
+    },
+    "live_runtime_execution": {
+      "registered_at": "2026-07-20T16:49:55Z",
+      "audit": "deploy/promotions/evidence/strategy_registry/20260720_binary_complement_live_tick_parity_amendment.json",
+      "forward_strategy_metrics_seen_before_registration": false,
+      "market_feed_source_sha256": "90d05537a03ab4cca40c6b2350ec4d38b15d85b15d576ccc87e56c89f570e480",
+      "live_pipeline_source_sha256": "a78abd0dbe6d92bb571a42c664f12d8e68c714d54f5a90c5ba6531bed918fd6e",
+      "shared_tick_policy_source_sha256": "023dacb644760a0e958ec7d4b7316b01f5fffa0347436cf935397f9584a13c0d",
+      "measurement_v8_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v8",
+      "measurement_v8_binary_sha256": "ee9886d80838ec5b4e5bde96795362c46061623f5a98e369c405f192b63e44be",
+      "fixed_rule_or_screen_gate_changed": false,
+      "capture_or_recollection_changed": false,
+      "requirement": "any future production promotion must retain this live tick-event and order-path parity contract"
+    },
+    "live_runtime_reconciliation": {
+      "registered_at": "2026-07-21T04:18:00Z",
+      "audit": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_live_reconciliation_parity_amendment.json",
+      "forward_strategy_metrics_seen_before_registration": false,
+      "user_channel_source_sha256": "573905c6cc536face016ba67d62253128f6f05b0e12ed39ad4f5d52afe3cbf1d",
+      "gamma_source_sha256": "72ccdf27b5c0f90cb212d8c4078ede91948943ef0b34c9481011d342692009c6",
+      "live_pipeline_source_sha256": "5811475a32d60392b5f62df3a536b4986bc0ba90004e2dc6e81276ac3f2da3d3",
+      "fee_source_sha256": "bfcfbd5d77acda12b38e0a2d86878898e262f3797fb83d7366e5e5625a9956d6",
+      "measurement_v9_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v9",
+      "measurement_v9_binary_sha256": "bdf301f5ea28cdd28c42be3f1b9288ecd71b91f05af18d986f211b3e0efa2511",
+      "fixed_rule_or_screen_gate_changed": false,
+      "capture_or_recollection_changed": false,
+      "live_promotion_blocked_on_automated_rest_recovery": false,
+      "rest_recovery_audit": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_rest_recovery_parity_amendment.json",
+      "requirement": "any future production promotion must retain the confirmed-fill, current-fee, exact-maker-leg, authenticated-heartbeat, durable-order-journal, and authenticated REST recovery contract"
+    },
+    "authenticated_rest_recovery": {
+      "registered_at": "2026-07-21T04:46:59Z",
+      "audit": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_rest_recovery_parity_amendment.json",
+      "forward_strategy_metrics_seen_before_registration": false,
+      "clob_source_sha256": "713f3a64fb8cbcf01d282b7177ef16b3a59d1ea3e804dbc7099236ef8ad0e03b",
+      "user_channel_source_sha256": "50ca933355df55c8fd6afe21df8e7c1fd0e4500ebb0bae52e1a81cd2cdd7ebc3",
+      "order_manager_source_sha256": "d9cc323d7fbcf60a2a4b3d4580fd9d83473332fffd35a127a0c7d91cbe8604ec",
+      "live_pipeline_source_sha256": "6ff6eaf581bcb4136212ad0fae0c81835df61b4999615783a9b13cb118dcf59f",
+      "risk_manager_source_sha256": "3ef81d01a4d25e658fd5be194ea38887183bc75d5b6abc1dcfd7c7ec7924d4a4",
+      "signing_source_sha256": "1ad2d79cb1b1bf7ded02302f1f7eb425f451cf3f5a3707550a98d037bff80f8e",
+      "measurement_v10_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v10",
+      "measurement_v10_binary_sha256": "03073aefcad8f5a403e55e5a472d81a915632c131db3c3a241d326845e08585f",
+      "fixed_rule_or_screen_gate_changed": false,
+      "capture_or_recollection_changed": false,
+      "requirement": "any future production promotion must retain pre-submit hash journaling, strict startup restore, terminal-confirmed fill accounting, and periodic authenticated REST order/trade recovery"
+    },
+    "fee_aware_unit_economics": {
+      "registered_at": "2026-07-18T18:37:07Z",
+      "forward_metrics_seen_before_registration": false,
+      "entry_budget_usd": 1.0,
+      "pricing_basis": "selected direction's recorded decision-time ask",
+      "fee_model": "shares * entry_fee_rate * price * (1 - price), rounded to five decimals",
+      "profit_factor_gate": "gross wins - 1.20 * absolute gross losses >= 0",
+      "payoff_gate": "average win - 0.20 * absolute average loss >= 0",
+      "strategy_feature_or_two_tick_rule_changed": false,
+      "classification_rate_thresholds_changed": false,
+      "block_verdict_changed": true,
+      "exact_replay_requirement_changed": false,
+      "interpretation": "The screen now rejects high-win-rate selections with inadequate pre-latency payoff geometry. Passing remains necessary but not sufficient for exact fee-inclusive replay profitability."
+    },
+    "descriptive_diagnostics": {
+      "registered_at": "2026-07-18T18:05:51Z",
+      "forward_metrics_seen_before_registration": false,
+      "gating_use": "none",
+      "selection_delay_seconds": "selected decision timestamp minus the first baseline-eligible decision timestamp for the condition",
+      "selected_seconds_to_close": "condition open timestamp plus 300 seconds minus the selected decision timestamp",
+      "baseline_and_selected_decision_ask": "fresh top ask recorded for each row's chosen direction before latency and fill simulation",
+      "same_direction_decision_ask_change": "selected ask minus baseline ask only when both rows choose the same direction",
+      "selected_in_final_60_seconds": "count and rate of selected rows with no more than 60 seconds until the five-minute close",
+      "selected_direction_changes": "count and rate where the later selected row chooses the opposite direction from the first baseline-eligible row",
+      "screen_rule_changed": false,
+      "screen_rate_or_threshold_changed": false,
+      "block_verdict_changed": false,
+      "second_block_requirement_changed": false,
+      "exact_replay_requirement_changed": false,
+      "interpretation": "These summaries expose whether a classification screen is benefiting from later, more expensive, or direction-reversed entries. They cannot pass or fail a block and cannot replace exact fee-inclusive runtime replay."
+    },
+    "repeat_audit": {
+      "command": "polymomentum-engine strategy-builder binary-complement-repeat-audit --screen <block_1_screen.json> --screen <block_2_screen.json> --output <repeat_audit.json>",
+      "threshold_arguments": "none",
+      "screen_order": "chronological",
+      "checks": [
+        "both screen verdicts pass",
+        "block IDs differ",
+        "report windows do not overlap",
+        "condition ID sets are disjoint",
+        "capture and baseline identities match the frozen contract",
+        "condition hashes, counts, rates, fee-aware unit economics, gates, and verdicts recompute exactly"
+      ],
+      "passing_status": "TWO_BLOCK_SCREEN_PASS_EXACT_REPLAY_ALLOWED",
+      "passing_status_is_live_promotion": false
+    }
+  },
+  "research_sources": [
+    {
+      "title": "Polymarket Positions and Tokens",
+      "url": "https://docs.polymarket.com/concepts/positions-tokens",
+      "use": "A binary Yes/No pair is fully backed by exactly one dollar and can be split or merged as a complete set."
+    },
+    {
+      "title": "Polymarket Prices and Orderbook",
+      "url": "https://docs.polymarket.com/concepts/prices-orderbook",
+      "use": "Executable prices are bids and asks; the displayed probability is normally the midpoint."
+    },
+    {
+      "title": "Polymarket Fees",
+      "url": "https://docs.polymarket.com/trading/fees",
+      "use": "The selected unit-economics screen applies the documented binary taker-fee formula and five-decimal rounding at the recorded entry ask."
+    },
+    {
+      "title": "Polymarket Market Channel",
+      "url": "https://docs.polymarket.com/market-data/websocket/market-channel",
+      "use": "The venue emits tick_size_change when book price crosses below 0.04 or above 0.96; the documented transition is 0.01 to 0.001."
+    },
+    {
+      "title": "Polymarket Orders Overview",
+      "url": "https://docs.polymarket.com/trading/orders/overview",
+      "use": "Order prices must conform to the current market tick, making contemporaneous tick reconstruction an execution-integrity input."
+    },
+    {
+      "title": "Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book",
+      "url": "https://arxiv.org/abs/1512.03492",
+      "use": "Depth imbalance can contain short-horizon information, motivating a depth-weighted microprice rather than midpoint-only parity."
+    },
+    {
+      "title": "Cross-Impact of Order Flow Imbalance in Equity Markets",
+      "url": "https://arxiv.org/abs/2112.13213",
+      "use": "Cross-book information should remain sparse and fixed; high-dimensional contemporaneous cross-impact is not assumed to add value."
+    },
+    {
+      "title": "Liquidity and Prediction Market Efficiency",
+      "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=929916",
+      "use": "Visible liquidity alone does not guarantee efficient prediction-market prices, so the feature is an uncertainty gate rather than a liquidity-is-good assumption."
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:57:12Z",
+  "mechanism_id": "late_window_article_family_v1",
+  "status": "LITERAL_FAMILY_EVALUATED_PRICE_INSENSITIVE_HYBRID_REJECTED_AFTER_HOLDOUT_STRESS",
+  "answer": "The article's directional pattern is real in public BTC data, but literal taker entry at minute three buys the winning token too close to one dollar. The plain three-minute rule loses after exact execution. The three-minute plus 100 USD hybrid is profitable and stable in discovery and holdout but does not retain positive holdout PnL after one average observed-size full loss.",
+  "public_screen": [
+    {
+      "rule": "path_3m",
+      "signals": 2147,
+      "accuracy": 0.8896134140661388,
+      "fresh_pre_forward_signals": 206,
+      "fresh_pre_forward_accuracy": 0.8786407766990292,
+      "post_decision_continuation_rate": 0.4657661853749418,
+      "median_decision_buffer_usd": 58.69000000000233
+    },
+    {
+      "rule": "path_4m",
+      "signals": 1032,
+      "accuracy": 0.9554263565891473,
+      "fresh_pre_forward_signals": 98,
+      "fresh_pre_forward_accuracy": 0.9285714285714286,
+      "post_decision_continuation_rate": 0.45058139534883723,
+      "median_decision_buffer_usd": 77.67000000000553
+    },
+    {
+      "rule": "move_2m_100",
+      "signals": 547,
+      "accuracy": 0.9287020109689214,
+      "fresh_pre_forward_signals": 16,
+      "fresh_pre_forward_accuracy": 0.9375,
+      "post_decision_continuation_rate": 0.4351005484460695,
+      "median_decision_buffer_usd": 131.0899999999965
+    },
+    {
+      "rule": "move_2m_200",
+      "signals": 69,
+      "accuracy": 0.9420289855072463,
+      "fresh_pre_forward_signals": 3,
+      "fresh_pre_forward_accuracy": 0.6666666666666666,
+      "post_decision_continuation_rate": 0.4782608695652174,
+      "median_decision_buffer_usd": 237.8000000000029
+    },
+    {
+      "rule": "path_3m_and_move_2m_100",
+      "signals": 200,
+      "accuracy": 0.97,
+      "fresh_pre_forward_signals": 6,
+      "fresh_pre_forward_accuracy": 1.0,
+      "post_decision_continuation_rate": 0.4,
+      "median_decision_buffer_usd": 178.93999999999505
+    }
+  ],
+  "top_of_book_screen": [
+    {
+      "rule": "path_3m",
+      "conditions": 78,
+      "accuracy": 0.9102564102564102,
+      "mean_fee_aware_cost_per_share": 0.904291922179487,
+      "mean_net_payoff_per_share": 0.005964488076923083,
+      "unit_profit_factor": 1.082539085550171
+    },
+    {
+      "rule": "path_4m",
+      "conditions": 23,
+      "accuracy": 0.8695652173913043,
+      "mean_fee_aware_cost_per_share": 0.971799425652174,
+      "mean_net_payoff_per_share": -0.10223420826086954,
+      "unit_profit_factor": 0.15555191998635323
+    },
+    {
+      "rule": "move_2m_100",
+      "conditions": 41,
+      "accuracy": 0.926829268292683,
+      "mean_fee_aware_cost_per_share": 0.9403982195121952,
+      "mean_net_payoff_per_share": -0.013568951219512185,
+      "unit_profit_factor": 0.791708740357684
+    },
+    {
+      "rule": "path_3m_and_move_2m_100",
+      "conditions": 14,
+      "accuracy": 1.0,
+      "mean_fee_aware_cost_per_share": 0.984626495,
+      "mean_net_payoff_per_share": 0.015373505000000013,
+      "unit_profit_factor": null
+    }
+  ],
+  "exact_l2_results": [
+    {
+      "order": 1,
+      "candidate": "path_3m literal taker",
+      "phase": "discovery",
+      "fills": 68,
+      "wins": 61,
+      "losses": 7,
+      "fill_rate": 0.9315068493150684,
+      "net_pnl_usd": -1.4389499999999966,
+      "mean_pnl_per_fill_usd": -0.021161029411764655,
+      "mean_fill_price": 0.8881223349601849,
+      "mean_winner_usd": 0.5604229508196723,
+      "mean_loser_usd": -5.089250000000001,
+      "pnl_after_one_average_full_loss_usd": -6.424963970588232,
+      "verdict": "rejected"
+    },
+    {
+      "order": 2,
+      "candidate": "path_3m + move_2m_100 literal taker",
+      "phase": "discovery",
+      "fills": 14,
+      "wins": 14,
+      "losses": 0,
+      "fill_rate": 1.0,
+      "net_pnl_usd": 1.1037300000000032,
+      "mean_pnl_per_fill_usd": 0.07883785714285738,
+      "mean_fill_price": 0.9835000000000002,
+      "mean_winner_usd": 0.07883785714285738,
+      "mean_loser_usd": null,
+      "pnl_after_one_average_full_loss_usd": -3.9024321428571396,
+      "verdict": "advanced to frozen holdout"
+    },
+    {
+      "order": 3,
+      "candidate": "path_3m + move_2m_100 literal taker",
+      "phase": "chronological holdout",
+      "fills": 33,
+      "wins": 33,
+      "losses": 0,
+      "fill_rate": 1.0,
+      "net_pnl_usd": 4.300910000000003,
+      "mean_pnl_per_fill_usd": 0.13033060606060615,
+      "mean_fill_price": 0.9733030303030303,
+      "mean_winner_usd": 0.13033060606060615,
+      "mean_loser_usd": null,
+      "pnl_after_one_average_full_loss_usd": -0.7123957575757549,
+      "verdict": "rejected by frozen one-loss robustness gate"
+    }
+  ],
+  "funnel": [
+    {"order": 1, "stage": "mechanism registration", "cost": "minutes", "purpose": "freeze causal rule and prohibit hidden search", "hard_support_floor": false},
+    {"order": 2, "stage": "public directional screen", "cost": "seconds", "purpose": "reject rules with no directional signal or breadth", "hard_support_floor": false},
+    {"order": 3, "stage": "shared top-of-book economic screen", "cost": "one capture pass", "purpose": "reject rules already priced away", "hard_support_floor": false},
+    {"order": 4, "stage": "exact L2 discovery replay", "cost": "hours only for at most two candidates", "purpose": "model latency, fees, depth, FOK failures, sizing, and resolution", "hard_support_floor": false},
+    {"order": 5, "stage": "newest resolved chronological holdout", "cost": "one frozen replay", "purpose": "test stability without retuning", "hard_support_floor": false},
+    {"order": 6, "stage": "bounded forward confirmation", "cost": "slow", "purpose": "final prospective evidence only after positive economics", "hard_support_floor": true}
+  ],
+  "decision": {
+    "literal_price_insensitive_family_progresses": false,
+    "new_price_aware_successor_may_be_registered": true,
+    "recommended_successor": "use the two-minute 100 USD impulse as the earliest trigger, preserve the three-minute path as confirmation, and require executable ask plus fee to remain below a conservative prior-only calibrated probability minus an EV buffer",
+    "retune_on_holdout": false,
+    "paper_or_live_runtime_change_authorized": false,
+    "profitability_or_a_plus_claim": false
+  },
+  "authority": [
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_strategy_validation_funnel_v2.json", "sha256": "3a85c1d04b86554ab015194b45b88d9cfbf20e5810532eb4aecdcdedf8a5087c"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_public_screen.json", "sha256": "b96c16e384606780a9c4dc645bc69a69337baafebee195b1d900749eadb2af24"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_top_of_book_screen.json", "sha256": "c760c1f277739b1f394e795c10bbbbd27dfbf4b87dcb92b4fc9441ae5b581e86"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_exact_l2_discovery.json", "sha256": "c924b86a7733ecf47ba1f2c0f859b20d8a16977a36e2b1ff260e1e59da50e59c"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_registration.json", "sha256": "f0f65b8bb329a56344f6fcfbd0984ad701a11c2fff7d70582d735e1816537e57"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_holdout.json", "sha256": "cf9605fc77e79214565f67cdc17fa49ef2e58614cfd5e87e781b7f7ffc6bda65"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_decision.json", "sha256": "3afcb4b5067f27c6ac64045a49935f70e8dff3d7fd2dbb11197e5153844783c1"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_exact_l2_discovery_raw_reports.tar.gz", "sha256": "40ed1abc27f0746ecce36ae8768ea6a7d7acdfaafb5ab1763b5531d942adc30f"},
+    {"path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_raw_reports.tar.gz", "sha256": "7e8dcbf6a836de1117e7a39183aee508e6f93765e1df9dfed58971e7318c4195"}
+  ]
+}

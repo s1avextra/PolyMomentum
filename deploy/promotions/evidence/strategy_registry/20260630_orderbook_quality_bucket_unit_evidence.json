@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-06-30T13:28:00Z",
+  "purpose": "Follow-up orderbook causal-bucket work: add intended-size bookwalk slippage and book-age buckets without changing the fill model.",
+  "implementation": {
+    "decision_regime_fields": [
+      "bookwalk_slippage_bucket",
+      "book_age_bucket"
+    ],
+    "causal_dimensions_added": [
+      "bookwalk_slippage",
+      "book_age"
+    ],
+    "notes": [
+      "bookwalk_slippage is computed from visible ask depth for the estimated buy size before selectivity runs.",
+      "book_age is computed from the traded token book timestamp and omitted when the visible book is older than 30 seconds.",
+      "Maker fill-risk remains pending because it needs a prior/fill-outcome model rather than a visible-book-only bucket."
+    ]
+  },
+  "validation": {
+    "tests": [
+      "cargo test --manifest-path rust_engine/Cargo.toml decision_regime_uses_only_pre_trade_inputs",
+      "cargo test --manifest-path rust_engine/Cargo.toml bookwalk_slippage_walks_visible_ask_depth",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_bucket_diagnostics_use_decision_regime",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_policy_search_can_select_orderbook_bucket",
+      "cargo test --manifest-path rust_engine/Cargo.toml causal_policy",
+      "cargo test --manifest-path rust_engine/Cargo.toml strategy_builder",
+      "cargo build --manifest-path rust_engine/Cargo.toml",
+      "cargo fmt --manifest-path rust_engine/Cargo.toml -- --check"
+    ],
+    "result": "passed"
+  },
+  "full_rerun_status": {
+    "status": "pending",
+    "reason": "The full May28-Jun10 report set must be regenerated before these new buckets can affect meta-label diagnostics."
+  },
+  "promotion_verdict": {
+    "live_ready": false,
+    "reason": "This is diagnostics/search-surface work only; no fresh full-window promotion evidence has been produced."
+  }
+}

@@ -3,18 +3,22 @@
 //! Single-binary Rust trading engine for Polymarket Up/Down crypto candle
 //! markets. Modules:
 //!
-//! - `config`            — env-driven settings
-//! - `data::{gamma, scanner, ctf, wallet, models}`
-//! - `strategy::{momentum, decision}` (+ `fair_value` BS pricer)
-//! - `execution::fees`   — Polymarket binary fee formula
-//! - `risk::manager`     — SQLite RiskManager (matches the Python state.db schema)
-//! - `monitoring::{session, alerter}` — JSONL writer + Slack webhook
-//! - `live::pipeline`    — main runtime: cycle loop, paper resolution, oracle verification
-//! - `polymarket_ws`, `exchange`, `price_state` — market data plumbing
-//! - `clob`, `signing`   — EIP-712-signed CLOB direct order placement (live mode)
+//! - `config` — environment-driven settings
+//! - `data` — market discovery, catalog, settlement, wallet, and source manifests
+//! - `strategy` and `fair_value` — signals, trade decisions, and pricing
+//! - `execution` and `risk` — order lifecycle, fees, sizing, and persisted risk state
+//! - `monitoring` — session diagnostics, causality checks, alerts, and staleness
+//! - `live` — paper/live runtime and replay parity
+//! - `backtest`, `sweep`, and `strategy_builder` — replay-first research and promotion gates
+//! - `polymarket_ws`, `exchange`, and `price_state` — market-data plumbing
+//! - `clob` and `signing` — authenticated CLOB execution
 
+#![forbid(unsafe_code)]
+
+pub mod artifact;
 pub mod backtest;
 pub mod clob;
+pub mod clob_user_ws;
 pub mod config;
 pub mod data;
 pub mod exchange;
@@ -24,9 +28,11 @@ pub mod live;
 pub mod monitoring;
 pub mod polymarket_ws;
 pub mod price_state;
+pub mod release;
 pub mod risk;
 pub mod signing;
 pub mod strategy;
+pub mod strategy_builder;
 pub mod sweep;
 
 pub use fair_value::norm_cdf;

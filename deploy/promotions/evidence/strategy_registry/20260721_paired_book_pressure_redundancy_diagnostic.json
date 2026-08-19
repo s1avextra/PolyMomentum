@@ -1,0 +1,386 @@
+{
+  "data_quality": {
+    "binance_internal_gaps_over_5s": [
+      {
+        "end_ms": 1784100506000,
+        "gap_ms": 21000,
+        "start_ms": 1784100485000
+      },
+      {
+        "end_ms": 1784101642000,
+        "gap_ms": 25000,
+        "start_ms": 1784101617000
+      }
+    ],
+    "book_events": 120475,
+    "chainlink_internal_gaps_over_5s": [
+      {
+        "end_ms": 1784098298000,
+        "gap_ms": 8000,
+        "start_ms": 1784098290000
+      },
+      {
+        "end_ms": 1784099795000,
+        "gap_ms": 8000,
+        "start_ms": 1784099787000
+      },
+      {
+        "end_ms": 1784100506000,
+        "gap_ms": 22000,
+        "start_ms": 1784100484000
+      },
+      {
+        "end_ms": 1784101131000,
+        "gap_ms": 8000,
+        "start_ms": 1784101123000
+      },
+      {
+        "end_ms": 1784101641000,
+        "gap_ms": 25000,
+        "start_ms": 1784101616000
+      },
+      {
+        "end_ms": 1784101907000,
+        "gap_ms": 9000,
+        "start_ms": 1784101898000
+      },
+      {
+        "end_ms": 1784103336000,
+        "gap_ms": 8000,
+        "start_ms": 1784103328000
+      },
+      {
+        "end_ms": 1784105304000,
+        "gap_ms": 7000,
+        "start_ms": 1784105297000
+      }
+    ],
+    "change_events": 7561554,
+    "invalid_paired_samples": 735,
+    "promotion_or_exact_replay_eligible": false,
+    "quality_assessment": "SHARE_WITH_CAVEATS_FOR_MECHANISM_SCREEN_ONLY",
+    "raw_frames": 4107504,
+    "reason": "reference-tape internal gaps, insufficient first-half signal preroll, timestamp regressions, and incomplete paired-state coverage; structural book-state diagnosis only",
+    "skipped_malformed_raw": 0,
+    "skipped_unknown_market": 0,
+    "skipped_unknown_token": 0,
+    "valid_paired_sample_coverage": 0.8979166666666667,
+    "within_condition_native_order_regressions_observed": 865
+  },
+  "decision": {
+    "a_plus_claim": false,
+    "current_strategy_grade": "A-",
+    "live_ready": false,
+    "live_trading": "OFF",
+    "next_evidence": "continue the unchanged binary_complement_coherence_v1 sealed block to the fixed 750-condition floor and score once",
+    "profitability_claim": false
+  },
+  "decision_question": "Does opposite-book pressure add independent causal information beyond chosen-token pressure?",
+  "generated_at": "2026-07-21T05:30:47.059826+00:00",
+  "mechanism_assessment": {
+    "active_binary_complement_rule_changed": false,
+    "chosen_token_pressure_family": "TERMINAL_PREDICTION_AND_ECONOMIC_VALUE_NOT_EVALUATED_BY_THIS_DIAGNOSTIC",
+    "independent_information_demonstrated": false,
+    "multiplicity_action": "do not add or score the opposite-book clause as a separate feature family",
+    "new_preregistration_created": false,
+    "opposite_book_pressure_clause": "REJECT_AS_NON_INDEPENDENT_IN_OBSERVED_VALID_STATES",
+    "reason": "Polymarket complementary orders produced mirrored cross-touches and opposing pressure: requiring chosen pressure > 0 and opposite pressure < 0 added zero observed decisions beyond chosen pressure > 0 across the valid sampled states.",
+    "scope_boundary": "This is an observed structural equivalence, not a universal venue invariant, terminal-outcome test, strategy backtest, or profitability result."
+  },
+  "methodology": {
+    "book_depth_levels": 3,
+    "maximum_book_age_seconds": 30.0,
+    "microprice": "(best_ask * bid_depth + best_bid * ask_depth) / (bid_depth + ask_depth)",
+    "pressure": "clamp((microprice - midpoint) / (spread / 2), -1, 1)",
+    "pressure_identity": "for a valid spread, pressure algebraically equals (bid_depth - ask_depth) / (bid_depth + ask_depth)",
+    "primary_test": "compare Up-token pressure with Down-token pressure without loading terminal labels",
+    "rust_formula_parity": "same top-three depth, microprice, midpoint, and pressure formulas as rust_engine/src/strategy/microstructure.rs; not an execution-timing parity claim",
+    "sampling": "end-of-second causal state for each of 24 non-overlapping five-minute conditions"
+  },
+  "per_condition_quality": [
+    {
+      "condition_id": "0x2f5ab181936e7ee5e2e50ba656e9f5bc67d253c2038d1f05b2e7f2d28ceb05c4",
+      "coverage": 0.8866666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.9960036108132044e-14,
+      "open_ts_s": 1784098200,
+      "valid_samples": 266
+    },
+    {
+      "condition_id": "0x009c1a51f5bca69804cf70ff10ff7a4539adc0d91098b07574e0570579824e4f",
+      "coverage": 0.8,
+      "max_abs_microprice_sum_residual": 1.9410742783998458e-05,
+      "max_abs_pressure_sum": 0.0038821485568197867,
+      "open_ts_s": 1784098500,
+      "valid_samples": 240
+    },
+    {
+      "condition_id": "0x919207d79db85c5fa635f31113bebf1969e8a50be9dd639a90bd6746fa934b61",
+      "coverage": 0.99,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.440892098500626e-14,
+      "open_ts_s": 1784098800,
+      "valid_samples": 297
+    },
+    {
+      "condition_id": "0x3d00af4fbfbed982c8f24b579ffe226ede635224024cc7a1b6b2bc128f56a285",
+      "coverage": 0.99,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 3.885780586188048e-14,
+      "open_ts_s": 1784099100,
+      "valid_samples": 297
+    },
+    {
+      "condition_id": "0x9759a66a41fc6625e47fc7fe5832321b9f47e99416761114ea812993bae111d7",
+      "coverage": 0.9433333333333334,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.440892098500626e-14,
+      "open_ts_s": 1784099400,
+      "valid_samples": 283
+    },
+    {
+      "condition_id": "0x68a3197c1ed8ba2323ca50bd71dae26e8c50d5592e349e5bf88b31f731d469ac",
+      "coverage": 0.9066666666666666,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 5.265232694284805e-14,
+      "open_ts_s": 1784099700,
+      "valid_samples": 272
+    },
+    {
+      "condition_id": "0x8c3338f35a83a138f36908450725df5c38d8787a653637b2b83c7d8c0915c6ae",
+      "coverage": 0.49666666666666665,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 2.41140440948584e-13,
+      "open_ts_s": 1784100000,
+      "valid_samples": 149
+    },
+    {
+      "condition_id": "0xae5e060b8d9165fe59a1372fdaffab20110a225251b0baf29c878a12503ad6a8",
+      "coverage": 0.6666666666666666,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.440892098500626e-14,
+      "open_ts_s": 1784100300,
+      "valid_samples": 200
+    },
+    {
+      "condition_id": "0x9cd3a3c0fb846268ccb7daec3fd1f084f8f98eb5c8f493066bb3c38a3da655e6",
+      "coverage": 0.98,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.718447854656915e-14,
+      "open_ts_s": 1784100600,
+      "valid_samples": 294
+    },
+    {
+      "condition_id": "0xae8bfb20e03dd6df78f79c1efc4cb7c39282138356246b2156778bca670f68ce",
+      "coverage": 0.9566666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.9960036108132044e-14,
+      "open_ts_s": 1784100900,
+      "valid_samples": 287
+    },
+    {
+      "condition_id": "0x583d6541a8f59820c8c449145ad0ed3d4e6fa9a5f52f1b6e643144a2554ed836",
+      "coverage": 0.9966666666666667,
+      "max_abs_microprice_sum_residual": 2.3526825123409978e-05,
+      "max_abs_pressure_sum": 0.004705365024676417,
+      "open_ts_s": 1784101200,
+      "valid_samples": 299
+    },
+    {
+      "condition_id": "0x05e9433d4452692dc5600cdb3e472fa5c589f7f8e0033abf85e1fdaa5fe2fb30",
+      "coverage": 0.9966666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.9404924595819466e-14,
+      "open_ts_s": 1784101500,
+      "valid_samples": 299
+    },
+    {
+      "condition_id": "0x35034e53832bb214444b16ba9cef17cebfe38a41aa6839852024147fc8fe359b",
+      "coverage": 0.99,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.440892098500626e-14,
+      "open_ts_s": 1784101800,
+      "valid_samples": 297
+    },
+    {
+      "condition_id": "0x608fc645eae73313c66566558ef7de68064ab538a5090f3d3ae38e0eff9a2754",
+      "coverage": 0.9366666666666666,
+      "max_abs_microprice_sum_residual": 0.00022509224978484177,
+      "max_abs_pressure_sum": 0.04501844995696832,
+      "open_ts_s": 1784102100,
+      "valid_samples": 281
+    },
+    {
+      "condition_id": "0x0b075b4e2ec0acb2ff8a35479d7b4c4eaa012613af9f22f11161f2c0ae4d34c4",
+      "coverage": 0.7233333333333334,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.674038933671909e-14,
+      "open_ts_s": 1784102400,
+      "valid_samples": 217
+    },
+    {
+      "condition_id": "0x631f72409eba3c1bab93c5aa562abaccad3de51271dcbb7ffb539285417ffea5",
+      "coverage": 0.68,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.714284518314571e-14,
+      "open_ts_s": 1784102700,
+      "valid_samples": 204
+    },
+    {
+      "condition_id": "0xd2965c35cc0b6a83aefbb9aa7a93f29e16233afb1492a14632ba5efdebd559a9",
+      "coverage": 0.98,
+      "max_abs_microprice_sum_residual": 1.730143681910601e-05,
+      "max_abs_pressure_sum": 0.0034602873638012177,
+      "open_ts_s": 1784103000,
+      "valid_samples": 294
+    },
+    {
+      "condition_id": "0x48d279515c6c1604a75d9ae7bc9f927ffefbb180036a69a2a1a8a67740790c4b",
+      "coverage": 0.9466666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.907185768843192e-14,
+      "open_ts_s": 1784103300,
+      "valid_samples": 284
+    },
+    {
+      "condition_id": "0x582ea19942e2577ec9a6f0bc8c12439813c6127ca2b0402d61fc85e0bb2cbc51",
+      "coverage": 0.9466666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.474198789239381e-14,
+      "open_ts_s": 1784103600,
+      "valid_samples": 284
+    },
+    {
+      "condition_id": "0x3a43a111f20b768f9b66c710c6598108261ff86547d54adc6f40c8c920c78811",
+      "coverage": 0.9166666666666666,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 5.265232694284805e-14,
+      "open_ts_s": 1784103900,
+      "valid_samples": 275
+    },
+    {
+      "condition_id": "0x1acb2932111f674534f2535e84ae620d55f96a6bee3fef377f3a3ac1ec8d8a28",
+      "coverage": 0.9033333333333333,
+      "max_abs_microprice_sum_residual": 9.461202102745148e-05,
+      "max_abs_pressure_sum": 0.018922404205503535,
+      "open_ts_s": 1784104200,
+      "valid_samples": 271
+    },
+    {
+      "condition_id": "0xc7d99f07a8c2e17b1883d158c827b702a7a1615e801bab781911081a373af9af",
+      "coverage": 0.9366666666666666,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 3.930189507173054e-14,
+      "open_ts_s": 1784104500,
+      "valid_samples": 281
+    },
+    {
+      "condition_id": "0x33285472a949f24fda2aeddea1a318b4ad3d1dee3896eaea93457222e78d0890",
+      "coverage": 0.9833333333333333,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.7406523151494184e-14,
+      "open_ts_s": 1784104800,
+      "valid_samples": 295
+    },
+    {
+      "condition_id": "0x537497909fc5b227bd675577c52044eec4943beb9bb34132c8066f5e41c4f8d8",
+      "coverage": 0.9966666666666667,
+      "max_abs_microprice_sum_residual": 2.220446049250313e-16,
+      "max_abs_pressure_sum": 4.440892098500626e-14,
+      "open_ts_s": 1784105100,
+      "valid_samples": 299
+    }
+  ],
+  "primary_sources": [
+    {
+      "title": "Polymarket Prices & Orderbook",
+      "url": "https://docs.polymarket.com/concepts/prices-orderbook",
+      "use": "Complementary Yes and No buy orders whose prices sum to one are matched by minting a complete set."
+    },
+    {
+      "title": "Polymarket CTF Exchange V2",
+      "url": "https://github.com/Polymarket/ctf-exchange-v2",
+      "use": "The official exchange implements MINT for two complementary buy orders and MERGE for two complementary sell orders."
+    },
+    {
+      "title": "Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book",
+      "url": "https://arxiv.org/abs/1512.03492",
+      "use": "Queue imbalance is supported as a short-horizon next-price descriptor, not as a terminal settlement predictor."
+    },
+    {
+      "title": "The Micro-Price: A High Frequency Estimator of Future Prices",
+      "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2970694",
+      "use": "Microprice is an imbalance-adjusted short-horizon price estimator."
+    }
+  ],
+  "schema_version": 2,
+  "source_authority": {
+    "capture": "abandoned fresh-block-canary captured 2026-07-15T06:49Z through 2026-07-15T08:50Z",
+    "capture_conditions": 24,
+    "distilled_files": [
+      "2026-07-15T06.v1.candles.jsonl.gz",
+      "2026-07-15T07.v1.candles.jsonl.gz",
+      "2026-07-15T08.v1.candles.jsonl.gz"
+    ],
+    "sha256": {
+      "2026-07-15T06.v1.candles.jsonl.gz": "9c5c59d0e71d88fc0745e8f28ea64076cc6e1afac2fcbf49bf50cb68759e5238",
+      "2026-07-15T07.v1.candles.jsonl.gz": "01ed7f4a315c6a23ad5e0b3386032e169024a980db65352f062d3bcbaccb5dd4",
+      "2026-07-15T08.v1.candles.jsonl.gz": "f08dd8224c13329ccc944f883501e725425b71448db6b2f9e4f2f06a85ab8cb9",
+      "manifest.json": "43a722ae7fbdc407513b1b16fa82602cc73b244e481a891ca9b594de7bf7588e",
+      "resolution_manifest.json": "b94b8a096d045c25ffe42b3f419e689c38aab9a193b8309c77e3eef551589322",
+      "rust_engine/src/strategy/microstructure.rs": "023dacb644760a0e958ec7d4b7316b01f5fffa0347436cf935397f9584a13c0d"
+    },
+    "terminal_labels_used_in_primary_analysis": false
+  },
+  "status": "DIAGNOSTIC_ONLY_REJECT_OPPOSITE_PRESSURE_CLAUSE_ACTIVE_RULE_UNCHANGED",
+  "structural_identity_checks": {
+    "all_conditions_represented": true,
+    "all_pass": true,
+    "cross_touch_mirror_error_at_float_tolerance": true,
+    "paired_and_chosen_positive_counts_match": true,
+    "paired_predicate_has_zero_observed_disagreements": true,
+    "valid_state_population_is_nonempty": true
+  },
+  "structural_results": {
+    "abs_cross_touch_mirror_error": {
+      "max": 0.0,
+      "median": 0.0,
+      "p99": 0.0
+    },
+    "abs_microprice_sum_residual": {
+      "max": 0.00022509224978484177,
+      "median": 0.0,
+      "p99": 2.220446049250313e-16
+    },
+    "abs_midpoint_sum_residual": {
+      "max": 1.1102230246251565e-16,
+      "median": 0.0,
+      "p99": 0.0
+    },
+    "abs_pressure_sum": {
+      "max": 0.04501844995696832,
+      "median": 1.1102230246251565e-14,
+      "p95": 3.3306690738754696e-14,
+      "p99": 4.440892098500626e-14
+    },
+    "abs_top3_depth_mirror_error": {
+      "max": 50.0,
+      "median": 0.0,
+      "p99": 0.0
+    },
+    "candidate_vs_chosen_positive_comparisons": 12930,
+    "candidate_vs_chosen_positive_disagreement_count": 0,
+    "candidate_vs_chosen_positive_disagreement_rate": 0.0,
+    "chosen_positive_count": 6464,
+    "conditions_with_valid_pair": 24,
+    "non_neutral_pressure_samples": 6465,
+    "opposite_sign_pressure_samples": 6464,
+    "opposite_sign_rate_among_non_neutral": 0.99984532095901,
+    "paired_candidate_count": 6464,
+    "possible_one_hz_samples": 7200,
+    "pressure_pearson_correlation": -0.9999990426497684,
+    "same_sign_pressure_samples": 1,
+    "valid_paired_sample_coverage": 0.8979166666666667,
+    "valid_paired_samples": 6465
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T07:48:32Z",
+  "registered_at": "2026-07-21T07:48:32Z",
+  "mechanism_id": "settlement_source_anchor_v1",
+  "status": "PREREGISTERED_FOR_DISJOINT_FUTURE_BLOCK_NO_ACTIVE_BLOCK_SCORE",
+  "decision_question": "Does pricing the Chainlink-settled event from a causal Chainlink current price and Chainlink window-open strike eliminate proxy-basis errors strongly enough to pass the unchanged A+ contract?",
+  "rationale": {
+    "contract_alignment": "The market resolves on Chainlink BTC/USD at the end versus the beginning of the window, while the current fair-value path supplies Binance current and open prices to the binary option formula.",
+    "label_free_selectivity": "With every non-anchor input held fixed, the official anchor changed 215 of 2778 fresh orientation-level fee-aware edge classifications across 21 of 24 markets and both directions.",
+    "published_strike_integrity": "All 24 captured Chainlink opens matched the corresponding public Polymarket price-to-beat value within 1e-9 USD.",
+    "novelty": "This is a settlement-process source correction, not probability shrinkage, a static feature veto, a paired-book transform, a lifecycle rule, or a fitted threshold."
+  },
+  "blindness": {
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "active_binary_complement_terminal_outcomes_accessed": false,
+    "diagnostic_terminal_labels_loaded": false,
+    "diagnostic_strategy_outcomes_loaded": false,
+    "registered_after_active_block_collection_began": true,
+    "active_block_eligibility": "forbidden",
+    "reason": "The candidate was identified after the current block began, so it cannot receive a second-hypothesis score on those outcomes even though the analyst remained outcome-blind."
+  },
+  "frozen_candidate": {
+    "baseline_strategy": "primary_v6_volfloor_300",
+    "baseline_params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "only_changed_inputs": {
+      "fair_spot": "latest Chainlink BTC/USD source timestamp at or before the decision",
+      "fair_strike": "Chainlink BTC/USD window-open value used as the public Polymarket price to beat"
+    },
+    "unchanged_inputs": [
+      "Binance proxy tape for momentum direction and signal confidence",
+      "Binance one-hour realized volatility with decision floor 0.30",
+      "binary option formula and annual risk-free rate 0.05",
+      "minimum confidence, z-score, reversion, timing, and state gates",
+      "decision-time executable asks and price band 0.10 through 0.85",
+      "Polymarket crypto taker fee formula with rate 0.07",
+      "minimum fee-aware primary edge 0.07",
+      "position sizing, exposure, breaker, latency, fill, and settlement semantics"
+    ],
+    "official_current_max_age_ms": 10000,
+    "official_open_max_distance_ms": 2000,
+    "published_price_to_beat_max_difference_usd": 0.01,
+    "missing_stale_or_mismatched_action": "reject_condition_row",
+    "alternate_source_freshness_thresholds_permitted": false,
+    "alternate_edge_or_probability_thresholds_permitted": false
+  },
+  "condition_allocation": {
+    "active_binary_complement_block_1": "reserved exclusively for binary_complement_coherence_v1",
+    "same_condition_id_in_both_mechanism_families": "forbidden",
+    "start_rule_if_binary_complement_block_1_fails": "start settlement-source-anchor block 1 at the first five-minute condition strictly after the sealed binary-complement block-1 condition set is published",
+    "start_rule_if_binary_complement_block_1_passes": "reserve the next disjoint 750-condition block for the unchanged binary-complement replication; start settlement-source-anchor block 1 only after that block seals",
+    "condition_id_overlap_check": "must be empty against every binary-complement screen and every prior settlement-source-anchor block",
+    "adaptive_reallocation_after_viewing_metrics": "forbidden"
+  },
+  "forward_evaluation": {
+    "blocks_required": 2,
+    "minimum_terminal_official_source_aligned_conditions_per_block": 750,
+    "minimum_official_anchor_coverage": 0.95,
+    "minimum_candidate_trades": 80,
+    "comparison": "proxy-anchor baseline and frozen official-anchor candidate on identical causal inputs and condition IDs",
+    "score_frequency": "once per sealed block",
+    "threshold_changes_after_any_score": "forbidden",
+    "failed_block_action": "reject mechanism family without neighbor search",
+    "required_absolute_gates_each_block": {
+      "wilson_95_lower_bound": 0.7,
+      "fee_inclusive_pnl_usd": "greater than 0",
+      "profit_factor": 1.2,
+      "payoff_ratio": 0.3,
+      "profitable_eligible_reports": 20,
+      "eligible_reports": 20,
+      "worst_fold_pnl_usd": -13.0,
+      "left_tail_cvar_usd": -8.0,
+      "maximum_losing_reports_in_any_five_report_window": 2,
+      "worst_loss_over_average_win": 3.5,
+      "first_half_fee_inclusive_pnl_usd": "greater than 0",
+      "second_half_fee_inclusive_pnl_usd": "greater than 0"
+    },
+    "minimum_replay_latency_ms": 202,
+    "exact_execution_required": true,
+    "exact_execution_contract": [
+      "causal official and proxy source timestamps",
+      "published price-to-beat reproduction",
+      "dynamic tick parity",
+      "executable L2 depth traversal and FOK behavior",
+      "entry and exit fees",
+      "stateful sizing and breaker behavior",
+      "durable order recovery and live/replay reconciliation parity"
+    ]
+  },
+  "attribution": {
+    "required_counts": [
+      "baseline candidates",
+      "official-source available candidates",
+      "proxy-only decisions",
+      "official-only decisions",
+      "both decisions",
+      "neither decision",
+      "direction changes"
+    ],
+    "required_distributions": [
+      "official current age",
+      "proxy-versus-official move difference",
+      "fair-probability change",
+      "fee-aware edge change",
+      "decision-time ask change"
+    ],
+    "required_economics": [
+      "gross wins and losses",
+      "fee-inclusive PnL",
+      "profit factor",
+      "payoff ratio",
+      "maximum drawdown",
+      "chronological halves",
+      "loss-burst attribution"
+    ]
+  },
+  "promotion_boundary": {
+    "label_free_diagnostic_is_promotion_evidence": false,
+    "single_forward_block_pass_is_promotion": false,
+    "two_screen_passes_are_promotion": false,
+    "next_if_both_blocks_pass": "implement one default-off runtime variant and run exact measured-latency replay plus live/replay parity; do not enable paper or live trading before all absolute gates pass",
+    "current_grade": "A-",
+    "current_live_trading": "OFF"
+  },
+  "source_evidence": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_settlement_source_anchor_diagnostic.json",
+      "sha256": "c4ef50cf50b6e4e4f445199f17637e9efcdc5a2778eaf0dc777bfebc35b9299a"
+    },
+    {
+      "path": "docs/notebooks/strategy_settlement_source_anchor_diagnostic_2026-07-21.ipynb",
+      "sha256": "7382c4b277edea7fa19a7fe332ead7c156bc0183baed00d47163b7f7d18d0b59"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_settlement_anchor_price_to_beat_manifest.json",
+      "sha256": "cc0273c9a2210b5098399ca62c09af15e6e05864846cbf97c7bd54d216a90d1e"
+    },
+    {
+      "path": "rust_engine/src/backtest/harness.rs",
+      "sha256": "5ea335ce79c9a0c061b44ee1479da2a6e06ae8d2365902f264df3f6f61372216"
+    },
+    {
+      "path": "rust_engine/src/strategy/decision.rs",
+      "sha256": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0"
+    }
+  ],
+  "decision": {
+    "candidate_registered": true,
+    "runtime_implementation_authorized": false,
+    "active_collector_change_authorized": false,
+    "active_block_score_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false
+  }
+}

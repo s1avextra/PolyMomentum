@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-08-19T05:02:43.403100+00:00",
+  "entries": [
+    {
+      "strategy_id": "a_plus5m_tail_early_reentry_20260629",
+      "version_id": "sv_f6580d73f7d86904",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "rejected",
+      "reason": "Early-zone re-entry challenger produced zero trades on the required Jun7 00-07 tail cluster; current gates are coverage-limited and do not qualify for Jun10, full-window, or freshest-window promotion.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/artifact_7f3508185645fc50.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/metrics_04146c303b5de808.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/evidence_00_fae3c3032806aa25.json"
+      ],
+      "notes": [
+        "Fail-fast rule: a challenger must pass the known Jun7 tail cluster before spending downloads or CPU on Jun10 and freshest-window promotion."
+      ],
+      "first_seen_at": "2026-06-29T16:30:00.956925+00:00",
+      "updated_at": "2026-06-29T17:37:38.538160+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T16:30:00.956925+00:00",
+          "status": "rejected",
+          "reason": "Early-zone re-entry challenger produced zero trades on the required Jun7 00-07 tail cluster; current gates are coverage-limited and do not qualify for Jun10, full-window, or freshest-window promotion.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_early_reentry_20260629/event_00_evidence_00_f181834dd0420aa0.json"
+          ],
+          "notes": [
+            "Fail-fast rule: a challenger must pass the known Jun7 tail cluster before spending downloads or CPU on Jun10 and freshest-window promotion."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "a_plus5m_tail_low_exposure_20260629",
+      "version_id": "sv_df442d536b5eab79",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "rejected",
+      "reason": "Low-exposure reversion challenger failed the required Jun7 00-07 tail cluster: 5 trades, 4 wins, 1 loss, total PnL -1.42235, early-zone PnL -4.28375, profit factor 0.72237.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/artifact_895dbc6416220576.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/metrics_821e1e1ed24efe15.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_00_ac48a31a57e22e39.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/evidence_01_180bbf12cfaf2ba2.json"
+      ],
+      "notes": [
+        "Primary bucket was positive (+2.86140), but the early bucket remained toxic (-4.28375); do not advance this parameterization to promotion."
+      ],
+      "first_seen_at": "2026-06-29T16:30:01.014056+00:00",
+      "updated_at": "2026-06-29T17:37:38.538160+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T16:30:01.014056+00:00",
+          "status": "rejected",
+          "reason": "Low-exposure reversion challenger failed the required Jun7 00-07 tail cluster: 5 trades, 4 wins, 1 loss, total PnL -1.42235, early-zone PnL -4.28375, profit factor 0.72237.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_00_0e81bd30511670e3.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_low_exposure_20260629/event_00_evidence_01_8de1f4f2aa30991d.json"
+          ],
+          "notes": [
+            "Primary bucket was positive (+2.86140), but the early bucket remained toxic (-4.28375); do not advance this parameterization to promotion."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "a_plus5m_tail_primary_minorder_20260629",
+      "version_id": "sv_995b52d88b1177b5",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "questionable",
+      "reason": "Min-order-aware primary-only challenger fixed Jun7 tail cluster (+7.73694, 7/7 wins) but failed Jun10 tail cluster (-2.10983, 2/3 wins); keep research-only and require fresh-window validation before any promotion.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/artifact_98bd5f6edb210ea9.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/metrics_65145792458cb08e.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_00_9ee109495881e993.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_01_1f04881deaf2981f.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_02_5cb82ff99fb5682e.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/evidence_03_bd85c9986d10b176.json"
+      ],
+      "notes": [
+        "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+      ],
+      "first_seen_at": "2026-06-29T10:44:35.402214+00:00",
+      "updated_at": "2026-06-29T17:37:38.538160+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T10:44:35.402214+00:00",
+          "status": "questionable",
+          "reason": "Min-order-aware primary-only challenger fixed Jun7 tail cluster (+7.73694, 7/7 wins) but failed Jun10 tail cluster (-2.10983, 2/3 wins); keep research-only and require fresh-window validation before any promotion.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_00_84d6a150a89f79b3.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_01_ca5ded8ec605f3fe.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_02_b2c67be6f2ea02e4.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/a_plus5m_tail_primary_minorder_20260629/event_00_evidence_03_48dc8498e30d1a95.json"
+          ],
+          "notes": [
+            "Fresh-window rule now applies: old tail clusters are regression tests, not promotion proof. This challenger must pass newest fully resolved windows plus older diagnostics before it can advance."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "binary_complement_coherence_v1",
+      "version_id": "sv_63f999ed69af47db",
+      "parent_id": null,
+      "status": "dead_end",
+      "reason": "Frozen at 448/750 by an external venue rule change: Polymarket switched candle resolution to Chainlink TWAP-vs-open around 2026-08-08T14:00-16:00Z (dated by per-session SETTLEMENT_DISAGREEMENT counts: zero through session 025, persistent 15-40% after). The preregistered scorer models terminal-vs-open; continuing would mix resolution regimes. No forward outcome or strategy rate was inspected. Successor: binary_complement_twap_v2 with TWAP-aware alignment and a fresh 750-condition floor.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260817_binary_complement_rule_change_block.json",
+        "docs/twap_resolution_rule_change_2026-08-17.md"
+      ],
+      "notes": [
+        "Raw capture frames remain rule-agnostic and valid; only alignment verdicts fail under the old model. Watchdog and restart-on-failure added 2026-08-17 remain in place for the successor collection."
+      ],
+      "first_seen_at": "2026-08-17T13:38:14.405518+00:00",
+      "updated_at": "2026-08-17T13:38:14.405518+00:00",
+      "events": [
+        {
+          "at": "2026-08-17T13:38:14.405518+00:00",
+          "status": "dead_end",
+          "reason": "Frozen at 448/750 by an external venue rule change: Polymarket switched candle resolution to Chainlink TWAP-vs-open around 2026-08-08T14:00-16:00Z (dated by per-session SETTLEMENT_DISAGREEMENT counts: zero through session 025, persistent 15-40% after). The preregistered scorer models terminal-vs-open; continuing would mix resolution regimes. No forward outcome or strategy rate was inspected. Successor: binary_complement_twap_v2 with TWAP-aware alignment and a fresh 750-condition floor.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260817_binary_complement_rule_change_block.json",
+            "docs/twap_resolution_rule_change_2026-08-17.md"
+          ],
+          "notes": [
+            "Raw capture frames remain rule-agnostic and valid; only alignment verdicts fail under the old model. Watchdog and restart-on-failure added 2026-08-17 remain in place for the successor collection."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "cross_venue_lead_lag_residual_20260812",
+      "version_id": "sv_171904f6977915d9",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "The checksum-verified external source covered all 704 coordinates, but zero of 36 preregistered lead/lag policies met both older and recent support/edge gates; exact replay and fresh scoring were not authorized.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_decision.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_search.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_source_and_feature_evidence.json",
+        "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_preregistration.json",
+        "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_search.json",
+        "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_decision.json",
+        "deploy/promotions/evidence/strategy_registry/20260812_strategy_finding_funnel_v3.json"
+      ],
+      "notes": [
+        "All 11 source dates passed checksum, closed-second, and timestamp-unit validation; external features were complete on 704/704 sealed rows.",
+        "The cheap screen mixed predictive and execution gates and became support-starved (displayed maxima: older 2, recent 6); do not retune this family after outcomes.",
+        "Next architecture separates raw directional validation, marketability, exact execution, and fresh resolved holdout."
+      ],
+      "first_seen_at": "2026-08-11T19:26:25.187198+00:00",
+      "updated_at": "2026-08-11T19:26:25.187198+00:00",
+      "events": [
+        {
+          "at": "2026-08-11T19:26:25.187198+00:00",
+          "status": "rejected",
+          "reason": "The checksum-verified external source covered all 704 coordinates, but zero of 36 preregistered lead/lag policies met both older and recent support/edge gates; exact replay and fresh scoring were not authorized.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_source_and_feature_evidence.json",
+            "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_preregistration.json",
+            "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_search.json",
+            "deploy/promotions/evidence/strategy_registry/20260812_cross_venue_lead_lag_decision.json",
+            "deploy/promotions/evidence/strategy_registry/20260812_strategy_finding_funnel_v3.json"
+          ],
+          "notes": [
+            "All 11 source dates passed checksum, closed-second, and timestamp-unit validation; external features were complete on 704/704 sealed rows.",
+            "The cheap screen mixed predictive and execution gates and became support-starved (displayed maxima: older 2, recent 6); do not retune this family after outcomes.",
+            "Next architecture separates raw directional validation, marketability, exact execution, and fresh resolved holdout."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "external_causal_probability_dislocation_20260811",
+      "version_id": "sv_c99d43f9c99a2a41",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "The independent causal-probability family produced positive exact-replay PnL, but neither of its two preregistered traces exceeded the fixed +0.02 Wilson edge advancement gate.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_decision.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_exact_replay.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_preregistration.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_search.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_exact_replay.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_decision.json"
+      ],
+      "notes": [
+        "The family used only observed BTC, strike, remaining time, causal realized volatility, executable ask, and fee-aware break-even; path, move, and pressure rules were forbidden.",
+        "The 180-second trace filled 32/32 with +$48.00168 PnL and Wilson edge +0.00272; the 120-second trace filled 37/37 with +$33.52831 PnL and Wilson edge -0.08333.",
+        "The terminal decision sets more_evidence_allowed=false and leaves all 133 fresh outcomes sealed."
+      ],
+      "first_seen_at": "2026-08-11T12:34:09+00:00",
+      "updated_at": "2026-08-11T12:51:49+00:00",
+      "events": [
+        {
+          "at": "2026-08-11T12:51:49+00:00",
+          "status": "rejected",
+          "reason": "Both bounded exact traces failed the fixed Wilson advancement margin; the experiment budget is exhausted and fresh remains sealed.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_preregistration.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_exact_replay.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_decision.json"
+          ],
+          "notes": [
+            "Positive point economics alone cannot override the preregistered confidence gate.",
+            "Do not add hours, model scales, price caps, or edge thresholds to this family."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "full_may28_jun10_strict_tail_loop_20260630",
+      "version_id": "sv_37d39f1ff2c4d419",
+      "parent_id": "reversion_1_2_causal_policy_tail_20260628",
+      "status": "dead_end",
+      "reason": "Full May28-Jun10 strict tail loop found no promotable candidate; positive aggregate variants fail loss-burst gates.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_multi_guard_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_direction_tail.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_mode_tail.json"
+      ],
+      "notes": [
+        "Strict gates: min trades 80 where applicable, Wilson lower 0.70, positive PnL, profitable reports >=20/18, tail CVaR >= -8, loss-burst <=2 over 5 folds.",
+        "Adaptive direction previously appeared passable without tail gates; patched adaptive selectors now report tail CVaR and loss-burst and fail closed."
+      ],
+      "first_seen_at": "2026-06-29T18:07:45.044795+00:00",
+      "updated_at": "2026-06-29T18:07:45.044795+00:00",
+      "events": [
+        {
+          "at": "2026-06-29T18:07:45.044795+00:00",
+          "status": "dead_end",
+          "reason": "Full May28-Jun10 strict tail loop found no promotable candidate; positive aggregate variants fail loss-burst gates.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_multi_guard_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_causal_policy_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_direction_tail.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_full_may28_jun10_adaptive_mode_tail.json"
+          ],
+          "notes": [
+            "Strict gates: min trades 80 where applicable, Wilson lower 0.70, positive PnL, profitable reports >=20/18, tail CVaR >= -8, loss-burst <=2 over 5 folds.",
+            "Adaptive direction previously appeared passable without tail gates; patched adaptive selectors now report tail CVaR and loss-burst and fail closed."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "late_window_opportunity_policy_family_20260811",
+      "version_id": "sv_37fe551e2225df08",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "The preregistered eight-hour discovery expansion left both bounded exact-replay traces below the +0.02 Wilson edge advancement gate, despite positive point estimates and fee-aware PnL.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_bounded_decision.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260811_opportunity_exact_replay_chronological_expanded.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_preregistration.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_opportunity_policy_search_chronological_expanded_v2.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_opportunity_exact_replay_chronological_expanded.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_bounded_decision.json"
+      ],
+      "notes": [
+        "The 704-row causal seal contains 144 older, 427 recent-discovery, and 133 fresh-holdout rows; all 133 fresh labels remained physically excluded.",
+        "The 180-second trace filled 28/28 with +$27.53992 PnL but Wilson edge -0.07190; the 120-second trace filled 28/28 with +$28.13791 PnL but Wilson edge -0.10098.",
+        "The family budget is exhausted. Do not add hours or parameter variants, and do not open fresh outcomes for these traces."
+      ],
+      "first_seen_at": "2026-08-11T09:38:20+00:00",
+      "updated_at": "2026-08-11T10:10:15+00:00",
+      "events": [
+        {
+          "at": "2026-08-11T10:10:15+00:00",
+          "status": "rejected",
+          "reason": "Neither of the two bounded exact-replay traces exceeded the preregistered +0.02 Wilson edge margin after the full eight-hour expansion; fresh remained sealed.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_preregistration.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_opportunity_exact_replay_chronological_expanded.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_opportunity_discovery_expansion_bounded_decision.json"
+          ],
+          "notes": [
+            "Positive point PnL is research evidence, not promotion evidence, when the fixed confidence gate fails.",
+            "Next work must start from an independent causal mechanism family."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "late_window_path_or_move_4m_2m200_20260729",
+      "version_id": "sv_d4688cc7f9aa4052",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "Fee-aware economic screening rejected the candidate: five fresh wins produced only $0.09817, one $5 maximum-stake loss requires 255 average wins to recover, and the public Wilson lower bound is below break-even.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_variant.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_research_manifest.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_public_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fresh_holdout.json",
+        "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_economic_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fixed_forward_gate.json"
+      ],
+      "notes": [
+        "Frozen hypothesis fingerprint: 453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018.",
+        "The earlier exact-replay pass meant research eligibility only; the subsequent economic gate is authoritative.",
+        "The fixed-forward job was sealed and blocked without consuming future outcomes; neither paper nor live trading is authorized."
+      ],
+      "first_seen_at": "2026-07-29T11:26:54+00:00",
+      "updated_at": "2026-08-03T10:31:33+00:00",
+      "events": [
+        {
+          "at": "2026-08-03T00:00:00+00:00",
+          "status": "questionable",
+          "reason": "Durably registered after separating research eligibility from promotion; asymmetric payoff risk remains unresolved.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_research_manifest.json",
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_public_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fresh_holdout.json"
+          ],
+          "notes": [
+            "Raw one-maximum-stake-loss robustness is false; the optional research gate is no longer represented as a positive observation."
+          ]
+        },
+        {
+          "at": "2026-08-03T10:31:33+00:00",
+          "status": "rejected",
+          "reason": "The separate economic gate failed mean-win, maximum-loss-recovery, and Wilson-over-break-even checks; the sealed forward confirmation was blocked before measuring any forward outcome.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_research_manifest.json",
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_economic_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fixed_forward_gate.json"
+          ],
+          "notes": [
+            "Five fills and positive net PnL are insufficient when the payoff-derived break-even accuracy is 0.996089.",
+            "Paper and live authorization remain false."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "loss_cluster_sentinel_causal_policy_20260630",
+      "version_id": "sv_f72ca8324f41e7d9",
+      "parent_id": "tail_first_causal_policy_payoff_20260630",
+      "status": "dead_end",
+      "reason": "Prior-only loss-cluster sentinel reduced burst risk but found no promotable candidate; best 2-fold cooldown kept 96 trades and burst 2 but failed CVaR -8.183, payoff 0.283, and profitable-report count 15/20.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_sentinel.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2_budget028.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown1.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown3.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_budget.json"
+      ],
+      "notes": [
+        "Implemented feed-forward prior loss-cluster flattening, separate sentinel lookback, and prior payoff/worst-loss budget gates.",
+        "Strict 42-fold result remains fail-closed: ok=false, live_ready=false; do not paper-validate or promote."
+      ],
+      "first_seen_at": "2026-06-30T08:47:18.218240+00:00",
+      "updated_at": "2026-06-30T08:47:18.218240+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T08:47:18.218240+00:00",
+          "status": "dead_end",
+          "reason": "Prior-only loss-cluster sentinel reduced burst risk but found no promotable candidate; best 2-fold cooldown kept 96 trades and burst 2 but failed CVaR -8.183, payoff 0.283, and profitable-report count 15/20.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_sentinel.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown2_budget028.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown1.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_loss_cooldown3.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_cluster_budget.json"
+          ],
+          "notes": [
+            "Implemented feed-forward prior loss-cluster flattening, separate sentinel lookback, and prior payoff/worst-loss budget gates.",
+            "Strict 42-fold result remains fail-closed: ok=false, live_ready=false; do not paper-validate or promote."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "meta_label_causal_policy_20260630",
+      "version_id": "sv_62d68444336e3c41",
+      "parent_id": "loss_cluster_sentinel_causal_policy_20260630",
+      "status": "dead_end",
+      "reason": "Meta-label hard gates cleaned tails but starved sample size below the 80-trade promotion gate on May28-Jun10 folds.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json"
+      ],
+      "notes": [
+        "Use meta_label diagnostics as a research lens, not as live/paper promotion evidence.",
+        "Next A+ loop should add orderbook causal buckets before trying meta-label promotion again."
+      ],
+      "first_seen_at": "2026-06-30T12:08:42.592783+00:00",
+      "updated_at": "2026-06-30T12:08:42.592783+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T12:08:42.592783+00:00",
+          "status": "dead_end",
+          "reason": "Meta-label hard gates cleaned tails but starved sample size below the 80-trade promotion gate on May28-Jun10 folds.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_causal_policy_meta_label_summary.json"
+          ],
+          "notes": [
+            "Use meta_label diagnostics as a research lens, not as live/paper promotion evidence.",
+            "Next A+ loop should add orderbook causal buckets before trying meta-label promotion again."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "partial_twap_lock_v1",
+      "version_id": "sv_7c554001d9413c1a",
+      "parent_id": null,
+      "status": "questionable",
+      "reason": "First TWAP-era family ran the full funnel end-to-end (12 sealed hours, 370 rows, 232 TWAP labels, frozen 54-policy screen) and terminated insufficient_support_data_blocked: max recent support of any policy = 1 vs the 100-fill gate. Root cause is data supply, not the mechanism: August realized vol ~8.8% makes lock-strength>=1 events cover only 8% of rows, and the PMXT archive stopped publishing at 2026-08-10T00 leaving ~32 TWAP-era hours total. Budget not spent; fresh outcomes never opened.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260818_partial_twap_lock_v1_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260817_partial_twap_lock_v1_preregistration.md"
+      ],
+      "notes": [
+        "Successor v2 may recalibrate lock-strength floors to the observed distribution (e.g. 0.25/0.5/1.0) as a NEW registration - this one never opened fresh outcomes so the redesign is not tuning-on-outcomes. Blocking prerequisite for any TWAP-era family: resume fresh book capture (VPS) since the archive outage makes it the only source."
+      ],
+      "first_seen_at": "2026-08-17T17:30:35.450047+00:00",
+      "updated_at": "2026-08-17T17:30:35.450047+00:00",
+      "events": [
+        {
+          "at": "2026-08-17T17:30:35.450047+00:00",
+          "status": "questionable",
+          "reason": "First TWAP-era family ran the full funnel end-to-end (12 sealed hours, 370 rows, 232 TWAP labels, frozen 54-policy screen) and terminated insufficient_support_data_blocked: max recent support of any policy = 1 vs the 100-fill gate. Root cause is data supply, not the mechanism: August realized vol ~8.8% makes lock-strength>=1 events cover only 8% of rows, and the PMXT archive stopped publishing at 2026-08-10T00 leaving ~32 TWAP-era hours total. Budget not spent; fresh outcomes never opened.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260818_partial_twap_lock_v1_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260817_partial_twap_lock_v1_preregistration.md"
+          ],
+          "notes": [
+            "Successor v2 may recalibrate lock-strength floors to the observed distribution (e.g. 0.25/0.5/1.0) as a NEW registration - this one never opened fresh outcomes so the redesign is not tuning-on-outcomes. Blocking prerequisite for any TWAP-era family: resume fresh book capture (VPS) since the archive outage makes it the only source."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "partial_twap_lock_v2",
+      "version_id": "sv_f869a41f6924c88d",
+      "parent_id": "partial_twap_lock_v1",
+      "status": "questionable",
+      "reason": "8.1x data expansion via --distilled-input (57 canary-captured hours, 1872 rows, 1609 TWAP discovery labels) still terminates insufficient_support_data_blocked: max per-policy recent support 24 vs the 100-fill gate. Structural causes: discovery era lost the most hours to capture gaps, cheap-ask (<=0.55) lead-matched events are naturally rare, and single-book tables discard lead-side mismatches. Diagnostic-only signal remains strongly positive (recent point edges +0.6 at cheap caps, n=3-4). Fresh (263 rows, Aug 11 04:00-16:00) never opened; budget unspent.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_preregistration.md"
+      ],
+      "notes": [
+        "Forward path is structural, not threshold-tuning: (a) capture campaign accumulates fresh TWAP-era books daily; (b) a v3 family should use the paired-book feature store so the lead-favoured side is executable regardless of signal side, roughly doubling eligible support; (c) adaptation-persistence must be answered on Aug 19+ data before any live consideration."
+      ],
+      "first_seen_at": "2026-08-19T05:02:43.403100+00:00",
+      "updated_at": "2026-08-19T05:02:43.403100+00:00",
+      "events": [
+        {
+          "at": "2026-08-19T05:02:43.403100+00:00",
+          "status": "questionable",
+          "reason": "8.1x data expansion via --distilled-input (57 canary-captured hours, 1872 rows, 1609 TWAP discovery labels) still terminates insufficient_support_data_blocked: max per-policy recent support 24 vs the 100-fill gate. Structural causes: discovery era lost the most hours to capture gaps, cheap-ask (<=0.55) lead-matched events are naturally rare, and single-book tables discard lead-side mismatches. Diagnostic-only signal remains strongly positive (recent point edges +0.6 at cheap caps, n=3-4). Fresh (263 rows, Aug 11 04:00-16:00) never opened; budget unspent.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_preregistration.md"
+          ],
+          "notes": [
+            "Forward path is structural, not threshold-tuning: (a) capture campaign accumulates fresh TWAP-era books daily; (b) a v3 family should use the paired-book feature store so the lead-favoured side is executable regardless of signal side, roughly doubling eligible support; (c) adaptation-persistence must be answered on Aug 19+ data before any live consideration."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "pure_cross_token_liquidity_dislocation_20260811",
+      "version_id": "sv_f61bf18c339116dc",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "The independent paired-book liquidity family retained positive exact-replay point economics, but neither preregistered trace exceeded the fixed +0.02 Wilson edge advancement gate.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_decision.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_exact_replay.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_preregistration.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_pair_features_manifest.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_search.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_exact_replay.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_decision.json"
+      ],
+      "notes": [
+        "The family selected direction only from the sign of the Up/Down top-depth pressure gap, its 15-second widening, and pair spread; BTC path, volatility, and model probability were forbidden selection inputs.",
+        "The gap>=0.5 trace filled 65/65 with +$7.28865 PnL and Wilson edge -0.07899; the gap>=1.0 trace filled 61/61 with +$0.81407 PnL and Wilson edge -0.09046.",
+        "The terminal decision sets more_evidence_allowed=false and leaves all 133 fresh outcomes sealed."
+      ],
+      "first_seen_at": "2026-08-11T14:54:30+00:00",
+      "updated_at": "2026-08-11T15:08:24+00:00",
+      "events": [
+        {
+          "at": "2026-08-11T15:08:24+00:00",
+          "status": "rejected",
+          "reason": "Both bounded liquidity traces failed the fixed Wilson advancement margin; the experiment budget is exhausted and fresh remains sealed.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_preregistration.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_exact_replay.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_decision.json"
+          ],
+          "notes": [
+            "Positive point economics alone cannot override the preregistered confidence gate.",
+            "Do not add pressure thresholds, spread caps, replay traces, or discovery hours to this family."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "reversion_1_2_causal_policy_tail_20260628",
+      "version_id": "sv_8e5ee8ac9f5e37f8",
+      "parent_id": null,
+      "status": "questionable",
+      "reason": "Second targeted tail-cluster probe avoided Jun7 00-07 losses by producing 0 trades under a_plus5m_tail_guard; paired with Jun10 improvement to +2.36/1 trade, this shows tail protection but insufficient throughput/robustness for promotion.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/artifact_d04d627fe47a8fe2.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/metrics_2f7c2907686249ae.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_00_bf76150e3b253f73.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_01_e017d20bcf580d87.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_02_3c29f4d64c782d8e.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_03_7dd8a5ddda43106e.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_04_99be0b622c4ec72a.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/evidence_05_275d9ba9a4b4c091.json"
+      ],
+      "notes": [
+        "Do not promote until the burst/tail problem is removed by feed-forward backtest/live-replay evidence.",
+        "Next: run adjacent losing folds/cluster; do not full-rerun 42 folds until tail subset proves enough trade count without reintroducing early-zone losses.",
+        "Tail guard is research-only: it blocks early-zone tail losses but may over-filter. Next search should preserve early-zone only under stricter confidence/price/timing gates or build a primary-only challenger with explicit minimum trade-rate gates."
+      ],
+      "first_seen_at": "2026-06-28T15:29:27.160627+00:00",
+      "updated_at": "2026-06-29T17:37:38.538160+00:00",
+      "events": [
+        {
+          "at": "2026-06-28T15:29:27.160627+00:00",
+          "status": "questionable",
+          "reason": "Positive OOS PnL and Wilson on May28-Jun10 reports, but tail-gated search found zero passing candidates; best reversion=1_2 has CVaR -7.9788 and max loss burst 5/5, so keep research-only.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_00_6c934e434f068fbb.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_01_b8b1fad9e79818d5.json"
+          ],
+          "notes": [
+            "Do not promote until the burst/tail problem is removed by feed-forward backtest/live-replay evidence."
+          ]
+        },
+        {
+          "at": "2026-06-28T17:00:09.373643+00:00",
+          "status": "questionable",
+          "reason": "Targeted worst-fold probe improved Jun10 08-15 from prior -12.06/9 trades/4 losses to +2.36/1 trade/0 losses under a_plus5m_tail_guard, but evidence is too sparse and fails robustness gates; keep research-only.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_00_evidence_01_b8b1fad9e79818d5.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_01_evidence_01_b1b2d79ecdd65ef3.json"
+          ],
+          "notes": [
+            "Next: run adjacent losing folds/cluster; do not full-rerun 42 folds until tail subset proves enough trade count without reintroducing early-zone losses."
+          ]
+        },
+        {
+          "at": "2026-06-28T18:05:59.317168+00:00",
+          "status": "questionable",
+          "reason": "Second targeted tail-cluster probe avoided Jun7 00-07 losses by producing 0 trades under a_plus5m_tail_guard; paired with Jun10 improvement to +2.36/1 trade, this shows tail protection but insufficient throughput/robustness for promotion.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_00_168ea9ec7d3eff9c.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_01_bae9168c5474ed4d.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/reversion_1_2_causal_policy_tail_20260628/event_02_evidence_02_b0da8257fdc593bd.json"
+          ],
+          "notes": [
+            "Tail guard is research-only: it blocks early-zone tail losses but may over-filter. Next search should preserve early-zone only under stricter confidence/price/timing gates or build a primary-only challenger with explicit minimum trade-rate gates."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "tail_first_causal_policy_payoff_20260630",
+      "version_id": "sv_c26b21e56513ffb0",
+      "parent_id": "full_may28_jun10_strict_tail_loop_20260630",
+      "status": "dead_end",
+      "reason": "Tail-first causal-policy search improved top tail shape but found no promotable candidate; best direction=up deny zone=primary still has burst 3/5 and payoff ratio 0.279 below the 0.30 gate.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json",
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_diagnostic.json",
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json"
+      ],
+      "notes": [
+        "Implemented opt-in tail-first ranking and payoff-asymmetry gates for causal-policy search.",
+        "Strict result remains fail-closed: ok=false, live-ready=false; do not promote or paper-validate."
+      ],
+      "first_seen_at": "2026-06-30T08:20:03.328896+00:00",
+      "updated_at": "2026-06-30T08:20:03.328896+00:00",
+      "events": [
+        {
+          "at": "2026-06-30T08:20:03.328896+00:00",
+          "status": "dead_end",
+          "reason": "Tail-first causal-policy search improved top tail shape but found no promotable candidate; best direction=up deny zone=primary still has burst 3/5 and payoff ratio 0.279 below the 0.30 gate.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_diagnostic.json",
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_first_causal_policy_payoff_gated.json"
+          ],
+          "notes": [
+            "Implemented opt-in tail-first ranking and payoff-asymmetry gates for causal-policy search.",
+            "Strict result remains fail-closed: ok=false, live-ready=false; do not promote or paper-validate."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "trade_tape_directional_flow_20260811",
+      "version_id": "sv_3fda6f53f47f9f04",
+      "parent_id": null,
+      "status": "rejected",
+      "reason": "The independent PMXT trade-tape family had complete causal coverage but no fixed rule reproduced a positive fee-aware edge across both older and recent discovery partitions, so exact replay was not authorized.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_decision.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_search.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_preregistration.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_feature_store_manifest.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_search.json",
+        "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_decision.json"
+      ],
+      "notes": [
+        "The reusable feature-store plugin streams PMXT book-top, quote-change, and unique trade-print fields once per hour into 704 outcome-free rows; all 704 had complete paired quotes.",
+        "Best recent diagnostic at 240s/15s/25 prints/0.50 imbalance had +0.03234 point edge and +$22.04 proxy PnL, but older edge was -0.04331; it failed temporal stability.",
+        "No exact replay or fresh outcome read was permitted. The terminal decision sets more_evidence_allowed=false for this family."
+      ],
+      "first_seen_at": "2026-08-11T15:54:28+00:00",
+      "updated_at": "2026-08-11T16:07:17+00:00",
+      "events": [
+        {
+          "at": "2026-08-11T16:07:17+00:00",
+          "status": "rejected",
+          "reason": "Zero of 54 preregistered trade-flow rules cleared both chronological cheap-screen gates; experiment budget is exhausted and fresh remains sealed.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_preregistration.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_search.json",
+            "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_decision.json"
+          ],
+          "notes": [
+            "Do not add tape thresholds, discovery hours, or replay traces to this rejected family.",
+            "The next independent family should use cross-venue lead/lag if a causally aligned source is available; otherwise change the coordinate universe rather than re-tuning this tape signal."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "zero_worst_fold_causal_policy_20260628",
+      "version_id": "sv_0da8a2e3a8125d40",
+      "parent_id": null,
+      "status": "dead_end",
+      "reason": "Strict zero-worst-fold causal policy gate produced no passing candidate on the 42-report May28-Jun10 set; the best prior artifact still had a deeply negative OOS fold.",
+      "artifact_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/artifact_41c0cceaa9b51de6.json",
+      "metrics_path": "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/metrics_90185935a57908f5.json",
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/evidence_00_6ee7670aed25b049.json"
+      ],
+      "notes": [
+        "Use tail-aware or exposure-reduced variants instead of trying to promote this gate result."
+      ],
+      "first_seen_at": "2026-06-28T15:29:36.036261+00:00",
+      "updated_at": "2026-06-29T17:37:38.538160+00:00",
+      "events": [
+        {
+          "at": "2026-06-28T15:29:36.036261+00:00",
+          "status": "dead_end",
+          "reason": "Strict zero-worst-fold causal policy gate produced no passing candidate on the 42-report May28-Jun10 set; the best prior artifact still had a deeply negative OOS fold.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260630_tail_loop_v4/zero_worst_fold_causal_policy_20260628/event_00_evidence_00_8646c56a5179746d.json"
+          ],
+          "notes": [
+            "Use tail-aware or exposure-reduced variants instead of trying to promote this gate result."
+          ]
+        }
+      ]
+    }
+  ]
+}

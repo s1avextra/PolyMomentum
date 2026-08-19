@@ -1,0 +1,25 @@
+{
+  "schema_version": "opportunity_dataset_v1",
+  "generated_at": "2026-08-10T15:38:47Z",
+  "causal_feature_semantics_version": "late_window_causal_features_v1",
+  "stake_usd": 5.0,
+  "fee_rate": 0.07,
+  "entries": [
+    {
+      "hour": "2026-05-25T15:00:00Z",
+      "manifest": {
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/2026-05-25T15.manifest.json",
+        "sha256": "d177731e671319597f7460131967226db7f5edf04d6c2d3a9365bc9c7a3d2793"
+      },
+      "opportunity_table": {
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/2026-05-25T15.parquet",
+        "sha256": "eff396a9198bb645ecd12c1dbc72b19c0d7f0b848697b090da495a5b7371b58b"
+      },
+      "row_count": 36
+    }
+  ],
+  "total_rows": 36,
+  "unique_opportunity_ids": 36,
+  "dataset_sha256": "29016932ba246d82273c74b1153b20f3e32c3373322380200544ca1e05c782f9",
+  "outcome_columns_present": false
+}

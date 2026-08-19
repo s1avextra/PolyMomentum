@@ -1,7 +1,7 @@
-//! Slack webhook alerter.
+//! Operator alerter.
 //!
 //! Posts a single message per alert; non-blocking on failure (we never want
-//! a webhook outage to halt the bot).
+//! an alerting outage to halt the bot).
 
 use std::time::Duration;
 
@@ -9,29 +9,78 @@ use anyhow::Result;
 use reqwest::Client;
 use serde_json::json;
 
+use crate::monitoring::telegram::{operator_keyboard, TelegramClient};
+
 #[derive(Clone)]
 pub struct Alerter {
     webhook: Option<String>,
+    telegram: Option<TelegramClient>,
     http: Client,
 }
 
 impl Alerter {
     pub fn new(webhook: Option<String>) -> Self {
+        Self::new_with_telegram(webhook, TelegramClient::from_env())
+    }
+
+    fn new_with_telegram(webhook: Option<String>, telegram: Option<TelegramClient>) -> Self {
+        let webhook = webhook.and_then(|url| {
+            let trimmed = url.trim();
+            if trimmed.is_empty() {
+                None
+            } else if telegram.is_some() && looks_like_telegram_send_message_url(trimmed) {
+                tracing::warn!(
+                    "ignoring Telegram sendMessage ALERT_WEBHOOK_URL because TELEGRAM_BOT_TOKEN is configured"
+                );
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
         let http = Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .expect("client");
-        Self { webhook, http }
+        Self {
+            webhook,
+            telegram,
+            http,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let webhook =
+            std::env::var("SLACK_WEBHOOK_URL").or_else(|_| std::env::var("ALERT_WEBHOOK_URL"));
+        Self::new(webhook.ok())
     }
 
     pub fn enabled(&self) -> bool {
-        self.webhook.is_some()
+        self.webhook.is_some() || self.telegram.is_some()
     }
 
     pub async fn send(&self, severity: &str, title: &str, body: &str) -> Result<()> {
-        let Some(url) = self.webhook.clone() else {
-            return Ok(());
-        };
+        if let Some(url) = self.webhook.clone() {
+            self.send_webhook(&url, severity, title, body).await?;
+        }
+        if let Some(telegram) = &self.telegram {
+            let prefix = match severity {
+                "info" => "[info]",
+                "warning" => "[warning]",
+                "critical" => "[critical]",
+                _ => "[alert]",
+            };
+            let text = format!("{prefix} {title}\n{body}");
+            if let Err(e) = telegram
+                .send_message(&text, Some(operator_keyboard()))
+                .await
+            {
+                tracing::warn!(error = %e, "telegram alert failed");
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_webhook(&self, url: &str, severity: &str, title: &str, body: &str) -> Result<()> {
         let icon = match severity {
             "info" => ":information_source:",
             "warning" => ":warning:",
@@ -41,7 +90,7 @@ impl Alerter {
         let text = format!("{icon} *{title}*\n{body}");
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .json(&json!({"text": text}))
             .send()
             .await;
@@ -56,5 +105,49 @@ impl Alerter {
                 Ok(())
             }
         }
+    }
+}
+
+fn looks_like_telegram_send_message_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("api.telegram.org/bot") && lower.contains("/sendmessage")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Alerter;
+    use crate::monitoring::telegram::TelegramClient;
+
+    #[test]
+    fn disabled_without_webhook() {
+        assert!(!Alerter::new_with_telegram(None, None).enabled());
+        assert!(!Alerter::new_with_telegram(Some("   ".to_string()), None).enabled());
+    }
+
+    #[test]
+    fn enabled_with_trimmed_webhook() {
+        assert!(
+            Alerter::new_with_telegram(Some(" https://example.com/hook ".to_string()), None)
+                .enabled()
+        );
+    }
+
+    #[test]
+    fn ignores_telegram_webhook_when_dedicated_telegram_is_configured() {
+        let telegram = TelegramClient::new(
+            "123456789:test-token".to_string(),
+            "415683".to_string(),
+            None,
+            None,
+        )
+        .expect("telegram client");
+        assert!(Alerter::new_with_telegram(
+            Some(
+                "https://api.telegram.org/bot123456789:old/sendMessage?chat_id=415683".to_string(),
+            ),
+            Some(telegram),
+        )
+        .webhook
+        .is_none());
     }
 }

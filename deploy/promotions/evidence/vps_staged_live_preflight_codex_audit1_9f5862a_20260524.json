@@ -1,0 +1,129 @@
+{
+  "ok": false,
+  "mode": "live",
+  "venue": "paper_only",
+  "release_manifest": {
+    "schema_version": 1,
+    "package": "polymomentum-engine",
+    "version": "0.2.0",
+    "git_sha": "9f5862a9ed6571e19e65ce1e53a0c94e97b48d0d",
+    "build_timestamp": "2026-05-24T14:36:25Z",
+    "binary_path": "/opt/polymomentum/staging/codex-audit1-9f5862a/polymomentum-engine",
+    "mode": "live",
+    "venue": "paper_only",
+    "config_hash": "43109a5d840f1cb10cfb72fe313c5d06a2eb658c4b9c24fa1ea1d32d81d33eda",
+    "promotion": {
+      "status": "ok",
+      "path": "/opt/polymomentum/staging/codex-audit1-9f5862a/promotion_candidate_continuous_grid_early_stresscap024_aggregate_20260520_24.json",
+      "detail": "promoted 224 trades from aggregate_3d",
+      "source_report_hash": "db2bddb8e0cf28878bf4c2ade8c4bbb2e4d772d47699da8e5cb7c55444e05b82",
+      "data_manifest_hash": "142e4010ff6fe89d868fe016b4c14645061fb378805eb4917290f3209f3e0813",
+      "strategy": {
+        "name": "candle_momentum",
+        "version": "1",
+        "params_hash": "a40d2eb7bc3f1747636f9dfbf4790f3ad4d2c745483d5a6e07da2284b6789df9",
+        "risk_profile": "position_pct=0.0500;max_per_market_usd=20.00;stress_dd_cap=0.2400"
+      },
+      "trades": 224,
+      "win_rate": 0.7723214285714286,
+      "total_pnl": 154.59000000000003
+    }
+  },
+  "checks": [
+    {
+      "name": "runtime_mode",
+      "status": "ok",
+      "detail": "mode=live"
+    },
+    {
+      "name": "venue_config",
+      "status": "ok",
+      "detail": "venue=paper_only"
+    },
+    {
+      "name": "peer_private_paths",
+      "status": "ok",
+      "detail": "runtime paths stay out of peer bot private directories"
+    },
+    {
+      "name": "data_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/data exists"
+    },
+    {
+      "name": "logs_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs exists"
+    },
+    {
+      "name": "session_log_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs/sessions exists"
+    },
+    {
+      "name": "state_db_parent",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs/candle exists"
+    },
+    {
+      "name": "kill_switch",
+      "status": "ok",
+      "detail": "kill switch absent at /opt/polymomentum/KILL"
+    },
+    {
+      "name": "promotion_artifact",
+      "status": "ok",
+      "detail": "loaded promoted strategy hash=a40d2eb7bc3f1747636f9dfbf4790f3ad4d2c745483d5a6e07da2284b6789df9 trades=224"
+    },
+    {
+      "name": "settlement_alignment",
+      "status": "ok",
+      "detail": "CANDLE_SETTLEMENT_ALIGNMENT_READY=true"
+    },
+    {
+      "name": "candle_window",
+      "status": "ok",
+      "detail": "CANDLE_WINDOW_MINUTES=5"
+    },
+    {
+      "name": "live_confirmation",
+      "status": "ok",
+      "detail": "--i-understand-live supplied"
+    },
+    {
+      "name": "live_venue",
+      "status": "fail",
+      "detail": "VENUE=paper_only refuses real-money live mode"
+    },
+    {
+      "name": "clob_v2_ready",
+      "status": "fail",
+      "detail": "live mode requires CLOB_V2_READY=1 until the V2 order-signing path is verified"
+    },
+    {
+      "name": "live_reconciliation",
+      "status": "fail",
+      "detail": "live mode requires POLYMOMENTUM_LIVE_RECONCILIATION_READY=1 so accepted orders are reconciled from CLOB user-channel/REST evidence"
+    },
+    {
+      "name": "live_credentials",
+      "status": "ok",
+      "detail": "required CLOB credentials are present"
+    },
+    {
+      "name": "live_alerting",
+      "status": "ok",
+      "detail": "alerting is required and a webhook is configured"
+    },
+    {
+      "name": "live_order_style",
+      "status": "ok",
+      "detail": "promoted maker strategy matches LIVE_ALLOW_MAKER_ORDERS=1"
+    },
+    {
+      "name": "live_wallet",
+      "status": "fail",
+      "detail": "wallet live_ready no: needs pUSD>=1.00, both CTF Exchange V2 pUSD allowances>=1.00, and POL>=0.01; observed address=0xe0ab9972e6ac14c29c06699fb0096a83f2a931ba pUSD=$0.88 CTF_V2_allow=$0.88 NegRisk_allow=$0.00 POL=5.2881; configured live order budget not ready: configured=$10.00, min_order_floor=$4.50, requires pUSD and both CTF Exchange V2 allowances >= $11.00"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T12:30:00Z",
+  "purpose": "Evaluate the current project state after forward BTC book recording and move the A+ path to the next validated data milestone.",
+  "project_evaluation": {
+    "current_grade": "A-",
+    "target_grade": "A+",
+    "live_ready": false,
+    "status": "KEEP_REPLAY_RESEARCH",
+    "strengths": [
+      "Strategy search and registry gates are fail-closed.",
+      "Historical PMXT replay and strict-tail validation infrastructure already exists.",
+      "Forward BTC up/down books can now be recorded read-only from exact Gamma slugs.",
+      "Recorded forward books can now be converted into the existing distilled replay-cache format.",
+      "Converted forward captures can now be refreshed with terminal Gamma outcomes after close."
+    ],
+    "a_plus_blockers": [
+      "No local BTC reference tape is present in the repo for the fresh forward captures.",
+      "Forward sample size is still tiny: one smoke capture with three resolved 5m markets is proof of plumbing, not strategy evidence.",
+      "A+ still requires repeated feed-forward replay/live-replay sessions with oracle agreement, causality checks, enough resolved samples, and strict tail gates."
+    ],
+    "verdict": "The project is technically closer to A+ because the fresh-data bottleneck is now a forward data pipeline rather than a PMXT remap mystery. It is not promotion-ready."
+  },
+  "pmxt_remap_result": {
+    "tested_hour": "2026-06-29T00:00:00Z",
+    "pmxt_market_count": 14440,
+    "pmxt_asset_count": 28880,
+    "exact_btc_5m_condition_overlap": 0,
+    "exact_btc_5m_token_overlap": 0,
+    "decision": "Do not force-remap PMXT for fresh btc-updown-5m replay. Use forward exact-slug collection."
+  },
+  "new_change": {
+    "command": "finalize-recorded-btc-books",
+    "input": "convert-recorded-btc-books output directory containing manifest.json",
+    "output": "resolution_manifest.json",
+    "role_in_a_plus_path": "Attach terminal Gamma outcomes to forward distilled captures so replay/evaluation can distinguish pending data from resolved ground truth.",
+    "safety": [
+      "read-only Gamma metadata refresh",
+      "no order placement",
+      "no wallet access",
+      "fail-closed terminal detection: markets without exactly one 1.0 outcome remain pending"
+    ]
+  },
+  "fresh_forward_smoke": {
+    "record_command": "./rust_engine/target/debug/polymomentum-engine record-btc-books --duration-seconds 20 --windows 3 --out-dir /private/tmp/polymomentum_record_btc_books_a_plus_smoke_20260701",
+    "convert_command": "./rust_engine/target/debug/polymomentum-engine convert-recorded-btc-books --input-dir /private/tmp/polymomentum_record_btc_books_a_plus_smoke_20260701 --output-dir /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701",
+    "finalize_command": "./rust_engine/target/debug/polymomentum-engine finalize-recorded-btc-books --input-dir /private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701",
+    "raw_frames": 11514,
+    "json_messages": 11519,
+    "book_events": 294,
+    "change_events": 22178,
+    "distilled_jsonl_lines": 22472,
+    "unknown_market_skips": 0,
+    "unknown_token_skips": 0,
+    "terminal_markets": 3,
+    "pending_markets": 0,
+    "terminal_directions": [
+      {
+        "slug": "btc-updown-5m-1782904500",
+        "terminal_direction": "up"
+      },
+      {
+        "slug": "btc-updown-5m-1782904800",
+        "terminal_direction": "up"
+      },
+      {
+        "slug": "btc-updown-5m-1782905100",
+        "terminal_direction": "down"
+      }
+    ],
+    "resolution_manifest": "/private/tmp/polymomentum_forward_distilled_a_plus_smoke_20260701/resolution_manifest.json"
+  },
+  "next_a_plus_step": {
+    "name": "BTC tape attachment and feed-forward scoring",
+    "why_next": "Orderbook events and terminal Gamma outcomes are now available. The remaining missing ground-truth input is a BTC reference tape aligned to each 5m market open/close, followed by repeated resolved replay sessions.",
+    "minimum_success_criteria": [
+      "BTC tape covers every forward market open_ts and close_ts.",
+      "A forward session/eval artifact contains signal/evaluation rows plus resolution rows for each resolved market.",
+      "Strategy-builder A+ replay checks see enough resolved/shadow samples, zero actionable oracle disagreements, and clean causality.",
+      "Strict loss-burst/CVaR gates remain fail-closed until enough repeated resolved samples exist."
+    ]
+  },
+  "verification": {
+    "cargo_fmt_check": "passed",
+    "terminal_direction_test": "passed: cargo test --manifest-path rust_engine/Cargo.toml terminal_direction_requires_closed_terminal_market",
+    "converter_test": "passed: cargo test --manifest-path rust_engine/Cargo.toml recorded_book_converter_emits_distilled_events",
+    "cargo_build": "passed",
+    "live_forward_record_convert_finalize_smoke": "passed"
+  }
+}

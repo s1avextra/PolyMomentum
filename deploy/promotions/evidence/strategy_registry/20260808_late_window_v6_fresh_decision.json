@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08T08:47:29Z",
+  "research_only": true,
+  "live_ready": false,
+  "public_snapshot": {
+    "latest_fully_resolved_day": "2026-08-07",
+    "sha256": "4093adcfe7d8c2a3f76f41ac59050b02805a82f10cc97145e59b59f81f7410f2"
+  },
+  "eligibility_policy_version": "staged_stress_v6",
+  "policy_change": {
+    "historical_and_fresh_signal_to_attempt_rate": "diagnostic",
+    "fixed_forward_signal_to_attempt_rate": "required",
+    "reconciliation_scope": [
+      "78af669b730768411b781e11f3b1f6085024f2de324df3f30a6e5d0d93b8f548",
+      "665a77e998e1e343803c671e9e7a6e5e7cc96ec43ef8b3bc91a6faa585fdca20"
+    ]
+  },
+  "candidates": [
+    {
+      "fingerprint": "78af669b730768411b781e11f3b1f6085024f2de324df3f30a6e5d0d93b8f548",
+      "maximum_entry_price": 0.95,
+      "historical": {
+        "windows": 8,
+        "public_signals": 34,
+        "execution_attempts": 9,
+        "fills_success": 9,
+        "total_pnl": 4.28441,
+        "classification": "research_eligible"
+      },
+      "fresh": {
+        "windows": 4,
+        "public_signals": 4,
+        "execution_attempts": 0,
+        "fills_success": 0,
+        "maximum_possible_fills": 4,
+        "classification": "insufficient_support",
+        "evidence_sha256": "baa35fcccf8964a31826693863da60c21ee393857d391e3be18cd87174417b5a"
+      },
+      "decision": "reject_before_fixed_forward"
+    },
+    {
+      "fingerprint": "665a77e998e1e343803c671e9e7a6e5e7cc96ec43ef8b3bc91a6faa585fdca20",
+      "maximum_entry_price": 0.9,
+      "historical": {
+        "windows": 8,
+        "public_signals": 34,
+        "execution_attempts": 6,
+        "fills_success": 6,
+        "total_pnl": 3.16499,
+        "classification": "research_eligible"
+      },
+      "fresh": {
+        "windows": 4,
+        "public_signals": 4,
+        "execution_attempts": 1,
+        "fills_failed": 1,
+        "fills_success": 0,
+        "maximum_possible_fills": 4,
+        "classification": "insufficient_support",
+        "evidence_sha256": "e2a2876c0e90b7c47cf25bbd5d00a1e7b7ddeb8562b79c7a89e16b35bb70ba9a"
+      },
+      "decision": "reject_before_fixed_forward"
+    }
+  ],
+  "conclusion": "The late-window path-and-move family did not reproduce executable capacity on the freshest frozen resolved windows. Keep live trading blocked and shift discovery to a reusable causal opportunity table with execution-equivalence deduplication.",
+  "next_architecture": "docs/strategy_finding_architecture_v3_2026-08-08.md",
+  "verification": {
+    "unit_tests": "python3 -m unittest tests/test_strategy_research_loop.py",
+    "tests_passed": 53,
+    "repository_script_sha256": "eedde4242501d1da0dad6f583236d214e437cdf2f41fc25015bdb2d01828d25e",
+    "installed_script_sha256": "eedde4242501d1da0dad6f583236d214e437cdf2f41fc25015bdb2d01828d25e",
+    "repository_config_sha256": "58a5bcb2845a7190c149e9ef5ac5c2bae594d92b4a772a6e3d5c21bbe8313a26",
+    "installed_config_sha256": "58a5bcb2845a7190c149e9ef5ac5c2bae594d92b4a772a6e3d5c21bbe8313a26"
+  }
+}

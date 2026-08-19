@@ -1,0 +1,1158 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Strategy probability opportunity calibration \u2014 strict 42-fold audit",
+        "id": "title",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "cardIds": [
+          "conditions_card",
+          "scored_folds_card",
+          "brier_card",
+          "logloss_card"
+        ],
+        "id": "metrics",
+        "layout": "full",
+        "type": "metric-strip"
+      },
+      {
+        "body": "## The calibration mechanism does not clear its evidence gate\n\nThe prior-fold policy is **rejected before strategy integration**. Across 34 scored folds and 498 equally weighted terminal conditions, market-minus-calibrated Brier improvement is `-0.000145` and log-loss improvement is `+0.000017`. The first/second-half Brier improvements are `-0.001496` / `+0.001174`; log-loss improvements are `-0.003417` / `+0.003369`. No calibration coefficient should be added to strategy runtime code.",
+        "id": "verdict",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "type": "markdown"
+      },
+      {
+        "chartId": "cumulative_brier",
+        "id": "brier_chart",
+        "layout": "half",
+        "type": "chart"
+      },
+      {
+        "chartId": "cumulative_logloss",
+        "id": "logloss_chart",
+        "layout": "half",
+        "type": "chart"
+      },
+      {
+        "body": "## A+ remains blocked by distributed support and loss clustering\n\nThe retained volatility-floor `0.30` strategy remains profitable at measured latency: 102 trades, 79W/23L, `$+13.54` PnL, and Wilson lower `0.6843`. It still has only 19 profitable reports out of 39, a five-report loss burst of 4, and `$-4.34` in the last 21 folds. The unchanged A+ gates require Wilson at least 0.70, at least 20 profitable reports, and loss burst at most two.",
+        "id": "baseline",
+        "layout": "full",
+        "sourceId": "strict_baseline",
+        "type": "markdown"
+      },
+      {
+        "body": "## Scope, data, and definitions\n\nThe harness records the first candidate per condition and UTC second only after all non-edge gates pass and before EV, stale-edge, and minimum-edge checks. Capture runs use an impossible edge threshold and fail if any order is submitted. The source manifests are complete for all 42 disjoint folds at 202 ms. Repeated seconds share one terminal label, so each condition receives total weight one.",
+        "id": "scope",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "type": "markdown"
+      },
+      {
+        "id": "quality",
+        "layout": "full",
+        "tableId": "quality_table",
+        "type": "table"
+      },
+      {
+        "body": "## Methodology\n\nScoring starts after eight prior folds. For every scored fold, identity, market-intercept, and bounded market-to-model logit shrinkage compete on the final two strictly prior folds across a fixed ridge grid. The winner is refit on all prior folds and applied once to the next fold. Eligibility requires positive Brier and log-loss improvement overall and in both chronological halves, positive lower bounds from a 2,000-draw condition bootstrap, at least 30 scored folds, and at least 300 scored conditions.",
+        "id": "methodology",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "type": "markdown"
+      },
+      {
+        "id": "models",
+        "layout": "full",
+        "tableId": "model_table",
+        "type": "table"
+      },
+      {
+        "body": "## Limitations and robustness\n\nThis cohort tests probability quality only within the current strategy's post-gate opportunity set; it does not discover signals outside that grammar. Bootstrap intervals are clustered by terminal condition but do not create new market regimes. The 95% intervals for market-minus-calibrated Brier and log loss are `[-0.002039189044594095, 0.0016996963068833775]` and `[-0.005735544869003813, 0.005620249899879944]`. Even a calibration pass would still need fold-specific exact L2 replay, unchanged fees and latency, and fresh fully resolved data before it could affect the A+ verdict.",
+        "id": "limitations",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "type": "markdown"
+      },
+      {
+        "body": "## Next steps\n\n1. Keep live trading off and preserve the retained volatility-floor strategy as research-only.\n2. If calibration is rejected, do not add a runtime coefficient; use the segment evidence only to define the next independently testable mechanism.\n3. If calibration is eligible, materialize strictly prior-fitted coefficients per fold and run exact executable replay before any registry change.\n4. Require the newest fully resolved joint CLOB, Binance-signal, and Chainlink-settlement window for any future promotion decision.",
+        "id": "next",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- Does a new causal feature explain the remaining loss cluster without reducing support below 80 trades?\n- Can fresh-window capture accumulate enough fully warmed conditions to distinguish candidate mechanisms?\n- Is the apparent low-price probability degradation stable under a separately preregistered fold-forward test, given that prior minimum-price guards failed exact generalization?",
+        "id": "questions",
+        "layout": "full",
+        "type": "markdown"
+      }
+    ],
+    "cards": [
+      {
+        "dataset": "headline",
+        "description": "Terminal conditions in the full quality-audited opportunity cohort.",
+        "id": "conditions_card",
+        "metrics": [
+          {
+            "field": "conditions",
+            "format": "number",
+            "label": "Cohort conditions"
+          }
+        ],
+        "sourceId": "opportunity_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Chronological folds scored only after the minimum prior-history requirement.",
+        "id": "scored_folds_card",
+        "metrics": [
+          {
+            "field": "scored_folds",
+            "format": "number",
+            "label": "Scored OOS folds"
+          }
+        ],
+        "sourceId": "opportunity_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Condition-weighted executable-market Brier minus calibrated Brier; positive means calibration improves.",
+        "id": "brier_card",
+        "metrics": [
+          {
+            "field": "brier_improvement_x10k",
+            "format": "number",
+            "label": "Brier improvement \u00d710k",
+            "signed": true
+          }
+        ],
+        "sourceId": "opportunity_audit"
+      },
+      {
+        "dataset": "headline",
+        "description": "Condition-weighted executable-market log loss minus calibrated log loss; positive means calibration improves.",
+        "id": "logloss_card",
+        "metrics": [
+          {
+            "field": "log_loss_improvement_x10k",
+            "format": "number",
+            "label": "Log-loss improvement \u00d710k",
+            "signed": true
+          }
+        ],
+        "sourceId": "opportunity_audit"
+      }
+    ],
+    "charts": [
+      {
+        "comparisonContext": {
+          "baseline": "executable market probability",
+          "grain": "strict replay fold",
+          "unit": "Brier score difference"
+        },
+        "dataset": "cumulative",
+        "encodings": {
+          "tooltip": [
+            {
+              "field": "conditions",
+              "format": "number",
+              "label": "Fold conditions",
+              "type": "quantitative"
+            },
+            {
+              "field": "selected_model",
+              "label": "Selected model",
+              "type": "nominal"
+            }
+          ],
+          "x": {
+            "field": "fold",
+            "label": "Scored fold",
+            "type": "ordinal"
+          },
+          "y": {
+            "field": "cumulative_brier_improvement_x10k",
+            "format": "number",
+            "label": "Market minus calibrated Brier \u00d710k",
+            "type": "quantitative"
+          }
+        },
+        "id": "cumulative_brier",
+        "intent": "trend",
+        "layout": "half",
+        "maxRows": 42,
+        "question": "Does Brier improvement remain positive as chronological OOS evidence accumulates?",
+        "rationale": "A cumulative line exposes whether an apparent aggregate gain is stable or dominated by an early slice.",
+        "referenceLines": [
+          {
+            "axis": "y",
+            "color": "neutral",
+            "label": "No improvement",
+            "lineStyle": "dashed",
+            "value": 0
+          }
+        ],
+        "sourceId": "opportunity_audit",
+        "subtitle": "Condition-weighted market minus prior-only calibrator, scaled \u00d710k; positive is better, 202 ms strict replay cohort.",
+        "title": "Cumulative Brier improvement by scored fold",
+        "type": "line"
+      },
+      {
+        "comparisonContext": {
+          "baseline": "executable market probability",
+          "grain": "strict replay fold",
+          "unit": "log-loss difference"
+        },
+        "dataset": "cumulative",
+        "encodings": {
+          "tooltip": [
+            {
+              "field": "conditions",
+              "format": "number",
+              "label": "Fold conditions",
+              "type": "quantitative"
+            },
+            {
+              "field": "selected_model",
+              "label": "Selected model",
+              "type": "nominal"
+            }
+          ],
+          "x": {
+            "field": "fold",
+            "label": "Scored fold",
+            "type": "ordinal"
+          },
+          "y": {
+            "field": "cumulative_log_loss_improvement_x10k",
+            "format": "number",
+            "label": "Market minus calibrated log loss \u00d710k",
+            "type": "quantitative"
+          }
+        },
+        "id": "cumulative_logloss",
+        "intent": "trend",
+        "layout": "half",
+        "maxRows": 42,
+        "question": "Does log-loss improvement remain positive as chronological OOS evidence accumulates?",
+        "rationale": "A separate cumulative line avoids mixing two proper-score scales while showing temporal stability.",
+        "referenceLines": [
+          {
+            "axis": "y",
+            "color": "neutral",
+            "label": "No improvement",
+            "lineStyle": "dashed",
+            "value": 0
+          }
+        ],
+        "sourceId": "opportunity_audit",
+        "subtitle": "Condition-weighted market minus prior-only calibrator, scaled \u00d710k; positive is better, 202 ms strict replay cohort.",
+        "title": "Cumulative log-loss improvement by scored fold",
+        "type": "line"
+      }
+    ],
+    "description": "Technical audit of an unbiased pre-edge probability-calibration cohort and its strategy-promotion implications.",
+    "generatedAt": "2026-07-15T02:14:36.516659+00:00",
+    "sources": [
+      {
+        "id": "opportunity_audit",
+        "label": "Strict 42-fold opportunity calibration summary",
+        "path": "deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json",
+        "query": {
+          "description": "Condition-equal, chronological fold-forward calibration analysis from harness-exported pre-edge opportunities.",
+          "engine": "duckdb",
+          "filters": [
+            "42 disjoint strict folds",
+            "202 ms replay latency",
+            "first pre-edge candidate per condition UTC second",
+            "minimum 8 strictly prior folds before scoring"
+          ],
+          "language": "python",
+          "metric_definitions": [
+            "Brier improvement = executable-market Brier score minus calibrated Brier score; positive is better.",
+            "Log-loss improvement = executable-market log loss minus calibrated log loss; positive is better.",
+            "Each terminal condition has total analytical weight one regardless of observation count."
+          ],
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json');"
+        }
+      },
+      {
+        "id": "strict_baseline",
+        "label": "Measured-latency strict 42-fold strategy aggregate",
+        "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+        "query": {
+          "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy at measured p99 latency.",
+          "engine": "duckdb",
+          "filters": [
+            "volatility floor 0.30",
+            "42 strict folds",
+            "202 ms replay latency"
+          ],
+          "metric_definitions": [
+            "Loss burst is the maximum number of losing reports in any five-report window.",
+            "Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate."
+          ],
+          "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');"
+        }
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "rows",
+            "format": "number",
+            "label": "Rows"
+          },
+          {
+            "field": "conditions",
+            "format": "number",
+            "label": "Conditions"
+          },
+          {
+            "field": "folds",
+            "format": "number",
+            "label": "Folds"
+          },
+          {
+            "field": "duplicate_condition_seconds",
+            "format": "number",
+            "label": "Duplicate condition-seconds"
+          },
+          {
+            "field": "conditions_crossing_folds",
+            "format": "number",
+            "label": "Conditions crossing folds"
+          },
+          {
+            "field": "outcome_mapping_mismatches",
+            "format": "number",
+            "label": "Outcome mapping mismatches"
+          },
+          {
+            "field": "invalid_probabilities",
+            "format": "number",
+            "label": "Invalid probabilities"
+          },
+          {
+            "field": "median_rows_per_condition",
+            "format": "number",
+            "label": "Median rows / condition"
+          }
+        ],
+        "dataset": "quality",
+        "defaultSort": {
+          "direction": "desc",
+          "field": "rows"
+        },
+        "density": "dense",
+        "id": "quality_table",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "subtitle": "Full exported cohort before fold-forward scoring.",
+        "title": "Opportunity cohort quality checks"
+      },
+      {
+        "columns": [
+          {
+            "field": "fold",
+            "format": "number",
+            "label": "Fold"
+          },
+          {
+            "field": "prior_folds",
+            "format": "number",
+            "label": "Prior folds"
+          },
+          {
+            "field": "model",
+            "label": "Model",
+            "type": "text"
+          },
+          {
+            "field": "ridge",
+            "format": "number",
+            "label": "Ridge"
+          },
+          {
+            "field": "coefficients",
+            "label": "Coefficients",
+            "type": "text"
+          },
+          {
+            "field": "conditions",
+            "format": "number",
+            "label": "Conditions"
+          },
+          {
+            "field": "brier_improvement_x10k",
+            "format": "number",
+            "label": "Brier improvement \u00d710k",
+            "movement": true
+          },
+          {
+            "field": "log_loss_improvement_x10k",
+            "format": "number",
+            "label": "Log-loss improvement \u00d710k",
+            "movement": true
+          }
+        ],
+        "dataset": "model_decisions",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "fold"
+        },
+        "density": "dense",
+        "id": "model_table",
+        "layout": "full",
+        "sourceId": "opportunity_audit",
+        "subtitle": "Family and ridge chosen on the final two prior folds; coefficients refit on all prior folds.",
+        "title": "Prior-only model decisions by scored fold"
+      }
+    ],
+    "title": "Strategy probability opportunity calibration \u2014 strict 42-fold audit",
+    "version": 1
+  },
+  "snapshot": {
+    "accessIssues": [],
+    "datasets": {
+      "baseline": [
+        {
+          "eligible_reports": 39,
+          "last_21_pnl": -4.338480000000002,
+          "losses": 23,
+          "max_loss_burst_5": 4,
+          "profitable_reports": 19,
+          "total_pnl": 13.540860000000002,
+          "trades": 102,
+          "wilson_lower": 0.6843083691640883,
+          "wins": 79
+        }
+      ],
+      "cumulative": [
+        {
+          "conditions": 19,
+          "cumulative_brier_improvement_x10k": 0.0,
+          "cumulative_log_loss_improvement_x10k": 0.0,
+          "fold": 9,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 22,
+          "cumulative_brier_improvement_x10k": 0.18945431159631598,
+          "cumulative_log_loss_improvement_x10k": 0.20401900441968115,
+          "fold": 10,
+          "fold_brier_improvement": 3.5307394433858885e-05,
+          "fold_log_loss_improvement": 3.802172355094058e-05,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 16,
+          "cumulative_brier_improvement_x10k": 0.1362741539552448,
+          "cumulative_log_loss_improvement_x10k": 0.14675051195131036,
+          "fold": 11,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 1.1102230246251565e-16,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 16,
+          "cumulative_brier_improvement_x10k": -1.1935449522455388,
+          "cumulative_log_loss_improvement_x10k": 0.6315354650391058,
+          "fold": 12,
+          "fold_brier_improvement": -0.0005931025518085831,
+          "fold_log_loss_improvement": 0.0002358581860414377,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 13,
+          "cumulative_brier_improvement_x10k": 3.496926123049446,
+          "cumulative_log_loss_improvement_x10k": 16.597361722417965,
+          "fold": 13,
+          "fold_brier_improvement": 0.0029835725238167438,
+          "fold_log_loss_improvement": 0.010625161686000695,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 20,
+          "cumulative_brier_improvement_x10k": 4.459797205512468,
+          "cumulative_log_loss_improvement_x10k": 19.954802688595542,
+          "fold": 14,
+          "fold_brier_improvement": 0.0008600142860103466,
+          "fold_log_loss_improvement": 0.0034391798843159127,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 17,
+          "cumulative_brier_improvement_x10k": -5.485180880763077,
+          "cumulative_log_loss_improvement_x10k": -7.9869900006879755,
+          "fold": 15,
+          "fold_brier_improvement": -0.006749504424224589,
+          "fold_log_loss_improvement": -0.01822122855926911,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 15,
+          "cumulative_brier_improvement_x10k": -4.888965567636656,
+          "cumulative_log_loss_improvement_x10k": -7.118838913656674,
+          "fold": 16,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 18,
+          "cumulative_brier_improvement_x10k": -4.324854155986273,
+          "cumulative_log_loss_improvement_x10k": -6.297434423619301,
+          "fold": 17,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 5.551115123125783e-17,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 9,
+          "cumulative_brier_improvement_x10k": -17.6624519810018,
+          "cumulative_log_loss_improvement_x10k": -39.91423288918541,
+          "fold": 18,
+          "fold_brier_improvement": -0.024884748094793768,
+          "fold_log_loss_improvement": -0.06226054062923314,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 11,
+          "cumulative_brier_improvement_x10k": -17.380640143686307,
+          "cumulative_log_loss_improvement_x10k": -41.338228241161694,
+          "fold": 19,
+          "fold_brier_improvement": -0.0013153462583953834,
+          "fold_log_loss_improvement": -0.006269815852080585,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 8,
+          "cumulative_brier_improvement_x10k": -16.624960137439075,
+          "cumulative_log_loss_improvement_x10k": -39.540913969806844,
+          "fold": 20,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 12,
+          "cumulative_brier_improvement_x10k": -18.671426558031637,
+          "cumulative_log_loss_improvement_x10k": -46.86530282479005,
+          "fold": 21,
+          "fold_brier_improvement": -0.00500505783404509,
+          "fold_log_loss_improvement": -0.015917259860119937,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 11,
+          "cumulative_brier_improvement_x10k": -17.67922514673527,
+          "cumulative_log_loss_improvement_x10k": -44.3748761046321,
+          "fold": 22,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 5.551115123125783e-17,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 8,
+          "cumulative_brier_improvement_x10k": -16.982342990900705,
+          "cumulative_log_loss_improvement_x10k": -42.55009699725837,
+          "fold": 23,
+          "fold_brier_improvement": 0.000104948279131864,
+          "fold_log_loss_improvement": 0.00046660624060368416,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 11,
+          "cumulative_brier_improvement_x10k": -15.763986371687105,
+          "cumulative_log_loss_improvement_x10k": -38.333557220866766,
+          "fold": 24,
+          "fold_brier_improvement": 0.0008049347549305974,
+          "fold_log_loss_improvement": 0.004408062931769652,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 20,
+          "cumulative_brier_improvement_x10k": -14.955335001670493,
+          "cumulative_log_loss_improvement_x10k": -34.16943384235843,
+          "fold": 25,
+          "fold_brier_improvement": -0.000581757452048276,
+          "fold_log_loss_improvement": 0.0012885160334785706,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 13,
+          "cumulative_brier_improvement_x10k": -11.974704141433861,
+          "cumulative_log_loss_improvement_x10k": -26.784775273270338,
+          "fold": 26,
+          "fold_brier_improvement": 0.004442800290612087,
+          "fold_log_loss_improvement": 0.011295568688024282,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 2,
+          "cumulative_brier_improvement_x10k": -12.070000112601996,
+          "cumulative_log_loss_improvement_x10k": -27.286390998597888,
+          "fold": 27,
+          "fold_brier_improvement": -0.0024410828378875066,
+          "fold_log_loss_improvement": -0.009224562742851605,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 5,
+          "cumulative_brier_improvement_x10k": -10.519865317962358,
+          "cumulative_log_loss_improvement_x10k": -22.01194867271015,
+          "fold": 28,
+          "fold_brier_improvement": 0.00703971709622267,
+          "fold_log_loss_improvement": 0.02533139407386298,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 18,
+          "cumulative_brier_improvement_x10k": -10.013076829266453,
+          "cumulative_log_loss_improvement_x10k": -20.752886415385486,
+          "fold": 29,
+          "fold_brier_improvement": -0.00025238691629825283,
+          "fold_log_loss_improvement": -0.0002146744168254333,
+          "selected_model": "market_intercept"
+        },
+        {
+          "conditions": 10,
+          "cumulative_brier_improvement_x10k": -11.230398574530362,
+          "cumulative_log_loss_improvement_x10k": -23.94184520102437,
+          "fold": 30,
+          "fold_brier_improvement": -0.004580233614002532,
+          "fold_log_loss_improvement": -0.011450827471316871,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 20,
+          "cumulative_brier_improvement_x10k": -10.95679591339925,
+          "cumulative_log_loss_improvement_x10k": -24.016627491663513,
+          "fold": 31,
+          "fold_brier_improvement": -0.0006934836794771915,
+          "fold_log_loss_improvement": -0.002511592716405886,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 15,
+          "cumulative_brier_improvement_x10k": -10.457245947742749,
+          "cumulative_log_loss_improvement_x10k": -22.92164447532627,
+          "fold": 32,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 11,
+          "cumulative_brier_improvement_x10k": -10.118923284727542,
+          "cumulative_log_loss_improvement_x10k": -22.1800618599481,
+          "fold": 33,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": -1.1102230246251565e-16,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 19,
+          "cumulative_brier_improvement_x10k": -9.583381383864525,
+          "cumulative_log_loss_improvement_x10k": -21.006186719728007,
+          "fold": 34,
+          "fold_brier_improvement": 0.0,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 12,
+          "cumulative_brier_improvement_x10k": -9.273406783847339,
+          "cumulative_log_loss_improvement_x10k": -20.32674132717616,
+          "fold": 35,
+          "fold_brier_improvement": 1.3877787807814457e-17,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 27,
+          "cumulative_brier_improvement_x10k": -6.147548323505057,
+          "cumulative_log_loss_improvement_x10k": -10.270463592986017,
+          "fold": 36,
+          "fold_brier_improvement": 0.0036804062372309265,
+          "fold_log_loss_improvement": 0.012791024156940445,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 18,
+          "cumulative_brier_improvement_x10k": -2.976800443444934,
+          "cumulative_log_loss_improvement_x10k": -4.769083444378916,
+          "fold": 37,
+          "fold_brier_improvement": 0.006713195823788445,
+          "fold_log_loss_improvement": 0.011687254428593363,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 17,
+          "cumulative_brier_improvement_x10k": -1.3152858233617428,
+          "cumulative_log_loss_improvement_x10k": 1.2972679142108687,
+          "fold": 38,
+          "fold_brier_improvement": 0.003934295429161516,
+          "fold_log_loss_improvement": 0.014974445410087855,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 20,
+          "cumulative_brier_improvement_x10k": -0.893217415991543,
+          "cumulative_log_loss_improvement_x10k": 3.013085147228895,
+          "fold": 39,
+          "fold_brier_improvement": 0.0008244563603573285,
+          "fold_log_loss_improvement": 0.004016052824206917,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 22,
+          "cumulative_brier_improvement_x10k": -1.5154426845333675,
+          "cumulative_log_loss_improvement_x10k": 0.1787612738966157,
+          "fold": 40,
+          "fold_brier_improvement": -0.0014327626623144574,
+          "fold_log_loss_improvement": -0.005818254393608169,
+          "selected_model": "fair_shrink"
+        },
+        {
+          "conditions": 17,
+          "cumulative_brier_improvement_x10k": -1.4630798275474777,
+          "cumulative_log_loss_improvement_x10k": 0.17258456321319604,
+          "fold": 41,
+          "fold_brier_improvement": -5.551115123125783e-17,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        },
+        {
+          "conditions": 6,
+          "cumulative_brier_improvement_x10k": -1.4454523597457,
+          "cumulative_log_loss_improvement_x10k": 0.17050523112629007,
+          "fold": 42,
+          "fold_brier_improvement": 6.938893903907228e-18,
+          "fold_log_loss_improvement": 0.0,
+          "selected_model": "identity"
+        }
+      ],
+      "headline": [
+        {
+          "brier_improvement_x10k": -1.4454523597454139,
+          "conditions": 631,
+          "log_loss_improvement_x10k": 0.17050523112627225,
+          "scored_conditions": 498,
+          "scored_folds": 34
+        }
+      ],
+      "model_decisions": [
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 19,
+          "fold": 9,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 8,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.35307394433858885,
+          "coefficients": "0.001124, 0.004745",
+          "conditions": 22,
+          "fold": 10,
+          "log_loss_improvement_x10k": 0.3802172355094058,
+          "model": "fair_shrink",
+          "prior_folds": 9,
+          "ridge": 10.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 16,
+          "fold": 11,
+          "log_loss_improvement_x10k": 1.1102230246251565e-12,
+          "model": "identity",
+          "prior_folds": 10,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -5.93102551808583,
+          "coefficients": "0.119785",
+          "conditions": 16,
+          "fold": 12,
+          "log_loss_improvement_x10k": 2.358581860414377,
+          "model": "market_intercept",
+          "prior_folds": 11,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 29.835725238167438,
+          "coefficients": "0.115468",
+          "conditions": 13,
+          "fold": 13,
+          "log_loss_improvement_x10k": 106.25161686000695,
+          "model": "market_intercept",
+          "prior_folds": 12,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 8.600142860103466,
+          "coefficients": "0.148427",
+          "conditions": 20,
+          "fold": 14,
+          "log_loss_improvement_x10k": 34.39179884315913,
+          "model": "market_intercept",
+          "prior_folds": 13,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -67.4950442422459,
+          "coefficients": "0.182576, 0.453808",
+          "conditions": 17,
+          "fold": 15,
+          "log_loss_improvement_x10k": -182.2122855926911,
+          "model": "fair_shrink",
+          "prior_folds": 14,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 15,
+          "fold": 16,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 15,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 18,
+          "fold": 17,
+          "log_loss_improvement_x10k": 5.551115123125783e-13,
+          "model": "identity",
+          "prior_folds": 16,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -248.84748094793767,
+          "coefficients": "0.150964, 0.493159",
+          "conditions": 9,
+          "fold": 18,
+          "log_loss_improvement_x10k": -622.6054062923314,
+          "model": "fair_shrink",
+          "prior_folds": 17,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -13.153462583953834,
+          "coefficients": "0.112815, 0.439121",
+          "conditions": 11,
+          "fold": 19,
+          "log_loss_improvement_x10k": -62.69815852080585,
+          "model": "fair_shrink",
+          "prior_folds": 18,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 8,
+          "fold": 20,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 19,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -50.050578340450905,
+          "coefficients": "0.100156",
+          "conditions": 12,
+          "fold": 21,
+          "log_loss_improvement_x10k": -159.17259860119935,
+          "model": "market_intercept",
+          "prior_folds": 20,
+          "ridge": 0.01
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 11,
+          "fold": 22,
+          "log_loss_improvement_x10k": 5.551115123125783e-13,
+          "model": "identity",
+          "prior_folds": 21,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 1.04948279131864,
+          "coefficients": "0.013340",
+          "conditions": 8,
+          "fold": 23,
+          "log_loss_improvement_x10k": 4.666062406036842,
+          "model": "market_intercept",
+          "prior_folds": 22,
+          "ridge": 1.0
+        },
+        {
+          "brier_improvement_x10k": 8.049347549305974,
+          "coefficients": "0.097228, 0.364236",
+          "conditions": 11,
+          "fold": 24,
+          "log_loss_improvement_x10k": 44.08062931769652,
+          "model": "fair_shrink",
+          "prior_folds": 23,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -5.81757452048276,
+          "coefficients": "0.088631, 0.372726",
+          "conditions": 20,
+          "fold": 25,
+          "log_loss_improvement_x10k": 12.885160334785706,
+          "model": "fair_shrink",
+          "prior_folds": 24,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 44.42800290612087,
+          "coefficients": "0.087745, 0.295713",
+          "conditions": 13,
+          "fold": 26,
+          "log_loss_improvement_x10k": 112.95568688024282,
+          "model": "fair_shrink",
+          "prior_folds": 25,
+          "ridge": 0.01
+        },
+        {
+          "brier_improvement_x10k": -24.410828378875067,
+          "coefficients": "0.079761, 0.373804",
+          "conditions": 2,
+          "fold": 27,
+          "log_loss_improvement_x10k": -92.24562742851606,
+          "model": "fair_shrink",
+          "prior_folds": 26,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 70.3971709622267,
+          "coefficients": "0.085370, 0.367885",
+          "conditions": 5,
+          "fold": 28,
+          "log_loss_improvement_x10k": 253.31394073862978,
+          "model": "fair_shrink",
+          "prior_folds": 27,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -2.5238691629825283,
+          "coefficients": "0.119874",
+          "conditions": 18,
+          "fold": 29,
+          "log_loss_improvement_x10k": -2.146744168254333,
+          "model": "market_intercept",
+          "prior_folds": 28,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -45.802336140025325,
+          "coefficients": "0.090655, 0.372659",
+          "conditions": 10,
+          "fold": 30,
+          "log_loss_improvement_x10k": -114.50827471316872,
+          "model": "fair_shrink",
+          "prior_folds": 29,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -6.934836794771915,
+          "coefficients": "0.014632, 0.019253",
+          "conditions": 20,
+          "fold": 31,
+          "log_loss_improvement_x10k": -25.11592716405886,
+          "model": "fair_shrink",
+          "prior_folds": 30,
+          "ridge": 1.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 15,
+          "fold": 32,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 31,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 11,
+          "fold": 33,
+          "log_loss_improvement_x10k": -1.1102230246251565e-12,
+          "model": "identity",
+          "prior_folds": 32,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 0.0,
+          "coefficients": "identity",
+          "conditions": 19,
+          "fold": 34,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 33,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 1.3877787807814457e-13,
+          "coefficients": "identity",
+          "conditions": 12,
+          "fold": 35,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 34,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 36.80406237230927,
+          "coefficients": "-0.000205, 0.267202",
+          "conditions": 27,
+          "fold": 36,
+          "log_loss_improvement_x10k": 127.91024156940445,
+          "model": "fair_shrink",
+          "prior_folds": 35,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 67.13195823788445,
+          "coefficients": "0.016993, 0.299346",
+          "conditions": 18,
+          "fold": 37,
+          "log_loss_improvement_x10k": 116.87254428593363,
+          "model": "fair_shrink",
+          "prior_folds": 36,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 39.342954291615165,
+          "coefficients": "0.032235, 0.304171",
+          "conditions": 17,
+          "fold": 38,
+          "log_loss_improvement_x10k": 149.74445410087856,
+          "model": "fair_shrink",
+          "prior_folds": 37,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 8.244563603573285,
+          "coefficients": "0.062792, 0.309495",
+          "conditions": 20,
+          "fold": 39,
+          "log_loss_improvement_x10k": 40.16052824206917,
+          "model": "fair_shrink",
+          "prior_folds": 38,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -14.327626623144575,
+          "coefficients": "0.052957, 0.320985",
+          "conditions": 22,
+          "fold": 40,
+          "log_loss_improvement_x10k": -58.182543936081686,
+          "model": "fair_shrink",
+          "prior_folds": 39,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": -5.551115123125783e-13,
+          "coefficients": "identity",
+          "conditions": 17,
+          "fold": 41,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 40,
+          "ridge": 0.0
+        },
+        {
+          "brier_improvement_x10k": 6.938893903907228e-14,
+          "coefficients": "identity",
+          "conditions": 6,
+          "fold": 42,
+          "log_loss_improvement_x10k": 0.0,
+          "model": "identity",
+          "prior_folds": 41,
+          "ridge": 0.0
+        }
+      ],
+      "quality": [
+        {
+          "conditions": 631,
+          "conditions_crossing_folds": 0,
+          "duplicate_condition_seconds": 0,
+          "folds": 42,
+          "invalid_probabilities": 0,
+          "maximum_rows_per_condition": 60,
+          "median_rows_per_condition": 11.0,
+          "minimum_rows_per_condition": 1,
+          "outcome_mapping_mismatches": 0,
+          "rows": 10609
+        }
+      ]
+    },
+    "generatedAt": "2026-07-15T02:14:36.516659+00:00",
+    "status": "ready",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "opportunity_audit",
+      "label": "Strict 42-fold opportunity calibration summary",
+      "path": "deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json",
+      "query": {
+        "description": "Condition-equal, chronological fold-forward calibration analysis from harness-exported pre-edge opportunities.",
+        "engine": "duckdb",
+        "filters": [
+          "42 disjoint strict folds",
+          "202 ms replay latency",
+          "first pre-edge candidate per condition UTC second",
+          "minimum 8 strictly prior folds before scoring"
+        ],
+        "language": "python",
+        "metric_definitions": [
+          "Brier improvement = executable-market Brier score minus calibrated Brier score; positive is better.",
+          "Log-loss improvement = executable-market log loss minus calibrated log loss; positive is better.",
+          "Each terminal condition has total analytical weight one regardless of observation count."
+        ],
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json');"
+      }
+    },
+    {
+      "id": "strict_baseline",
+      "label": "Measured-latency strict 42-fold strategy aggregate",
+      "path": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+      "query": {
+        "description": "Exact executable replay aggregate for the retained 0.30 volatility-floor strategy at measured p99 latency.",
+        "engine": "duckdb",
+        "filters": [
+          "volatility floor 0.30",
+          "42 strict folds",
+          "202 ms replay latency"
+        ],
+        "metric_definitions": [
+          "Loss burst is the maximum number of losing reports in any five-report window.",
+          "Wilson lower is the 95 percent Wilson lower confidence bound for trade win rate."
+        ],
+        "sql": "SELECT * FROM read_json_auto('deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json');"
+      }
+    }
+  ],
+  "surface": "report"
+}

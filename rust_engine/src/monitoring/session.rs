@@ -14,6 +14,8 @@ use chrono::{TimeZone, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::artifact::write_json_atomic;
+
 #[derive(Default)]
 struct Counters {
     order_count: u64,
@@ -28,6 +30,8 @@ struct Counters {
     signal_skip_count: u64,
     skip_reasons: std::collections::HashMap<String, u64>,
     price_gaps: Vec<f64>,
+    price_staleness_ms: Vec<f64>,
+    cycle_ms: Vec<f64>,
     fill_times: Vec<f64>,
     api_latencies: Vec<f64>,
     errors: Vec<Value>,
@@ -36,6 +40,7 @@ struct Counters {
 
 pub struct SessionMonitor {
     session_id: String,
+    events_path: PathBuf,
     summary_path: PathBuf,
     file: Mutex<std::fs::File>,
     start_time: f64,
@@ -61,11 +66,24 @@ impl SessionMonitor {
         tracing::info!(?events_path, "session monitor started");
         Ok(Self {
             session_id,
+            events_path,
             summary_path,
             file: Mutex::new(file),
             start_time,
             counters: Mutex::new(Counters::default()),
         })
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn events_path(&self) -> &std::path::Path {
+        &self.events_path
+    }
+
+    pub fn summary_path(&self) -> &std::path::Path {
+        &self.summary_path
     }
 
     fn write_event(&self, category: &str, event_type: &str, mut data: Value) {
@@ -94,9 +112,55 @@ impl SessionMonitor {
 
     // ── Order lifecycle ────────────────────────────────────────────
 
+    pub fn record_release_manifest(&self, manifest: &crate::release::ReleaseManifest) {
+        self.write_event(
+            "system",
+            "release_manifest",
+            serde_json::to_value(manifest).unwrap_or(Value::Null),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_runtime_strategy(
+        &self,
+        source: &str,
+        strategy: &crate::strategy::spec::StrategySpec,
+        zone_config: &crate::strategy::decision::ZoneConfig,
+        min_confidence: f64,
+        min_edge: f64,
+        skip_dead_zone: bool,
+        microstructure: &crate::strategy::microstructure::MicrostructureConfig,
+        selectivity: &crate::backtest::strategies::SelectivityFilter,
+        settlement_alignment_ready: bool,
+    ) {
+        self.write_event(
+            "system",
+            "runtime_strategy",
+            json!({
+                "source": source,
+                "strategy": strategy,
+                "zone_config": zone_config,
+                "min_confidence": min_confidence,
+                "min_edge": min_edge,
+                "skip_dead_zone": skip_dead_zone,
+                "microstructure": microstructure,
+                "selectivity": selectivity,
+                "settlement_alignment_ready": settlement_alignment_ready,
+                "settlement_cutoff_minutes": zone_config.settlement_cutoff_minutes,
+                "settlement_guard_minutes": zone_config.settlement_guard_minutes,
+                "settlement_min_abs_move_usd": zone_config.settlement_min_abs_move_usd,
+                "settlement_sigma_buffer": zone_config.settlement_sigma_buffer,
+            }),
+        );
+    }
+
     pub fn record_order_placed(&self, evt: &OrderPlaced) {
         self.counters.lock().unwrap().order_count += 1;
-        self.write_event("order", "placed", serde_json::to_value(evt).unwrap_or(Value::Null));
+        self.write_event(
+            "order",
+            "placed",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
     }
 
     pub fn record_order_filled(&self, evt: &OrderFilled) {
@@ -110,7 +174,27 @@ impl SessionMonitor {
             c.partial_fill_count += 1;
         }
         drop(c);
-        self.write_event("order", "filled", serde_json::to_value(evt).unwrap_or(Value::Null));
+        self.write_event(
+            "order",
+            "filled",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
+    }
+
+    pub fn record_order_timing(&self, evt: &OrderTiming) {
+        self.write_event(
+            "causality",
+            "order_timing",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
+    }
+
+    pub fn record_resolution_timing(&self, evt: &ResolutionTiming) {
+        self.write_event(
+            "causality",
+            "resolution_timing",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
+        );
     }
 
     pub fn record_order_rejected(&self, token_id: &str, reason: &str, price: f64, size: f64) {
@@ -124,6 +208,14 @@ impl SessionMonitor {
                 "price": round_n(price, 4),
                 "size": round_n(size, 2),
             }),
+        );
+    }
+
+    pub fn record_order_reconciled(&self, evt: &OrderReconciled) {
+        self.write_event(
+            "order",
+            "reconciled",
+            serde_json::to_value(evt).unwrap_or(Value::Null),
         );
     }
 
@@ -153,12 +245,17 @@ impl SessionMonitor {
 
     pub fn top_skip_reasons(&self, n: usize) -> Vec<(String, u64)> {
         let c = self.counters.lock().unwrap();
-        let mut v: Vec<(String, u64)> = c.skip_reasons.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut v: Vec<(String, u64)> = c
+            .skip_reasons
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        v.sort_by_key(|item| std::cmp::Reverse(item.1));
         v.truncate(n);
         v
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_resolution(
         &self,
         contract_id: &str,
@@ -169,6 +266,8 @@ impl SessionMonitor {
         entry_price: f64,
         open_btc: f64,
         close_btc: f64,
+        source: &str,
+        realized: bool,
     ) {
         self.write_event(
             "resolution",
@@ -183,10 +282,56 @@ impl SessionMonitor {
                 "open_btc": round_n(open_btc, 2),
                 "close_btc": round_n(close_btc, 2),
                 "btc_move": round_n(close_btc - open_btc, 2),
+                "source": source,
+                "realized": realized,
             }),
         );
     }
 
+    pub fn record_realized_resolution(
+        &self,
+        contract_id: &str,
+        actual: &str,
+        won: bool,
+        pnl: f64,
+        source: &str,
+    ) {
+        self.write_event(
+            "resolution",
+            "realized",
+            json!({
+                "cid": short(contract_id, 16),
+                "actual": actual,
+                "won": won,
+                "pnl": round_n(pnl, 4),
+                "source": source,
+            }),
+        );
+    }
+
+    pub fn record_shadow_resolution(
+        &self,
+        contract_id: &str,
+        predicted: &str,
+        actual: &str,
+        open_btc: f64,
+        close_btc: f64,
+    ) {
+        self.write_event(
+            "shadow",
+            "resolved",
+            json!({
+                "cid": short(contract_id, 16),
+                "predicted": predicted,
+                "actual": actual,
+                "open_btc": round_n(open_btc, 2),
+                "close_btc": round_n(close_btc, 2),
+                "btc_move": round_n(close_btc - open_btc, 2),
+            }),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn record_oracle_resolution(
         &self,
         contract_id: &str,
@@ -216,8 +361,39 @@ impl SessionMonitor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_oracle_correction(
+        &self,
+        contract_id: &str,
+        predicted: &str,
+        provisional_actual: &str,
+        polymarket_actual: &str,
+        provisional_won: bool,
+        final_won: bool,
+        provisional_pnl: f64,
+        final_pnl: f64,
+    ) {
+        self.write_event(
+            "oracle",
+            "correction",
+            json!({
+                "cid": short(contract_id, 16),
+                "predicted": predicted,
+                "provisional_actual": provisional_actual,
+                "polymarket_actual": polymarket_actual,
+                "provisional_won": provisional_won,
+                "final_won": final_won,
+                "provisional_pnl": round_n(provisional_pnl, 4),
+                "final_pnl": round_n(final_pnl, 4),
+                "pnl_delta": round_n(final_pnl - provisional_pnl, 4),
+            }),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn record_risk_state(
         &self,
+        starting_bankroll: f64,
         bankroll: f64,
         exposure: f64,
         available: f64,
@@ -231,6 +407,7 @@ impl SessionMonitor {
             "risk",
             "state",
             json!({
+                "starting_bankroll": round_n(starting_bankroll, 2),
                 "bankroll": round_n(bankroll, 2),
                 "exposure": round_n(exposure, 2),
                 "available": round_n(available, 2),
@@ -239,6 +416,42 @@ impl SessionMonitor {
                 "wins": wins,
                 "losses": losses,
                 "win_rate": round_n(wins as f64 / total as f64, 3),
+            }),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_breaker_state(
+        &self,
+        state: &str,
+        reason: &str,
+        wins: u64,
+        losses: u64,
+        realized_pnl: f64,
+        peak_pnl: f64,
+        open_exposure: f64,
+        stressed_pnl: f64,
+        realized_drawdown: f64,
+        realized_drawdown_pct: f64,
+        stressed_drawdown: f64,
+        stressed_drawdown_pct: f64,
+    ) {
+        self.write_event(
+            "risk",
+            "breaker",
+            json!({
+                "state": state,
+                "reason": short(reason, 100),
+                "wins": wins,
+                "losses": losses,
+                "realized_pnl": round_n(realized_pnl, 4),
+                "peak_pnl": round_n(peak_pnl, 4),
+                "open_exposure": round_n(open_exposure, 4),
+                "stressed_pnl": round_n(stressed_pnl, 4),
+                "realized_drawdown": round_n(realized_drawdown, 4),
+                "realized_drawdown_pct": round_n(realized_drawdown_pct, 4),
+                "stressed_drawdown": round_n(stressed_drawdown, 4),
+                "stressed_drawdown_pct": round_n(stressed_drawdown_pct, 4),
             }),
         );
     }
@@ -252,10 +465,14 @@ impl SessionMonitor {
         sources: &std::collections::HashMap<String, f64>,
     ) {
         let mut c = self.counters.lock().unwrap();
+        if staleness_ms.is_finite() {
+            c.price_staleness_ms.push(staleness_ms.max(0.0));
+        }
         if sources.len() >= 2 {
             let mut prices: Vec<f64> = sources.values().copied().collect();
             prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let gap = prices.last().copied().unwrap_or(0.0) - prices.first().copied().unwrap_or(0.0);
+            let gap =
+                prices.last().copied().unwrap_or(0.0) - prices.first().copied().unwrap_or(0.0);
             c.price_gaps.push(gap);
         }
         drop(c);
@@ -273,6 +490,25 @@ impl SessionMonitor {
                 "spread": round_n(spread, 2),
                 "staleness_ms": round_n(staleness_ms, 1),
                 "source_prices": rounded,
+            }),
+        );
+    }
+
+    pub fn record_cycle(&self, cycle: u64, cycle_ms: f64, contracts: usize) {
+        if cycle_ms.is_finite() {
+            self.counters
+                .lock()
+                .unwrap()
+                .cycle_ms
+                .push(cycle_ms.max(0.0));
+        }
+        self.write_event(
+            "system",
+            "cycle",
+            json!({
+                "cycle": cycle,
+                "cycle_ms": round_n(cycle_ms, 3),
+                "contracts": contracts,
             }),
         );
     }
@@ -302,7 +538,7 @@ impl SessionMonitor {
 
     pub fn save_summary(&self) -> Result<()> {
         let summary = self.get_summary();
-        std::fs::write(&self.summary_path, serde_json::to_string_pretty(&summary)?)?;
+        write_json_atomic(&self.summary_path, &summary, true).context("write session summary")?;
         tracing::info!(session_id = %self.session_id, "session summary saved");
         Ok(())
     }
@@ -329,6 +565,18 @@ impl SessionMonitor {
         } else {
             c.api_latencies.iter().sum::<f64>() / c.api_latencies.len() as f64
         };
+        let avg_cycle_ms = if c.cycle_ms.is_empty() {
+            0.0
+        } else {
+            c.cycle_ms.iter().sum::<f64>() / c.cycle_ms.len() as f64
+        };
+        let max_cycle_ms = c.cycle_ms.iter().cloned().fold(0.0_f64, f64::max);
+        let avg_staleness_ms = if c.price_staleness_ms.is_empty() {
+            0.0
+        } else {
+            c.price_staleness_ms.iter().sum::<f64>() / c.price_staleness_ms.len() as f64
+        };
+        let max_staleness_ms = c.price_staleness_ms.iter().cloned().fold(0.0_f64, f64::max);
         let avg_gap = if c.price_gaps.is_empty() {
             0.0
         } else {
@@ -336,9 +584,12 @@ impl SessionMonitor {
         };
         let max_gap = c.price_gaps.iter().cloned().fold(0.0_f64, f64::max);
 
-        let mut sorted_skips: Vec<(String, u64)> =
-            c.skip_reasons.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        sorted_skips.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut sorted_skips: Vec<(String, u64)> = c
+            .skip_reasons
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        sorted_skips.sort_by_key(|item| std::cmp::Reverse(item.1));
 
         json!({
             "session_id": self.session_id,
@@ -363,21 +614,26 @@ impl SessionMonitor {
             "price_feed": {
                 "avg_cross_exchange_gap": round_n(avg_gap, 2),
                 "max_cross_exchange_gap": round_n(max_gap, 2),
+                "avg_staleness_ms": round_n(avg_staleness_ms, 1),
+                "max_staleness_ms": round_n(max_staleness_ms, 1),
                 "source_dropouts": c.source_dropouts,
             },
             "system": {
                 "avg_api_latency_ms": round_n(avg_latency, 1),
+                "avg_cycle_ms": round_n(avg_cycle_ms, 2),
+                "max_cycle_ms": round_n(max_cycle_ms, 2),
                 "total_errors": c.errors.len(),
             },
         })
     }
-
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderPlaced {
+    pub intent_id: String,
     pub token_id: String,
     pub side: String,
+    pub state: String,
     pub price: f64,
     pub live_price: f64,
     pub size: f64,
@@ -387,21 +643,60 @@ pub struct OrderPlaced {
     pub book_ask_depth: f64,
     pub book_bid_depth: f64,
     pub balance_usd: f64,
+    pub submit_latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderFilled {
+    pub intent_id: String,
     pub order_id: String,
     pub filled: f64,
     pub requested: f64,
     pub fill_pct: f64,
     pub fill_price: f64,
+    pub cost: f64,
     pub limit_price: f64,
     pub slippage: f64,
     pub slippage_bps: f64,
     pub fill_time_s: f64,
     pub fee: f64,
     pub n_trades: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderTiming {
+    pub intent_id: String,
+    pub condition_id: String,
+    pub token_id: String,
+    pub source: String,
+    pub signal_source_ts_s: f64,
+    pub decision_ts_s: f64,
+    pub order_ts_s: f64,
+    pub market_start_ts_s: f64,
+    pub market_end_ts_s: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_model_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolutionTiming {
+    pub condition_id: String,
+    pub source: String,
+    pub market_end_ts_s: f64,
+    pub resolution_ts_s: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderReconciled {
+    pub intent_id: String,
+    pub order_id: String,
+    pub source: String,
+    pub venue_state: String,
+    pub filled: f64,
+    pub requested: f64,
+    pub fill_price: f64,
+    pub fee: f64,
+    pub detail: String,
 }
 
 /// Replay-grade signal evaluation event. Schema MUST match Python's
@@ -418,6 +713,7 @@ pub struct SignalEvaluation {
     pub cons: f64,
     pub z: f64,
     pub conf: f64,
+    pub reversion_count: u32,
     pub elapsed_min: f64,
     pub remaining_min: f64,
     pub dir: String,
@@ -427,9 +723,15 @@ pub struct SignalEvaluation {
     pub cross_boost: f64,
     pub up_price: f64,
     pub down_price: f64,
+    pub book_spread: f64,
+    pub book_pressure: f64,
+    pub book_bid_depth: f64,
+    pub book_ask_depth: f64,
     pub zone: String,
     pub fair: f64,
     pub edge: f64,
+    pub decision_trade: bool,
+    pub execution_attempted: bool,
     pub traded: bool,
     pub skip_reason: Option<String>,
     pub skip_detail: Option<String>,
@@ -463,11 +765,7 @@ mod tests {
         let entry = std::fs::read_dir(tmp.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("session_")
-            })
+            .find(|e| e.file_name().to_string_lossy().starts_with("session_"))
             .expect("session file");
         let body = std::fs::read_to_string(entry.path()).unwrap();
         assert!(body.contains("\"reason\":\"low_confidence\""));
@@ -484,5 +782,27 @@ mod tests {
         let top = m.top_skip_reasons(2);
         assert_eq!(top[0].0, "low_edge");
         assert_eq!(top[0].1, 2);
+    }
+
+    #[test]
+    fn summary_write_is_atomic() {
+        let tmp = TempDir::new().unwrap();
+        let monitor = SessionMonitor::open(tmp.path()).unwrap();
+
+        monitor.save_summary().unwrap();
+
+        let summary: Value =
+            serde_json::from_slice(&std::fs::read(monitor.summary_path()).unwrap()).unwrap();
+        assert_eq!(summary["session_id"], monitor.session_id());
+        let temp_name = format!(
+            "{}.tmp.{}",
+            monitor
+                .summary_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            std::process::id()
+        );
+        assert!(!tmp.path().join(temp_name).exists());
     }
 }

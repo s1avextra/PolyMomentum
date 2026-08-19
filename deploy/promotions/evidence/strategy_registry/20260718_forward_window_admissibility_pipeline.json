@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T06:35:49Z",
+  "status": "REAL_CANARY_VALIDATED_NOT_DEPLOYED",
+  "decision": {
+    "strategy": "primary_v6_volfloor_300",
+    "grade": "A-",
+    "live_ready": false,
+    "live_trading": "OFF",
+    "strategy_score_emitted": false,
+    "reason": "The fresh replacement block is still collecting and no forward mechanism result is eligible for disclosure."
+  },
+  "diagnostic_question": "Can the fresh forward screen target the baseline's loss asymmetry without allowing one damaged feed interval to invalidate or contaminate unrelated five-minute conditions?",
+  "baseline": {
+    "source": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+    "latency_ms": 202,
+    "trades": 102,
+    "wins": 79,
+    "losses": 23,
+    "win_rate": 0.7745098039215687,
+    "wilson_95_lower": 0.6843083691640883,
+    "fee_inclusive_pnl_usd": 13.54086,
+    "profit_factor": 1.1142358335893776,
+    "payoff_ratio": 0.3243977743361479,
+    "worst_loss_to_average_win": 3.3457149991610837,
+    "profitable_reports": 19,
+    "reports": 42,
+    "maximum_losses_in_five_reports": 4,
+    "first_21_fold_pnl_usd": 17.87934,
+    "last_21_fold_pnl_usd": -4.33848
+  },
+  "driver_diagnosis": {
+    "verified": "The strategy is profitable in aggregate, but one average loss costs roughly three average wins and the second chronological half is negative.",
+    "primary_blocker": "Loss selectivity and temporal clustering, not insufficient headline win rate alone.",
+    "why_binary_complement_is_the_current_test": "It uses new simultaneous paired-book information as a fixed uncertainty gate and is evaluated prospectively, avoiding another threshold search on the exhausted 42-fold outcomes.",
+    "minimum_registered_count_case": {
+      "baseline_winners": 79,
+      "baseline_losses": 23,
+      "minimum_winner_retention": 0.9,
+      "minimum_retained_winners": 72,
+      "minimum_loss_removal": 0.3,
+      "maximum_retained_losses": 16,
+      "resulting_trades": 88,
+      "resulting_win_rate": 0.8181818181818182,
+      "resulting_wilson_95_lower": 0.7248754936722209,
+      "interpretation": "The registered count gates are jointly strong enough to clear the Wilson requirement if achieved. They do not prove PnL, fold breadth, loss-burst, or tail gates; those remain exact-replay requirements."
+    }
+  },
+  "per_condition_admissibility_contract": {
+    "unit": "one captured BTC five-minute condition",
+    "clob": {
+      "required_range": "market open through market close",
+      "maximum_receive_gap_ms": 2000,
+      "token_coverage": "both registered outcome token IDs must be observed"
+    },
+    "binance_signal": {
+      "required_range": "one causal hour before market open through market close",
+      "boundary_tolerance_ms": 1000,
+      "maximum_internal_gap": "max(5000 ms, 3 * median cadence)"
+    },
+    "chainlink_settlement": {
+      "required_range": "market open through market close",
+      "boundary_tolerance_ms": 1000,
+      "maximum_internal_gap": "max(5000 ms, 3 * median cadence)"
+    },
+    "grouping": "Only adjacent admissible conditions are grouped. A failed condition creates a hard group boundary.",
+    "fail_closed": true
+  },
+  "implementation": {
+    "latency_artifact": "forward-latency-audit now emits window_continuity and window_admissibility with per-condition reasons and contiguous admissible groups.",
+    "finalization": "finalize-recorded-btc-books accepts repeated or comma-separated --condition-id filters and rejects unknown captured IDs.",
+    "capture_runner": "The runner proceeds only when at least one condition is admissible, finalizes each admissible group separately, and records group counts in status.json.",
+    "replay_runner": "The dev-box replay consumes only fully ready resolution groups and derives exact replay bounds from each group's selected markets.",
+    "production_decision_behavior_changed": false,
+    "live_behavior_changed": false,
+    "deployed_measurement_binary_contains_change": true
+  },
+  "verification": {
+    "full_cargo_test": {
+      "passed": 480,
+      "failed": 0
+    },
+    "forward_latency_tests": {
+      "passed": 10,
+      "failed": 0
+    },
+    "finalizer_cli_tests": {
+      "passed": 1,
+      "failed": 0
+    },
+    "binary_complement_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "capture_runner_suite": "PASS",
+    "replay_runner_suite": "PASS",
+    "format_check": "PASS",
+    "clippy": "PASS_WITH_PREEXISTING_TOO_MANY_ARGUMENTS_LINT_EXCLUDED",
+    "clippy_note": "The changed binary passes all other warnings as errors; cmd_harness_sweep already exceeds Clippy's argument-count lint outside this change.",
+    "preserved_july_15_canary_reconciliation": {
+      "status": "EXACT_MATCH",
+      "source_capture_bytes": 3483427156,
+      "source_capture_sha256": "92646e53ffa3bed0b91c4a8065b0a9054910fb9c455adedaf936b4ee3e7bd067",
+      "condition_level_audit_sha256": "3b77abe95e9d21b4fa13966e79cee6f1520a2d513242fcab1482f544aafa584f",
+      "local_validation_binary_sha256": "44cde976a3ad20cb67cd2b1862299bc7808c254d657e16a0fa51a5981cc56e43",
+      "captured_conditions": 24,
+      "clob_excluded_conditions": 1,
+      "chainlink_excluded_conditions": 8,
+      "continuity_clean_conditions": 15,
+      "continuity_clean_binance_outer_bound_failures": 6,
+      "continuity_clean_binance_internal_gap_failures": 9,
+      "exact_replay_admissible_conditions": 0,
+      "contiguous_admissible_groups": 0,
+      "interpretation": "The upgraded condition-level auditor independently reproduces the prior manual gate sequence exactly: 24 captured -> 15 CLOB/Chainlink continuity-clean -> 6 missing causal pre-roll plus 9 bound-valid internal-gap failures -> 0 exact-replay-admissible."
+    }
+  },
+  "artifacts": {
+    "capture_runner": {
+      "path": "deploy/capture-forward-segments.sh",
+      "sha256": "be992ae9a93821aa57cd25b45025533ddcfced3e002d95c36d5eb85d81d5a12b"
+    },
+    "replay_runner": {
+      "path": "deploy/replay-binary-complement-block.sh",
+      "sha256": "41c6177a57d58f7e5ebdbf47e37c7cbfc2c1a1ffd5d30468f5ee349dc3694894"
+    },
+    "engine_source": {
+      "path": "rust_engine/src/main.rs",
+      "sha256": "885cc8f5c8f408877b15ed26cf4cb54cadfb12412c3633f121df3daac531258f"
+    }
+  },
+  "limitations": [
+    "The hardened measurement binary and current ownership-safe runner are deployed for segment 002; any failed gate still preserves the raw frame log for local re-audit.",
+    "A two-minute VPS smoke validates both RTDS sources under the deployed binary, but only the full bounded segment can establish multi-hour continuity.",
+    "No forward outcome, screen metric, or counterfactual PnL is available while collection is incomplete.",
+    "Passing the binary-complement count and Wilson screen would authorize only a second disjoint block, not live promotion."
+  ]
+}

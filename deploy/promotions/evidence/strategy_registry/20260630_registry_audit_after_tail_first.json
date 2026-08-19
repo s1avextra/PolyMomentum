@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "registry_path": "docs/strategy_registry.json",
+  "durable_prefix": "deploy/promotions/evidence/strategy_registry",
+  "ok": true,
+  "live_ready": false,
+  "grade": "A-",
+  "entries": 7,
+  "status_counts": {
+    "dead_end": 3,
+    "questionable": 2,
+    "rejected": 2
+  },
+  "live_candidate_count": 0,
+  "missing_paths": [],
+  "non_durable_paths": [],
+  "checks": [
+    "entries=7",
+    "live_candidate_count=0",
+    "missing_paths=0",
+    "non_durable_paths=0"
+  ],
+  "next_steps": [
+    "No active/promoted registry entry exists; keep live trading blocked and run fresh feed-forward search."
+  ]
+}

@@ -1,0 +1,619 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:30:32.887248+00:00",
+  "mechanism_id": "late_window_article_family_v1",
+  "status": "STAGE_2_TOP_OF_BOOK_SCREEN_COMPLETE",
+  "authority": {
+    "public_screen_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_public_screen.json",
+    "public_screen_sha256": "b96c16e384606780a9c4dc645bc69a69337baafebee195b1d900749eadb2af24",
+    "opportunity_sources": [
+      {
+        "path": "/private/tmp/late-window-article-fold029-atomic-opportunities.json",
+        "sha256": "7305b9be397475e9fcdf975a52c74e631c13691a4a718b796c5089b9d0636be7",
+        "rows": 25209,
+        "start": "2026-06-06T08:00:00+00:00",
+        "end": "2026-06-06T15:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold030-atomic-opportunities.json",
+        "sha256": "6451c853e053798d742033c61b5dfd667bd916d29a739a9d852a496afc1681ce",
+        "rows": 19916,
+        "start": "2026-06-06T16:00:00+00:00",
+        "end": "2026-06-06T23:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold031-atomic-opportunities.json",
+        "sha256": "26f45b684f1c4e39b6026099cdb3e76e8587331b3ca123f095973e0e3fe86c13",
+        "rows": 25525,
+        "start": "2026-06-07T00:00:00+00:00",
+        "end": "2026-06-07T07:00:00+00:00",
+        "latency_ms": 202
+      },
+      {
+        "path": "/private/tmp/late-window-article-fold032-atomic-opportunities.json",
+        "sha256": "b9fe58c4ae4d9d3761057a7e0538e39982fefadf0e5250989b934a8a1f85f7d5",
+        "rows": 25521,
+        "start": "2026-06-07T08:00:00+00:00",
+        "end": "2026-06-07T15:00:00+00:00",
+        "latency_ms": 202
+      }
+    ]
+  },
+  "sampling": {
+    "one_row_per_rule_condition": "earliest causal row at or after the frozen decision offset",
+    "input_rows": 86356,
+    "latency_applied_to_quote": false,
+    "visible_depth_bookwalk_applied": false,
+    "fee_formula": "rate * ask * (1 - ask)",
+    "payoff_formula": "outcome - ask - fee"
+  },
+  "results": {
+    "path_3m": {
+      "decision_offset_seconds": 180,
+      "overall": {
+        "conditions": 78,
+        "wins": 71,
+        "losses": 7,
+        "accuracy": 0.9102564102564102,
+        "mean_best_ask": 0.8984487179487178,
+        "median_best_ask": 0.93,
+        "mean_fee_aware_cost_per_share": 0.904291922179487,
+        "net_one_share_payoff": 0.46523007000000044,
+        "mean_one_share_payoff": 0.005964488076923083,
+        "unit_profit_factor": 1.082539085550171,
+        "positive_unit_payoff": 6.10171207,
+        "negative_unit_payoff": 5.636482
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 31,
+          "wins": 28,
+          "losses": 3,
+          "accuracy": 0.9032258064516129,
+          "mean_best_ask": 0.9135483870967742,
+          "median_best_ask": 0.94,
+          "mean_fee_aware_cost_per_share": 0.9187347096774194,
+          "net_one_share_payoff": -0.48077599999999954,
+          "mean_one_share_payoff": -0.015508903225806437,
+          "unit_profit_factor": 0.8076967536807632,
+          "positive_unit_payoff": 2.0193170000000005,
+          "negative_unit_payoff": 2.500093
+        },
+        "up": {
+          "conditions": 47,
+          "wins": 43,
+          "losses": 4,
+          "accuracy": 0.9148936170212766,
+          "mean_best_ask": 0.8884893617021273,
+          "median_best_ask": 0.92,
+          "mean_fee_aware_cost_per_share": 0.8947658282978724,
+          "net_one_share_payoff": 0.9460060699999999,
+          "mean_one_share_payoff": 0.020127788723404254,
+          "unit_profit_factor": 1.3016226845585799,
+          "positive_unit_payoff": 4.08239507,
+          "negative_unit_payoff": 3.136389
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 41,
+          "wins": 38,
+          "losses": 3,
+          "accuracy": 0.926829268292683,
+          "mean_best_ask": 0.9024146341463414,
+          "median_best_ask": 0.92,
+          "mean_fee_aware_cost_per_share": 0.9080900958536586,
+          "net_one_share_payoff": 0.7683060700000004,
+          "mean_one_share_payoff": 0.0187391724390244,
+          "unit_profit_factor": 1.3261534866266669,
+          "positive_unit_payoff": 3.123964070000001,
+          "negative_unit_payoff": 2.355658
+        },
+        "2026-06-07": {
+          "conditions": 37,
+          "wins": 33,
+          "losses": 4,
+          "accuracy": 0.8918918918918919,
+          "mean_best_ask": 0.8940540540540542,
+          "median_best_ask": 0.94,
+          "mean_fee_aware_cost_per_share": 0.900083135135135,
+          "net_one_share_payoff": -0.30307599999999935,
+          "mean_one_share_payoff": -0.008191243243243225,
+          "unit_profit_factor": 0.907621987647006,
+          "positive_unit_payoff": 2.9777480000000005,
+          "negative_unit_payoff": 3.280824
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "path_4m": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "conditions": 23,
+        "wins": 20,
+        "losses": 3,
+        "accuracy": 0.8695652173913043,
+        "mean_best_ask": 0.9698695652173911,
+        "median_best_ask": 0.99,
+        "mean_fee_aware_cost_per_share": 0.971799425652174,
+        "net_one_share_payoff": -2.3513867899999994,
+        "mean_one_share_payoff": -0.10223420826086954,
+        "unit_profit_factor": 0.15555191998635323,
+        "positive_unit_payoff": 0.43313821000000025,
+        "negative_unit_payoff": 2.784525
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 9,
+          "wins": 8,
+          "losses": 1,
+          "accuracy": 0.8888888888888888,
+          "mean_best_ask": 0.9787777777777777,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.9801614366666667,
+          "net_one_share_payoff": -0.82145293,
+          "mean_one_share_payoff": -0.09127254777777777,
+          "unit_profit_factor": 0.08407182670961692,
+          "positive_unit_payoff": 0.07540007000000007,
+          "negative_unit_payoff": 0.896853
+        },
+        "up": {
+          "conditions": 14,
+          "wins": 12,
+          "losses": 2,
+          "accuracy": 0.8571428571428571,
+          "mean_best_ask": 0.9641428571428571,
+          "median_best_ask": 0.98,
+          "mean_fee_aware_cost_per_share": 0.9664238471428571,
+          "net_one_share_payoff": -1.5299338599999999,
+          "mean_one_share_payoff": -0.10928099,
+          "unit_profit_factor": 0.18951287088011062,
+          "positive_unit_payoff": 0.3577381400000002,
+          "negative_unit_payoff": 1.887672
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 15,
+          "wins": 13,
+          "losses": 2,
+          "accuracy": 0.8666666666666667,
+          "mean_best_ask": 0.9824666666666668,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.9836342526666667,
+          "net_one_share_payoff": -1.75451379,
+          "mean_one_share_payoff": -0.116967586,
+          "unit_profit_factor": 0.07054096792239335,
+          "positive_unit_payoff": 0.1331582100000001,
+          "negative_unit_payoff": 1.887672
+        },
+        "2026-06-07": {
+          "conditions": 8,
+          "wins": 7,
+          "losses": 1,
+          "accuracy": 0.875,
+          "mean_best_ask": 0.94625,
+          "median_best_ask": 0.97,
+          "mean_fee_aware_cost_per_share": 0.949609125,
+          "net_one_share_payoff": -0.5968729999999999,
+          "mean_one_share_payoff": -0.07460912499999998,
+          "unit_profit_factor": 0.3344806785504426,
+          "positive_unit_payoff": 0.29998000000000014,
+          "negative_unit_payoff": 0.896853
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "move_2m_100": {
+      "decision_offset_seconds": 120,
+      "overall": {
+        "conditions": 41,
+        "wins": 38,
+        "losses": 3,
+        "accuracy": 0.926829268292683,
+        "mean_best_ask": 0.936341463414634,
+        "median_best_ask": 0.95,
+        "mean_fee_aware_cost_per_share": 0.9403982195121952,
+        "net_one_share_payoff": -0.5563269999999996,
+        "mean_one_share_payoff": -0.013568951219512185,
+        "unit_profit_factor": 0.791708740357684,
+        "positive_unit_payoff": 2.1145820000000013,
+        "negative_unit_payoff": 2.670909
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 25,
+          "wins": 24,
+          "losses": 1,
+          "accuracy": 0.96,
+          "mean_best_ask": 0.9396,
+          "median_best_ask": 0.95,
+          "mean_fee_aware_cost_per_share": 0.9434900399999999,
+          "net_one_share_payoff": 0.41274900000000037,
+          "mean_one_share_payoff": 0.016509960000000014,
+          "unit_profit_factor": 1.4461418231814884,
+          "positive_unit_payoff": 1.3379010000000005,
+          "negative_unit_payoff": 0.9251520000000001
+        },
+        "up": {
+          "conditions": 16,
+          "wins": 14,
+          "losses": 2,
+          "accuracy": 0.875,
+          "mean_best_ask": 0.9312499999999999,
+          "median_best_ask": 0.945,
+          "mean_fee_aware_cost_per_share": 0.93556725,
+          "net_one_share_payoff": -0.9690759999999998,
+          "mean_one_share_payoff": -0.06056724999999999,
+          "unit_profit_factor": 0.44489639737947495,
+          "positive_unit_payoff": 0.7766810000000002,
+          "negative_unit_payoff": 1.7457570000000002
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 17,
+          "wins": 16,
+          "losses": 1,
+          "accuracy": 0.9411764705882353,
+          "mean_best_ask": 0.9464705882352941,
+          "median_best_ask": 0.95,
+          "mean_fee_aware_cost_per_share": 0.9499792352941175,
+          "net_one_share_payoff": -0.1496469999999999,
+          "mean_one_share_payoff": -0.008802764705882347,
+          "unit_profit_factor": 0.8398738653715078,
+          "positive_unit_payoff": 0.7849100000000002,
+          "negative_unit_payoff": 0.9345570000000001
+        },
+        "2026-06-07": {
+          "conditions": 24,
+          "wins": 22,
+          "losses": 2,
+          "accuracy": 0.9166666666666666,
+          "mean_best_ask": 0.9291666666666667,
+          "median_best_ask": 0.95,
+          "mean_fee_aware_cost_per_share": 0.9336116666666666,
+          "net_one_share_payoff": -0.40667999999999965,
+          "mean_one_share_payoff": -0.016944999999999984,
+          "unit_profit_factor": 0.7657848178249574,
+          "positive_unit_payoff": 1.3296720000000006,
+          "negative_unit_payoff": 1.7363520000000001
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "move_2m_200": {
+      "decision_offset_seconds": 120,
+      "overall": {
+        "conditions": 3,
+        "wins": 3,
+        "losses": 0,
+        "accuracy": 1.0,
+        "mean_best_ask": 0.9666666666666667,
+        "median_best_ask": 0.97,
+        "mean_fee_aware_cost_per_share": 0.9689206666666665,
+        "net_one_share_payoff": 0.09323800000000008,
+        "mean_one_share_payoff": 0.03107933333333336,
+        "unit_profit_factor": null,
+        "positive_unit_payoff": 0.09323800000000008,
+        "negative_unit_payoff": -0.0
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 1,
+          "wins": 1,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.96,
+          "median_best_ask": 0.96,
+          "mean_fee_aware_cost_per_share": 0.962688,
+          "net_one_share_payoff": 0.03731200000000003,
+          "mean_one_share_payoff": 0.03731200000000003,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.03731200000000003,
+          "negative_unit_payoff": -0.0
+        },
+        "up": {
+          "conditions": 2,
+          "wins": 2,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.97,
+          "median_best_ask": 0.97,
+          "mean_fee_aware_cost_per_share": 0.9720369999999999,
+          "net_one_share_payoff": 0.05592600000000005,
+          "mean_one_share_payoff": 0.027963000000000026,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.05592600000000005,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 1,
+          "wins": 1,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.96,
+          "median_best_ask": 0.96,
+          "mean_fee_aware_cost_per_share": 0.962688,
+          "net_one_share_payoff": 0.03731200000000003,
+          "mean_one_share_payoff": 0.03731200000000003,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.03731200000000003,
+          "negative_unit_payoff": -0.0
+        },
+        "2026-06-07": {
+          "conditions": 2,
+          "wins": 2,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.97,
+          "median_best_ask": 0.97,
+          "mean_fee_aware_cost_per_share": 0.9720369999999999,
+          "net_one_share_payoff": 0.05592600000000005,
+          "mean_one_share_payoff": 0.027963000000000026,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.05592600000000005,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "path_3m_and_move_2m_100": {
+      "decision_offset_seconds": 180,
+      "overall": {
+        "conditions": 14,
+        "wins": 14,
+        "losses": 0,
+        "accuracy": 1.0,
+        "mean_best_ask": 0.9835,
+        "median_best_ask": 0.99,
+        "mean_fee_aware_cost_per_share": 0.984626495,
+        "net_one_share_payoff": 0.2152290700000002,
+        "mean_one_share_payoff": 0.015373505000000013,
+        "unit_profit_factor": null,
+        "positive_unit_payoff": 0.2152290700000002,
+        "negative_unit_payoff": -0.0
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 8,
+          "wins": 8,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.98125,
+          "median_best_ask": 0.985,
+          "mean_fee_aware_cost_per_share": 0.9825266250000001,
+          "net_one_share_payoff": 0.1397870000000001,
+          "mean_one_share_payoff": 0.017473375000000013,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.1397870000000001,
+          "negative_unit_payoff": -0.0
+        },
+        "up": {
+          "conditions": 6,
+          "wins": 6,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.9865,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.9874263216666668,
+          "net_one_share_payoff": 0.07544207000000007,
+          "mean_one_share_payoff": 0.012573678333333345,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.07544207000000007,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 6,
+          "wins": 6,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.9865,
+          "median_best_ask": 0.985,
+          "mean_fee_aware_cost_per_share": 0.9874286550000001,
+          "net_one_share_payoff": 0.07542807000000007,
+          "mean_one_share_payoff": 0.012571345000000012,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.07542807000000007,
+          "negative_unit_payoff": -0.0
+        },
+        "2026-06-07": {
+          "conditions": 8,
+          "wins": 8,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.98125,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.9825248750000001,
+          "net_one_share_payoff": 0.13980100000000012,
+          "mean_one_share_payoff": 0.017475125000000015,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.13980100000000012,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "path_4m_and_move_2m_100": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "conditions": 3,
+        "wins": 3,
+        "losses": 0,
+        "accuracy": 1.0,
+        "mean_best_ask": 0.993,
+        "median_best_ask": 0.99,
+        "mean_fee_aware_cost_per_share": 0.99348531,
+        "net_one_share_payoff": 0.019544070000000018,
+        "mean_one_share_payoff": 0.006514690000000006,
+        "unit_profit_factor": null,
+        "positive_unit_payoff": 0.019544070000000018,
+        "negative_unit_payoff": -0.0
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 2,
+          "wins": 2,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.99,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.990693,
+          "net_one_share_payoff": 0.018614000000000016,
+          "mean_one_share_payoff": 0.009307000000000008,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.018614000000000016,
+          "negative_unit_payoff": -0.0
+        },
+        "up": {
+          "conditions": 1,
+          "wins": 1,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.999,
+          "median_best_ask": 0.999,
+          "mean_fee_aware_cost_per_share": 0.99906993,
+          "net_one_share_payoff": 0.0009300700000000008,
+          "mean_one_share_payoff": 0.0009300700000000008,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.0009300700000000008,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 2,
+          "wins": 2,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.9944999999999999,
+          "median_best_ask": 0.9944999999999999,
+          "mean_fee_aware_cost_per_share": 0.994881465,
+          "net_one_share_payoff": 0.01023707000000001,
+          "mean_one_share_payoff": 0.005118535000000005,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.01023707000000001,
+          "negative_unit_payoff": -0.0
+        },
+        "2026-06-07": {
+          "conditions": 1,
+          "wins": 1,
+          "losses": 0,
+          "accuracy": 1.0,
+          "mean_best_ask": 0.99,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.990693,
+          "net_one_share_payoff": 0.009307000000000008,
+          "mean_one_share_payoff": 0.009307000000000008,
+          "unit_profit_factor": null,
+          "positive_unit_payoff": 0.009307000000000008,
+          "negative_unit_payoff": -0.0
+        }
+      },
+      "cheap_screen_only": true
+    },
+    "path_4m_or_move_2m_200_aligned": {
+      "decision_offset_seconds": 240,
+      "overall": {
+        "conditions": 24,
+        "wins": 21,
+        "losses": 3,
+        "accuracy": 0.875,
+        "mean_best_ask": 0.9702916666666667,
+        "median_best_ask": 0.985,
+        "mean_fee_aware_cost_per_share": 0.9721982829166667,
+        "net_one_share_payoff": -2.3327587899999997,
+        "mean_one_share_payoff": -0.09719828291666666,
+        "unit_profit_factor": 0.1622417503883069,
+        "positive_unit_payoff": 0.4517662100000003,
+        "negative_unit_payoff": 2.784525
+      },
+      "by_direction": {
+        "down": {
+          "conditions": 10,
+          "wins": 9,
+          "losses": 1,
+          "accuracy": 0.9,
+          "mean_best_ask": 0.9789,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.980282493,
+          "net_one_share_payoff": -0.80282493,
+          "mean_one_share_payoff": -0.080282493,
+          "unit_profit_factor": 0.1048422316700731,
+          "positive_unit_payoff": 0.09402807000000007,
+          "negative_unit_payoff": 0.896853
+        },
+        "up": {
+          "conditions": 14,
+          "wins": 12,
+          "losses": 2,
+          "accuracy": 0.8571428571428571,
+          "mean_best_ask": 0.9641428571428571,
+          "median_best_ask": 0.98,
+          "mean_fee_aware_cost_per_share": 0.9664238471428571,
+          "net_one_share_payoff": -1.5299338599999999,
+          "mean_one_share_payoff": -0.10928099,
+          "unit_profit_factor": 0.18951287088011062,
+          "positive_unit_payoff": 0.3577381400000002,
+          "negative_unit_payoff": 1.887672
+        }
+      },
+      "by_utc_day": {
+        "2026-06-06": {
+          "conditions": 16,
+          "wins": 14,
+          "losses": 2,
+          "accuracy": 0.875,
+          "mean_best_ask": 0.9823124999999999,
+          "median_best_ask": 0.99,
+          "mean_fee_aware_cost_per_share": 0.9834928618750001,
+          "net_one_share_payoff": -1.7358857899999998,
+          "mean_one_share_payoff": -0.10849286187499999,
+          "unit_profit_factor": 0.08040920774371826,
+          "positive_unit_payoff": 0.15178621000000014,
+          "negative_unit_payoff": 1.887672
+        },
+        "2026-06-07": {
+          "conditions": 8,
+          "wins": 7,
+          "losses": 1,
+          "accuracy": 0.875,
+          "mean_best_ask": 0.94625,
+          "median_best_ask": 0.97,
+          "mean_fee_aware_cost_per_share": 0.949609125,
+          "net_one_share_payoff": -0.5968729999999999,
+          "mean_one_share_payoff": -0.07460912499999998,
+          "unit_profit_factor": 0.3344806785504426,
+          "positive_unit_payoff": 0.29998000000000014,
+          "negative_unit_payoff": 0.896853
+        }
+      },
+      "cheap_screen_only": true
+    }
+  },
+  "stage_2": {
+    "exact_l2_shortlist": [
+      "path_3m_and_move_2m_100",
+      "path_3m"
+    ],
+    "maximum_shortlist": 2,
+    "ranking": "positive mean one-share payoff, then support, then earlier decision",
+    "no_shortlist_reason": null
+  },
+  "decision": {
+    "exact_l2_replay_authorized": true,
+    "runtime_paper_or_live_change_authorized": false,
+    "profitability_or_a_plus_claim": false
+  },
+  "limitations": [
+    "The quote is contemporaneous top-of-book, not the 202 ms post-signal visible-depth VWAP.",
+    "One-share payoff ignores the engine's FOK size optimization, exposure state, and breaker.",
+    "This stage intentionally ranks candidates but cannot establish executable profitability."
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": "cross_venue_source_and_feature_evidence_v1",
+  "generated_at": "2026-08-11T19:24:45Z",
+  "family_id": "cross_venue_lead_lag_residual_v1",
+  "source_contract": {
+    "spot": "official Binance BTCUSDT spot daily 1s klines",
+    "perpetual": "official Binance BTCUSDT USD-M daily aggTrades grouped by transact_time second",
+    "integrity": "every archive and adjacent CHECKSUM was SHA-256 verified before parsing",
+    "availability": "a source bucket is observable only at second_start_ms + 1000; partially formed seconds are excluded",
+    "timestamp_normalization": "spot microseconds and perpetual milliseconds normalize to Unix milliseconds"
+  },
+  "coverage": {
+    "sealed_pmxt_hours": 20,
+    "unique_source_dates": 11,
+    "complete_spot_days": 11,
+    "fully_aligned_days": 11,
+    "spot_missing_seconds": 0,
+    "maximum_perpetual_trade_gap_seconds": 9,
+    "sealed_opportunity_rows": 704,
+    "complete_external_feature_rows": 704,
+    "complete_current_and_lookback_pair_rows": 681,
+    "maximum_perpetual_price_age_ms_at_observation": 3413
+  },
+  "feature_contract": {
+    "plugin_id": "binance_spot_perpetual_lead_lag",
+    "plugin_version": "v1",
+    "causal_windows_ms": [1000, 5000, 15000],
+    "configuration_sha256": "c439443193625fa74abc724a2bc8aef6ca740fc3577dbc0d5e39955f40db31a2",
+    "dataset_sha256": "37fe551e2225df08f9869fe7b8ce85501db3d04a5f643af4d392d9f725888d63"
+  },
+  "pinned_local_artifacts": {
+    "source_tape_manifest": {
+      "path": "logs/strategy-research/binance-cross-venue/source_feasibility_20260812.json",
+      "sha256": "18f93f51aa301a568bee28877d840540071c603c2a1911e8654bc7954eb7f1b0"
+    },
+    "feature_store_manifest": {
+      "path": "logs/strategy-research/binance-cross-venue/cross_venue_features_20260812.manifest.json",
+      "sha256": "ddbc794a828e6a96fb2df2d74862a59b2825c881ab89aa137abd285594332dcf"
+    }
+  },
+  "outcome_safety": {
+    "labels_read_during_source_and_feature_build": 0,
+    "outcomes_read": 0,
+    "scores_read": 0,
+    "pnl_read": 0,
+    "fresh_holdout_outcomes_accessed": false
+  },
+  "status": "source_and_feature_parity_ready"
+}

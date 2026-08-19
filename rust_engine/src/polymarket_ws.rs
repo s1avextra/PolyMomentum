@@ -10,24 +10,29 @@
 //! waited for a disconnect to reload the list.
 //!
 //! WS protocol:
-//!   Subscribe: {"type":"subscribe","channel":"book","assets_ids":[...]}
-//!   Update:    {"type":"book","data":{"asset_id":..., "bids":[...], "asks":[...]}}
-//!   Tick:      {"type":"price_change","data":{"asset_id":..., "changes":[...]}}
+//!   Subscribe: {"type":"market","assets_ids":[...]}
+//!   Snapshot:  {"event_type":"book","asset_id":..., "bids":[...], "asks":[...]}
+//!   Tick:      {"event_type":"price_change","price_changes":[...]}
+//!
+//! The parser also accepts the legacy `{"type": ..., "data": ...}` envelope so
+//! old captures remain replayable in tests and diagnostics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, RwLock};
 use tokio::time::{timeout, Instant};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 
 const POLYMARKET_WS_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 const STALE_AFTER: Duration = Duration::from_secs(60);
+const MID_HISTORY_MAX_AGE_US: u64 = 300_000_000;
+const MID_HISTORY_MIN_STEP_US: u64 = 100_000;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct BookLevel {
@@ -42,7 +47,16 @@ pub struct TokenBookState {
     pub mid: f64,
     pub bids: Vec<BookLevel>,
     pub asks: Vec<BookLevel>,
+    /// Polymarket source event time, not local receipt time.
     pub last_update_us: u64,
+    /// Latest market-channel tick-size value for this token.
+    #[serde(default)]
+    pub tick_size: Option<f64>,
+    /// Source event time for `tick_size`; kept separate from book freshness.
+    #[serde(default)]
+    pub tick_update_us: u64,
+    #[serde(skip)]
+    pub mid_history: VecDeque<(f64, f64)>,
 }
 
 pub type SharedBookState = Arc<RwLock<HashMap<String, TokenBookState>>>;
@@ -61,15 +75,7 @@ pub fn new_subscription_notify() -> Arc<Notify> {
 struct SubscribeMsg {
     #[serde(rename = "type")]
     msg_type: &'static str,
-    channel: &'static str,
     assets_ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct WsEnvelope {
-    #[serde(rename = "type")]
-    msg_type: Option<String>,
-    data: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -83,13 +89,17 @@ struct BookSnapshot {
 struct PriceChange {
     asset_id: Option<String>,
     changes: Option<Vec<ChangeEntry>>,
+    price_changes: Option<Vec<ChangeEntry>>,
 }
 
 #[derive(Deserialize)]
 struct ChangeEntry {
+    asset_id: Option<String>,
     price: String,
     side: String, // "BUY" or "SELL"
     size: String,
+    best_bid: Option<String>,
+    best_ask: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -113,26 +123,79 @@ fn parse_levels(raw: &Option<Vec<RawLevel>>, descending: bool) -> Vec<BookLevel>
         })
         .collect();
     if descending {
-        out.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.price
+                .partial_cmp(&a.price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     } else {
-        out.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            a.price
+                .partial_cmp(&b.price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
     out
 }
 
-fn now_us() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_micros() as u64)
-        .unwrap_or(0)
+fn source_timestamp_us(data: &serde_json::Value) -> Option<u64> {
+    fn float_ms_to_us(timestamp_ms: f64) -> Option<u64> {
+        let timestamp_us = timestamp_ms * 1_000.0;
+        if !timestamp_us.is_finite() || timestamp_us <= 0.0 || timestamp_us > u64::MAX as f64 {
+            return None;
+        }
+        Some(timestamp_us.round() as u64)
+    }
+
+    match data.get("timestamp")? {
+        serde_json::Value::String(raw) => raw
+            .parse::<u64>()
+            .ok()
+            .and_then(|timestamp_ms| timestamp_ms.checked_mul(1_000))
+            .or_else(|| raw.parse::<f64>().ok().and_then(float_ms_to_us)),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .and_then(|timestamp_ms| timestamp_ms.checked_mul(1_000))
+            .or_else(|| number.as_f64().and_then(float_ms_to_us)),
+        _ => None,
+    }
+}
+
+fn record_mid_history(state: &mut TokenBookState, timestamp_us: u64) {
+    if state.mid <= 0.0 || !state.mid.is_finite() {
+        return;
+    }
+    if state.mid_history.back().is_some_and(|(last_ts, _)| {
+        timestamp_us as f64 / 1_000_000.0 - *last_ts < MID_HISTORY_MIN_STEP_US as f64 / 1_000_000.0
+    }) {
+        return;
+    }
+    let timestamp_s = timestamp_us as f64 / 1_000_000.0;
+    state.mid_history.push_back((timestamp_s, state.mid));
+    let cutoff = timestamp_us.saturating_sub(MID_HISTORY_MAX_AGE_US) as f64 / 1_000_000.0;
+    while state
+        .mid_history
+        .front()
+        .is_some_and(|(ts, _)| *ts < cutoff)
+    {
+        state.mid_history.pop_front();
+    }
 }
 
 fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
     for ch in changes {
-        let Ok(price) = ch.price.parse::<f64>() else { continue };
-        let Ok(size) = ch.size.parse::<f64>() else { continue };
+        let Ok(price) = ch.price.parse::<f64>() else {
+            continue;
+        };
+        let Ok(size) = ch.size.parse::<f64>() else {
+            continue;
+        };
         let descending = matches!(ch.side.as_str(), "BUY");
-        let levels = if descending { &mut state.bids } else { &mut state.asks };
+        let levels = if descending {
+            &mut state.bids
+        } else {
+            &mut state.asks
+        };
         if let Some(idx) = levels.iter().position(|l| (l.price - price).abs() < 1e-9) {
             if size <= 0.0 {
                 levels.remove(idx);
@@ -142,9 +205,17 @@ fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
         } else if size > 0.0 {
             levels.push(BookLevel { price, size });
             if descending {
-                levels.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+                levels.sort_by(|a, b| {
+                    b.price
+                        .partial_cmp(&a.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             } else {
-                levels.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+                levels.sort_by(|a, b| {
+                    a.price
+                        .partial_cmp(&b.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
         }
     }
@@ -157,7 +228,6 @@ fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
     } else {
         state.best_ask
     };
-    state.last_update_us = now_us();
 }
 
 /// Run the Polymarket WS feed.
@@ -205,8 +275,7 @@ async fn run_session(
         .map_err(|e| format!("connect: {e}"))?;
     let (mut write, mut read) = ws.split();
     let sub = SubscribeMsg {
-        msg_type: "subscribe",
-        channel: "book",
+        msg_type: "market",
         assets_ids: ids,
     };
     let payload = serde_json::to_string(&sub).map_err(|e| format!("encode: {e}"))?;
@@ -248,29 +317,73 @@ async fn run_session(
 
 async fn handle_frame(book_state: &SharedBookState, m: Message) {
     let Ok(text) = m.into_text() else { return };
-    // Polymarket sometimes sends arrays of envelopes
+    // Polymarket sometimes sends arrays of messages.
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return;
     }
     if trimmed.starts_with('[') {
-        let Ok(arr) = serde_json::from_str::<Vec<WsEnvelope>>(trimmed) else { return };
-        for env in arr {
-            apply_envelope(book_state, env).await;
+        let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) else {
+            return;
+        };
+        for msg in arr {
+            apply_message_value(book_state, msg).await;
         }
     } else {
-        let Ok(env) = serde_json::from_str::<WsEnvelope>(trimmed) else { return };
-        apply_envelope(book_state, env).await;
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return;
+        };
+        apply_message_value(book_state, msg).await;
     }
 }
 
-async fn apply_envelope(book_state: &SharedBookState, env: WsEnvelope) {
-    let Some(t) = env.msg_type.as_deref() else { return };
-    let Some(data) = env.data else { return };
+async fn apply_message_value(book_state: &SharedBookState, msg: serde_json::Value) {
+    let msg_type = msg
+        .get("event_type")
+        .or_else(|| msg.get("type"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let Some(msg_type) = msg_type else { return };
+    let data = msg.get("data").cloned().unwrap_or(msg);
+    apply_typed_message(book_state, &msg_type, data).await;
+}
+
+async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_json::Value) {
+    if !matches!(
+        t,
+        "book" | "price_change" | "best_bid_ask" | "tick_size_change"
+    ) {
+        return;
+    }
+    let Some(timestamp_us) = source_timestamp_us(&data) else {
+        return;
+    };
+
     match t {
+        "tick_size_change" => {
+            let asset_id = data
+                .get("asset_id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned);
+            let tick_size = data.get("new_tick_size").and_then(parse_positive_price);
+            let (Some(asset_id), Some(tick_size)) = (asset_id, tick_size) else {
+                return;
+            };
+            let mut map = book_state.write().await;
+            let state = map.entry(asset_id).or_default();
+            if timestamp_us < state.tick_update_us {
+                return;
+            }
+            state.tick_size = Some(tick_size);
+            state.tick_update_us = timestamp_us;
+        }
         "book" => {
-            let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else { return };
-            let Some(asset_id) = snap.asset_id else { return };
+            let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else {
+                return;
+            };
+            let Some(asset_id) = snap.asset_id else {
+                return;
+            };
             let bids = parse_levels(&snap.bids, true);
             let asks = parse_levels(&snap.asks, false);
             let best_bid = bids.first().map(|l| l.price).unwrap_or(0.0);
@@ -282,27 +395,98 @@ async fn apply_envelope(book_state: &SharedBookState, env: WsEnvelope) {
             } else {
                 best_ask
             };
-            let state = TokenBookState {
-                best_bid,
-                best_ask,
-                mid,
-                bids,
-                asks,
-                last_update_us: now_us(),
-            };
             let mut map = book_state.write().await;
-            map.insert(asset_id, state);
+            let state = map.entry(asset_id).or_default();
+            if timestamp_us < state.last_update_us {
+                return;
+            }
+            state.best_bid = best_bid;
+            state.best_ask = best_ask;
+            state.mid = mid;
+            state.bids = bids;
+            state.asks = asks;
+            state.last_update_us = timestamp_us;
+            record_mid_history(state, timestamp_us);
         }
         "price_change" => {
-            let Ok(pc): Result<PriceChange, _> = serde_json::from_value(data) else { return };
-            let Some(asset_id) = pc.asset_id else { return };
-            let Some(changes) = pc.changes else { return };
+            let Ok(pc): Result<PriceChange, _> = serde_json::from_value(data) else {
+                return;
+            };
+            let changes = pc.price_changes.or(pc.changes).unwrap_or_default();
+            if changes.is_empty() {
+                return;
+            }
+            let mut map = book_state.write().await;
+            for ch in changes {
+                let Some(asset_id) = ch.asset_id.clone().or_else(|| pc.asset_id.clone()) else {
+                    continue;
+                };
+                let entry = map.entry(asset_id).or_default();
+                if timestamp_us < entry.last_update_us {
+                    continue;
+                }
+                apply_price_change(entry, std::slice::from_ref(&ch));
+                if let Some(best_bid) = ch.best_bid.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                    entry.best_bid = best_bid;
+                }
+                if let Some(best_ask) = ch.best_ask.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                    entry.best_ask = best_ask;
+                }
+                entry.mid = if entry.best_bid > 0.0 && entry.best_ask > 0.0 {
+                    (entry.best_bid + entry.best_ask) / 2.0
+                } else if entry.best_bid > 0.0 {
+                    entry.best_bid
+                } else {
+                    entry.best_ask
+                };
+                entry.last_update_us = timestamp_us;
+                record_mid_history(entry, timestamp_us);
+            }
+        }
+        "best_bid_ask" => {
+            let asset_id = data
+                .get("asset_id")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned);
+            let best_bid = data
+                .get("best_bid")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let best_ask = data
+                .get("best_ask")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let Some(asset_id) = asset_id else { return };
             let mut map = book_state.write().await;
             let entry = map.entry(asset_id).or_default();
-            apply_price_change(entry, &changes);
+            if timestamp_us < entry.last_update_us {
+                return;
+            }
+            entry.best_bid = best_bid;
+            entry.best_ask = best_ask;
+            entry.mid = if best_bid > 0.0 && best_ask > 0.0 {
+                (best_bid + best_ask) / 2.0
+            } else if best_bid > 0.0 {
+                best_bid
+            } else {
+                best_ask
+            };
+            entry.last_update_us = timestamp_us;
+            record_mid_history(entry, timestamp_us);
         }
         _ => {}
     }
+}
+
+fn parse_positive_price(value: &serde_json::Value) -> Option<f64> {
+    let parsed = match value {
+        serde_json::Value::String(raw) => raw.parse::<f64>().ok(),
+        serde_json::Value::Number(number) => number.as_f64(),
+        _ => None,
+    }?;
+    (parsed.is_finite() && parsed > 0.0 && parsed < 1.0).then_some(parsed)
 }
 
 #[cfg(test)]
@@ -312,8 +496,14 @@ mod tests {
     #[test]
     fn applies_book_snapshot() {
         let levels = Some(vec![
-            RawLevel { price: "0.51".into(), size: "100".into() },
-            RawLevel { price: "0.50".into(), size: "200".into() },
+            RawLevel {
+                price: "0.51".into(),
+                size: "100".into(),
+            },
+            RawLevel {
+                price: "0.50".into(),
+                size: "200".into(),
+            },
         ]);
         let bids = parse_levels(&levels, true);
         assert_eq!(bids.len(), 2);
@@ -323,12 +513,34 @@ mod tests {
 
     #[test]
     fn applies_price_change_inserts_and_removes() {
-        let mut s = TokenBookState::default();
-        s.bids = vec![BookLevel { price: 0.50, size: 100.0 }];
-        s.asks = vec![BookLevel { price: 0.52, size: 50.0 }];
+        let mut s = TokenBookState {
+            bids: vec![BookLevel {
+                price: 0.50,
+                size: 100.0,
+            }],
+            asks: vec![BookLevel {
+                price: 0.52,
+                size: 50.0,
+            }],
+            ..TokenBookState::default()
+        };
         let changes = vec![
-            ChangeEntry { price: "0.51".into(), side: "BUY".into(), size: "150".into() },
-            ChangeEntry { price: "0.52".into(), side: "SELL".into(), size: "0".into() },
+            ChangeEntry {
+                asset_id: None,
+                price: "0.51".into(),
+                side: "BUY".into(),
+                size: "150".into(),
+                best_bid: None,
+                best_ask: None,
+            },
+            ChangeEntry {
+                asset_id: None,
+                price: "0.52".into(),
+                side: "SELL".into(),
+                size: "0".into(),
+                best_bid: None,
+                best_ask: None,
+            },
         ];
         apply_price_change(&mut s, &changes);
         assert_eq!(s.bids.len(), 2);
@@ -336,4 +548,176 @@ mod tests {
         assert!(s.asks.is_empty());
     }
 
+    #[test]
+    fn subscription_uses_current_market_channel_shape() {
+        let sub = SubscribeMsg {
+            msg_type: "market",
+            assets_ids: vec!["token-a".into()],
+        };
+        let json = serde_json::to_value(&sub).unwrap();
+        assert_eq!(json["type"], "market");
+        assert_eq!(json["assets_ids"][0], "token-a");
+        assert!(json.get("channel").is_none());
+    }
+
+    #[tokio::test]
+    async fn applies_current_flat_book_snapshot() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": "2000",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.48", "size": "30"}],
+                "asks": [{"price": "0.52", "size": "25"}],
+            }),
+        )
+        .await;
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert!((token.best_bid - 0.48).abs() < 1e-9);
+        assert!((token.best_ask - 0.52).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn applies_current_flat_price_change() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "price_change",
+                "timestamp": 2001,
+                "price_changes": [{
+                    "asset_id": "token-a",
+                    "price": "0.51",
+                    "size": "10",
+                    "side": "BUY",
+                    "best_bid": "0.51",
+                    "best_ask": "0.53"
+                }],
+            }),
+        )
+        .await;
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert!((token.best_bid - 0.51).abs() < 1e-9);
+        assert!((token.best_ask - 0.53).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn applies_current_best_bid_ask() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "best_bid_ask",
+                "timestamp": 2002.5,
+                "asset_id": "token-a",
+                "best_bid": "0.49",
+                "best_ask": "0.51"
+            }),
+        )
+        .await;
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert!((token.mid - 0.50).abs() < 1e-9);
+        assert_eq!(token.last_update_us, 2_002_500);
+    }
+
+    #[tokio::test]
+    async fn applies_latest_tick_size_change_without_refreshing_book_age() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": "3000",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.95", "size": "30"}],
+                "asks": [{"price": "0.96", "size": "25"}],
+            }),
+        )
+        .await;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "tick_size_change",
+                "timestamp": "4000",
+                "asset_id": "token-a",
+                "market": "condition-a",
+                "old_tick_size": "0.01",
+                "new_tick_size": "0.001"
+            }),
+        )
+        .await;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "tick_size_change",
+                "timestamp": "3500",
+                "asset_id": "token-a",
+                "market": "condition-a",
+                "old_tick_size": "0.001",
+                "new_tick_size": "0.01"
+            }),
+        )
+        .await;
+
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert_eq!(token.tick_size, Some(0.001));
+        assert_eq!(token.tick_update_us, 4_000_000);
+        assert_eq!(token.last_update_us, 3_000_000);
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_cannot_overwrite_newer_book() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": "2000",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.48", "size": "30"}],
+                "asks": [{"price": "0.52", "size": "25"}],
+            }),
+        )
+        .await;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": "1000",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.20", "size": "30"}],
+                "asks": [{"price": "0.80", "size": "25"}],
+            }),
+        )
+        .await;
+
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        assert!((token.best_bid - 0.48).abs() < 1e-9);
+        assert!((token.best_ask - 0.52).abs() < 1e-9);
+        assert_eq!(token.last_update_us, 2_000_000);
+    }
+
+    #[tokio::test]
+    async fn missing_source_timestamp_is_ignored() {
+        let book = new_shared_book();
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "asset_id": "token-a",
+                "bids": [{"price": "0.48", "size": "30"}],
+                "asks": [{"price": "0.52", "size": "25"}],
+            }),
+        )
+        .await;
+
+        assert!(book.read().await.is_empty());
+    }
 }

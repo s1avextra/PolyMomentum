@@ -1,0 +1,20 @@
+[Unit]
+Description=PolyMomentum soak evidence report
+After=polymomentum-engine.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=polymomentum
+Group=polymomentum
+WorkingDirectory=/opt/polymomentum
+EnvironmentFile=-/etc/polymomentum/env
+ExecStart=/opt/polymomentum/soak-report.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/polymomentum/logs

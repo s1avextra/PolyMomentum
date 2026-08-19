@@ -1,0 +1,93 @@
+name: Linux Release Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "codex/**"
+    paths:
+      - "rust_engine/**"
+      - "deploy/**"
+      - ".github/workflows/linux-release.yml"
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86-64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust_engine/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust_engine/Cargo.lock', 'rust_engine/Cargo.toml') }}
+
+      - name: Format
+        working-directory: rust_engine
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: rust_engine
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test
+        working-directory: rust_engine
+        run: cargo test --locked
+
+      - name: Build release binary
+        working-directory: rust_engine
+        run: |
+          export POLYMOMENTUM_GIT_SHA="${GITHUB_SHA}"
+          export POLYMOMENTUM_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cargo build --release --locked --bin polymomentum-engine
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          install -m 0755 rust_engine/target/release/polymomentum-engine dist/polymomentum-engine-linux-x86_64
+          sha256sum dist/polymomentum-engine-linux-x86_64 > dist/polymomentum-engine-linux-x86_64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: polymomentum-engine-linux-x86_64-${{ github.sha }}
+          path: |
+            dist/polymomentum-engine-linux-x86_64
+            dist/polymomentum-engine-linux-x86_64.sha256
+          if-no-files-found: error
+
+      - name: Publish branch prerelease asset
+        if: startsWith(github.ref, 'refs/heads/codex/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="ci-${GITHUB_REF_NAME//\//-}"
+          title="CI artifact for ${GITHUB_REF_NAME}"
+          notes="Automated Linux x86_64 artifact for ${GITHUB_SHA}."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --prerelease
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --prerelease
+          fi
+          gh release upload "$tag" \
+            dist/polymomentum-engine-linux-x86_64 \
+            dist/polymomentum-engine-linux-x86_64.sha256 \
+            --clobber

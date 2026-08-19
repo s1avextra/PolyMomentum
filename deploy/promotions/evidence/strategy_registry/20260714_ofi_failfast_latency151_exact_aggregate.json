@@ -1,0 +1,274 @@
+[
+  {
+    "name": "primary_v6_volfloor_30_ofi10_-0.25",
+    "trades": 9,
+    "wins": 5,
+    "losses": 4,
+    "pnl": -13.02552,
+    "fees": 0.80682,
+    "folds": [
+      {
+        "trades": 4,
+        "wins": 3,
+        "losses": 1,
+        "pnl": -0.8034899999999991
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.539320000000001
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.0768
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_30_ofi10_-0.5",
+    "trades": 9,
+    "wins": 5,
+    "losses": 4,
+    "pnl": -13.02552,
+    "fees": 0.80682,
+    "folds": [
+      {
+        "trades": 4,
+        "wins": 3,
+        "losses": 1,
+        "pnl": -0.8034899999999991
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.539320000000001
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.0768
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_30_ofi10_-0.75",
+    "trades": 9,
+    "wins": 5,
+    "losses": 4,
+    "pnl": -13.02552,
+    "fees": 0.80682,
+    "folds": [
+      {
+        "trades": 4,
+        "wins": 3,
+        "losses": 1,
+        "pnl": -0.8034899999999991
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.539320000000001
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.0768
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_35_ofi10_-0.25",
+    "trades": 8,
+    "wins": 4,
+    "losses": 4,
+    "pnl": -14.065999999999999,
+    "fees": 0.7826,
+    "folds": [
+      {
+        "trades": 3,
+        "wins": 2,
+        "losses": 1,
+        "pnl": -2.3510599999999986
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.02662
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08241
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_35_ofi10_-0.5",
+    "trades": 8,
+    "wins": 4,
+    "losses": 4,
+    "pnl": -14.065999999999999,
+    "fees": 0.7826,
+    "folds": [
+      {
+        "trades": 3,
+        "wins": 2,
+        "losses": 1,
+        "pnl": -2.3510599999999986
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.02662
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08241
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_35_ofi10_-0.75",
+    "trades": 8,
+    "wins": 4,
+    "losses": 4,
+    "pnl": -14.065999999999999,
+    "fees": 0.7826,
+    "folds": [
+      {
+        "trades": 3,
+        "wins": 2,
+        "losses": 1,
+        "pnl": -2.3510599999999986
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.02662
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08241
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.6059100000000006
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_30_ofi10_0.0",
+    "trades": 6,
+    "wins": 2,
+    "losses": 4,
+    "pnl": -17.633270000000003,
+    "fees": 0.50227,
+    "folds": [
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08241
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.57841
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08591
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.886540000000001
+      }
+    ]
+  },
+  {
+    "name": "primary_v6_volfloor_35_ofi10_0.0",
+    "trades": 5,
+    "wins": 1,
+    "losses": 4,
+    "pnl": -19.077640000000002,
+    "fees": 0.42623999999999995,
+    "folds": [
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.027430000000001
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.0777600000000005
+      },
+      {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -5.08591
+      },
+      {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": -3.886540000000001
+      }
+    ]
+  }
+]

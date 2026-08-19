@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T04:53:29Z",
+  "status": "PREREGISTERED_BEFORE_FOUR_MINUTE_LABEL_EVALUATION",
+  "mechanism_id": "four_minute_continuation_v1",
+  "source_claim": {
+    "post_url": "https://x.com/0xbobaaa/status/2036073103281803412",
+    "article_id": "2036047191672848384",
+    "article_title": "4 minute rule on polymarket: holy grail or trap?",
+    "published_at": "2026-03-23T13:30:30Z",
+    "reported_sample_periods": 12000,
+    "reported_strict_up_accuracy": 0.9683,
+    "reported_strict_down_accuracy": 0.9597,
+    "reported_first_two_minute_move_over_100_accuracy": 0.8858,
+    "reported_first_two_minute_move_over_200_accuracy": 0.9276,
+    "reported_full_strategy_accuracy": 0.7846,
+    "reported_maximum_losing_streak": 6,
+    "reported_maximum_drawdown": 0.005,
+    "reported_breakeven_accuracy": 0.5102
+  },
+  "decision_question": "Do four consecutive same-direction one-minute BTC returns during the first four minutes of a UTC-aligned five-minute window predict the terminal direction strongly and stably enough to justify a separate, fee- and latency-aware Polymarket execution screen?",
+  "frozen_signal": {
+    "window_alignment": "UTC Unix timestamp divisible by 300 seconds",
+    "checkpoint_offsets_seconds": [0, 60, 120, 180, 240],
+    "checkpoint_price": "last official Binance BTCUSDT one-second close observable at each checkpoint; the window-open checkpoint uses the first one-second open",
+    "maximum_checkpoint_gap_seconds": 2,
+    "up_signal": "each of P60-P0, P120-P60, P180-P120, and P240-P180 is strictly positive",
+    "down_signal": "each of P60-P0, P120-P60, P180-P120, and P240-P180 is strictly negative",
+    "zero_return_rule": "any zero one-minute return makes the condition ineligible",
+    "decision_offset_seconds": 240,
+    "terminal_price": "last one-second close before the 300-second boundary",
+    "terminal_up": "terminal price strictly greater than the window-open price",
+    "terminal_down": "terminal price strictly less than the window-open price",
+    "terminal_tie_rule": "exclude exact ties",
+    "prediction": "the strict four-minute signal direction",
+    "coefficient_or_threshold_grid": false
+  },
+  "public_proxy_data_contract": {
+    "source": "Official Binance public BTCUSDT spot one-second kline daily archives and adjacent SHA-256 checksum files",
+    "base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/",
+    "older_evaluation_utc": "2026-04-16T00:00:00Z through 2026-05-16T00:00:00Z",
+    "fresh_pre_forward_evaluation_utc": "2026-07-11T00:00:00Z through 2026-07-14T00:00:00Z",
+    "fresh_window_reason": "freshest complete daily archives ending before the protected forward-block interval; the July 14 archive is not opened",
+    "excluded_windows": [
+      "2026-03-23T13:30:30Z and earlier because the source article could have selected them",
+      "2026-05-28T00:00:00Z through 2026-06-11T00:00:00Z strict-42 population",
+      "2026-07-14T00:00:00Z onward because active or sealed binary-complement conditions remain outcome-blind below 750"
+    ],
+    "checksum_required": true,
+    "label_results_inspected_before_registration": false
+  },
+  "frozen_estimands": {
+    "primary_grain": "one prediction per eligible five-minute window",
+    "primary_metrics": [
+      "eligible signal count and fraction",
+      "condition-weighted continuation accuracy",
+      "up-signal accuracy",
+      "down-signal accuracy",
+      "UTC-day block-bootstrap 95 percent interval for continuation accuracy"
+    ],
+    "stability_slices": [
+      "older evaluation window",
+      "fresh pre-forward evaluation window",
+      "up and down direction",
+      "weekday and weekend"
+    ],
+    "diagnostic_only_slices": [
+      "09:00 UTC",
+      "23:00 UTC",
+      "absolute first-two-minute move at least 100 USD",
+      "absolute first-two-minute move at least 200 USD"
+    ],
+    "uncertainty": "UTC-day block bootstrap with 10000 deterministic resamples and seed 20260722",
+    "economic_interpretation": "directional accuracy is not executable edge; the per-trade break-even probability is executable token cost plus taker fee per share, not a fixed 51.02 percent"
+  },
+  "fixed_public_proxy_gates": {
+    "data_quality": {
+      "checksum_failures": 0,
+      "timestamp_duplicates": 0,
+      "timestamp_regressions": 0,
+      "maximum_internal_gap_seconds": 2,
+      "invalid_prices": 0,
+      "minimum_eligible_signals_older": 800,
+      "minimum_eligible_signals_fresh": 100
+    },
+    "directional_viability": {
+      "minimum_overall_accuracy": 0.6,
+      "minimum_bootstrap_lower_bound": 0.55,
+      "minimum_accuracy_each_chronological_window": 0.55,
+      "minimum_accuracy_each_direction": 0.55
+    },
+    "claim_replication_report_only": {
+      "strict_up_accuracy_at_least": 0.9,
+      "strict_down_accuracy_at_least": 0.9,
+      "affects_candidate_pass": false
+    }
+  },
+  "fixed_polymarket_screen_if_public_proxy_passes": {
+    "authorization": "implement one default-off research feature and exact replay only; do not change runtime behavior",
+    "feature": "four_minute_consistency with values consistent_up, consistent_down, inconsistent, or unavailable",
+    "entry": "earliest causal chosen-token book after offset 240 seconds plus at least 202 milliseconds insertion latency",
+    "order": "taker FOK using visible-depth book-walk VWAP and worst-price ceiling",
+    "size": "existing position budget, minimum order size, exposure cap, and projected stressed-drawdown cap",
+    "fee": "exact market fee metadata with the engine's fail-closed category fallback",
+    "exit": "hold to authoritative market resolution for the literal source-rule audit",
+    "comparisons": [
+      "literal standalone rule versus no trade",
+      "existing candle_momentum baseline versus the same baseline requiring direction-matched four-minute consistency"
+    ],
+    "minimum_replay_latency_ms": 202,
+    "required_outputs": [
+      "eligible conditions, submitted orders, fills, and fill rate",
+      "entry ask, book-walk VWAP, worst price, slippage, and fee per share",
+      "realized accuracy and price-weighted break-even accuracy",
+      "net PnL, expectancy per filled share, profit factor, maximum drawdown, and longest losing streak",
+      "chronological fold, direction, weekday/weekend, UTC-hour, and entry-price stability",
+      "zero unresolved fills, breaker reconciliation errors, or settlement identity mismatches"
+    ],
+    "promotion_gates": {
+      "minimum_filled_conditions": 200,
+      "minimum_fresh_filled_conditions": 50,
+      "minimum_net_expectancy_per_share": 0.005,
+      "minimum_profit_factor": 1.2,
+      "positive_utc_day_bootstrap_expectancy_lower_bound": true,
+      "positive_net_pnl_each_chronological_window": true,
+      "positive_net_pnl_each_direction": true,
+      "maximum_drawdown_fraction": 0.05,
+      "minimum_incremental_net_pnl_over_existing_baseline": 0.0
+    }
+  },
+  "decision_rules": {
+    "public_proxy_pass": "Proceed only to the frozen default-off Polymarket opportunity and exact-L2 screen.",
+    "public_proxy_fail": "Reject four_minute_continuation_v1 without tuning checkpoint offsets, date windows, magnitude thresholds, hours, or directional gates on these labels.",
+    "polymarket_screen_pass": "Retain as a default-off candidate and require a newest fully resolved, non-overlapping forward block before any promotion decision.",
+    "polymarket_screen_fail": "Record a fee-, latency-, or robustness-based rejection; do not integrate into paper or live runtime.",
+    "profitability_claim_permitted": false,
+    "a_plus_claim_permitted": false
+  },
+  "source_pins_before_evaluation": {
+    "momentum_rs": {
+      "path": "rust_engine/src/strategy/momentum.rs",
+      "sha256": "4459cfa840f486c5763731d983d8c1bbe931d348b7648ee2cb78d208b6bf49ea"
+    },
+    "harness_rs": {
+      "path": "rust_engine/src/backtest/harness.rs",
+      "sha256": "e78b182f2d7dffffff6c7e78b7d0dad21418e9f3b2db44413a4bb3b31a25bcb6"
+    },
+    "fill_model_rs": {
+      "path": "rust_engine/src/backtest/fill_model.rs",
+      "sha256": "02570bc1895e98bb1f33aaadf5c5282645c7d3a715febab97dc32acd9dade4e2"
+    },
+    "fees_rs": {
+      "path": "rust_engine/src/execution/fees.rs",
+      "sha256": "bfcfbd5d77acda12b38e0a2d86878898e262f3797fb83d7366e5e5625a9956d6"
+    },
+    "l2_replay_rs": {
+      "path": "rust_engine/src/backtest/l2_replay.rs",
+      "sha256": "e7329d496edd77641b65a493a38b46f5b26ebcb84b6c10563d37124f0e9b08b7"
+    }
+  },
+  "integrity": {
+    "active_binary_complement_outcomes_accessed": false,
+    "active_binary_complement_strategy_metrics_accessed": false,
+    "four_minute_evaluation_labels_computed": false,
+    "strategy_or_runtime_changed": false,
+    "paper_or_live_behavior_changed": false
+  }
+}

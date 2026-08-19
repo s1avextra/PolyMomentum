@@ -30,20 +30,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use arrow_array::BooleanArray;
 use arrow_array::{
-    Array, Decimal128Array, FixedSizeBinaryArray, RecordBatch, StringArray, TimestampMillisecondArray,
+    Array, Decimal128Array, FixedSizeBinaryArray, RecordBatch, StringArray,
+    TimestampMillisecondArray,
 };
 use chrono::{DateTime, Utc};
-use arrow_array::BooleanArray;
-use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter,
+};
 use parquet::arrow::ProjectionMask;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 const PMXT_V2_BASE_URL: &str = "https://r2v2.pmxt.dev";
 pub const DEFAULT_CACHE_DIR: &str = "data/pmxt_v2_cache";
 /// Multi-tenant cache shared with the peer bot polyarbitrage on the VPS.
 pub const SHARED_CACHE_DIR: &str = "/opt/shared/pmxt_v2_cache";
+const DOWNLOAD_ATTEMPTS: usize = 4;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct L2Level {
@@ -88,6 +92,31 @@ pub struct L2Event {
     pub body: L2EventBody,
 }
 
+/// Lightweight causal tape event for feature extraction. Unlike `L2Event`,
+/// this retains trade prints but deliberately omits full book levels so a
+/// feature plugin can scan a filtered parquet hour without materializing the
+/// multi-million-row event stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketFlowEventKind {
+    Book,
+    PriceChange,
+    Trade,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarketFlowEvent {
+    pub timestamp_ms: i64,
+    pub market_id: String,
+    pub token_id: String,
+    pub kind: MarketFlowEventKind,
+    pub side: String,
+    pub price: f64,
+    pub size: f64,
+    pub best_bid: f64,
+    pub best_ask: f64,
+    pub transaction_hash: Option<String>,
+}
+
 pub struct PMXTv2Loader {
     cache_dir: PathBuf,
     http: Client,
@@ -103,32 +132,32 @@ impl PMXTv2Loader {
             // bounded timeout so a slow link can finish a long download.
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(20))
+                .http1_only()
                 .build()
                 .expect("client"),
         }
     }
 
     /// Pick the cache dir from env (`PMXT_V2_CACHE_DIR`), else the shared
-    /// multi-tenant dir if it exists, else the project-local fallback.
-    pub fn from_env() -> Self {
-        let dir = std::env::var("PMXT_V2_CACHE_DIR")
+    /// multi-tenant VPS cache if it exists, else the project-local fallback.
+    pub fn default_cache_dir() -> PathBuf {
+        std::env::var("PMXT_V2_CACHE_DIR")
+            .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                if Path::new(SHARED_CACHE_DIR).exists() {
-                    SHARED_CACHE_DIR.into()
+                let shared = PathBuf::from(SHARED_CACHE_DIR);
+                if shared.exists() {
+                    shared
                 } else {
-                    DEFAULT_CACHE_DIR.into()
+                    PathBuf::from(DEFAULT_CACHE_DIR)
                 }
-            });
-        Self::new(dir)
-    }
-
-    pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
+            })
     }
 
     pub fn cache_path_for_hour(&self, hour: DateTime<Utc>) -> PathBuf {
-        self.cache_dir
-            .join(format!("polymarket_orderbook_{}.parquet", hour.format("%Y-%m-%dT%H")))
+        self.cache_dir.join(format!(
+            "polymarket_orderbook_{}.parquet",
+            hour.format("%Y-%m-%dT%H")
+        ))
     }
 
     pub fn is_cached(&self, hour: DateTime<Utc>) -> bool {
@@ -144,27 +173,118 @@ impl PMXTv2Loader {
         )
     }
 
+    /// Check whether a remote PMXT hour exists without downloading the parquet.
+    pub async fn remote_hour_available(&self, hour: DateTime<Utc>) -> Result<bool> {
+        let url = Self::url_for_hour(hour);
+        let resp = self.http.head(&url).send().await.context("send HEAD")?;
+        if resp.status().is_success() {
+            return Ok(true);
+        }
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        anyhow::bail!("PMXT v2 returned HTTP {} for {}", resp.status(), url);
+    }
+
     /// Download a single hour's parquet to the cache directory.
     pub async fn download_hour(&self, hour: DateTime<Utc>, force: bool) -> Result<PathBuf> {
+        let (path, _) = self.download_hour_with_status(hour, force).await?;
+        Ok(path)
+    }
+
+    /// Download a single hour and report whether this call created/replaced
+    /// the parquet. Callers use the boolean to avoid deleting pre-existing
+    /// shared or peer-owned cache files.
+    pub async fn download_hour_with_status(
+        &self,
+        hour: DateTime<Utc>,
+        force: bool,
+    ) -> Result<(PathBuf, bool)> {
         let path = self.cache_path_for_hour(hour);
         if !force && self.is_cached(hour) {
-            return Ok(path);
+            return Ok((path, false));
         }
         let url = Self::url_for_hour(hour);
         tracing::info!(%url, ?path, "downloading PMXT v2 hour");
-        let tmp = path.with_extension("parquet.tmp");
-        let mut resp = self.http.get(&url).send().await.context("send GET")?;
+        let mut last_err = None;
+        for attempt in 1..=DOWNLOAD_ATTEMPTS {
+            let tmp =
+                path.with_extension(format!("parquet.tmp.{}.{}", std::process::id(), attempt));
+            if let Err(err) = std::fs::remove_file(&tmp) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    return Err(err).with_context(|| format!("remove stale tmp {}", tmp.display()));
+                }
+            }
+
+            match self.download_hour_once(&url, &path, &tmp).await {
+                Ok(()) => return Ok((path, true)),
+                Err(err) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    last_err = Some(err);
+                    if attempt < DOWNLOAD_ATTEMPTS {
+                        let backoff_ms = 750_u64 * attempt as u64;
+                        tracing::warn!(
+                            %url,
+                            ?path,
+                            attempt,
+                            backoff_ms,
+                            "PMXT download failed; retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download did not start"))).with_context(
+            || {
+                format!(
+                    "download PMXT v2 hour {} after {} attempts",
+                    hour, DOWNLOAD_ATTEMPTS
+                )
+            },
+        )
+    }
+
+    async fn download_hour_once(&self, url: &str, path: &Path, tmp: &Path) -> Result<()> {
+        let mut resp = self.http.get(url).send().await.context("send GET")?;
         if !resp.status().is_success() {
             anyhow::bail!("PMXT v2 returned HTTP {} for {}", resp.status(), url);
         }
-        let mut f = std::fs::File::create(&tmp).context("create tmp file")?;
+        let expected_len = resp.content_length();
+        let mut f = std::fs::File::create(tmp).context("create tmp file")?;
         use std::io::Write;
+        let mut bytes_written = 0_u64;
         while let Some(chunk) = resp.chunk().await.context("read chunk")? {
+            bytes_written += chunk.len() as u64;
             f.write_all(&chunk).context("write chunk")?;
         }
+        if let Some(expected_len) = expected_len {
+            if bytes_written != expected_len {
+                anyhow::bail!(
+                    "PMXT v2 short download for {}: wrote {} bytes, expected {}",
+                    url,
+                    bytes_written,
+                    expected_len
+                );
+            }
+        }
+        f.flush().context("flush tmp file")?;
         drop(f);
-        std::fs::rename(&tmp, &path).context("rename tmp to final")?;
-        Ok(path)
+        std::fs::rename(tmp, path).context("rename tmp to final")?;
+        Ok(())
+    }
+
+    /// Remove the raw cached parquet for an hour. This must only be called
+    /// when `download_hour_with_status` returned `downloaded=true` for the
+    /// same process/session.
+    pub fn remove_cached_hour_parquet(&self, hour: DateTime<Utc>) -> Result<()> {
+        let path = self.cache_path_for_hour(hour);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err).with_context(|| format!("remove {}", path.display())),
+        }
     }
 
     /// Read one hour's events from cache (the file must already be cached).
@@ -181,14 +301,24 @@ impl PMXTv2Loader {
         read_parquet(&path, condition_ids)
     }
 
-    /// Convenience: ensure the file is downloaded, then read it.
-    pub async fn load_hour(
+    /// Stream book-top, price-change, and trade-print rows for selected
+    /// conditions in parquet-native order. The callback must not retain a
+    /// reference to the event. This is intentionally separate from the
+    /// execution loader, whose replay contract continues to ignore trades.
+    pub fn scan_cached_hour_market_flow<F>(
         &self,
         hour: DateTime<Utc>,
-        condition_ids: Option<&HashSet<String>>,
-    ) -> Result<Vec<L2Event>> {
-        self.download_hour(hour, false).await?;
-        self.load_cached_hour(hour, condition_ids)
+        condition_ids: &HashSet<String>,
+        visitor: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(&MarketFlowEvent),
+    {
+        let path = self.cache_path_for_hour(hour);
+        if !path.exists() {
+            anyhow::bail!("PMXT v2 hour {} not cached at {}", hour, path.display());
+        }
+        scan_market_flow_parquet(&path, condition_ids, visitor)
     }
 
     /// Sidecar path for a `(hour, cid_set)` event cache. Filenames are
@@ -203,6 +333,21 @@ impl PMXTv2Loader {
         ))
     }
 
+    pub fn sidecar_path_for_conditions(
+        &self,
+        hour: DateTime<Utc>,
+        condition_ids: &HashSet<String>,
+    ) -> PathBuf {
+        let mut sorted: Vec<&String> = condition_ids.iter().collect();
+        sorted.sort();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hasher::write_usize(&mut hasher, sorted.len());
+        for condition_id in sorted {
+            std::hash::Hash::hash(condition_id.as_str(), &mut hasher);
+        }
+        self.sidecar_path(hour, std::hash::Hasher::finish(&hasher))
+    }
+
     /// Load events for the given hour, using a per-(hour, cid_set) sidecar
     /// cache if one exists. First call decodes the parquet (slow) then
     /// writes a compact gzipped bincode of the filtered events. Subsequent
@@ -212,15 +357,7 @@ impl PMXTv2Loader {
         hour: DateTime<Utc>,
         condition_ids: &HashSet<String>,
     ) -> Result<Vec<L2Event>> {
-        let mut sorted: Vec<&String> = condition_ids.iter().collect();
-        sorted.sort();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hasher::write_usize(&mut hasher, sorted.len());
-        for s in &sorted {
-            std::hash::Hash::hash(s.as_str(), &mut hasher);
-        }
-        let cid_hash = std::hash::Hasher::finish(&hasher);
-        let sidecar = self.sidecar_path(hour, cid_hash);
+        let sidecar = self.sidecar_path_for_conditions(hour, condition_ids);
 
         if sidecar.exists() {
             if let Ok(events) = read_sidecar(&sidecar) {
@@ -255,7 +392,9 @@ impl PMXTv2Loader {
         let mut out = HashSet::new();
         for batch in reader {
             let batch = batch?;
-            let Some(col) = batch.column_by_name("market") else { continue };
+            let Some(col) = batch.column_by_name("market") else {
+                continue;
+            };
             if let Some(arr) = col.as_any().downcast_ref::<FixedSizeBinaryArray>() {
                 for i in 0..arr.len() {
                     if !arr.is_null(i) {
@@ -274,6 +413,192 @@ impl PMXTv2Loader {
         }
         Ok(out)
     }
+}
+
+fn scan_market_flow_parquet<F>(
+    path: &Path,
+    condition_ids: &HashSet<String>,
+    mut visitor: F,
+) -> Result<usize>
+where
+    F: FnMut(&MarketFlowEvent),
+{
+    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .with_context(|| format!("parquet builder {}", path.display()))?;
+    let needed = [
+        "timestamp",
+        "timestamp_received",
+        "market",
+        "event_type",
+        "asset_id",
+        "price",
+        "size",
+        "side",
+        "best_bid",
+        "best_ask",
+        "transaction_hash",
+    ];
+    let leaf_indices = needed
+        .iter()
+        .filter_map(|name| {
+            builder
+                .parquet_schema()
+                .columns()
+                .iter()
+                .position(|column| column.name() == *name)
+        })
+        .collect::<Vec<_>>();
+    let market_index = builder
+        .parquet_schema()
+        .columns()
+        .iter()
+        .position(|column| column.name() == "market")
+        .context("parquet schema missing `market` column")?;
+    let projection = ProjectionMask::leaves(builder.parquet_schema(), leaf_indices);
+    let predicate_projection = ProjectionMask::leaves(builder.parquet_schema(), vec![market_index]);
+    let cid_set = condition_ids
+        .iter()
+        .map(|condition_id| condition_id.as_bytes().to_vec())
+        .collect::<HashSet<_>>();
+    let predicate = ArrowPredicateFn::new(predicate_projection, move |batch| {
+        let column = batch.column(0);
+        let rows = batch.num_rows();
+        let mut keep = Vec::with_capacity(rows);
+        if let Some(array) = column.as_any().downcast_ref::<FixedSizeBinaryArray>() {
+            for index in 0..rows {
+                keep.push(!array.is_null(index) && cid_set.contains(array.value(index)));
+            }
+        } else if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
+            for index in 0..rows {
+                keep.push(!array.is_null(index) && cid_set.contains(array.value(index).as_bytes()));
+            }
+        } else {
+            keep.resize(rows, false);
+        }
+        Ok(BooleanArray::from(keep))
+    });
+    let reader = builder
+        .with_projection(projection)
+        .with_row_filter(RowFilter::new(vec![
+            Box::new(predicate) as Box<dyn ArrowPredicate>
+        ]))
+        .build()
+        .context("build market-flow parquet reader")?;
+
+    let mut emitted = 0usize;
+    for batch in reader {
+        emitted +=
+            decode_market_flow_batch(&batch.context("read market-flow batch")?, &mut visitor)?;
+    }
+    Ok(emitted)
+}
+
+fn decode_market_flow_batch<F>(batch: &RecordBatch, visitor: &mut F) -> Result<usize>
+where
+    F: FnMut(&MarketFlowEvent),
+{
+    let market_column = batch
+        .column_by_name("market")
+        .context("missing column `market`")?;
+    let market_fixed = market_column
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>();
+    let market_string = market_column.as_any().downcast_ref::<StringArray>();
+    let event_type = batch
+        .column_by_name("event_type")
+        .context("missing column `event_type`")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("`event_type` not a StringArray")?;
+    let asset_id = batch
+        .column_by_name("asset_id")
+        .context("missing column `asset_id`")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("`asset_id` not a StringArray")?;
+    let timestamp = batch
+        .column_by_name("timestamp")
+        .context("missing column `timestamp`")?
+        .as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .context("`timestamp` not TimestampMillisecondArray")?;
+    let timestamp_received = batch
+        .column_by_name("timestamp_received")
+        .and_then(|column| column.as_any().downcast_ref::<TimestampMillisecondArray>());
+    let side = batch
+        .column_by_name("side")
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+    let price = batch
+        .column_by_name("price")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let size = batch
+        .column_by_name("size")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let best_bid = batch
+        .column_by_name("best_bid")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let best_ask = batch
+        .column_by_name("best_ask")
+        .and_then(|column| column.as_any().downcast_ref::<Decimal128Array>());
+    let transaction_hash = batch
+        .column_by_name("transaction_hash")
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+
+    let mut emitted = 0usize;
+    for index in 0..batch.num_rows() {
+        let kind = match event_type.value(index) {
+            "book" => MarketFlowEventKind::Book,
+            "price_change" => MarketFlowEventKind::PriceChange,
+            "last_trade_price" => MarketFlowEventKind::Trade,
+            _ => continue,
+        };
+        let timestamp_ms = if !timestamp.is_null(index) {
+            timestamp.value(index)
+        } else if let Some(received) = timestamp_received {
+            if received.is_null(index) {
+                continue;
+            }
+            received.value(index)
+        } else {
+            continue;
+        };
+        let market_id = if let Some(array) = market_fixed {
+            std::str::from_utf8(array.value(index))
+                .unwrap_or("")
+                .to_string()
+        } else if let Some(array) = market_string {
+            array.value(index).to_string()
+        } else {
+            continue;
+        };
+        let event = MarketFlowEvent {
+            timestamp_ms,
+            market_id,
+            token_id: asset_id.value(index).to_string(),
+            kind,
+            side: side
+                .and_then(|array| (!array.is_null(index)).then(|| array.value(index).to_string()))
+                .unwrap_or_default(),
+            price: price
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            size: size
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            best_bid: best_bid
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            best_ask: best_ask
+                .map(|array| decimal_to_f64(array, index))
+                .unwrap_or(0.0),
+            transaction_hash: transaction_hash
+                .and_then(|array| (!array.is_null(index)).then(|| array.value(index).to_string())),
+        };
+        visitor(&event);
+        emitted += 1;
+    }
+    Ok(emitted)
 }
 
 fn read_parquet(path: &Path, condition_ids: Option<&HashSet<String>>) -> Result<Vec<L2Event>> {
@@ -346,13 +671,13 @@ fn read_parquet(path: &Path, condition_ids: Option<&HashSet<String>>) -> Result<
                     }
                 }
             } else {
-                for _ in 0..n {
-                    keep.push(false);
-                }
+                keep.resize(n, false);
             }
             Ok(BooleanArray::from(keep))
         });
-        builder = builder.with_row_filter(RowFilter::new(vec![Box::new(predicate) as Box<dyn ArrowPredicate>]));
+        builder = builder.with_row_filter(RowFilter::new(vec![
+            Box::new(predicate) as Box<dyn ArrowPredicate>
+        ]));
     }
 
     let reader = builder.build().context("build parquet reader")?;
@@ -362,7 +687,11 @@ fn read_parquet(path: &Path, condition_ids: Option<&HashSet<String>>) -> Result<
         let batch: RecordBatch = batch_result.context("read batch")?;
         decode_batch(&batch, condition_ids, &mut events)?;
     }
-    events.sort_by(|a, b| a.timestamp_s.partial_cmp(&b.timestamp_s).unwrap_or(std::cmp::Ordering::Equal));
+    events.sort_by(|a, b| {
+        a.timestamp_s
+            .partial_cmp(&b.timestamp_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(events)
 }
 
@@ -372,19 +701,23 @@ fn decode_batch(
     out: &mut Vec<L2Event>,
 ) -> Result<()> {
     let n = batch.num_rows();
-    let market_col = batch.column_by_name("market")
+    let market_col = batch
+        .column_by_name("market")
         .context("missing column `market`")?;
-    let event_type_col = batch.column_by_name("event_type")
+    let event_type_col = batch
+        .column_by_name("event_type")
         .context("missing column `event_type`")?
         .as_any()
         .downcast_ref::<StringArray>()
         .context("`event_type` not a StringArray")?;
-    let asset_id_col = batch.column_by_name("asset_id")
+    let asset_id_col = batch
+        .column_by_name("asset_id")
         .context("missing column `asset_id`")?
         .as_any()
         .downcast_ref::<StringArray>()
         .context("`asset_id` not a StringArray")?;
-    let timestamp_col = batch.column_by_name("timestamp")
+    let timestamp_col = batch
+        .column_by_name("timestamp")
         .context("missing column `timestamp`")?
         .as_any()
         .downcast_ref::<TimestampMillisecondArray>()
@@ -451,26 +784,42 @@ fn decode_batch(
         };
         let ts_s = ts_ms as f64 / 1000.0;
 
-        let best_bid = best_bid_col
-            .map(|c| decimal_to_f64(c, i))
-            .unwrap_or(0.0);
-        let best_ask = best_ask_col
-            .map(|c| decimal_to_f64(c, i))
-            .unwrap_or(0.0);
+        let best_bid = best_bid_col.map(|c| decimal_to_f64(c, i)).unwrap_or(0.0);
+        let best_ask = best_ask_col.map(|c| decimal_to_f64(c, i)).unwrap_or(0.0);
 
         match event_type {
             "book" => {
-                let bids_str = bids_col.and_then(|c| if c.is_null(i) { None } else { Some(c.value(i)) }).unwrap_or("[]");
-                let asks_str = asks_col.and_then(|c| if c.is_null(i) { None } else { Some(c.value(i)) }).unwrap_or("[]");
+                let bids_str = bids_col
+                    .and_then(|c| if c.is_null(i) { None } else { Some(c.value(i)) })
+                    .unwrap_or("[]");
+                let asks_str = asks_col
+                    .and_then(|c| if c.is_null(i) { None } else { Some(c.value(i)) })
+                    .unwrap_or("[]");
                 let mut bids = parse_levels_json(bids_str);
                 let mut asks = parse_levels_json(asks_str);
-                bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
-                asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+                bids.sort_by(|a, b| {
+                    b.price
+                        .partial_cmp(&a.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                asks.sort_by(|a, b| {
+                    a.price
+                        .partial_cmp(&b.price)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 let snap = BookSnapshot {
                     market_id: market_id.clone(),
                     token_id: asset_id,
-                    best_bid: if best_bid > 0.0 { best_bid } else { bids.first().map(|l| l.price).unwrap_or(0.0) },
-                    best_ask: if best_ask > 0.0 { best_ask } else { asks.first().map(|l| l.price).unwrap_or(0.0) },
+                    best_bid: if best_bid > 0.0 {
+                        best_bid
+                    } else {
+                        bids.first().map(|l| l.price).unwrap_or(0.0)
+                    },
+                    best_ask: if best_ask > 0.0 {
+                        best_ask
+                    } else {
+                        asks.first().map(|l| l.price).unwrap_or(0.0)
+                    },
                     timestamp_s: ts_s,
                     bids,
                     asks,
@@ -531,7 +880,9 @@ fn parse_levels_json(s: &str) -> Vec<L2Level> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let Some(arr) = v.as_array() else { return Vec::new() };
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
     let mut out = Vec::with_capacity(arr.len());
     for entry in arr {
         let parsed = match entry {
@@ -573,20 +924,33 @@ const SIDECAR_VERSION: u32 = 1;
 
 fn write_sidecar(path: &Path, events: &[L2Event]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("bin.gz.tmp");
-    let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
-    let mut buf = std::io::BufWriter::new(f);
-    buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
-    buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
-    let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
-    let mut bin = std::io::BufWriter::new(encoder);
-    bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
-    bin.flush()?;
-    let encoder = bin.into_inner().context("flush gz writer")?;
-    let mut buf = encoder.finish().context("finish gz")?;
-    buf.flush()?;
-    drop(buf);
-    std::fs::rename(&tmp, path).context("rename tmp sidecar")?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sidecar.bin.gz");
+    let tmp = path.with_file_name(format!("{file_name}.tmp.{}", std::process::id()));
+    let write_result = (|| -> Result<()> {
+        let f = std::fs::File::create(&tmp).context("create sidecar tmp")?;
+        let mut buf = std::io::BufWriter::new(f);
+        buf.write_all(&SIDECAR_MAGIC.to_le_bytes())?;
+        buf.write_all(&SIDECAR_VERSION.to_le_bytes())?;
+        let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
+        let mut bin = std::io::BufWriter::new(encoder);
+        bincode::serialize_into(&mut bin, events).context("bincode serialize")?;
+        bin.flush()?;
+        let encoder = bin.into_inner().context("flush gz writer")?;
+        let mut buf = encoder.finish().context("finish gz")?;
+        buf.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error).context("rename tmp sidecar");
+    }
     Ok(())
 }
 
@@ -602,11 +966,16 @@ fn read_sidecar(path: &Path) -> Result<Vec<L2Event>> {
         anyhow::bail!("sidecar magic mismatch (file may be a different format)");
     }
     if version != SIDECAR_VERSION {
-        anyhow::bail!("sidecar version {} unsupported (expected {})", version, SIDECAR_VERSION);
+        anyhow::bail!(
+            "sidecar version {} unsupported (expected {})",
+            version,
+            SIDECAR_VERSION
+        );
     }
     let decoder = flate2::read::GzDecoder::new(buf);
     let mut bin = std::io::BufReader::new(decoder);
-    let events: Vec<L2Event> = bincode::deserialize_from(&mut bin).context("bincode deserialize")?;
+    let events: Vec<L2Event> =
+        bincode::deserialize_from(&mut bin).context("bincode deserialize")?;
     Ok(events)
 }
 
@@ -639,10 +1008,42 @@ mod tests {
 
     #[test]
     fn url_for_hour_uses_utc_format() {
-        let h = DateTime::parse_from_rfc3339("2026-04-26T14:00:00Z").unwrap().with_timezone(&Utc);
+        let h = DateTime::parse_from_rfc3339("2026-04-26T14:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         assert_eq!(
             PMXTv2Loader::url_for_hour(h),
             "https://r2v2.pmxt.dev/polymarket_orderbook_2026-04-26T14.parquet"
         );
+    }
+
+    #[test]
+    fn sidecar_write_is_atomic_and_round_trips() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("sample.events.bin.gz");
+        let events = vec![L2Event {
+            timestamp_s: 1.25,
+            market_id: "market-1".to_string(),
+            body: L2EventBody::BookSnapshot(BookSnapshot {
+                market_id: "market-1".to_string(),
+                token_id: "token-1".to_string(),
+                best_bid: 0.49,
+                best_ask: 0.51,
+                timestamp_s: 1.25,
+                bids: Vec::new(),
+                asks: Vec::new(),
+            }),
+        }];
+
+        write_sidecar(&path, &events).unwrap();
+        let loaded = read_sidecar(&path).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].market_id, "market-1");
+        assert_eq!(loaded[0].timestamp_s, 1.25);
+        assert!(!temp
+            .path()
+            .join(format!("sample.events.bin.gz.tmp.{}", std::process::id()))
+            .exists());
     }
 }

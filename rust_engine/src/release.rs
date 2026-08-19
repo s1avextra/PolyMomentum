@@ -1,0 +1,1296 @@
+//! Release identity and fail-closed startup preflight.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde::Serialize;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::backtest::experiment::{PromotionArtifact, CURRENT_INVENTORY_MODEL_VERSION};
+use crate::backtest::strategies::StrategyVariant;
+use crate::config::{RuntimeMode, Settings, VenueMode};
+use crate::strategy::spec::{stable_json_hash, StrategySpec};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseManifest {
+    pub schema_version: u32,
+    pub package: &'static str,
+    pub version: &'static str,
+    pub git_sha: &'static str,
+    pub build_timestamp: &'static str,
+    pub binary_path: String,
+    pub mode: RuntimeMode,
+    pub venue: VenueMode,
+    pub config_hash: String,
+    pub promotion: PromotionReleaseManifest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromotionReleaseManifest {
+    pub status: &'static str,
+    pub path: Option<String>,
+    pub detail: String,
+    pub source_report_hash: Option<String>,
+    pub data_manifest_hash: Option<String>,
+    pub inventory_model_version: Option<u32>,
+    pub required_inventory_model_version: u32,
+    pub strategy: Option<StrategySpec>,
+    pub trades: Option<usize>,
+    pub win_rate: Option<f64>,
+    pub total_pnl: Option<f64>,
+}
+
+impl ReleaseManifest {
+    pub fn capture(settings: &Settings, mode: RuntimeMode) -> Self {
+        Self {
+            schema_version: 1,
+            package: env!("CARGO_PKG_NAME"),
+            version: env!("CARGO_PKG_VERSION"),
+            git_sha: option_env!("POLYMOMENTUM_GIT_SHA")
+                .or(option_env!("GIT_SHA"))
+                .unwrap_or("unknown"),
+            build_timestamp: option_env!("POLYMOMENTUM_BUILD_TIMESTAMP")
+                .or(option_env!("BUILD_TIMESTAMP"))
+                .unwrap_or("unknown"),
+            binary_path: std::env::current_exe()
+                .ok()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            mode,
+            venue: settings.venue,
+            config_hash: redacted_config_hash(settings),
+            promotion: capture_promotion_manifest(settings),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Ok,
+    Warn,
+    Fail,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreflightCheck {
+    pub name: &'static str,
+    pub status: CheckStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreflightReport {
+    pub ok: bool,
+    pub mode: RuntimeMode,
+    pub venue: VenueMode,
+    pub release_manifest: ReleaseManifest,
+    pub checks: Vec<PreflightCheck>,
+}
+
+impl PreflightReport {
+    pub fn failure_summary(&self) -> String {
+        let failures: Vec<&str> = self
+            .checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .map(|c| c.detail.as_str())
+            .collect();
+        if failures.is_empty() {
+            "preflight passed".to_string()
+        } else {
+            failures.join("; ")
+        }
+    }
+}
+
+pub fn run_preflight(
+    settings: &Settings,
+    mode: RuntimeMode,
+    i_understand_live: bool,
+) -> PreflightReport {
+    let mut checks = Vec::new();
+
+    push(
+        &mut checks,
+        "runtime_mode",
+        CheckStatus::Ok,
+        format!("mode={}", mode.as_str()),
+    );
+
+    if let Some(e) = &settings.venue_parse_error {
+        push(&mut checks, "venue_config", CheckStatus::Fail, e.clone());
+    } else {
+        push(
+            &mut checks,
+            "venue_config",
+            CheckStatus::Ok,
+            format!("venue={}", settings.venue.as_str()),
+        );
+    }
+
+    check_peer_private_paths(settings, &mut checks);
+    check_runtime_paths(settings, mode, &mut checks);
+    check_disk_watermarks(settings, &mut checks);
+    check_kill_switch(settings, &mut checks);
+    check_promotion_artifact(settings, mode, &mut checks);
+    check_settlement_alignment(settings, mode, &mut checks);
+    check_candle_window(settings, mode, &mut checks);
+
+    if mode.is_live() {
+        check_live_confirmation(i_understand_live, &mut checks);
+        check_live_venue(settings, &mut checks);
+        check_clob_v2_ready(settings, &mut checks);
+        check_live_reconciliation(settings, &mut checks);
+        check_live_credentials(settings, &mut checks);
+        check_live_alerts(settings, &mut checks);
+        check_live_order_style_alignment(settings, &mut checks);
+    } else {
+        check_paper_bankroll(settings, &mut checks);
+        push(
+            &mut checks,
+            "live_safeguard",
+            CheckStatus::Ok,
+            "paper mode does not initialize live CLOB order placement".to_string(),
+        );
+    }
+
+    let ok = !checks.iter().any(|c| c.status == CheckStatus::Fail);
+    PreflightReport {
+        ok,
+        mode,
+        venue: settings.venue,
+        release_manifest: ReleaseManifest::capture(settings, mode),
+        checks,
+    }
+}
+
+fn redacted_config_hash(settings: &Settings) -> String {
+    let material = json!({
+        "poly_base_url": settings.poly_base_url,
+        "poly_gamma_url": settings.poly_gamma_url,
+        "venue": settings.venue.as_str(),
+        "operator_country_present": !settings.operator_country.trim().is_empty(),
+        "venue_compliance_ok": settings.venue_compliance_ok,
+        "polymarket_us_api_enabled": settings.polymarket_us_api_enabled,
+        "clob_v2_ready": settings.clob_v2_ready,
+        "live_reconciliation_ready": settings.live_reconciliation_ready,
+        "live_min_order_size_shares": settings.live_min_order_size_shares,
+        "live_order_budget_buffer": settings.live_order_budget_buffer,
+        "live_allow_maker_orders": settings.live_allow_maker_orders,
+        "private_key_present": !settings.private_key.is_empty(),
+        "poly_api_key_present": !settings.poly_api_key.is_empty(),
+        "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
+        "poly_api_passphrase_present": !settings.poly_api_passphrase.is_empty(),
+        "bankroll_usd": settings.bankroll_usd,
+        "simulated_bankroll_usd": settings.simulated_bankroll_usd(),
+        "candle_simulated_balance_reset_on_start": settings.candle_simulated_balance_reset_on_start,
+        "max_total_exposure_usd": settings.max_total_exposure_usd,
+        "max_position_per_market_usd": settings.max_position_per_market_usd,
+        "candle_position_pct": settings.candle_position_pct,
+        "candle_max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
+        "candle_prefer_maker": settings.candle_prefer_maker,
+        "candle_maker_timeout_s": settings.candle_maker_timeout_s,
+        "candle_window_minutes": settings.candle_window_minutes,
+        "candle_cross_asset_enabled": settings.candle_cross_asset_enabled,
+        "candle_settlement_alignment_ready": settings.candle_settlement_alignment_ready,
+        "alert_required": settings.alert_required,
+        "promotion_artifact_present": !settings.promotion_artifact_path.trim().is_empty(),
+        "promotion_required": settings.promotion_required,
+        "allow_stale_research_artifact": settings.allow_stale_research_artifact,
+        "preflight_min_free_disk_gb": settings.preflight_min_free_disk_gb,
+        "preflight_min_free_disk_pct": settings.preflight_min_free_disk_pct,
+        "data_dir": settings.data_dir,
+        "logs_dir": settings.logs_dir,
+        "state_db_path": settings.state_db_path,
+        "session_log_dir": settings.session_log_dir,
+        "kill_switch_path": settings.kill_switch_path,
+    });
+    let bytes = serde_json::to_vec(&material).unwrap_or_default();
+    let digest = Sha256::digest(bytes);
+    format!("{digest:x}")
+}
+
+fn check_settlement_alignment(
+    settings: &Settings,
+    mode: RuntimeMode,
+    checks: &mut Vec<PreflightCheck>,
+) {
+    if settings.candle_settlement_alignment_ready {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Ok,
+            "CANDLE_SETTLEMENT_ALIGNMENT_READY=true".to_string(),
+        );
+    } else if mode.is_live() {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Fail,
+            "live requires CANDLE_SETTLEMENT_ALIGNMENT_READY=true after oracle-alignment validation".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "settlement_alignment",
+            CheckStatus::Warn,
+            "paper runs settlement-shadow only until CANDLE_SETTLEMENT_ALIGNMENT_READY=true"
+                .to_string(),
+        );
+    }
+}
+
+fn check_candle_window(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+    let target = settings.candle_window_minutes;
+    if (target - 5.0).abs() < 0.05 {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Ok,
+            "CANDLE_WINDOW_MINUTES=5".to_string(),
+        );
+    } else if mode.is_live() {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Fail,
+            format!(
+                "live requires CANDLE_WINDOW_MINUTES=5 to match the promoted 5-minute backtest; got {target}"
+            ),
+        );
+    } else {
+        push(
+            checks,
+            "candle_window",
+            CheckStatus::Warn,
+            format!(
+                "set CANDLE_WINDOW_MINUTES=5 before promotion-bound paper/live runs; current value is {target}"
+            ),
+        );
+    }
+}
+
+fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        return PromotionReleaseManifest {
+            status: "absent",
+            path: None,
+            detail: "no promotion artifact configured".to_string(),
+            source_report_hash: None,
+            data_manifest_hash: None,
+            inventory_model_version: None,
+            required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+            strategy: None,
+            trades: None,
+            win_rate: None,
+            total_pnl: None,
+        };
+    }
+
+    match crate::backtest::experiment::read_promotion(path) {
+        Ok(artifact) => {
+            if let Some(detail) = promotion_validation_error(&artifact) {
+                PromotionReleaseManifest {
+                    status: "invalid",
+                    path: Some(path.to_string()),
+                    detail,
+                    source_report_hash: Some(artifact.source_report_hash),
+                    data_manifest_hash: Some(artifact.data_manifest_hash),
+                    inventory_model_version: Some(artifact.inventory_model_version),
+                    required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+                    strategy: Some(artifact.selected_strategy),
+                    trades: Some(artifact.trades),
+                    win_rate: Some(artifact.win_rate),
+                    total_pnl: Some(artifact.total_pnl),
+                }
+            } else {
+                promotion_manifest_from_artifact(path, &artifact)
+            }
+        }
+        Err(e) => PromotionReleaseManifest {
+            status: "invalid",
+            path: Some(path.to_string()),
+            detail: e.to_string(),
+            source_report_hash: None,
+            data_manifest_hash: None,
+            inventory_model_version: None,
+            required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+            strategy: None,
+            trades: None,
+            win_rate: None,
+            total_pnl: None,
+        },
+    }
+}
+
+fn check_live_order_style_alignment(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        return;
+    }
+
+    let Ok(artifact) = crate::backtest::experiment::read_promotion(path) else {
+        return;
+    };
+    let Ok(variant) = serde_json::from_value::<StrategyVariant>(artifact.strategy_params.clone())
+    else {
+        return;
+    };
+
+    if variant.prefer_maker && !settings.live_allow_maker_orders {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Fail,
+            "promoted strategy uses maker orders; set LIVE_ALLOW_MAKER_ORDERS=1 or promote a taker strategy before live"
+                .to_string(),
+        );
+    } else if variant.prefer_maker {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Ok,
+            "promoted maker strategy matches LIVE_ALLOW_MAKER_ORDERS=1".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_order_style",
+            CheckStatus::Ok,
+            "promoted taker strategy does not require maker enablement".to_string(),
+        );
+    }
+}
+
+fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
+    if artifact.schema_version != 1 {
+        return Some(format!(
+            "unsupported promotion schema {}",
+            artifact.schema_version
+        ));
+    }
+    if artifact.selected_strategy.name != "candle_momentum" {
+        return Some(format!(
+            "unsupported promoted strategy {}",
+            artifact.selected_strategy.name
+        ));
+    }
+    if artifact.strategy_params.is_null() {
+        return Some("promotion artifact has no strategy_params".to_string());
+    }
+    let variant: StrategyVariant = match serde_json::from_value(artifact.strategy_params.clone()) {
+        Ok(variant) => variant,
+        Err(e) => {
+            return Some(format!(
+                "strategy_params do not parse as StrategyVariant: {e}"
+            ))
+        }
+    };
+    if !variant.exit.is_disabled() {
+        return Some(
+            "strategy_params enable an exit lifecycle that live runtime does not yet implement"
+                .to_string(),
+        );
+    }
+    let params_hash = stable_json_hash(&variant);
+    if params_hash != artifact.selected_strategy.params_hash {
+        return Some(format!(
+            "strategy_params hash {} does not match selected_strategy hash {}",
+            params_hash, artifact.selected_strategy.params_hash
+        ));
+    }
+    None
+}
+
+fn promotion_manifest_from_artifact(
+    path: &str,
+    artifact: &PromotionArtifact,
+) -> PromotionReleaseManifest {
+    let stale_detail = promotion_inventory_model_error(artifact);
+    PromotionReleaseManifest {
+        status: if stale_detail.is_some() {
+            "stale_research"
+        } else {
+            "ok"
+        },
+        path: Some(path.to_string()),
+        detail: stale_detail.unwrap_or_else(|| {
+            format!(
+                "promoted {} trades from {}",
+                artifact.trades, artifact.source_label
+            )
+        }),
+        source_report_hash: Some(artifact.source_report_hash.clone()),
+        data_manifest_hash: Some(artifact.data_manifest_hash.clone()),
+        inventory_model_version: Some(artifact.inventory_model_version),
+        required_inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+        strategy: Some(artifact.selected_strategy.clone()),
+        trades: Some(artifact.trades),
+        win_rate: Some(artifact.win_rate),
+        total_pnl: Some(artifact.total_pnl),
+    }
+}
+
+fn check_live_confirmation(i_understand_live: bool, checks: &mut Vec<PreflightCheck>) {
+    if i_understand_live {
+        push(
+            checks,
+            "live_confirmation",
+            CheckStatus::Ok,
+            "--i-understand-live supplied".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_confirmation",
+            CheckStatus::Fail,
+            "live mode requires --i-understand-live".to_string(),
+        );
+    }
+}
+
+fn check_live_venue(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    match settings.venue {
+        VenueMode::PaperOnly => push(
+            checks,
+            "live_venue",
+            CheckStatus::Fail,
+            "VENUE=paper_only refuses real-money live mode".to_string(),
+        ),
+        VenueMode::PolymarketUs => {
+            if settings.polymarket_us_api_enabled && settings.venue_compliance_ok {
+                push(
+                    checks,
+                    "live_venue",
+                    CheckStatus::Ok,
+                    "Polymarket US venue explicitly enabled by configuration".to_string(),
+                );
+            } else {
+                push(
+                    checks,
+                    "live_venue",
+                    CheckStatus::Fail,
+                    "VENUE=polymarket_us requires POLYMARKET_US_API_ENABLED=1 and POLYMOMENTUM_VENUE_COMPLIANCE_OK=1".to_string(),
+                );
+            }
+        }
+        VenueMode::PolymarketInternational => {
+            let country = settings.operator_country.trim().to_ascii_uppercase();
+            let country_blocked = matches!(
+                country.as_str(),
+                "US" | "USA" | "UNITED_STATES" | "UNITED STATES"
+            );
+            if country_blocked {
+                push(
+                    checks,
+                    "live_venue",
+                    CheckStatus::Fail,
+                    "VENUE=polymarket_international is blocked for OPERATOR_COUNTRY=US".to_string(),
+                );
+            } else if settings.venue_compliance_ok && !country.is_empty() {
+                push(
+                    checks,
+                    "live_venue",
+                    CheckStatus::Ok,
+                    "international venue compliance acknowledged with non-US operator country"
+                        .to_string(),
+                );
+            } else {
+                push(
+                    checks,
+                    "live_venue",
+                    CheckStatus::Fail,
+                    "VENUE=polymarket_international requires non-US OPERATOR_COUNTRY and POLYMOMENTUM_VENUE_COMPLIANCE_OK=1".to_string(),
+                );
+            }
+        }
+    }
+}
+
+fn check_live_credentials(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let missing: Vec<&str> = [
+        ("PRIVATE_KEY", settings.private_key.as_str()),
+        ("POLY_API_KEY", settings.poly_api_key.as_str()),
+        ("POLY_API_SECRET", settings.poly_api_secret.as_str()),
+        ("POLY_API_PASSPHRASE", settings.poly_api_passphrase.as_str()),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| if value.is_empty() { Some(name) } else { None })
+    .collect();
+
+    if !settings.private_key.is_empty()
+        && crate::signing::parse_private_key(&settings.private_key).is_none()
+    {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Fail,
+            "PRIVATE_KEY is present but is not a valid secp256k1 hex key".to_string(),
+        );
+    } else if missing.is_empty() && !crate::signing::api_secret_is_valid(&settings.poly_api_secret)
+    {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Fail,
+            "POLY_API_SECRET is present but is not valid URL-safe base64".to_string(),
+        );
+    } else if missing.is_empty() {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Ok,
+            "required CLOB credentials are present".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_credentials",
+            CheckStatus::Fail,
+            format!("missing live credential(s): {}", missing.join(", ")),
+        );
+    }
+}
+
+fn check_clob_v2_ready(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if crate::signing::CLOB_ORDER_SIGNING_VERSION != 2 {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Fail,
+            format!(
+                "compiled CLOB order signer is V{}; live mode requires CLOB V2 signing",
+                crate::signing::CLOB_ORDER_SIGNING_VERSION
+            ),
+        );
+    } else if settings.clob_v2_ready {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Ok,
+            "CLOB_V2_READY=1 acknowledges the live order path has been migrated and verified"
+                .to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "clob_v2_ready",
+            CheckStatus::Fail,
+            "live mode requires CLOB_V2_READY=1 until the V2 order-signing path is verified"
+                .to_string(),
+        );
+    }
+}
+
+fn check_live_reconciliation(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if settings.live_reconciliation_ready {
+        push(
+            checks,
+            "live_reconciliation",
+            CheckStatus::Ok,
+            "authenticated user-channel/REST reconciliation is explicitly enabled".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_reconciliation",
+            CheckStatus::Fail,
+            "live mode requires POLYMOMENTUM_LIVE_RECONCILIATION_READY=1 so accepted orders are reconciled from CLOB user-channel/REST evidence".to_string(),
+        );
+    }
+}
+
+fn check_live_alerts(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let webhook_present = std::env::var("SLACK_WEBHOOK_URL")
+        .or_else(|_| std::env::var("ALERT_WEBHOOK_URL"))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let telegram_present = std::env::var("TELEGRAM_BOT_TOKEN")
+        .or_else(|_| std::env::var("POLYMOMENTUM_TELEGRAM_BOT_TOKEN"))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        && std::env::var("TELEGRAM_CHAT_ID")
+            .or_else(|_| std::env::var("POLYMOMENTUM_TELEGRAM_CHAT_ID"))
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+    if settings.alert_required && (webhook_present || telegram_present) {
+        push(
+            checks,
+            "live_alerting",
+            CheckStatus::Ok,
+            "alerting is required and Slack/webhook or Telegram is configured".to_string(),
+        );
+    } else if settings.alert_required {
+        push(
+            checks,
+            "live_alerting",
+            CheckStatus::Fail,
+            "ALERT_REQUIRED=1 but no Slack/webhook or Telegram alert target is configured"
+                .to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "live_alerting",
+            CheckStatus::Fail,
+            "live mode requires ALERT_REQUIRED=1".to_string(),
+        );
+    }
+}
+
+fn check_runtime_paths(settings: &Settings, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+    check_dir("data_dir", &settings.data_dir, mode, checks);
+    check_dir("logs_dir", &settings.logs_dir, mode, checks);
+    check_dir("session_log_dir", &settings.session_log_dir, mode, checks);
+
+    let state_parent = Path::new(&settings.state_db_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    check_dir(
+        "state_db_parent",
+        &state_parent.display().to_string(),
+        mode,
+        checks,
+    );
+}
+
+#[derive(Debug)]
+struct DiskUsage {
+    checked_path: PathBuf,
+    available_bytes: u64,
+    total_bytes: u64,
+    free_pct: f64,
+}
+
+fn check_disk_watermarks(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let min_free_gb = settings.preflight_min_free_disk_gb.max(0.0);
+    let min_free_pct = settings.preflight_min_free_disk_pct.max(0.0);
+    if min_free_gb <= 0.0 && min_free_pct <= 0.0 {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Ok,
+            "disk watermark disabled".to_string(),
+        );
+        return;
+    }
+
+    let state_parent = Path::new(&settings.state_db_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let paths = [
+        PathBuf::from(&settings.data_dir),
+        PathBuf::from(&settings.logs_dir),
+        PathBuf::from(&settings.session_log_dir),
+        state_parent,
+    ];
+
+    let mut seen = BTreeSet::new();
+    let mut failures = Vec::new();
+    let mut details = Vec::new();
+    for path in paths {
+        let check_path = nearest_existing_path(&path);
+        let key = check_path.display().to_string();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        match disk_usage(&check_path) {
+            Ok(usage) => {
+                let available_gb = usage.available_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+                let total_gb = usage.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+                let low_gb = min_free_gb > 0.0 && available_gb < min_free_gb;
+                let low_pct = min_free_pct > 0.0 && usage.free_pct < min_free_pct;
+                let detail = format!(
+                    "{} free={available_gb:.2}GiB/{total_gb:.2}GiB ({:.1}%)",
+                    usage.checked_path.display(),
+                    usage.free_pct
+                );
+                if low_gb || low_pct {
+                    failures.push(format!(
+                        "{detail} below min {:.2}GiB and/or {:.1}%",
+                        min_free_gb, min_free_pct
+                    ));
+                } else {
+                    details.push(detail);
+                }
+            }
+            Err(e) => failures.push(format!("{key}: disk check failed: {e}")),
+        }
+    }
+
+    if failures.is_empty() {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Ok,
+            format!(
+                "disk headroom ok; min {:.2}GiB and {:.1}% free; {}",
+                min_free_gb,
+                min_free_pct,
+                details.join("; ")
+            ),
+        );
+    } else {
+        push(
+            checks,
+            "disk_watermark",
+            CheckStatus::Fail,
+            failures.join("; "),
+        );
+    }
+}
+
+fn nearest_existing_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.exists() {
+            return ancestor.to_path_buf();
+        }
+    }
+    PathBuf::from("/")
+}
+
+fn disk_usage(path: &Path) -> std::io::Result<DiskUsage> {
+    let output = Command::new("df").arg("-Pk").arg(path).output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .ok_or_else(|| std::io::Error::other("empty df output"))?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 5 {
+        return Err(std::io::Error::other(format!(
+            "unparseable df output: {line}"
+        )));
+    }
+    let total_kb = fields[1]
+        .parse::<u64>()
+        .map_err(|e| std::io::Error::other(format!("parse df total blocks failed: {e}")))?;
+    let available_kb = fields[3]
+        .parse::<u64>()
+        .map_err(|e| std::io::Error::other(format!("parse df available blocks failed: {e}")))?;
+    let used_pct = fields[4]
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .map_err(|e| std::io::Error::other(format!("parse df capacity failed: {e}")))?;
+    Ok(DiskUsage {
+        checked_path: path.to_path_buf(),
+        available_bytes: available_kb.saturating_mul(1024),
+        total_bytes: total_kb.saturating_mul(1024),
+        free_pct: (100.0 - used_pct).max(0.0),
+    })
+}
+
+fn check_dir(name: &'static str, path: &str, mode: RuntimeMode, checks: &mut Vec<PreflightCheck>) {
+    let p = Path::new(path);
+    match std::fs::metadata(p) {
+        Ok(m) if m.is_dir() => push(checks, name, CheckStatus::Ok, format!("{path} exists")),
+        Ok(_) => push(
+            checks,
+            name,
+            CheckStatus::Fail,
+            format!("{path} exists but is not a directory"),
+        ),
+        Err(_) if mode.is_live() => push(
+            checks,
+            name,
+            CheckStatus::Fail,
+            format!("{path} is missing"),
+        ),
+        Err(_) => push(
+            checks,
+            name,
+            CheckStatus::Warn,
+            format!("{path} is missing; runtime will attempt to create it"),
+        ),
+    }
+}
+
+fn check_paper_bankroll(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let bankroll = settings.simulated_bankroll_usd();
+    if bankroll > 0.0 {
+        push(
+            checks,
+            "paper_bankroll",
+            CheckStatus::Ok,
+            if settings.bankroll_usd > 0.0 {
+                format!("BANKROLL_USD={bankroll:.2}")
+            } else {
+                format!("BANKROLL_USD defaulted to simulated ${bankroll:.2}")
+            },
+        );
+    } else {
+        push(
+            checks,
+            "paper_bankroll",
+            CheckStatus::Fail,
+            "paper mode requires a positive simulated bankroll so fills and risk limits are exercised".to_string(),
+        );
+    }
+}
+
+fn check_kill_switch(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    if Path::new(&settings.kill_switch_path).exists() {
+        push(
+            checks,
+            "kill_switch",
+            CheckStatus::Fail,
+            format!("kill switch is active at {}", settings.kill_switch_path),
+        );
+    } else {
+        push(
+            checks,
+            "kill_switch",
+            CheckStatus::Ok,
+            format!("kill switch absent at {}", settings.kill_switch_path),
+        );
+    }
+}
+
+fn check_promotion_artifact(
+    settings: &Settings,
+    mode: RuntimeMode,
+    checks: &mut Vec<PreflightCheck>,
+) {
+    let path = settings.promotion_artifact_path.trim();
+    if path.is_empty() {
+        let status = if settings.promotion_required {
+            CheckStatus::Fail
+        } else {
+            CheckStatus::Warn
+        };
+        push(
+            checks,
+            "promotion_artifact",
+            status,
+            "no POLYMOMENTUM_PROMOTION_ARTIFACT configured".to_string(),
+        );
+        return;
+    }
+
+    match crate::backtest::experiment::read_promotion(path) {
+        Ok(artifact) => {
+            if let Some(detail) = promotion_validation_error(&artifact) {
+                push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+            } else if let Some(detail) = promotion_inventory_model_error(&artifact) {
+                if !mode.is_live() && settings.allow_stale_research_artifact {
+                    push(
+                        checks,
+                        "promotion_artifact",
+                        CheckStatus::Warn,
+                        format!("{detail}; allowed for paper research diagnostics only"),
+                    );
+                } else {
+                    push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+                }
+            } else {
+                push(
+                    checks,
+                    "promotion_artifact",
+                    CheckStatus::Ok,
+                    format!(
+                        "loaded promoted strategy hash={} trades={}",
+                        artifact.selected_strategy.params_hash, artifact.trades
+                    ),
+                );
+            }
+        }
+        Err(e) => push(
+            checks,
+            "promotion_artifact",
+            CheckStatus::Fail,
+            format!("failed to load promotion artifact {path}: {e}"),
+        ),
+    }
+}
+
+fn promotion_inventory_model_error(artifact: &PromotionArtifact) -> Option<String> {
+    if artifact.inventory_model_version < CURRENT_INVENTORY_MODEL_VERSION {
+        Some(format!(
+            "promotion artifact inventory_model_version={} is stale; current required version is {}",
+            artifact.inventory_model_version, CURRENT_INVENTORY_MODEL_VERSION
+        ))
+    } else {
+        None
+    }
+}
+
+fn check_peer_private_paths(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
+    let mut paths = vec![
+        ("data_dir", settings.data_dir.as_str()),
+        ("logs_dir", settings.logs_dir.as_str()),
+        ("state_db_path", settings.state_db_path.as_str()),
+        ("session_log_dir", settings.session_log_dir.as_str()),
+        ("kill_switch_path", settings.kill_switch_path.as_str()),
+    ];
+    if !settings.promotion_artifact_path.trim().is_empty() {
+        paths.push((
+            "promotion_artifact_path",
+            settings.promotion_artifact_path.as_str(),
+        ));
+    }
+    let bad: Vec<String> = paths
+        .iter()
+        .filter_map(|(name, path)| {
+            let normalized = path.trim_end_matches('/');
+            if normalized.starts_with("/opt/polyarbitrage")
+                || normalized.starts_with("/etc/polyarbitrage")
+                || normalized.starts_with("/opt/adgts")
+                || normalized.starts_with("/etc/adgts")
+            {
+                Some(format!("{name}={path}"))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if bad.is_empty() {
+        push(
+            checks,
+            "peer_private_paths",
+            CheckStatus::Ok,
+            "runtime paths stay out of peer bot private directories".to_string(),
+        );
+    } else {
+        push(
+            checks,
+            "peer_private_paths",
+            CheckStatus::Fail,
+            format!(
+                "runtime path(s) point into peer private directories: {}",
+                bad.join(", ")
+            ),
+        );
+    }
+}
+
+fn push(checks: &mut Vec<PreflightCheck>, name: &'static str, status: CheckStatus, detail: String) {
+    checks.push(PreflightCheck {
+        name,
+        status,
+        detail,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backtest::experiment::{PromotionGate, CURRENT_INVENTORY_MODEL_VERSION};
+    use tempfile::TempDir;
+
+    fn test_settings(tmp: &TempDir) -> Settings {
+        let mut s = Settings::from_env();
+        let root = tmp.path();
+        s.data_dir = root.join("data").display().to_string();
+        s.logs_dir = root.join("logs").display().to_string();
+        s.session_log_dir = root.join("logs/sessions").display().to_string();
+        s.state_db_path = root.join("logs/candle/state.db").display().to_string();
+        s.kill_switch_path = root.join("KILL").display().to_string();
+        std::fs::create_dir_all(&s.data_dir).unwrap();
+        std::fs::create_dir_all(&s.logs_dir).unwrap();
+        std::fs::create_dir_all(&s.session_log_dir).unwrap();
+        std::fs::create_dir_all(root.join("logs/candle")).unwrap();
+        s.venue = VenueMode::PaperOnly;
+        s.venue_raw = "paper_only".to_string();
+        s.venue_parse_error = None;
+        s.alert_required = false;
+        s.bankroll_usd = 100.0;
+        s.candle_window_minutes = 5.0;
+        s.promotion_artifact_path.clear();
+        s.promotion_required = false;
+        s.allow_stale_research_artifact = false;
+        s.preflight_min_free_disk_gb = 0.0;
+        s.preflight_min_free_disk_pct = 0.0;
+        s.clob_v2_ready = false;
+        s.live_reconciliation_ready = false;
+        s.private_key.clear();
+        s.poly_api_key.clear();
+        s.poly_api_secret.clear();
+        s.poly_api_passphrase.clear();
+        s
+    }
+
+    #[test]
+    fn paper_preflight_passes_with_local_runtime_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let s = test_settings(&tmp);
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(report.ok, "{}", report.failure_summary());
+    }
+
+    #[test]
+    fn paper_preflight_defaults_zero_bankroll_to_simulated_balance() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.bankroll_usd = 0.0;
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(report.ok, "{}", report.failure_summary());
+        assert!(report
+            .checks
+            .iter()
+            .any(|c| c.name == "paper_bankroll" && c.detail.contains("simulated $100.00")));
+    }
+
+    #[test]
+    fn live_preflight_fails_closed_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let s = test_settings(&tmp);
+        let report = run_preflight(&s, RuntimeMode::Live, false);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("CANDLE_SETTLEMENT_ALIGNMENT_READY=true"));
+        assert!(report
+            .failure_summary()
+            .contains("VENUE=paper_only refuses real-money live mode"));
+    }
+
+    #[test]
+    fn live_preflight_requires_clob_v2_ready_flag() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = false;
+        s.private_key = "0xabc".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("live mode requires CLOB_V2_READY=1"));
+    }
+
+    #[test]
+    fn live_preflight_requires_reconciliation_ready_flag() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = true;
+        s.live_reconciliation_ready = false;
+        s.alert_required = true;
+        s.private_key = "0xabc".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("POLYMOMENTUM_LIVE_RECONCILIATION_READY=1"));
+    }
+
+    #[test]
+    fn live_credentials_reject_malformed_api_secret() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.private_key =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "not base64!".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let mut checks = Vec::new();
+        check_live_credentials(&s, &mut checks);
+
+        assert!(matches!(checks[0].status, CheckStatus::Fail));
+        assert!(checks[0].detail.contains("POLY_API_SECRET"));
+    }
+
+    #[test]
+    fn preflight_rejects_peer_private_paths() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.logs_dir = "/opt/polyarbitrage/logs".to_string();
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("peer private"));
+    }
+
+    #[test]
+    fn preflight_can_require_promotion_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.promotion_required = true;
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("POLYMOMENTUM_PROMOTION_ARTIFACT"));
+    }
+
+    #[test]
+    fn preflight_rejects_invalid_promotion_artifact() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = tmp.path().join("promotion.json");
+        std::fs::write(&artifact, "{bad json").unwrap();
+        s.promotion_artifact_path = artifact.display().to_string();
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("failed to load promotion"));
+    }
+
+    #[test]
+    fn preflight_rejects_complete_set_lock_until_live_runtime_has_parity() {
+        let tmp = TempDir::new().unwrap();
+        let mut variant = StrategyVariant::baseline();
+        variant.exit.complete_set_lock_enabled = true;
+        let artifact = write_test_promotion(tmp.path(), variant);
+        let mut settings = test_settings(&tmp);
+        settings.promotion_artifact_path = artifact.display().to_string();
+
+        let report = run_preflight(&settings, RuntimeMode::Paper, false);
+
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("exit lifecycle that live runtime does not yet implement"));
+    }
+
+    #[test]
+    fn preflight_rejects_stale_inventory_model_promotion_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion_with_inventory_model(
+            tmp.path(),
+            StrategyVariant::baseline(),
+            CURRENT_INVENTORY_MODEL_VERSION - 1,
+        );
+        s.promotion_artifact_path = artifact.display().to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("inventory_model_version"));
+        assert_eq!(report.release_manifest.promotion.status, "stale_research");
+    }
+
+    #[test]
+    fn paper_preflight_allows_stale_inventory_model_for_research_override() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion_with_inventory_model(
+            tmp.path(),
+            StrategyVariant::baseline(),
+            CURRENT_INVENTORY_MODEL_VERSION - 1,
+        );
+        s.promotion_artifact_path = artifact.display().to_string();
+        s.allow_stale_research_artifact = true;
+
+        let report = run_preflight(&s, RuntimeMode::Paper, false);
+
+        assert!(report.ok, "{}", report.failure_summary());
+        assert!(report.checks.iter().any(|c| {
+            c.name == "promotion_artifact"
+                && c.status == CheckStatus::Warn
+                && c.detail.contains("paper research diagnostics only")
+        }));
+    }
+
+    #[test]
+    fn live_preflight_requires_5m_window() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.candle_window_minutes = 0.0;
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report.failure_summary().contains("CANDLE_WINDOW_MINUTES=5"));
+    }
+
+    #[test]
+    fn live_preflight_rejects_maker_promotion_without_maker_permission() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        let artifact = write_test_promotion(tmp.path(), StrategyVariant::maker_first());
+        s.promotion_artifact_path = artifact.display().to_string();
+        s.venue = VenueMode::PolymarketInternational;
+        s.venue_raw = "polymarket_international".to_string();
+        s.operator_country = "IE".to_string();
+        s.venue_compliance_ok = true;
+        s.clob_v2_ready = true;
+        s.live_reconciliation_ready = true;
+        s.candle_settlement_alignment_ready = true;
+        s.alert_required = true;
+        s.live_allow_maker_orders = false;
+        s.private_key =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
+        s.poly_api_key = "key".to_string();
+        s.poly_api_secret = "c2VjcmV0".to_string();
+        s.poly_api_passphrase = "pass".to_string();
+
+        let report = run_preflight(&s, RuntimeMode::Live, true);
+        assert!(!report.ok);
+        assert!(report
+            .failure_summary()
+            .contains("LIVE_ALLOW_MAKER_ORDERS=1"));
+    }
+
+    fn write_test_promotion(root: &std::path::Path, variant: StrategyVariant) -> PathBuf {
+        write_test_promotion_with_inventory_model(root, variant, CURRENT_INVENTORY_MODEL_VERSION)
+    }
+
+    fn write_test_promotion_with_inventory_model(
+        root: &std::path::Path,
+        variant: StrategyVariant,
+        inventory_model_version: u32,
+    ) -> PathBuf {
+        let selected_strategy = StrategySpec::from_serializable_params(
+            "candle_momentum",
+            "1",
+            &variant,
+            variant.risk_profile(),
+        );
+        let artifact = PromotionArtifact {
+            schema_version: 1,
+            inventory_model_version,
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            source_report_hash: "source".to_string(),
+            source_label: "test".to_string(),
+            source_window: "test".to_string(),
+            selected_strategy,
+            strategy_params: serde_json::to_value(&variant).unwrap(),
+            data_manifest_hash: "data".to_string(),
+            market_count: 1,
+            trades: 30,
+            win_rate: 0.7,
+            total_pnl: 10.0,
+            avg_pnl: 0.33,
+            total_fees: 0.0,
+            sharpe_like: 0.1,
+            dominant_zone: Some("early".to_string()),
+            dominant_zone_trade_share: Some(1.0),
+            risk_notes: vec![],
+            promotion_gate: PromotionGate::default(),
+            robust_diagnostics: None,
+        };
+        let path = root.join("promotion.json");
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        path
+    }
+}

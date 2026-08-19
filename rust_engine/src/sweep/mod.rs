@@ -21,13 +21,16 @@ pub mod strategy;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use crate::sweep::replay::{run_strategy, EvaluationRow, ResolutionRow};
 use crate::sweep::strategy::Strategy;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct SweepRun {
     pub strategy_name: String,
+    pub position_pct: f64,
+    pub max_per_market_usd: f64,
     pub trades: u64,
     pub wins: u64,
     pub losses: u64,
@@ -42,15 +45,23 @@ pub struct SweepRun {
 impl SweepRun {
     pub fn win_rate(&self) -> f64 {
         let resolved = self.wins + self.losses;
-        if resolved == 0 { 0.0 } else { self.wins as f64 / resolved as f64 }
+        if resolved == 0 {
+            0.0
+        } else {
+            self.wins as f64 / resolved as f64
+        }
     }
 
     pub fn pnl_per_trade(&self) -> f64 {
-        if self.trades == 0 { 0.0 } else { self.realized_pnl / self.trades as f64 }
+        if self.trades == 0 {
+            0.0
+        } else {
+            self.realized_pnl / self.trades as f64
+        }
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct ZoneStats {
     pub trades: u64,
     pub wins: u64,
@@ -61,7 +72,11 @@ pub struct ZoneStats {
 impl ZoneStats {
     pub fn win_rate(&self) -> f64 {
         let r = self.wins + self.losses;
-        if r == 0 { 0.0 } else { self.wins as f64 / r as f64 }
+        if r == 0 {
+            0.0
+        } else {
+            self.wins as f64 / r as f64
+        }
     }
 }
 
@@ -71,12 +86,21 @@ pub fn run_sweep(
     jsonl_paths: &[PathBuf],
     strategies: &[Strategy],
     bankroll_usd: f64,
+    position_pct: f64,
+    max_per_market_usd: f64,
     insufficient_threshold: u64,
 ) -> Result<Vec<SweepRun>> {
     let (evaluations, resolutions) = load_session_logs(jsonl_paths)?;
     let mut results = Vec::new();
     for strat in strategies {
-        let mut run = run_strategy(&evaluations, &resolutions, strat, bankroll_usd);
+        let mut run = run_strategy(
+            &evaluations,
+            &resolutions,
+            strat,
+            bankroll_usd,
+            position_pct,
+            max_per_market_usd,
+        );
         run.insufficient_data = run.trades < insufficient_threshold;
         results.push(run);
     }
@@ -88,8 +112,8 @@ fn load_session_logs(paths: &[PathBuf]) -> Result<(Vec<EvaluationRow>, Vec<Resol
     let mut evals = Vec::new();
     let mut resolves = Vec::new();
     for p in paths {
-        let f = std::fs::File::open(p)
-            .with_context(|| format!("open session log {}", p.display()))?;
+        let f =
+            std::fs::File::open(p).with_context(|| format!("open session log {}", p.display()))?;
         let reader = std::io::BufReader::new(f);
         for line in reader.lines().map_while(|l| l.ok()) {
             let trimmed = line.trim();
@@ -118,7 +142,7 @@ fn load_session_logs(paths: &[PathBuf]) -> Result<(Vec<EvaluationRow>, Vec<Resol
         }
     }
     // Stable ordering for deterministic replay.
-    evals.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+    evals.sort_by_key(|eval| eval.ts_ms);
     Ok((evals, resolves))
 }
 
@@ -151,7 +175,11 @@ pub fn render_table(runs: &[SweepRun]) -> String {
     }
     if runs.iter().any(|r| r.insufficient_data) {
         writeln!(&mut out).unwrap();
-        writeln!(&mut out, "* = sample below significance threshold; treat as directional only").unwrap();
+        writeln!(
+            &mut out,
+            "* = sample below significance threshold; treat as directional only"
+        )
+        .unwrap();
     }
     out
 }
@@ -174,7 +202,12 @@ pub fn render_zone_breakdown(runs: &[SweepRun]) -> String {
             writeln!(
                 &mut out,
                 "  {:<10} {:>7} {:>7} {:>7} {:>6.1}% {:>+8.2}",
-                zone, stats.trades, stats.wins, stats.losses, 100.0 * stats.win_rate(), stats.pnl
+                zone,
+                stats.trades,
+                stats.wins,
+                stats.losses,
+                100.0 * stats.win_rate(),
+                stats.pnl
             )
             .unwrap();
         }

@@ -22,6 +22,23 @@ pub struct MomentumSignal {
     pub open_price: f64,
     pub z_score: f64,
     pub reversion_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directional_impulse_10s_bps: Option<f64>,
+    /// Strict signs of the first two one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_2m: Option<String>,
+    /// Strict signs of the first three one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_3m: Option<String>,
+    /// Strict signs of the first four one-minute checkpoint returns.
+    /// Values are `up`, `down`, or `mixed`; unavailable until minute four.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_path_4m: Option<String>,
+    /// Causal BTC move from the window open to the two-minute checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_move_2m_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +76,41 @@ pub struct MomentumDetector {
 
 const SECONDS_PER_YEAR: f64 = 365.25 * 86400.0;
 
+pub fn annualized_realized_vol<I>(samples: I, min_returns: usize) -> Option<f64>
+where
+    I: IntoIterator<Item = (f64, f64)>,
+{
+    let mut previous: Option<(f64, f64)> = None;
+    let mut count = 0_usize;
+    let mut mean = 0.0;
+    let mut m2 = 0.0;
+    let mut total_dt = 0.0;
+    for (timestamp_s, price) in samples {
+        if let Some((previous_ts, previous_price)) = previous {
+            let dt = timestamp_s - previous_ts;
+            if dt > 0.0 && previous_price > 0.0 && price > 0.0 {
+                let value = (price / previous_price).ln();
+                count += 1;
+                let delta = value - mean;
+                mean += delta / count as f64;
+                m2 += delta * (value - mean);
+                total_dt += dt;
+            }
+        }
+        previous = Some((timestamp_s, price));
+    }
+    if count < min_returns || total_dt <= 0.0 {
+        return None;
+    }
+    let variance = m2 / count as f64;
+    let average_dt = total_dt / count as f64;
+    Some(
+        (variance / average_dt * SECONDS_PER_YEAR)
+            .sqrt()
+            .clamp(0.05, 5.0),
+    )
+}
+
 impl MomentumDetector {
     pub fn new(seed_vol: Option<f64>, cfg: MomentumConfig) -> Self {
         let seed = seed_vol.unwrap_or(0.50);
@@ -92,6 +144,20 @@ impl MomentumDetector {
         }
         let v = (self.slow_var.max(0.0) * SECONDS_PER_YEAR).sqrt();
         v.clamp(self.cfg.floor_vol, 5.0)
+    }
+
+    pub fn rolling_realized_vol(&self, lookback_seconds: f64) -> Option<f64> {
+        if lookback_seconds <= 0.0 || !lookback_seconds.is_finite() {
+            return None;
+        }
+        let cutoff = self.ticks.back()?.0 - lookback_seconds;
+        annualized_realized_vol(
+            self.ticks
+                .iter()
+                .copied()
+                .filter(|(timestamp_s, _)| *timestamp_s >= cutoff),
+            20,
+        )
     }
 
     pub fn set_realized_vol(&mut self, vol: f64) {
@@ -185,6 +251,14 @@ impl MomentumDetector {
         let price_change = current_price - open_price;
         let price_change_pct = price_change / open_price;
         let direction = if price_change >= 0.0 { "up" } else { "down" };
+        let directional_impulse_10s_bps =
+            self.directional_impulse_bps(direction, current_price, now, 10.0);
+        let article_path_2m = self.article_checkpoint_path(window_start, open_price, now, 2);
+        let article_path_3m = self.article_checkpoint_path(window_start, open_price, now, 3);
+        let article_path_4m = self.article_checkpoint_path(window_start, open_price, now, 4);
+        let article_move_2m_usd = self
+            .checkpoint_price(window_start + 120.0, now)
+            .map(|price| price - open_price);
 
         // Walk ticks newest → oldest, stop at window_start.
         let mut recent: Vec<(f64, f64)> = Vec::new();
@@ -225,8 +299,14 @@ impl MomentumDetector {
         let total_window = minutes_elapsed + minutes_remaining;
         let current_vol = self.realized_vol();
         let mut sigma_window = open_price * current_vol * (total_window / 525_600.0).sqrt();
-        if sigma_window < 1.0 {
-            sigma_window = 1.0;
+        // Asset-relative sigma floor: 1e-5 of the open price. On BTC at
+        // ~$100k this is ~$1 — the value the historical absolute floor was
+        // tuned around — while on SOL/ETH price scales the old flat $1.0
+        // floor inflated sigma and muted z-scores ~4x, silently disabling
+        // every non-BTC signal. Floor also guards div-by-zero on a dead tape.
+        let sigma_floor = (open_price.abs() * 1e-5).max(f64::MIN_POSITIVE);
+        if sigma_window < sigma_floor {
+            sigma_window = sigma_floor;
         }
         let z_score = price_change.abs() / sigma_window;
 
@@ -238,10 +318,8 @@ impl MomentumDetector {
         let reversion_penalty = (1.0 - reversion_count as f64 * 0.05).max(0.0);
         let z_factor = (z_score / 3.0).min(1.0);
 
-        let mut confidence = 0.35 * time_factor
-            + 0.35 * z_factor
-            + 0.15 * consistency
-            + 0.15 * reversion_penalty;
+        let mut confidence =
+            0.35 * time_factor + 0.35 * z_factor + 0.15 * consistency + 0.15 * reversion_penalty;
         confidence = confidence.clamp(0.10, 0.95);
 
         if minutes_remaining < 1.0 && z_score > 0.5 {
@@ -266,6 +344,83 @@ impl MomentumDetector {
             open_price,
             z_score,
             reversion_count,
+            directional_impulse_10s_bps,
+            article_path_2m,
+            article_path_3m,
+            article_path_4m,
+            article_move_2m_usd,
+        })
+    }
+
+    fn checkpoint_price(&self, checkpoint_ts: f64, now_ts: f64) -> Option<f64> {
+        if !checkpoint_ts.is_finite() || !now_ts.is_finite() || now_ts + 1e-9 < checkpoint_ts {
+            return None;
+        }
+        let &(observed_ts, price) = self.ticks.iter().rev().find(|(timestamp, price)| {
+            *timestamp <= checkpoint_ts && *price > 0.0 && price.is_finite()
+        })?;
+        (checkpoint_ts - observed_ts <= 2.0).then_some(price)
+    }
+
+    fn article_checkpoint_path(
+        &self,
+        window_start: f64,
+        open_price: f64,
+        now_ts: f64,
+        minutes: usize,
+    ) -> Option<String> {
+        if !(2..=4).contains(&minutes) {
+            return None;
+        }
+        let mut previous = open_price;
+        let mut all_up = true;
+        let mut all_down = true;
+        for minute in 1..=minutes {
+            let price = self.checkpoint_price(window_start + minute as f64 * 60.0, now_ts)?;
+            all_up &= price > previous;
+            all_down &= price < previous;
+            previous = price;
+        }
+        Some(
+            if all_up {
+                "up"
+            } else if all_down {
+                "down"
+            } else {
+                "mixed"
+            }
+            .to_string(),
+        )
+    }
+
+    pub fn directional_impulse_bps(
+        &self,
+        direction: &str,
+        current_price: f64,
+        now_ts: f64,
+        lookback_seconds: f64,
+    ) -> Option<f64> {
+        if current_price <= 0.0
+            || !current_price.is_finite()
+            || !now_ts.is_finite()
+            || lookback_seconds <= 0.0
+        {
+            return None;
+        }
+        let target_ts = now_ts - lookback_seconds;
+        let &(history_ts, history_price) = self
+            .ticks
+            .iter()
+            .rev()
+            .find(|(ts, price)| *ts <= target_ts && *price > 0.0 && price.is_finite())?;
+        if target_ts - history_ts > 2.0 {
+            return None;
+        }
+        let raw_bps = (current_price - history_price) / current_price * 10_000.0;
+        Some(if direction == "down" {
+            -raw_bps
+        } else {
+            raw_bps
         })
     }
 }
@@ -301,6 +456,101 @@ mod tests {
         assert_eq!(sig.direction, "up");
         assert!(sig.consistency > 0.5);
         assert!(sig.confidence > 0.0);
+    }
+
+    #[test]
+    fn z_score_is_scale_invariant_across_asset_price_levels() {
+        // The same relative move with the same relative tick pattern must
+        // produce (nearly) the same z-score whether the asset trades at
+        // BTC scale ($115k), ETH scale ($4k), or SOL scale ($230). The old
+        // absolute $1.00 sigma floor broke this: on SOL a realistic sigma
+        // (~$0.23) was floored to $1, crushing z ~4x and silently muting
+        // every non-BTC signal.
+        let mut z_scores = Vec::new();
+        for open in [115_000.0_f64, 4_000.0, 230.0] {
+            let mut det = MomentumDetector::new(Some(0.5), MomentumConfig::default());
+            let t0 = 1_700_000_000.0;
+            for i in 0..60 {
+                // 0.5% total drift across the window, same shape per asset.
+                let px = open * (1.0 + 0.005 * i as f64 / 60.0);
+                det.add_tick(px, Some(t0 + i as f64 * 5.0));
+            }
+            det.set_window_open("c", open);
+            let sig = det
+                .detect("c", 5.0, 0.5, open * 1.005, Some(t0 + 300.0))
+                .expect("signal at this price scale");
+            z_scores.push(sig.z_score);
+        }
+        let (btc, eth, sol) = (z_scores[0], z_scores[1], z_scores[2]);
+        assert!(btc > 0.0);
+        // Relative spread across scales must be small (was ~4x before).
+        assert!((eth / btc - 1.0).abs() < 0.05, "eth z {eth} vs btc z {btc}");
+        assert!((sol / btc - 1.0).abs() < 0.05, "sol z {sol} vs btc z {btc}");
+    }
+
+    #[test]
+    fn article_checkpoints_become_available_only_at_their_causal_offsets() {
+        let mut det = MomentumDetector::new(Some(0.5), MomentumConfig::default());
+        let t0 = 1_700_000_100.0;
+        det.set_window_open("c", 70_000.0);
+        for second in 0..=180 {
+            det.add_tick(70_000.0 + second as f64, Some(t0 + second as f64));
+        }
+
+        let at_two = det
+            .detect("c", 2.0, 3.0, 70_120.0, Some(t0 + 120.0))
+            .expect("two-minute signal");
+        assert_eq!(at_two.article_path_2m.as_deref(), Some("up"));
+        assert_eq!(at_two.article_path_3m, None);
+
+        let at_three = det
+            .detect("c", 3.0, 2.0, 70_180.0, Some(t0 + 180.0))
+            .expect("three-minute signal");
+        assert_eq!(at_three.article_path_2m.as_deref(), Some("up"));
+        assert_eq!(at_three.article_path_3m.as_deref(), Some("up"));
+        assert_eq!(at_three.article_path_4m, None);
+        assert_eq!(at_three.article_move_2m_usd, Some(120.0));
+
+        for second in 181..=240 {
+            det.add_tick(70_000.0 + second as f64, Some(t0 + second as f64));
+        }
+        let at_four = det
+            .detect("c", 4.0, 1.0, 70_240.0, Some(t0 + 240.0))
+            .expect("four-minute signal");
+        assert_eq!(at_four.article_path_3m.as_deref(), Some("up"));
+        assert_eq!(at_four.article_path_4m.as_deref(), Some("up"));
+        assert_eq!(at_four.article_move_2m_usd, Some(120.0));
+    }
+
+    #[test]
+    fn directional_impulse_is_signed_to_the_trade_direction() {
+        let mut det = MomentumDetector::new(None, MomentumConfig::default());
+        for second in 0..=10 {
+            det.add_tick(100.0 + second as f64, Some(second as f64));
+        }
+
+        let up = det
+            .directional_impulse_bps("up", 110.0, 10.0, 10.0)
+            .unwrap();
+        let down = det
+            .directional_impulse_bps("down", 110.0, 10.0, 10.0)
+            .unwrap();
+        assert!((up - 909.090909).abs() < 1e-5);
+        assert!((down + 909.090909).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rolling_realized_vol_uses_only_causal_lookback_ticks() {
+        let mut detector = MomentumDetector::new(None, MomentumConfig::default());
+        for second in 0..=60 {
+            let price = 100.0 * (1.0 + (second as f64 * 0.0001));
+            detector.add_tick(price, Some(second as f64));
+        }
+
+        let volatility = detector.rolling_realized_vol(30.0).unwrap();
+        assert!(volatility.is_finite());
+        assert!((0.05..=5.0).contains(&volatility));
+        assert_eq!(detector.rolling_realized_vol(0.0), None);
     }
 
     #[test]

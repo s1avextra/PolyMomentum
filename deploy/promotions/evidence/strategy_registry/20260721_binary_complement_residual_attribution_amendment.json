@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T06:40:00Z",
+  "updated_at": "2026-07-21T06:58:46Z",
+  "amendment_id": "binary_complement_residual_attribution_v1",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PREREGISTERED_AND_IMPLEMENTED_POST_BLOCK_ATTRIBUTION_ABLATION_ACTIVE_RULE_UNCHANGED",
+  "objective": "Attribute any forward improvement separately to baseline eligibility, paired-book validity, and residual magnitude before crediting the registered coherence rule or changing it.",
+  "parent_preregistration_at_registration": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+    "sha256": "abbdadb281e33a980961d3c691bad53985761a32cd2201d8a951051767460ec5"
+  },
+  "blindness": {
+    "sealed_block_1_strategy_metrics_accessed": false,
+    "sealed_block_1_terminal_outcomes_accessed": false,
+    "registered_before_block_1_scoring": true,
+    "active_rule_or_threshold_changed": false
+  },
+  "source_evidence": [
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_independence_diagnostic.json",
+      "sha256": "606d70a4b1234997a5eac4a2cef4e2cf8f5d1f4f62fd24e98e0240abbf1326c2",
+      "population": "24 BTC candle markets; 6,465 valid full-window paired states and 1,403 valid registered-interval states",
+      "result": "zero registered residual rejections; all 735 invalid full-window states failed valid-top checks"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/20260721_binary_complement_residual_cross_market_replication.json",
+      "sha256": "60c8b64df1c661687acb86668672307c81cde9ab94199a4fbe6110e2f2e0ffe4",
+      "population": "100 current non-candle binary markets across five public batch rounds; 490 valid paired states",
+      "result": "zero registered residual rejections and zero rejections at the fixed 0.002 robustness threshold"
+    },
+    {
+      "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books.json.gz",
+      "sha256": "5fd25a3e78e1f46c556b1adcb6e05d0939f5fd475d4ddf48136863588fc78811",
+      "purpose": "source-pinned public cross-market order-book snapshot"
+    }
+  ],
+  "registered_comparators": [
+    {
+      "name": "baseline_primary_low_edge",
+      "rule": "evaluation_result == low_edge && zone == primary && edge >= 0.07",
+      "purpose": "measure the unpaired baseline candidate pool"
+    },
+    {
+      "name": "paired_book_validity_only",
+      "rule": "baseline_primary_low_edge && valid market tick && both book ages in [0, 30000] ms && paired microstructure recomputes from valid top-three books",
+      "purpose": "measure candidate and loss removal attributable to having an admissible paired book"
+    },
+    {
+      "name": "frozen_residual_rule",
+      "rule": "paired_book_validity_only && max(abs(midpoint_sum_residual), abs(microprice_sum_residual)) <= 2 * market_tick_size",
+      "purpose": "measure incremental selectivity attributable only to residual magnitude"
+    }
+  ],
+  "registered_outputs": {
+    "per_comparator": [
+      "candidate_count",
+      "selected_count",
+      "wins",
+      "losses",
+      "win_rate",
+      "net_pnl",
+      "profit_factor",
+      "maximum_drawdown"
+    ],
+    "incremental_attribution": [
+      "paired_validity_candidate_removals_vs_baseline",
+      "paired_validity_loss_removals_vs_baseline",
+      "residual_candidate_removals_vs_paired_validity",
+      "residual_loss_removals_vs_paired_validity",
+      "residual_decision_disagreement_count"
+    ],
+    "reporting_rule": "Report zero counts explicitly; do not replace them with ratios having a zero denominator."
+  },
+  "evaluation_sequence": [
+    "Do not run the labeled attribution until sealed block 1 reaches exactly 750 admissible candidates and the parent preregistration permits one scoring pass.",
+    "Score all three comparators on the identical sealed rows with identical fees, fills, latency assumptions, and terminal labels.",
+    "If block 1 passes its parent gates, repeat the same frozen attribution on the disjoint 750-candidate block 2.",
+    "Do not search residual multipliers, book-age limits, depth levels, candidate intervals, or edge thresholds in either block."
+  ],
+  "implementation": {
+    "screen_schema_version_before": 5,
+    "screen_schema_version_after": 6,
+    "source": "rust_engine/src/strategy_builder.rs",
+    "source_sha256_before": "d42d7c9853107b3fe240ade0602d17ca0c735656cc6bd6b02465bc3debf2ee51",
+    "source_sha256_after": "65459ba41de8c4b62c9bc597e5c198f021e9c6350de5e947841134e1d77f11e4",
+    "parent_preregistration_sha256_after_implementation": "517b89add115ca870fc74afa70a60abc19e660d30f72e91f19dabb7dce1c3fa9",
+    "gating_behavior_changed": false,
+    "strategy_rule_or_threshold_changed": false,
+    "serialized_output_mapping": {
+      "candidate_count_and_selected_count": "attribution.<comparator>.candidates; each comparator's candidate is its selected row for that condition",
+      "wins_and_losses": "attribution.<comparator>.winners and losses",
+      "win_rate": "attribution.<comparator>.win_rate",
+      "net_pnl": "attribution.<comparator>.unit_economics.total_pnl_usd",
+      "profit_factor": "attribution.<comparator>.unit_economics.profit_factor",
+      "maximum_drawdown": "attribution.<comparator>.unit_economics.maximum_drawdown_usd",
+      "incremental_removals_and_disagreements": "attribution.paired_validity_candidate_removals, paired_validity_loss_removals, residual_candidate_removals, residual_loss_removals, and residual_decision_disagreements"
+    },
+    "tests": {
+      "command": "cargo test --manifest-path rust_engine/Cargo.toml binary_complement -- --nocapture",
+      "result": "23 passed; 0 failed",
+      "frozen_fixture": "The schema-6 attribution reproduces the schema-5 selected counts, gates, and unit economics while separating baseline, paired-validity, and residual comparators.",
+      "inert_residual_fixture": "A coherent paired book that makes every residual pass produces zero residual candidate removals, loss removals, and decision disagreements."
+    },
+    "linux_measurement_binary": {
+      "schema_6_binary_built_or_installed": false,
+      "existing_measurement_v11_schema": 5,
+      "reason": "The forward block remains sealed and below its fixed floor; avoid a nonessential release build on the two-core shared VPS. Build a separately hash-pinned schema-6 measurement binary only when scoring is authorized."
+    }
+  },
+  "decision_rules": {
+    "zero_residual_disagreements_in_both_blocks": "Classify residual magnitude as an integrity assertion with no demonstrated alpha selectivity. Do not credit it for PnL or loss removal. Any code removal still requires paired-book fault-injection coverage and exact replay parity.",
+    "nonzero_residual_disagreements": "Retain the frozen clause for analysis and report its exact candidate/loss/PnL contribution. Do not tune it on the observed blocks.",
+    "paired_validity_improves_losses_or_pnl": "Attribute the effect to paired-book admissibility, not residual magnitude, and require the existing support and economic gates to remain satisfied.",
+    "any_parent_gate_failure": "Reject promotion regardless of ablation results."
+  },
+  "promotion_effect": {
+    "changes_current_block_decision_boundary": false,
+    "changes_live_or_paper_runtime": false,
+    "authorizes_a_plus_claim": false,
+    "authorizes_profitability_claim": false,
+    "authorizes_live_trading": false
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T06:53:38Z",
+  "status": "MEASUREMENT_ONLY_READY_NOT_SCORED",
+  "live_ready": false,
+  "question": "Can an opposite-token complete-set execution path improve loss control beyond selling the chosen token without repeating the classification failures of prior lifecycle exits?",
+  "baseline": {
+    "source": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+    "strategy": "primary_v6_volfloor_300",
+    "latency_ms": 202,
+    "trades": 102,
+    "wins": 79,
+    "losses": 23,
+    "fee_inclusive_pnl_usd": 13.54086,
+    "wilson_95_lower": 0.6843083691640883,
+    "payoff_ratio": 0.3243977743361479,
+    "worst_loss_to_average_win": 3.3457149991610837,
+    "last_21_fold_pnl_usd": -4.33848
+  },
+  "prior_lifecycle_evidence": {
+    "source": "deploy/promotions/evidence/strategy_registry/20260715_strategy_lifecycle_causal_screens.json",
+    "source_sha256": "6c0851dc65e6855b7c072a1150271bb96899b04be5982edb4e87334c38424758",
+    "tail_trades": 40,
+    "tail_terminal_winners": 30,
+    "tail_terminal_losses": 10,
+    "tail_baseline_pnl_usd": -16.0665,
+    "screens": [
+      {
+        "name": "executable_profit_lock",
+        "execution": "chosen-token visible-bid FOK at 202 ms",
+        "delta_pnl_usd": 2.91237,
+        "harmed_winners": 3,
+        "status": "REJECT"
+      },
+      {
+        "name": "thirty_second_late_loss_cut",
+        "execution": "chosen-token visible-bid FOK at 202 ms",
+        "delta_pnl_usd": 7.08078,
+        "harmed_winners": 2,
+        "status": "REJECT"
+      }
+    ],
+    "diagnosis": "Both executable exits improved tail PnL but turned eventual winners into realized losers. An opposite-token ask may change execution payoff and liquidity, but it does not by itself solve the causal classification error."
+  },
+  "instrumentation": {
+    "decision_behavior_changed": false,
+    "selector_behavior_changed": false,
+    "live_behavior_changed": false,
+    "production_binary_changed": false,
+    "capture_grain": "one-Hz post-gate calibration opportunity",
+    "new_fields": [
+      "chosen_best_bid",
+      "chosen_best_ask",
+      "chosen_bid_depth",
+      "chosen_ask_depth",
+      "chosen_book_age_ms",
+      "opposite_best_bid",
+      "opposite_best_ask",
+      "opposite_bid_depth",
+      "opposite_ask_depth",
+      "opposite_book_age_ms"
+    ],
+    "existing_paired_fields_retained": [
+      "opposite_token_id",
+      "market_tick_size",
+      "chosen_microprice",
+      "opposite_mid",
+      "opposite_microprice",
+      "complement_mid_sum_residual",
+      "complement_microprice_sum_residual"
+    ],
+    "frozen_binary_complement_rule_changed": false,
+    "frozen_binary_complement_gates_changed": false
+  },
+  "research_contract": {
+    "next_required_data": "Fresh exact post-entry paired top-of-book paths with visible depth, book age, measured latency, fees, and terminal official-source labels.",
+    "comparison": [
+      "chosen-token visible-bid full-size FOK sale",
+      "opposite-token visible-ask full-size FOK purchase forming a complete set"
+    ],
+    "evaluation_rule": "Replay both executable paths at unchanged preregistered lifecycle horizons and triggers; fail closed on stale books or insufficient displayed depth.",
+    "anti_tuning_rule": "Do not search adjacent horizons, trigger PnL values, latency values, or book-quality thresholds after observing outcomes.",
+    "promotion_boundary": "No hedge or exit rule may enter a strategy candidate until it avoids harmed winners on holdout data, improves the full exact-replay contract, and repeats on the freshest fully resolved window."
+  },
+  "verification": {
+    "full_cargo_test": {
+      "passed": 465,
+      "failed": 0
+    },
+    "binary_complement_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "source_hashes": {
+      "rust_engine/src/backtest/harness.rs": "3f40eb1ffae7e7d4060a70fa3ea79dadf2639008caa067e442a03fd0b1b8410f",
+      "rust_engine/src/strategy/microstructure.rs": "fec761c0e9c69130fb2a4c0bf41ec49edfa2fe3921a985ecc85fedf3e5f3f16b",
+      "rust_engine/src/strategy_builder.rs": "59bf045c0d1071917d46172e8b58d6a7351bf3e813cabbc0de31b2ea14788dee",
+      "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json": "01d099ff8adabf6d57f1a237c4e7ac537f4da0564ba83ceacd49843b7de48e56"
+    }
+  },
+  "verdict": {
+    "strategy_adjustment": "none",
+    "measurement_adjustment": "paired executable-book state is now preserved for future causal replay",
+    "reason": "The alternate execution route is technically distinct and worth measuring, but current evidence does not show that it can identify losses without exiting future winners.",
+    "grade": "A- research system; A+ strategy remains unproven",
+    "live_trading": "OFF"
+  }
+}

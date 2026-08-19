@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T16:03:12Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_PAIRED_BOOK_REPRODUCTION_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Can the frozen complement screen trust serialized residuals, or must the scorer reproduce the pair, feature arithmetic, tick state, and executable asks before using them?",
+  "defect": {
+    "before": "The schema-4 scorer consumed stored complement midpoint and microprice residuals directly. It did not deserialize the raw paired bids, asks, depths, token IDs, or stored microprices that produced those residuals.",
+    "risk": "A token-wiring, serialization, arithmetic, or quote-alignment defect could manufacture apparent coherence and fee-aware economics while every statistical gate still passed.",
+    "severity": "high",
+    "observed_forward_corruption": false,
+    "forward_strategy_metrics_inspected": false
+  },
+  "research_interpretation": {
+    "venue_mechanism": "The CLOB can match complementary outcome orders through complete-set mint and merge settlement, so paired-book coherence is partly constrained by market mechanics.",
+    "strategy_implication": "The feature remains a prospective uncertainty veto, not independent directional alpha or free arbitrage. Its value must still be demonstrated on two sealed forward blocks and exact executable replay.",
+    "fixed_rule_changed": false,
+    "threshold_search_performed": false
+  },
+  "reproduction_contract": {
+    "token_identity": [
+      "chosen and opposite token IDs must be non-empty and distinct",
+      "the unordered token pair must remain stable within a condition",
+      "the chosen token for a given condition and direction must remain stable"
+    ],
+    "book_validity": "Both serialized books must have finite prices strictly inside zero and one, bid below ask, positive bid and ask depth, and stored microprice inside the spread.",
+    "microprice_recomputation": "(best_ask * bid_depth + best_bid * ask_depth) / (bid_depth + ask_depth)",
+    "residual_recomputation": [
+      "chosen_mid + opposite_mid - 1",
+      "recomputed_chosen_microprice + recomputed_opposite_microprice - 1"
+    ],
+    "economic_alignment": "The chosen and opposite serialized best asks must equal the corresponding recorded decision-time up/down executable asks used by the normalized one-dollar economic screen.",
+    "dynamic_tick_alignment": "Any serialized top price outside the inclusive 0.04 to 0.96 interval requires market_tick_size no greater than 0.001.",
+    "missing_pair_action": "reject the row through the existing feature-coverage path",
+    "inconsistent_serialized_pair_action": "abort scoring with an input-integrity error",
+    "numeric_tolerance": "relative 1e-10 with a unit floor"
+  },
+  "implementation": {
+    "file": "rust_engine/src/strategy_builder.rs",
+    "source_sha256": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "screen_schema_version": 4,
+    "schema_version_unchanged_reason": "The output fields, fixed rule, gates, and interpretation are unchanged; only scorer-side input verification is stricter.",
+    "capture_format_changed": false,
+    "recollection_required": false,
+    "measurement_v5_capture_compatible": true,
+    "tests_added": [
+      "binary_complement_screen_rejects_residual_not_reproduced_from_pair",
+      "binary_complement_screen_rejects_reused_opposite_token",
+      "binary_complement_screen_rejects_pair_ask_not_used_for_economics",
+      "binary_complement_screen_rejects_extreme_book_without_dynamic_tick"
+    ]
+  },
+  "deployed_scorer_v6": {
+    "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v6",
+    "sha256": "0e90894902fdc5c5beaed072f3535fcc8cecb1764761ec2581aaabaa63b29140",
+    "linux_x86_64_linkage_verified": true,
+    "help_verified_as_polymomentum": true,
+    "active_v5_capture_interrupted": false,
+    "active_v5_capture_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_v5_capture_restarts": 0,
+    "scoring_requirement": "Use this v6 binary or a later binary whose strategy_builder.rs hash matches this amendment."
+  },
+  "validation": {
+    "cargo_test": "PASS: 501 passed (450 library + 51 binary), 0 failed; doc-tests 0",
+    "cargo_clippy": "PASS: all targets with warnings denied after allowing the two documented pre-existing unrelated lints",
+    "cargo_fmt_check": "PASS",
+    "replay_wrapper_tests": "PASS",
+    "forward_scores_disclosed": 0
+  },
+  "external_sources": [
+    {
+      "title": "Polymarket Prices and Orderbook",
+      "url": "https://docs.polymarket.com/concepts/prices-orderbook",
+      "use": "Complementary Yes and No buy orders can match when their prices sum to one, and the buyer pays the executable ask rather than the displayed midpoint."
+    },
+    {
+      "title": "Polymarket CTF Exchange V2",
+      "url": "https://github.com/Polymarket/ctf-exchange-v2",
+      "use": "The exchange distinguishes complementary transfer, mint, and merge settlement paths, confirming that raw pair identity and quote alignment are market-structure invariants."
+    }
+  ],
+  "decision": {
+    "safe_to_continue_sealed_collection": true,
+    "safe_to_score_below_750": false,
+    "strategy_rule_or_gate_changed": false,
+    "current_grade": "A-",
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue the sealed first block to 750 unique officially aligned terminal conditions, then score exactly once with measurement-v7 or a later binary retaining this reproduction-hardened scorer hash."
+  }
+}

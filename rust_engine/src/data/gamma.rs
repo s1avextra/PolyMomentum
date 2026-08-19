@@ -7,12 +7,14 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use futures_util::{stream, StreamExt};
 use reqwest::Client;
 use serde_json::Value;
 
 use crate::data::models::{Market, Outcome};
 
-const GAMMA_MARKETS: &str = "/markets";
+const GAMMA_MARKETS_KEYSET: &str = "/markets/keyset";
+const MAX_SLUG_FETCH_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]
 pub struct GammaClient {
@@ -25,6 +27,8 @@ impl GammaClient {
     pub fn new(gamma_url: impl Into<String>) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(15))
+            .http1_only()
+            .user_agent("polymomentum-engine/0.2")
             .build()
             .expect("reqwest client builds");
         Self {
@@ -61,38 +65,6 @@ impl GammaClient {
         Err(last_err.unwrap_or_else(|| anyhow!("Gamma request failed without specific error")))
     }
 
-    /// Fetch up to `limit` markets matching the given condition_ids.
-    /// Gamma's `condition_ids` parameter is repeated once per ID (Rails-style
-    /// array param). Gamma defaults to `closed=false` so we walk both pages
-    /// to surface resolved markets (the harness needs them).
-    pub async fn fetch_markets_by_condition_ids(
-        &self,
-        condition_ids: &[String],
-    ) -> Result<Vec<Market>> {
-        const BATCH: usize = 50;
-        let mut out: Vec<Market> = Vec::new();
-        for chunk in condition_ids.chunks(BATCH) {
-            for closed in ["true", "false"] {
-                let mut params: Vec<(&str, String)> = chunk
-                    .iter()
-                    .map(|cid| ("condition_ids", cid.clone()))
-                    .collect();
-                params.push(("limit", BATCH.to_string()));
-                params.push(("closed", closed.to_string()));
-                let v = self.get_with_retry(GAMMA_MARKETS, &params).await?;
-                let items = unwrap_market_list(v);
-                for raw in &items {
-                    if let Some(m) = parse_gamma_market(raw) {
-                        out.push(m);
-                    }
-                }
-            }
-        }
-        out.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
-        out.dedup_by(|a, b| a.condition_id == b.condition_id);
-        Ok(out)
-    }
-
     /// Fetch markets sorted by endDate ascending — the fast path for candle
     /// discovery. Stops paginating once the last page's endDate exceeds
     /// `now + max_hours`. Filters out markets with degenerate prices /
@@ -105,26 +77,30 @@ impl GammaClient {
         let now = chrono::Utc::now().timestamp() as f64;
         let cutoff_ts = now + max_hours * 3600.0;
         let mut all: Vec<Market> = Vec::new();
-        let mut offset = 0u32;
         let page_size = 100u32;
+        let mut next_cursor: Option<String> = None;
 
         loop {
-            let params = vec![
+            let mut params = vec![
                 ("limit", page_size.to_string()),
-                ("offset", offset.to_string()),
                 ("active", "true".to_string()),
                 ("closed", "false".to_string()),
                 ("order", "endDate".to_string()),
                 ("ascending", "true".to_string()),
             ];
-            let v = self.get_with_retry(GAMMA_MARKETS, &params).await?;
-            let items = unwrap_market_list(v);
+            if let Some(cursor) = &next_cursor {
+                params.push(("next_cursor", cursor.clone()));
+            }
+            let v = self.get_with_retry(GAMMA_MARKETS_KEYSET, &params).await?;
+            let (items, cursor) = unwrap_market_page(v);
             if items.is_empty() {
                 break;
             }
 
             for raw in &items {
-                let Some(m) = parse_gamma_market(raw) else { continue };
+                let Some(m) = parse_gamma_market(raw) else {
+                    continue;
+                };
                 if m.outcomes.is_empty() || m.outcomes.iter().all(|o| o.price == 0.0) {
                     continue;
                 }
@@ -150,28 +126,162 @@ impl GammaClient {
                 }
             }
 
-            if items.len() < page_size as usize {
+            next_cursor = cursor;
+            if items.len() < page_size as usize || next_cursor.is_none() {
                 break;
             }
-            offset += page_size;
         }
 
-        tracing::info!(count = all.len(), max_hours, "Gamma markets-by-endDate fetched");
+        tracing::info!(
+            count = all.len(),
+            max_hours,
+            "Gamma markets-by-endDate fetched"
+        );
+        Ok(all)
+    }
+
+    /// Fetch exact market slugs. This is the fast historical path for
+    /// recurring crypto candle markets such as `btc-updown-5m-<start_ts>`.
+    pub async fn fetch_markets_by_slugs(
+        &self,
+        slugs: &[String],
+        closed: bool,
+    ) -> Result<Vec<Market>> {
+        let raw = self.fetch_raw_markets_by_slugs(slugs, closed).await?;
+        let mut all: Vec<Market> = raw.iter().filter_map(parse_gamma_market).collect();
+        all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
+        all.dedup_by(|a, b| a.condition_id == b.condition_id);
+        Ok(all)
+    }
+
+    /// Fetch exact market slugs as raw Gamma JSON. This preserves metadata
+    /// fields that are not part of the common market model, such as
+    /// `resolutionSource`.
+    pub async fn fetch_raw_markets_by_slugs(
+        &self,
+        slugs: &[String],
+        closed: bool,
+    ) -> Result<Vec<Value>> {
+        let mut all = Vec::new();
+        let total = slugs.len();
+        let concurrency = total.clamp(1, MAX_SLUG_FETCH_CONCURRENCY);
+        let mut responses = stream::iter(slugs.iter().cloned())
+            .map(|slug| async move {
+                let params = vec![
+                    ("limit", "1".to_string()),
+                    ("slug", slug.clone()),
+                    ("closed", closed.to_string()),
+                ];
+                let v = self
+                    .get_with_retry(GAMMA_MARKETS_KEYSET, &params)
+                    .await
+                    .with_context(|| format!("fetch gamma slug {slug}"))?;
+                let (items, _) = unwrap_market_page(v);
+                Ok::<_, anyhow::Error>(items)
+            })
+            .buffer_unordered(concurrency);
+
+        let mut completed = 0usize;
+        while let Some(items) = responses.next().await {
+            let mut items = items?;
+            all.append(&mut items);
+            completed += 1;
+            if completed.is_multiple_of(100) || completed == total {
+                eprintln!("gamma: fetched {completed}/{total} slug metadata response(s)");
+            }
+        }
+        Ok(all)
+    }
+
+    /// Fetch historical markets whose endDate falls inside an explicit UTC
+    /// range. This is the targeted metadata path for backtests: fetch by time
+    /// first, then let the candle scanner keep only supported candle markets.
+    pub async fn fetch_markets_by_end_date_range(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+        closed: bool,
+    ) -> Result<Vec<Market>> {
+        let mut all: Vec<Market> = Vec::new();
+        let page_size = 100u32;
+        let mut next_cursor: Option<String> = None;
+        let start_ts = start.timestamp() as f64;
+        let end_ts = end.timestamp() as f64;
+
+        loop {
+            let mut params = vec![
+                ("limit", page_size.to_string()),
+                ("closed", closed.to_string()),
+                ("order", "endDate".to_string()),
+                ("ascending", "true".to_string()),
+                ("end_date_min", start.to_rfc3339()),
+                ("end_date_max", end.to_rfc3339()),
+            ];
+            if let Some(cursor) = &next_cursor {
+                params.push(("next_cursor", cursor.clone()));
+            }
+            let v = self.get_with_retry(GAMMA_MARKETS_KEYSET, &params).await?;
+            let (items, cursor) = unwrap_market_page(v);
+            if items.is_empty() {
+                break;
+            }
+            for raw in &items {
+                let Some(item_end_ts) = market_end_ts(raw) else {
+                    continue;
+                };
+                if item_end_ts < start_ts || item_end_ts > end_ts {
+                    continue;
+                }
+                let Some(m) = parse_gamma_market(raw) else {
+                    continue;
+                };
+                all.push(m);
+            }
+            if items
+                .last()
+                .and_then(market_end_ts)
+                .map(|item_end_ts| item_end_ts > end_ts)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            next_cursor = cursor;
+            if items.len() < page_size as usize || next_cursor.is_none() {
+                break;
+            }
+        }
+
+        all.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
+        all.dedup_by(|a, b| a.condition_id == b.condition_id);
+        tracing::info!(
+            count = all.len(),
+            start = %start,
+            end = %end,
+            closed,
+            "Gamma historical markets fetched"
+        );
         Ok(all)
     }
 }
 
-fn unwrap_market_list(v: Value) -> Vec<Value> {
+fn unwrap_market_page(v: Value) -> (Vec<Value>, Option<String>) {
+    let next_cursor = v
+        .get("next_cursor")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "LTE=")
+        .map(str::to_string);
+
     if let Value::Array(arr) = v {
-        return arr;
+        return (arr, next_cursor);
     }
     if let Some(arr) = v.get("data").and_then(|x| x.as_array()) {
-        return arr.clone();
+        return (arr.clone(), next_cursor);
     }
     if let Some(arr) = v.get("markets").and_then(|x| x.as_array()) {
-        return arr.clone();
+        return (arr.clone(), next_cursor);
     }
-    Vec::new()
+    (Vec::new(), next_cursor)
 }
 
 fn parse_f64(v: &Value) -> Option<f64> {
@@ -180,6 +290,78 @@ fn parse_f64(v: &Value) -> Option<f64> {
         Value::String(s) => s.parse::<f64>().ok(),
         _ => None,
     }
+}
+
+fn parse_bool(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => n.as_u64().map(|x| x != 0),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_fee_rate_decimal(v: &Value) -> Option<f64> {
+    let rate = parse_f64(v)?;
+    if rate.is_finite() && (0.0..=1.0).contains(&rate) {
+        Some(rate)
+    } else {
+        None
+    }
+}
+
+fn parse_fee_rate_bps(v: &Value) -> Option<f64> {
+    let bps = parse_f64(v)?;
+    if bps.is_finite() && bps >= 0.0 {
+        Some(bps / 10_000.0)
+    } else {
+        None
+    }
+}
+
+fn parse_taker_fee_rate(raw: &Value) -> Option<f64> {
+    raw.get("feeSchedule")
+        .and_then(|schedule| schedule.get("rate"))
+        .and_then(parse_fee_rate_decimal)
+        .or_else(|| {
+            raw.get("fee_schedule")
+                .and_then(|schedule| schedule.get("rate"))
+                .and_then(parse_fee_rate_decimal)
+        })
+        .or_else(|| {
+            raw.get("fd")
+                .and_then(|fd| fd.get("r"))
+                .and_then(parse_fee_rate_decimal)
+        })
+        .or_else(|| raw.get("feeRate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("takerFeeRate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("taker_fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("feeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("takerFeeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("taker_fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("tbf").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("base_fee").and_then(parse_fee_rate_bps))
+}
+
+fn parse_maker_fee_rate(raw: &Value) -> Option<f64> {
+    raw.get("makerFeeRate")
+        .and_then(parse_fee_rate_decimal)
+        .or_else(|| raw.get("maker_fee_rate").and_then(parse_fee_rate_decimal))
+        .or_else(|| raw.get("makerFeeRateBps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("maker_fee_rate_bps").and_then(parse_fee_rate_bps))
+        .or_else(|| raw.get("mbf").and_then(parse_fee_rate_bps))
+}
+
+fn parse_fees_enabled(raw: &Value) -> Option<bool> {
+    raw.get("feesEnabled")
+        .or_else(|| raw.get("fees_enabled"))
+        .and_then(parse_bool)
 }
 
 fn parse_json_or_csv(v: Option<&Value>) -> Vec<String> {
@@ -193,7 +375,9 @@ fn parse_json_or_csv(v: Option<&Value>) -> Vec<String> {
             })
             .collect();
     }
-    let Some(s) = v.as_str() else { return Vec::new() };
+    let Some(s) = v.as_str() else {
+        return Vec::new();
+    };
     let s = s.trim();
     if s.is_empty() {
         return Vec::new();
@@ -215,6 +399,13 @@ fn parse_json_or_csv(v: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
+fn market_end_ts(raw: &Value) -> Option<f64> {
+    raw.get("endDate")
+        .or_else(|| raw.get("end_date"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso8601)
+}
+
 pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
     let condition_id = raw
         .get("conditionId")
@@ -222,19 +413,28 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let question = raw.get("question").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let question = raw
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if condition_id.is_empty() || question.is_empty() {
         return None;
     }
 
     let outcome_names = parse_json_or_csv(raw.get("outcomes"));
-    let outcome_prices_raw =
-        parse_json_or_csv(raw.get("outcomePrices").or_else(|| raw.get("outcome_prices")));
+    let outcome_prices_raw = parse_json_or_csv(
+        raw.get("outcomePrices")
+            .or_else(|| raw.get("outcome_prices")),
+    );
     let outcome_prices: Vec<f64> = outcome_prices_raw
         .iter()
         .map(|s| s.parse::<f64>().unwrap_or(0.0))
         .collect();
-    let token_ids = parse_json_or_csv(raw.get("clobTokenIds").or_else(|| raw.get("clob_token_ids")));
+    let token_ids = parse_json_or_csv(
+        raw.get("clobTokenIds")
+            .or_else(|| raw.get("clob_token_ids")),
+    );
 
     let outcomes: Vec<Outcome> = outcome_names
         .iter()
@@ -266,7 +466,11 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
     let mut neg_risk_augmented = false;
     if let Some(Value::Array(events)) = raw.get("events") {
         if let Some(ev) = events.first() {
-            event_slug = ev.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            event_slug = ev
+                .get("slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             event_id = ev
                 .get("id")
                 .map(|v| match v {
@@ -275,7 +479,11 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
                     other => other.to_string(),
                 })
                 .unwrap_or_default();
-            event_title = ev.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            event_title = ev
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             neg_risk_augmented = ev
                 .get("negRiskAugmented")
                 .and_then(|v| v.as_bool())
@@ -286,10 +494,18 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
     Some(Market {
         condition_id,
         question,
-        slug: raw.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        slug: raw
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         outcomes,
         tags,
-        category: raw.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        category: raw
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         active: raw.get("active").and_then(|v| v.as_bool()).unwrap_or(true),
         closed: raw.get("closed").and_then(|v| v.as_bool()).unwrap_or(false),
         volume: raw.get("volume").and_then(parse_f64).unwrap_or(0.0),
@@ -309,8 +525,19 @@ pub fn parse_gamma_market(raw: &Value) -> Option<Market> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        neg_risk: raw.get("negRisk").and_then(|v| v.as_bool()).unwrap_or(false),
+        neg_risk: raw
+            .get("negRisk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         neg_risk_augmented,
+        minimum_tick_size: raw
+            .get("minimum_tick_size")
+            .or_else(|| raw.get("minimumTickSize"))
+            .or_else(|| raw.get("orderPriceMinTickSize"))
+            .and_then(parse_f64),
+        fees_enabled: parse_fees_enabled(raw),
+        taker_fee_rate: parse_taker_fee_rate(raw),
+        maker_fee_rate: parse_maker_fee_rate(raw),
     })
 }
 
@@ -342,6 +569,31 @@ mod tests {
     }
 
     #[test]
+    fn unwraps_keyset_market_page() {
+        let raw = serde_json::json!({
+            "markets": [{"conditionId": "0xabc", "question": "q"}],
+            "next_cursor": "cursor-1"
+        });
+        let (items, cursor) = unwrap_market_page(raw);
+        assert_eq!(items.len(), 1);
+        assert_eq!(cursor.as_deref(), Some("cursor-1"));
+
+        let raw = serde_json::json!({
+            "markets": [],
+            "next_cursor": "LTE="
+        });
+        let (items, cursor) = unwrap_market_page(raw);
+        assert!(items.is_empty());
+        assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn reads_market_end_timestamp() {
+        let raw = serde_json::json!({"endDate": "2026-05-20T14:00:00Z"});
+        assert_eq!(market_end_ts(&raw), Some(1_779_285_600.0));
+    }
+
+    #[test]
     fn parses_gamma_market_skeleton() {
         let raw = serde_json::json!({
             "conditionId": "0xabc",
@@ -352,6 +604,10 @@ mod tests {
             "active": true,
             "closed": false,
             "endDate": "2026-04-04T07:00:00Z",
+            "minimum_tick_size": "0.001",
+            "feesEnabled": true,
+            "fd": {"r": 0.07, "e": 2, "to": true},
+            "mbf": 0,
         });
         let m = parse_gamma_market(&raw).unwrap();
         assert_eq!(m.condition_id, "0xabc");
@@ -359,5 +615,39 @@ mod tests {
         assert_eq!(m.outcomes[0].token_id, "t1");
         assert_eq!(m.outcomes[0].name, "Up");
         assert!((m.outcomes[0].price - 0.5).abs() < 1e-9);
+        assert_eq!(m.minimum_tick_size, Some(0.001));
+        assert_eq!(m.fees_enabled, Some(true));
+        assert_eq!(m.taker_fee_rate, Some(0.07));
+        assert_eq!(m.maker_fee_rate, Some(0.0));
+    }
+
+    #[test]
+    fn parses_basis_point_fee_fields() {
+        let raw = serde_json::json!({
+            "conditionId": "0xabc",
+            "question": "Bitcoin Up or Down - April 4, 3AM ET?",
+            "tbf": 700,
+            "makerFeeRateBps": "0",
+        });
+        let m = parse_gamma_market(&raw).unwrap();
+        assert_eq!(m.taker_fee_rate, Some(0.07));
+        assert_eq!(m.maker_fee_rate, Some(0.0));
+    }
+
+    #[test]
+    fn parses_current_gamma_tick_and_fee_schedule_fields() {
+        let raw = serde_json::json!({
+            "conditionId": "0xabc",
+            "question": "Bitcoin Up or Down - July 20, 1PM ET?",
+            "category": "Crypto",
+            "orderPriceMinTickSize": 0.01,
+            "feesEnabled": true,
+            "takerBaseFee": 1000,
+            "feeSchedule": {"exponent": 1, "rate": 0.07, "takerOnly": true},
+        });
+        let market = parse_gamma_market(&raw).unwrap();
+        assert_eq!(market.minimum_tick_size, Some(0.01));
+        assert_eq!(market.taker_fee_rate, Some(0.07));
+        assert_eq!(market.effective_maker_fee_rate(0.0), 0.0);
     }
 }

@@ -1,0 +1,140 @@
+{
+  "assessment": {
+    "candidate_action": "KEEP_FROZEN_FORWARD_CONTRACT_UNCHANGED; DO_NOT PROMOTE, RETUNE, OR CLAIM PROFITABILITY",
+    "directional_assessment": "DIRECTIONALLY_NEGATIVE_BUT_UNDERPOWERED",
+    "independent_strategy_opportunity_conditions": 3,
+    "minimum_future_conditions_per_registered_block": 750,
+    "reason": "Only three historical conditions reached the non-edge strategy gate, the signal tape required external gap repair, and the official tape cannot satisfy exact settlement continuity. The diagnostic can reject an obviously harmful mechanism but cannot validate A+ economics."
+  },
+  "authority": {
+    "active_forward_block_loaded": false,
+    "active_forward_strategy_metrics_loaded": false,
+    "diagnostic_only": true,
+    "exact_replay_evidence": false,
+    "one_label_observed_before_estimands_locked": true,
+    "promotion_credit": false,
+    "retrospective_labels_loaded": true
+  },
+  "changed_condition_rows": [
+    {
+      "baseline_one_share_pnl": 0.31452299999999994,
+      "baseline_selected": true,
+      "baseline_won": true,
+      "condition_id": "0x9759a66a41fc6625e47fc7fe5832321b9f47e99416761114ea812993bae111d7",
+      "official_minus_baseline_one_share_pnl": -0.31452299999999994,
+      "official_one_share_pnl": 0.0,
+      "official_selected": false,
+      "official_won": null,
+      "same_decision": false
+    }
+  ],
+  "decision": {
+    "a_plus_claim": false,
+    "candidate_promoted": false,
+    "candidate_rejected": false,
+    "future_disjoint_blocks_still_required": 2,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "runtime_change_authorized": false
+  },
+  "decision_question": "Does official Chainlink anchoring improve the outcome alignment of actual post-non-edge-gate strategy opportunities in the historical July 15 capture?",
+  "frozen_comparison": {
+    "alternate_thresholds_tested": 0,
+    "baseline": "primary_v6_volfloor_300",
+    "candidate": "settlement_source_anchor_v1",
+    "gross_edge_stale_cap": 0.25,
+    "minimum_fee_aware_edge": 0.07,
+    "official_current_max_age_ms": 10000,
+    "official_open_max_age_ms": 2000,
+    "only_changed_inputs": [
+      "fair-value current spot",
+      "fair-value five-minute strike"
+    ]
+  },
+  "generated_at": "2026-07-21T10:05:35.424319+00:00",
+  "limitations": [
+    "Only three of 24 captured conditions produced post-non-edge-gate strategy opportunities.",
+    "Repeated opportunity seconds share terminal labels and are not independent observations.",
+    "The signal tape uses official Binance one-second klines for the missing preroll and 44 internal gap seconds; captured RTDS takes precedence elsewhere.",
+    "The captured Chainlink tape fails the harness five-second settlement continuity check, so engine opportunity labels use the repaired Binance proxy; the retained resolution manifest shows identical official and proxy terminal directions for all 24 markets.",
+    "Decision-time one-share payoff excludes latency, L2 traversal, fill failure, sizing, exposure state, breaker state, and tail clustering.",
+    "The same 24-market source capture motivated the candidate, so this is retrospective diagnostic evidence with zero promotion credit."
+  ],
+  "mechanism_id": "settlement_source_anchor_v1",
+  "methodology": {
+    "baseline_fair_value_max_recompute_error": 0.0,
+    "decision_time_one_share_pnl_is_executable": false,
+    "event_rows_are_independent": false,
+    "unit_of_decision": "earliest edge-qualified post-non-edge-gate opportunity per condition and anchor"
+  },
+  "results": {
+    "condition_level_primary": {
+      "baseline": {
+        "average_one_share_pnl": 0.31452299999999994,
+        "decision_time_one_share_pnl": 0.31452299999999994,
+        "losses": 0,
+        "selected_conditions": 1,
+        "win_rate": 1.0,
+        "wins": 1
+      },
+      "baseline_only_conditions": 1,
+      "changed_decisions": 1,
+      "official": {
+        "average_one_share_pnl": null,
+        "decision_time_one_share_pnl": 0,
+        "losses": 0,
+        "selected_conditions": 0,
+        "win_rate": null,
+        "wins": 0
+      },
+      "official_only_conditions": 0,
+      "paired_one_share_pnl_delta_across_all_24_conditions": -0.31452299999999994
+    },
+    "event_level_descriptive": {
+      "baseline_edge_pass_rows": 1,
+      "conditions": 3,
+      "edge_delta": {
+        "maximum": 0.024897479897172947,
+        "mean": -0.004120676499047977,
+        "median": -0.0035103351267746774,
+        "minimum": -0.07061215526725984
+      },
+      "eligibility_disagreement_rows": 1,
+      "official_edge_pass_rows": 0,
+      "official_source_coverage": 1.0,
+      "official_source_fresh_rows": 81,
+      "rows": 81
+    }
+  },
+  "schema_version": 1,
+  "source_authority": {
+    "binance_market_data_documentation": "https://developers.binance.com/en/docs/products/spot/rest-api",
+    "binance_public_market_data_endpoint": "https://data-api.binance.vision/api/v3/klines",
+    "captured_markets": 24,
+    "engine_opportunity_conditions": 3,
+    "engine_opportunity_rows": 81,
+    "official_vs_proxy_terminal_direction_disagreements": 0,
+    "source_sha256": {
+      "baseline_variant": "50ffad389f08f44fe18c4914c438542f413045df869302cce81b4a621325e6cf",
+      "binance_gapfill": "2ffc8019d7467a5c7dcc008cb7a6751b4133e34d619149cc80161916a35efc15",
+      "binance_preroll": "5c6135a3a1dce432589c6da5c1379fc7c2c7551c879d37b7ee0b2bf95fd1fccc",
+      "capture_variant": "1d59b960e2d0742f13d9784f9a4c851e94f42aa13bb9862dc8076daccae4a23e",
+      "captured_binance": "62994df62537ca11299575b02afdfdd26c6665b09bce09289f05aab47580cb40",
+      "chainlink": "f944278a83cd3452138433c9eb7aa4f3a2641b74c2cd04669ae23685aaccd732",
+      "opportunities": "ad062ea985fabc3e86a5a308f988f790aa3047ad25a9f87fd16cf1a631c01af3",
+      "replay_report": "421814334f91bd0dbf951fb920a5100401ed4b33973dfa15a57b9d36e859e559",
+      "resolution": "cb17ede854ca4b112509ed5f06c0e68390ac0d428eedf858f00e4bc73d7b0ae0"
+    },
+    "source_uncompressed_sha256": {
+      "binance_gapfill": "10f2f00d25b376a983eeba8ee209420d8e174c2554fcfe0ccaed36fdde4f6975",
+      "binance_preroll": "d4fa2cf6225572277490ea7db0752218a8e84c278be6d6f13026353f9a029ac5",
+      "captured_binance": "a35f0831be0ae2880435ac4e1051f6e40164e2f38d46bcc0b35457797800b9de",
+      "chainlink": "caa86f114881e6ca79a83ce1be1532623af46ad9d869ebeef95c16175a93aa5d",
+      "opportunities": "e23bdbb7da926b67840bc917b7db688ffa5c1e91aedf8ee302d92559da38c0ee",
+      "replay_report": "4a842019976238d3c68bc357e4f73331ff64ac91b4783bcd70ceacbb294c7915",
+      "resolution": "b94b8a096d045c25ffe42b3f419e689c38aab9a193b8309c77e3eef551589322"
+    },
+    "window_utc": "2026-07-15T06:50:00Z through 2026-07-15T08:50:00Z"
+  },
+  "status": "RETROSPECTIVE_SIGNAL_GATED_DIAGNOSTIC_DIRECTIONALLY_NEGATIVE_INADEQUATE_SUPPORT"
+}

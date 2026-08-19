@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T04:46:59Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_AUTHENTICATED_REST_RECOVERY_PARITY_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Can a future promoted V2 runtime retain every unresolved order and confirmed fill across an ambiguous submission, WebSocket gap, or process restart without changing the frozen strategy?",
+  "defects": {
+    "pre_ack_crash": "The prior runtime learned the venue order id only after POST /order returned. A process exit after venue acceptance but before the response could leave an untracked live order.",
+    "restart_state": "Managed live orders, pending position economics, and reconciled trade ids existed only in memory.",
+    "rest_gap": "Authenticated order and trade endpoints existed in the client but no startup or periodic recovery loop consumed them.",
+    "terminal_order_race": "A terminal order event could release pending exposure even when size_matched exceeded the locally confirmed trade total.",
+    "severity": "promotion_blocking_live_exposure_and_pnl_integrity",
+    "forward_strategy_metrics_inspected": false,
+    "forward_trade_or_screen_metrics_disclosed": false,
+    "active_capture_data_invalidated": false
+  },
+  "repair_contract": {
+    "precomputed_order_id": "Compute the CLOB V2 EIP-712 order hash before POST /order and persist it as the venue lookup id before crossing the network.",
+    "durable_journal": "Atomically persist each nonterminal ManagedOrder, remaining PendingLivePosition, fee schedule, recovery miss count, and reconciled trade-id set in SQLite.",
+    "startup_restore": "Restore only Submitted, Acked, or PartiallyFilled orders after strict economic validation; lock their markets and all new live trading until the first authenticated recovery pass succeeds.",
+    "rest_recovery": "Every five seconds, fetch authenticated trades from the order creation boundary, process only terminal CONFIRMED or FAILED trade evidence through the shared reconciler, then query the order hash for current venue state.",
+    "fail_closed_terminality": "Never infer fill price or fee from size_matched. A terminal order whose venue matched size exceeds confirmed local fills retains exposure, trips the breaker, and stops the runtime.",
+    "pre_submit_crash_resolution": "Clear only a Submitted zero-fill journal entry that is at least 30 seconds old and has returned three authenticated REST 404 responses.",
+    "ambiguous_submission": "Transport failures, 408/429 responses, 5xx responses, malformed success bodies, and missing order ids retain the journal and relock new live trading for REST recovery.",
+    "paper_isolation": "A simulated paper reset never deletes the live-order journal, and paper startup refuses to bypass unresolved live exposure.",
+    "production_source_behavior_changed": true,
+    "production_binary_replaced_or_restarted": false,
+    "active_measurement_v5_capture_restarted": false,
+    "capture_format_changed": false,
+    "scorer_rule_schema_gate_or_threshold_changed": false,
+    "recollection_required": false
+  },
+  "implementation": {
+    "clob_file": "rust_engine/src/clob.rs",
+    "clob_sha256": "713f3a64fb8cbcf01d282b7177ef16b3a59d1ea3e804dbc7099236ef8ad0e03b",
+    "user_channel_file": "rust_engine/src/clob_user_ws.rs",
+    "user_channel_sha256": "50ca933355df55c8fd6afe21df8e7c1fd0e4500ebb0bae52e1a81cd2cdd7ebc3",
+    "order_manager_file": "rust_engine/src/execution/order_manager.rs",
+    "order_manager_sha256": "d9cc323d7fbcf60a2a4b3d4580fd9d83473332fffd35a127a0c7d91cbe8604ec",
+    "live_pipeline_file": "rust_engine/src/live/pipeline.rs",
+    "live_pipeline_sha256": "6ff6eaf581bcb4136212ad0fae0c81835df61b4999615783a9b13cb118dcf59f",
+    "risk_manager_file": "rust_engine/src/risk/manager.rs",
+    "risk_manager_sha256": "3ef81d01a4d25e658fd5be194ea38887183bc75d5b6abc1dcfd7c7ec7924d4a4",
+    "signing_file": "rust_engine/src/signing.rs",
+    "signing_sha256": "1ad2d79cb1b1bf7ded02302f1f7eb425f451cf3f5a3707550a98d037bff80f8e",
+    "scorer_sha256_unchanged": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "tests_added": [
+      "live_pending_orders_round_trip",
+      "restores_a_persisted_nonterminal_order",
+      "parses_confirmed_rest_trade_page",
+      "prepares_order_and_lookup_hash_before_network_submission",
+      "submission_receipt_compares_hashes_case_insensitively",
+      "parses_rest_terminal_order_economics",
+      "recognizes_only_explicit_rest_not_found_errors",
+      "simulated_session_reset_starts_fresh_without_erasing_trade_history",
+      "stable EIP-712 order-hash vector"
+    ]
+  },
+  "deployed_measurement_v10": {
+    "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v10",
+    "sha256": "03073aefcad8f5a403e55e5a472d81a915632c131db3c3a241d326845e08585f",
+    "format": "ELF 64-bit LSB PIE x86-64",
+    "linux_x86_64_linkage_verified": true,
+    "cli_help_verified": true,
+    "production_binary_replaced": false,
+    "production_service_restarted": false,
+    "active_v5_capture_interrupted": false,
+    "active_v5_capture_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_v5_capture_main_pid": 240334,
+    "active_v5_capture_restarts": 0,
+    "active_recorder_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement-v5",
+    "scoring_requirement": "v10 retains the unchanged schema-4 scorer and may score the sealed block only after the fixed 750-condition floor.",
+    "promotion_requirement": "Any future production runtime must retain the v10 durable journal, pre-submit hash, terminal-confirmed trade, and authenticated REST recovery contract or a later hash-pinned equivalent."
+  },
+  "vps_observation": {
+    "observed_at": "2026-07-21T04:46:59Z",
+    "production_engine_active": true,
+    "production_engine_main_pid": 228671,
+    "production_engine_restarts": 0,
+    "telegram_monitor_active": true,
+    "telegram_monitor_main_pid": 228684,
+    "telegram_monitor_restarts": 0,
+    "health_timer_active": true,
+    "healthcheck_last_result": "success",
+    "soak_timer_active": true,
+    "soak_report_last_result": "success",
+    "canary_active": true,
+    "canary_main_pid": 240334,
+    "canary_restarts": 0,
+    "unique_ready_terminal_conditions": 290,
+    "target_terminal_conditions": 750,
+    "new_segments_completed": 15,
+    "maximum_new_segments": 96,
+    "strategy_metrics_disclosed": false,
+    "active_recorder_session": "binary-complement-block1-floor-017",
+    "active_recorder_start": "2026-07-21T05:15:00Z",
+    "active_recorder_windows": 24,
+    "active_recorder_duration_seconds": 10860
+  },
+  "validation": {
+    "cargo_test": "PASS: 517 passed (466 library + 51 binary), 0 failed; doc-tests 0",
+    "cargo_clippy": "PASS: all targets with warnings denied after allowing only the two documented pre-existing unrelated binary lints",
+    "cargo_fmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "linux_binary_hash_match": true,
+    "forward_scores_disclosed": 0
+  },
+  "external_sources": [
+    {
+      "title": "Polymarket Get Trades",
+      "url": "https://docs.polymarket.com/api-reference/trade/get-trades",
+      "use": "Defines authenticated paginated trade recovery fields and terminal trade statuses."
+    },
+    {
+      "title": "Polymarket Get Single Order",
+      "url": "https://docs.polymarket.com/api-reference/trade/get-single-order-by-id",
+      "use": "Defines authenticated order lookup, size_matched, associate_trades, and venue order statuses."
+    },
+    {
+      "title": "Polymarket CTF Exchange V2",
+      "url": "https://github.com/Polymarket/ctf-exchange-v2",
+      "use": "Defines EIP-712 typed V2 orders and hash-addressed OrderStatus lifecycle."
+    },
+    {
+      "title": "Polymarket User Channel",
+      "url": "https://docs.polymarket.com/market-data/websocket/user-channel",
+      "use": "Defines the authenticated order/trade stream that REST recovery complements."
+    }
+  ],
+  "decision": {
+    "safe_to_continue_sealed_collection": true,
+    "safe_to_score_below_750": false,
+    "fixed_strategy_rule_or_gate_changed": false,
+    "live_runtime_parity_contract_changed": true,
+    "automated_rest_recovery_implemented": true,
+    "safe_for_live_promotion_now": false,
+    "live_promotion_blockers_remaining": [
+      "two disjoint 750-condition frozen-rule screen passes",
+      "exact measured-latency replay passes every registered A+ gate",
+      "fresh registry audit live_ready=true"
+    ],
+    "current_grade": "A-",
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue sealed collection to 750 and score exactly once with measurement-v10 or a later hash-pinned equivalent. Do not replace the paper-only production binary and do not promote live trading before both disjoint blocks and exact replay pass."
+  }
+}

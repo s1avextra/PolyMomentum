@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-05-26T14:14:03.134401+00:00",
+  "source_report_hash": "661bcb9ec549702065840d0ec1e19cff3ecfcb05495ffb84999ec829e45eef9f",
+  "source_label": "aggregate_6d",
+  "source_window": "2026-05-23T00:00:00+00:00..2026-05-24T23:00:00+00:00",
+  "selected_strategy": {
+    "name": "candle_momentum",
+    "version": "1",
+    "params_hash": "5d45dd913015fcc03229becd492443286e51fb95b66aa5766e52baeceb239a69",
+    "risk_profile": "position_pct=0.0500;max_per_market_usd=20.00;stress_dd_cap=0.2400"
+  },
+  "strategy_params": {
+    "default_fee_rate": 0.07,
+    "maker_fee_rate": 0.0,
+    "maker_fill_prob": 0.65,
+    "maker_seed": 42,
+    "max_per_market_usd": 20.0,
+    "max_projected_stressed_drawdown_pct": 0.24,
+    "microstructure": {
+      "max_spread": 1.0,
+      "min_book_depth": 0.0,
+      "min_book_pressure": -1.0
+    },
+    "min_confidence": 0.3,
+    "min_edge": 0.03,
+    "name": "early_c0.30_z0.50_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk",
+    "position_pct": 0.05,
+    "prefer_maker": true,
+    "skip_dead_zone": true,
+    "use_perfect_fill": false,
+    "zone_config": {
+      "dead_zone_hi": 0.9,
+      "dead_zone_lo": 0.8,
+      "early_min_confidence": 0.3,
+      "early_min_edge": 0.03,
+      "early_min_z": 0.5,
+      "edge_cap": 0.25,
+      "late_min_confidence": 1.1,
+      "late_min_edge": 1.0,
+      "late_min_z": 100.0,
+      "max_price": 0.9,
+      "min_ev_buffer": -1.0,
+      "min_price": 0.1,
+      "primary_min_z": 100.0,
+      "settlement_guard_minutes": 1.0,
+      "settlement_min_abs_move_usd": 10.0,
+      "settlement_sigma_buffer": 0.0,
+      "terminal_min_confidence": 1.1,
+      "terminal_min_edge": 1.0,
+      "terminal_min_z": 100.0
+    }
+  },
+  "data_manifest_hash": "1c52080d037221c2fedb38d8e78c97f4c914fb5057339f6d41b844d68da954a7",
+  "market_count": 576,
+  "trades": 155,
+  "win_rate": 0.8129032258064516,
+  "total_pnl": 99.03989999999999,
+  "avg_pnl": 0.6389670967741935,
+  "total_fees": 0.0,
+  "sharpe_like": 1.5113663345354031,
+  "dominant_zone": "early",
+  "dominant_zone_trade_share": 1.0,
+  "risk_notes": [
+    "selected variant has 123 passive maker non-fills/post-only rejects: {\"maker_unfilled\": 103, \"post_only_cross\": 20}",
+    "dominant zone early carries 100.0% of selected trades",
+    "wilson win-rate lower bound 95%: 0.744",
+    "multi-report gate: reports=6 profitable=6 min_profitable=6 min_daily_trades=15 min_daily_pnl=0.00 worst_daily_pnl=3.68",
+    "robust score 0.5259; worst_window_pnl 3.68; median_window_pnl 13.65; neighbor_positive_rate 72.7% over 11 neighbor(s)",
+    "PBO estimate 0.250 across 20 split(s); median OOS percentile 0.729",
+    "trial ledger: reports=6 comparable_variants=48 variant_report_trials=288 windows=2026-05-23T00:00:00+00:00..2026-05-23T07:00:00+00:00,2026-05-23T08:00:00+00:00..2026-05-23T15:00:00+00:00,2026-05-23T16:00:00+00:00..2026-05-23T23:00:00+00:00,2026-05-24T00:00:00+00:00..2026-05-24T07:00:00+00:00,2026-05-24T08:00:00+00:00..2026-05-24T15:00:00+00:00,2026-05-24T16:00:00+00:00..2026-05-24T23:00:00+00:00"
+  ],
+  "promotion_gate": {
+    "min_trades": 90,
+    "min_losses": 10,
+    "min_zone_count": 1,
+    "min_win_rate": 0.7,
+    "min_wilson_win_rate_lower": 0.6,
+    "min_total_pnl": 0.0,
+    "min_sharpe_like": 0.0,
+    "max_unresolved_fills": 0,
+    "max_failed_fills": 0,
+    "max_passive_failed_fills": 480,
+    "min_fill_rate": 0.55,
+    "max_zone_trade_share": 1.0,
+    "require_complete_data": true
+  },
+  "robust_diagnostics": {
+    "schema_version": 1,
+    "trial_ledger": {
+      "report_count": 6,
+      "variant_count": 288,
+      "comparable_variant_count": 48,
+      "total_variant_report_trials": 288,
+      "windows": [
+        "2026-05-23T00:00:00+00:00..2026-05-23T07:00:00+00:00",
+        "2026-05-23T08:00:00+00:00..2026-05-23T15:00:00+00:00",
+        "2026-05-23T16:00:00+00:00..2026-05-23T23:00:00+00:00",
+        "2026-05-24T00:00:00+00:00..2026-05-24T07:00:00+00:00",
+        "2026-05-24T08:00:00+00:00..2026-05-24T15:00:00+00:00",
+        "2026-05-24T16:00:00+00:00..2026-05-24T23:00:00+00:00"
+      ],
+      "report_hashes": [
+        "5651f0086ba0f288aa51915308d612cc25fcf8c6a0f6001114242eb5622d5542",
+        "9e81267d1660e8428b223ce37f348e073df9978cc721a1cdcbbf4bc77554688a",
+        "4e2d51f275d9899316f0a4a1ca11df0cde94c44a3775f540294583193edcebb4",
+        "f2204902be27be3a9c3f32828beb1d930d423032d9d3ce50556fb4f609740ac5",
+        "87b3a39277e5d081f979c475b516ea8f2a1a04e58a30e41ee8d30ba425526764",
+        "5806ff7b5f54dda6bfac3e4d7f7e5325fe1f8537281cf9a2d995757052b2e3c9"
+      ],
+      "selection_objective": "robust_score with hard vetoes, neighbor stability, worst-window pnl, and PBO"
+    },
+    "pbo": {
+      "splits": 20,
+      "pbo": 0.25,
+      "median_oos_percentile": 0.7291666666666666,
+      "truncated": false
+    },
+    "selected": {
+      "strategy_name": "early_c0.30_z0.50_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk",
+      "params_hash": "5d45dd913015fcc03229becd492443286e51fb95b66aa5766e52baeceb239a69",
+      "total_pnl": 99.03989999999999,
+      "trades": 155,
+      "worst_window_pnl": 3.677299999999996,
+      "median_window_pnl": 13.645349999999992,
+      "worst_window_expectancy": 0.11862258064516115,
+      "median_window_expectancy": 0.6646722988505742,
+      "wilson_win_rate_lower": 0.7442159245751728,
+      "neighbor_count": 11,
+      "neighbor_positive_rate": 0.7272727272727273,
+      "fill_rate": 0.5575539568345323,
+      "max_stressed_drawdown_pct": 0.1657496113207873,
+      "robust_score": 0.5258791135249288
+    },
+    "top_candidates": [
+      {
+        "strategy_name": "early_c0.30_z0.50_e0.03_ev-1.00_p0.10-0.90_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk",
+        "params_hash": "5d45dd913015fcc03229becd492443286e51fb95b66aa5766e52baeceb239a69",
+        "total_pnl": 99.03989999999999,
+        "trades": 155,
+        "worst_window_pnl": 3.677299999999996,
+        "median_window_pnl": 13.645349999999992,
+        "worst_window_expectancy": 0.11862258064516115,
+        "median_window_expectancy": 0.6646722988505742,
+        "wilson_win_rate_lower": 0.7442159245751728,
+        "neighbor_count": 11,
+        "neighbor_positive_rate": 0.7272727272727273,
+        "fill_rate": 0.5575539568345323,
+        "max_stressed_drawdown_pct": 0.1657496113207873,
+        "robust_score": 0.5258791135249288
+      }
+    ]
+  }
+}

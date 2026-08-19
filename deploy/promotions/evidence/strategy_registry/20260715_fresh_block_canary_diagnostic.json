@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T05:39:26Z",
+  "status": "CANARY_MEASUREMENT_VALID_BUT_STRATEGY_REPLAY_INADMISSIBLE",
+  "decision": {
+    "grade": "A-",
+    "verdict": "KEEP_REPLAY_RESEARCH",
+    "live_ready": false,
+    "live_trading": "OFF",
+    "strategy_score_emitted": false
+  },
+  "deployment": {
+    "measurement_binary": "/opt/polymomentum/tools/polymomentum-engine-measurement",
+    "measurement_binary_sha256": "190ec4ae6f614b557ecfbf16f2726fa60655658ee8cf7a742e69ca5b3c5472b3",
+    "capture_runner": "/opt/polymomentum/tools/capture-forward-segments.sh",
+    "session": "/opt/polymomentum/logs/forward-captures/fresh-block-canary",
+    "production_service_observed_after_capture": {
+      "active_state": "active",
+      "sub_state": "running",
+      "main_pid": 324003,
+      "restart_count": 0
+    },
+    "current_vps_check": {
+      "attempted_at": "2026-07-18T05:39:26Z",
+      "status": "REACHABLE_AND_HEALTHY_AFTER_RESTART",
+      "evidence": "polymomentum-engine.service and polymomentum-telegram-monitor.service are active/running with PIDs 3013 and 3014, zero restarts, and no warning-or-higher journal entries since restart; healthcheck and soak-report timers are active.",
+      "production_state_inferred": false,
+      "production_state_observed": true,
+      "engine_mode": "paper_only",
+      "enabled_units_restarted": [
+        "polymomentum-engine.service",
+        "polymomentum-telegram-monitor.service",
+        "polymomentum-healthcheck.timer",
+        "polymomentum-soak-report.timer"
+      ],
+      "disabled_legacy_units_started": false
+    },
+    "remote_raw_frames_preserved": true,
+    "remote_raw_frames_preservation_reason": "The original monolithic latency gate failed; the ownership-safe runner stopped before conversion or deletion."
+  },
+  "capture": {
+    "first_window_open": "2026-07-15T06:50:00Z",
+    "last_window_close": "2026-07-15T08:50:00Z",
+    "complete_windows": 24,
+    "conditions": 24,
+    "tokens": 48,
+    "duration_seconds": 7260,
+    "raw_frames": 4107504,
+    "raw_file_bytes": 3483427156,
+    "raw_file_sha256": "92646e53ffa3bed0b91c4a8065b0a9054910fb9c455adedaf936b4ee3e7bd067",
+    "book_messages": 120475,
+    "price_change_messages": 3780777,
+    "connected_sessions": 5,
+    "reconnects": 4,
+    "websocket_read_errors": 4,
+    "source_provenance_ready": true,
+    "official_chainlink_ready": true,
+    "binance_proxy_ready": true
+  },
+  "latency": {
+    "p50_ms": 10.0,
+    "p90_ms": 18.0,
+    "p95_ms": 31.0,
+    "p99_ms": 99.0,
+    "p99_5_ms": 145.0,
+    "missing_event_timestamps": 0,
+    "negative_delay_samples": 0,
+    "recommended_replay_latency_ms": 99,
+    "registered_replay_floor_ms": 202,
+    "original_global_gap_ms": 3082,
+    "original_global_gap_start": "2026-07-15T08:50:24.104Z",
+    "original_global_gap_end": "2026-07-15T08:50:27.186Z",
+    "global_gap_location": "post-window capture padding",
+    "active_window_gap_ms": 2154,
+    "active_window_gap_start": "2026-07-15T07:43:10.186Z",
+    "active_window_gap_end": "2026-07-15T07:43:12.340Z",
+    "active_window_gap_limit_ms": 2000,
+    "active_window_verdict": "STREAM_RECEIVE_GAP_TOO_HIGH"
+  },
+  "reference_tapes": {
+    "chainlink_ticks": 7104,
+    "binance_ticks": 7212,
+    "chainlink_max_observation_gap_ms": 25000,
+    "binance_max_observation_gap_ms": 25000,
+    "chainlink_gaps_over_5000_ms": [
+      {"previous_ms": 1784098290000, "current_ms": 1784098298000, "gap_ms": 8000, "excluded_window_open_s": 1784098200},
+      {"previous_ms": 1784099787000, "current_ms": 1784099795000, "gap_ms": 8000, "excluded_window_open_s": 1784099700},
+      {"previous_ms": 1784100484000, "current_ms": 1784100506000, "gap_ms": 22000, "excluded_window_open_s": 1784100300},
+      {"previous_ms": 1784101123000, "current_ms": 1784101131000, "gap_ms": 8000, "excluded_window_open_s": 1784100900},
+      {"previous_ms": 1784101616000, "current_ms": 1784101641000, "gap_ms": 25000, "excluded_window_open_s": 1784101500},
+      {"previous_ms": 1784101898000, "current_ms": 1784101907000, "gap_ms": 9000, "excluded_window_open_s": 1784101800},
+      {"previous_ms": 1784103328000, "current_ms": 1784103336000, "gap_ms": 8000, "excluded_window_open_s": 1784103300},
+      {"previous_ms": 1784105297000, "current_ms": 1784105304000, "gap_ms": 7000, "excluded_window_open_s": 1784105100}
+    ],
+    "binance_gaps_over_5000_ms": [
+      {"previous_ms": 1784100485000, "current_ms": 1784100506000, "gap_ms": 21000, "excluded_window_open_s": 1784100300},
+      {"previous_ms": 1784101617000, "current_ms": 1784101642000, "gap_ms": 25000, "excluded_window_open_s": 1784101500}
+    ]
+  },
+  "conversion": {
+    "status": "VERIFIED_LOCAL_DEV_BOX",
+    "manifest_sha256": "c8dbd3fa486b498214e19739c9ba5bf0d890babbe46d1df02d90ed6034a62386",
+    "hours": 3,
+    "markets": 24,
+    "book_events": 120475,
+    "change_events": 7561554,
+    "skipped_malformed_lines": 0,
+    "skipped_malformed_raw": 0,
+    "skipped_missing_fields": 0,
+    "skipped_unknown_market": 0,
+    "skipped_unknown_token": 0,
+    "exact_replay_flag": "--require-shared-distilled"
+  },
+  "clean_subsegments": {
+    "retained_conditions": 15,
+    "excluded_conditions": 9,
+    "excluded_window_open_seconds": [
+      1784098200,
+      1784099700,
+      1784100300,
+      1784100900,
+      1784101200,
+      1784101500,
+      1784101800,
+      1784103300,
+      1784105100
+    ],
+    "segments": [
+      {"id": "segment_001", "window_open_seconds": [1784098500, 1784098800, 1784099100, 1784099400]},
+      {"id": "segment_002", "window_open_seconds": [1784100000]},
+      {"id": "segment_003", "window_open_seconds": [1784100600]},
+      {"id": "segment_004", "window_open_seconds": [1784102100, 1784102400, 1784102700, 1784103000]},
+      {"id": "segment_005", "window_open_seconds": [1784103600, 1784103900, 1784104200, 1784104500, 1784104800]}
+    ]
+  },
+  "exact_replay_admissibility": {
+    "required_binance_signal_history_seconds": 3600,
+    "required_chainlink_coverage": "first selected market open through last selected market close",
+    "canary_capture_plan": {
+      "planned_start": "2026-07-15T06:49:30Z",
+      "first_market_open": "2026-07-15T06:50:00Z",
+      "preopen_seconds": 30
+    },
+    "currently_certified_conditions": 0,
+    "definitely_inadmissible_conditions": 15,
+    "definitely_inadmissible_segments": ["segment_001", "segment_002", "segment_003", "segment_004", "segment_005"],
+    "outer_bound_inadmissible_conditions": 6,
+    "outer_bound_inadmissible_segments": ["segment_001", "segment_002", "segment_003"],
+    "outer_bound_reason": "The first selected markets require Binance observations before the authoritative tape begins at 1784098172000 ms.",
+    "internal_gap_inadmissible_conditions": 9,
+    "internal_gap_inadmissible_segments": ["segment_004", "segment_005"],
+    "internal_gap_reason": "Both otherwise bound-valid segments include 21,000 ms and 25,000 ms Binance gaps in their required causal histories; median cadence is 1,000 ms and the independent fail-closed limit is 5,000 ms.",
+    "authoritative_tape_bounds": {
+      "binance_first_ms": 1784098172000,
+      "binance_last_ms": 1784105429000,
+      "chainlink_first_ms": 1784098171000,
+      "chainlink_last_ms": 1784105429000,
+      "binance_csv_sha256": "a35f0831be0ae2880435ac4e1051f6e40164e2f38d46bcc0b35457797800b9de",
+      "chainlink_csv_sha256": "caa86f114881e6ca79a83ce1be1532623af46ad9d869ebeef95c16175a93aa5d"
+    },
+    "segment_checks": [
+      {"segment": "segment_001", "conditions": 4, "required_start_ms": 1784094900000, "required_end_ms": 1784099700000, "outer_bounds_ready": false, "max_internal_gap_ms": 1000, "verdict": "inadmissible_outer_bound"},
+      {"segment": "segment_002", "conditions": 1, "required_start_ms": 1784096400000, "required_end_ms": 1784100300000, "outer_bounds_ready": false, "max_internal_gap_ms": 1000, "verdict": "inadmissible_outer_bound"},
+      {"segment": "segment_003", "conditions": 1, "required_start_ms": 1784097000000, "required_end_ms": 1784100900000, "outer_bounds_ready": false, "max_internal_gap_ms": 21000, "verdict": "inadmissible_outer_bound"},
+      {"segment": "segment_004", "conditions": 4, "required_start_ms": 1784098500000, "required_end_ms": 1784103300000, "outer_bounds_ready": true, "median_internal_gap_ms": 1000, "max_internal_gap_ms": 25000, "allowed_internal_gap_ms": 5000, "verdict": "inadmissible_internal_gap"},
+      {"segment": "segment_005", "conditions": 5, "required_start_ms": 1784100000000, "required_end_ms": 1784105100000, "outer_bounds_ready": true, "median_internal_gap_ms": 1000, "max_internal_gap_ms": 25000, "allowed_internal_gap_ms": 5000, "verdict": "inadmissible_internal_gap"}
+    ],
+    "future_capture_contract": {
+      "signal_preroll_seconds": 3600,
+      "boundary_padding_seconds": 30,
+      "default_24_window_duration_seconds": 10860,
+      "conservative_raw_estimate_gib": 6.07,
+      "replay_preflight": "Fail before harness execution unless Binance covers the causal hour, its maximum internal gap is no larger than max(5,000 ms, three times median cadence), and both reference tapes cover the selected market range."
+    }
+  },
+  "terminal_resolution": {
+    "ready": false,
+    "reason": "Not refreshed because all 15 continuity-clean conditions already fail exact signal-history admissibility; terminal labels cannot make an invalid strategy replay admissible.",
+    "synthetic_labels_allowed": false,
+    "partial_strategy_metrics_allowed": false
+  },
+  "binary_complement_forward_gate": {
+    "mechanism": "binary_complement_coherence_v1",
+    "minimum_terminal_conditions_per_block": 100,
+    "retained_canary_conditions_before_terminal_refresh": 15,
+    "currently_exact_replay_certified_conditions": 0,
+    "eligible_to_score": false,
+    "reason": "The immutable scorer intentionally refuses to reveal metrics below 100 terminal official-source-aligned conditions."
+  },
+  "pipeline_integrity_changes": [
+    "Latency continuity now evaluates the active registered market window while retaining global capture-padding gaps as diagnostics.",
+    "Replay hour loading floors exact non-hour-aligned window bounds so every touched cache hour is loaded.",
+    "Replay keeps exact first/last market bounds and seeds the harness cache from captured Gamma metadata.",
+    "Future capture planning now records a full causal Binance hour before the first market, and replay fails closed on insufficient Binance or Chainlink tape bounds.",
+    "Capture and replay preflights now mirror the harness's internal Binance-gap rule: max gap must not exceed max(5,000 ms, three times median cadence).",
+    "No strategy threshold, runtime decision rule, production binary, or live control changed."
+  ],
+  "source_hashes": {
+    "capture_summary_sha256": "7644839aa096557671897b2f31e74debb2b4cb5ca1617921be7898dd8696de67",
+    "original_vps_latency_audit_sha256": "132b1032670751e90187209625c305f56804d0ee63432c3872fcd4fcc2424efe",
+    "active_window_latency_audit_sha256": "354dcb96a6b5aefd1d2d7a9111b573fdaa1801376579faf2ca602cdc4b7b6995",
+    "local_analysis_binary_sha256": "6b9f7a1689d095d70a70336519887c10cc81f179452e11e4d6d1ae04bac020d6",
+    "recovered_binance_csv_sha256": "a35f0831be0ae2880435ac4e1051f6e40164e2f38d46bcc0b35457797800b9de",
+    "recovered_chainlink_csv_sha256": "caa86f114881e6ca79a83ce1be1532623af46ad9d869ebeef95c16175a93aa5d"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": "opportunity_table_v1",
+  "causal_feature_semantics_version": "late_window_causal_features_v1",
+  "generated_at": "2026-08-10T15:38:42Z",
+  "hour": "2026-05-25T15:00:00Z",
+  "signals": {
+    "path": "logs/strategy-research/causal-signals/2026-05-25T15.jsonl",
+    "sha256": "ef9ee429f8c2344271bb1b8eb92ec3499e661b145d0e0331919b2ed93ad77dd1"
+  },
+  "pmxt_parquet": {
+    "path": "data/pmxt_v2_cache/polymarket_orderbook_2026-05-25T15.parquet",
+    "sha256": "7b09ffa5b3a307067a2b99dcad8228c9ac40d15b0b0f016c2210382b5ea0b2c9"
+  },
+  "output": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/2026-05-25T15.parquet",
+    "sha256": "eff396a9198bb645ecd12c1dbc72b19c0d7f0b848697b090da495a5b7371b58b"
+  },
+  "row_count": 36,
+  "observable_book_rows": 35,
+  "missing_book_rows": 1,
+  "stake_usd": 5.0,
+  "fee_rate": 0.07,
+  "outcome_columns_present": false,
+  "single_pmxt_rowfiltered_scan": true,
+  "timestamp_semantics": "PMXT exchange timestamp; events at or before observed_at only"
+}

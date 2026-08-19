@@ -1,0 +1,24 @@
+{
+  "schema_version": "opportunity_flow_decision_evidence_v1",
+  "generated_at": "2026-08-11T16:07:17Z",
+  "family_id": "trade_tape_directional_flow_v1",
+  "source_decision_report": {
+    "path": "logs/strategy-research/opportunity-flow/trade_flow_decision_20260811.json",
+    "sha256": "7d6f54e5ffe1cc7beb553c590848b7fbd7e1018d0b4b4ad38e570296f034e399"
+  },
+  "preregistration": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_preregistration.json",
+    "sha256": "dc95fe21e42465d3add799af2476baf1c1b968e5e24d7e8cac69d96b11a3d41c"
+  },
+  "search_evidence": "deploy/promotions/evidence/strategy_registry/20260811_trade_tape_directional_flow_search.json",
+  "fixed_advancement_wilson_edge": 0.02,
+  "maximum_exact_replays": 2,
+  "exact_replays_consumed": 0,
+  "fresh_holdout_outcomes_accessed": false,
+  "decision": "reject_family_keep_fresh_sealed",
+  "reason": "No fixed-grid trade-flow policy cleared both the older stability and recent discovery cheap-screen gates, so exact replay was not authorized.",
+  "terminal": true,
+  "search_budget_exhausted": true,
+  "more_evidence_allowed": false,
+  "fresh_gate_opened": false
+}

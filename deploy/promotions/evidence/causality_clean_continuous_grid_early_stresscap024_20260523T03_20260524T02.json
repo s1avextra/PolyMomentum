@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "path": "/private/tmp/polymomentum_final_gate_20260524T1500Z/sessions/session_20260524_150203.jsonl",
+  "ok": true,
+  "config": {
+    "max_clock_skew_s": 0.5,
+    "max_post_end_fill_s": 0.0,
+    "min_order_timings": 1,
+    "min_resolution_timings": 1
+  },
+  "total_events": 68497,
+  "malformed_lines": 0,
+  "order_timings": 126,
+  "order_placed": 126,
+  "order_filled": 70,
+  "resolution_timings": 70,
+  "missing_timing_for_fills": 0,
+  "violations": [],
+  "warnings": []
+}

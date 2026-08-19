@@ -1,0 +1,565 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "PolyMomentum: restore capacity, finish one test, stop the grid",
+    "description": "Decision report covering strategy-research results through August 8, 2026, current operational blockers, and the bounded plan to reach the next valid decision.",
+    "generatedAt": "2026-08-08T08:12:57Z",
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# PolyMomentum: restore capacity, finish one test, stop the grid"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Executive Summary\n\n- **Nothing is ready for promotion.** The strategy registry has zero live candidates, and live trading remains blocked.\n- **Fresh evidence did useful work.** The strongest historical candidate made +$101.45 on 27 exact-L2 fills, then lost $9.83 on 24 frozen fresh fills. Another candidate stayed positive but produced only three fresh fills, too little to estimate an edge.\n- **One bounded test should finish.** The current 0.95 hybrid has completed three of eight exact windows, with six fills and -$1.00 interim net PnL. Finish the five frozen windows before drawing a conclusion.\n- **The loop is wasting work and is resource-blocked.** The Mac has 16.88 GiB free against a 20 GiB gate, the VPS has 4.9 GiB free and its engine is failed, ten recent variants collapsed to four exact outcomes, and the deterministic baseline repeated the same zero-pass result seven times."
+      },
+      {
+        "id": "headline_metrics",
+        "type": "metric-strip",
+        "layout": "full",
+        "cardIds": [
+          "live_candidates_card",
+          "fresh_reversal_card",
+          "current_progress_card"
+        ]
+      },
+      {
+        "id": "definitions",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Fresh replay, not historical accuracy, now controls the decision\n\nExact-L2 results use a $100 research bankroll, a $5 maximum stake, 202 ms insertion latency, fee-aware taker execution, visible book depth, and resolved payout. A frozen fresh holdout uses previously unmeasured resolved windows and cannot be retuned. Net PnL is payout minus executable cost and fees. The rows below are separate candidate cohorts, so they should be compared as evidence stages rather than as one time series."
+      },
+      {
+        "id": "candidate_results_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "candidate_results_table"
+      },
+      {
+        "id": "fresh_interpretation",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## The fresh reversal is the decisive failure\n\nThe up-only 0.97 path rule looked exceptional historically, then four fresh losses erased the small winning payouts and produced -$9.83. That is the exact failure mode the fresh gate is meant to catch. The 0.97 hybrid did not fail on observed PnL, but three fills across seven windows cannot support a reliable decision. Neither candidate should advance."
+      },
+      {
+        "id": "validation_stage_pnl_block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "validation_stage_pnl_chart"
+      },
+      {
+        "id": "current_candidate",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## The 0.95 hybrid is the only in-flight candidate\n\nIts public screen passed with 751 signals, 98.27% terminal accuracy, and a 97.06% Wilson lower bound. The cached screen found 14 of 14 positive conditions with +$0.0154 mean one-share payoff. Exact replay is not yet positive: the first three windows produced five winning fills, one losing fill, and -$1.00 total. Five preregistered windows remain, so the correct action is to finish this bounded replay and create no sibling candidates meanwhile."
+      },
+      {
+        "id": "system_findings",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Resource gates and duplicate work—not a 750-condition rule—are blocking progress\n\nThe current funnel has no universal 750-condition exploration barrier. The eventual fixed-forward stage starts at a 25-fill checkpoint and derives its target from payoff and power. Today, however, both research hosts are below their disk gates. The loop also repeats execution-equivalent variants and reruns an unchanged deterministic baseline. These are fixable workflow problems."
+      },
+      {
+        "id": "bottlenecks_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "bottlenecks_table"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Recommended next steps\n\n1. **Recover disk headroom first.** Remove rebuildable Mac debug artifacts before touching evidence. On the VPS, archive or compress verified PolyMomentum-owned raw captures and old session logs; do not touch shared or peer-private directories. Target at least 25 GiB free on the Mac and 15 GiB on the VPS.\n2. **Finish only candidate `78af669b73`.** Run its five remaining exact windows and seal the eight-window verdict. Do not generate another grid variant during this run.\n3. **Amend and preregister funnel policy v6.** Reuse exact results for execution-equivalent candidates, suspend baseline evolution until its input report hash changes, and make signal-to-attempt a capacity diagnostic when minimum fills and window breadth already pass. Rename exact-economic failures so the ledger identifies the real stage.\n4. **Run one low-price challenger.** Register the canonical 0.90 path-plus-move rule as a new research challenger under v6. Its old v5 result cannot be relabeled as a pass. Use only untouched global-reserve windows, at most eight, with no sibling variants or retuning.\n5. **Advance or close.** A fresh pass moves to payoff-derived future-only confirmation, official Chainlink parity, and then a bounded measurement-only VPS shadow. A fresh failure closes this continuation family."
+      },
+      {
+        "id": "plan_table_block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "plan_table"
+      },
+      {
+        "id": "runtime_decision",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Keep the stale strategy runtime stopped\n\nThe VPS trading engine has been failed since July 25 because its disk preflight cannot meet the 10 GiB and 15% free-space requirements. Its configured A+ promotion artifact is also stale, and the registry has no live candidate. After cleanup, restore measurement and monitoring health; do not restart the stale strategy merely to make systemd green. The separate measurement binary is present. Binary-complement session 020 independently sealed with verified capture and resolution readiness at 329 support; total sealed support later reached 352 of 750 before that collector also stopped on disk. Its strategy metrics remain sealed, and the collector should stay retired unless that separate research question is explicitly revived."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Does the completed 0.95 replay recover from its first full loss while retaining both-direction support?\n- Can the 0.90 challenger produce at least five fresh fills from the untouched reserve, or is the apparent edge too sparse to operate?\n- If both fail, should the next preregistered mechanism be a simple train-only calibration table using move bucket, distance to strike, remaining time, and executable ask rather than another fixed-threshold grid?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "research_status_plan",
+        "body": "## Caveats and assumptions\n\nThe 0.95 PnL is interim, not a verdict. The 0.90 candidate failed the policy that governed its original run; changing policy after seeing historical results is acceptable only as a new preregistered research hypothesis tested on untouched data. The public snapshot currently ends on August 6 because the latest cycle was disk-deferred. Historical and resolved-fresh replay still do not validate official Chainlink settlement parity or live websocket behavior. No evidence here authorizes live orders."
+      }
+    ],
+    "cards": [
+      {
+        "id": "live_candidates_card",
+        "dataset": "headline",
+        "description": "Registry entries currently authorized for live use.",
+        "sourceId": "research_status_plan",
+        "metrics": [
+          {
+            "field": "live_candidates",
+            "format": "number",
+            "label": "Live candidates"
+          }
+        ]
+      },
+      {
+        "id": "fresh_reversal_card",
+        "dataset": "headline",
+        "description": "Net PnL of the historically strongest candidate on its frozen fresh holdout.",
+        "sourceId": "research_status_plan",
+        "metrics": [
+          {
+            "field": "fresh_reversal_pnl_usd",
+            "format": "number",
+            "label": "Strongest candidate fresh PnL, USD",
+            "signed": true
+          },
+          {
+            "field": "fresh_reversal_fills",
+            "format": "number",
+            "label": "Fresh fills"
+          }
+        ]
+      },
+      {
+        "id": "current_progress_card",
+        "dataset": "headline",
+        "description": "Completed windows for the only in-flight exact-L2 candidate.",
+        "sourceId": "research_status_plan",
+        "metrics": [
+          {
+            "field": "current_exact_windows",
+            "format": "number",
+            "label": "Current exact windows"
+          },
+          {
+            "field": "current_exact_target_windows",
+            "format": "number",
+            "label": "Preregistered target"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "validation_stage_pnl_chart",
+        "type": "bar",
+        "intent": "comparison",
+        "layout": "full",
+        "dataset": "validation_stage_pnl",
+        "title": "Net PnL by validation stage",
+        "subtitle": "Historical and frozen fresh cohorts for the two candidates that reached fresh replay; fill counts appear in tooltips.",
+        "question": "Did historical exact-L2 profitability persist on frozen fresh windows?",
+        "rationale": "Grouped bars expose the up-only reversal and the hybrid's positive but underpowered fresh result without implying a time trend.",
+        "maxRows": 4,
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "legend": {
+          "position": "top",
+          "title": "Validation stage",
+          "interactive": true,
+          "sort": "labelAsc"
+        },
+        "comparisonContext": {
+          "baseline": "zero net PnL",
+          "grain": "candidate and validation cohort",
+          "unit": "USD"
+        },
+        "referenceLines": [
+          {
+            "axis": "y",
+            "value": 0,
+            "label": "Break-even",
+            "color": "neutral",
+            "lineStyle": "dashed"
+          }
+        ],
+        "encodings": {
+          "x": {
+            "field": "candidate",
+            "type": "nominal",
+            "label": "Candidate"
+          },
+          "y": {
+            "field": "net_pnl_usd",
+            "type": "quantitative",
+            "label": "Net PnL, USD",
+            "format": "number"
+          },
+          "color": {
+            "field": "stage",
+            "type": "nominal",
+            "label": "Validation stage"
+          },
+          "tooltip": [
+            {
+              "field": "fills",
+              "type": "quantitative",
+              "label": "Fills",
+              "format": "number"
+            },
+            {
+              "field": "windows",
+              "type": "quantitative",
+              "label": "Windows",
+              "format": "number"
+            }
+          ]
+        },
+        "sourceId": "research_status_plan"
+      }
+    ],
+    "tables": [
+      {
+        "id": "candidate_results_table",
+        "dataset": "candidate_results",
+        "title": "Candidate evidence by validation stage",
+        "subtitle": "Fee-aware exact-L2 results through August 8, 2026; fresh results use frozen previously unmeasured windows.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "sourceId": "research_status_plan",
+        "columns": [
+          {
+            "field": "order",
+            "label": "Order",
+            "format": "number"
+          },
+          {
+            "field": "candidate",
+            "label": "Candidate",
+            "type": "text"
+          },
+          {
+            "field": "historical_fills",
+            "label": "Historical fills",
+            "format": "number"
+          },
+          {
+            "field": "historical_pnl_usd",
+            "label": "Historical PnL, USD",
+            "format": "number",
+            "movement": true
+          },
+          {
+            "field": "fresh_fills",
+            "label": "Fresh fills",
+            "format": "number"
+          },
+          {
+            "field": "fresh_pnl_usd",
+            "label": "Fresh PnL, USD",
+            "format": "number",
+            "movement": true
+          },
+          {
+            "field": "verdict",
+            "label": "Verdict",
+            "type": "text"
+          },
+          {
+            "field": "reason",
+            "label": "Decision reason",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "bottlenecks_table",
+        "dataset": "bottlenecks",
+        "title": "Verified workflow bottlenecks",
+        "subtitle": "Resource and process findings that can be corrected without weakening economic validation.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "priority",
+          "direction": "asc"
+        },
+        "sourceId": "research_status_plan",
+        "columns": [
+          {
+            "field": "priority",
+            "label": "Priority",
+            "format": "number"
+          },
+          {
+            "field": "problem",
+            "label": "Problem",
+            "type": "text"
+          },
+          {
+            "field": "evidence",
+            "label": "Evidence",
+            "type": "text"
+          },
+          {
+            "field": "fix",
+            "label": "Fix",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "plan_table",
+        "dataset": "plan",
+        "title": "Bounded decision plan",
+        "subtitle": "Each stage has a concrete stop condition; no paper or live strategy run is used where replay can decide.",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "sourceId": "research_status_plan",
+        "columns": [
+          {
+            "field": "order",
+            "label": "Step",
+            "format": "number"
+          },
+          {
+            "field": "action",
+            "label": "Action",
+            "type": "text"
+          },
+          {
+            "field": "acceptance",
+            "label": "Acceptance / stop condition",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "research_status_plan",
+        "label": "PolyMomentum strategy research status and plan, August 8, 2026",
+        "path": "deploy/promotions/evidence/strategy_registry/20260808_strategy_research_status_and_plan.json",
+        "query": {
+          "description": "Reviewed snapshot of the SQLite research ledger, frozen result payloads, registry audit, local resource gates, VPS service health, and support-only canary readiness.",
+          "engine": "sqlite-and-system-health",
+          "language": "sql",
+          "sql": "SELECT h.fingerprint, h.status, j.stage, j.status, j.payload_json FROM hypotheses h LEFT JOIN jobs j ON j.hypothesis_fingerprint = h.fingerprint WHERE h.created_at >= '2026-08-03T00:00:00Z';",
+          "filters": [
+            "late-window research hypotheses created on or after August 3, 2026",
+            "fee-aware exact-L2 and frozen fresh result payloads",
+            "VPS service and disk health observed August 8, 2026",
+            "binary-complement support/readiness only; strategy metrics remain sealed"
+          ],
+          "metric_definitions": [
+            "Net PnL is resolved payout minus executable cost and fees.",
+            "Fresh holdout windows were frozen and previously unmeasured for that candidate.",
+            "Execution-equivalent outcome groups share window count, fill count, direction PnL, and total PnL.",
+            "Live candidate count is the registry count of currently active or promoted strategies."
+          ],
+          "executed_at": "2026-08-08T08:12:57Z"
+        }
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "accessIssues": [],
+    "datasets": {
+      "headline": [
+        {
+          "live_candidates": 0,
+          "fresh_reversal_pnl_usd": -9.82591,
+          "fresh_reversal_fills": 24,
+          "current_exact_windows": 3,
+          "current_exact_target_windows": 8
+        }
+      ],
+      "candidate_results": [
+        {
+          "order": 1,
+          "candidate": "0.97 path-only, both directions",
+          "historical_fills": 45,
+          "historical_pnl_usd": 61.21195,
+          "fresh_fills": null,
+          "fresh_pnl_usd": null,
+          "verdict": "Rejected historical",
+          "reason": "Down direction lost $8.65"
+        },
+        {
+          "order": 2,
+          "candidate": "0.97 path + $100 move, both",
+          "historical_fills": 13,
+          "historical_pnl_usd": 19.28177,
+          "fresh_fills": 3,
+          "fresh_pnl_usd": 0.69519,
+          "verdict": "Fresh support insufficient",
+          "reason": "Only 3 fills across 7 windows"
+        },
+        {
+          "order": 3,
+          "candidate": "0.97 path-only, up",
+          "historical_fills": 27,
+          "historical_pnl_usd": 101.4476,
+          "fresh_fills": 24,
+          "fresh_pnl_usd": -9.82591,
+          "verdict": "Rejected fresh",
+          "reason": "20 wins and 4 losses produced negative PnL"
+        },
+        {
+          "order": 4,
+          "candidate": "0.90 path + $100 move, both",
+          "historical_fills": 6,
+          "historical_pnl_usd": 3.16499,
+          "fresh_fills": null,
+          "fresh_pnl_usd": null,
+          "verdict": "Rejected under v5",
+          "reason": "Only failed 0.25 signal-to-attempt gate"
+        },
+        {
+          "order": 5,
+          "candidate": "0.95 path + $100 move, both",
+          "historical_fills": 6,
+          "historical_pnl_usd": -1.0047,
+          "fresh_fills": null,
+          "fresh_pnl_usd": null,
+          "verdict": "In progress",
+          "reason": "3 of 8 exact windows complete"
+        }
+      ],
+      "validation_stage_pnl": [
+        {
+          "candidate": "0.97 hybrid",
+          "stage": "Historical exact",
+          "net_pnl_usd": 19.28177,
+          "fills": 13,
+          "windows": 8
+        },
+        {
+          "candidate": "0.97 hybrid",
+          "stage": "Frozen fresh",
+          "net_pnl_usd": 0.69519,
+          "fills": 3,
+          "windows": 7
+        },
+        {
+          "candidate": "0.97 up-only",
+          "stage": "Historical exact",
+          "net_pnl_usd": 101.4476,
+          "fills": 27,
+          "windows": 8
+        },
+        {
+          "candidate": "0.97 up-only",
+          "stage": "Frozen fresh",
+          "net_pnl_usd": -9.82591,
+          "fills": 24,
+          "windows": 8
+        }
+      ],
+      "bottlenecks": [
+        {
+          "priority": 1,
+          "problem": "Mac research loop is resource-deferred",
+          "evidence": "16.88 GiB free vs 20 GiB gate; 40 GiB rebuildable debug target",
+          "fix": "Clean dev build artifacts; retain evidence; verify >=25 GiB free"
+        },
+        {
+          "priority": 2,
+          "problem": "VPS engine and legacy collector are disk-failed",
+          "evidence": "4.9 GiB free; 16 GiB PolyMomentum logs; engine failed since July 25",
+          "fix": "Archive/compress verified owned raw data; target >=15 GiB free"
+        },
+        {
+          "priority": 3,
+          "problem": "Execution-equivalent exact replays repeat",
+          "evidence": "10 recent variants collapsed to 4 outcome signatures",
+          "fix": "Cache by executable-behavior signature and reuse the result"
+        },
+        {
+          "priority": 4,
+          "problem": "Unchanged deterministic baseline repeats",
+          "evidence": "7 runs, 36 candidates each, same top hash, zero passes",
+          "fix": "Run only when source report hashes change"
+        },
+        {
+          "priority": 5,
+          "problem": "Selectivity is treated as a quality failure",
+          "evidence": "0.90 hybrid passed quality gates but was rejected at 17.6% signal-to-attempt",
+          "fix": "Preregister v6: retain fill/support gates; report selectivity as capacity"
+        }
+      ],
+      "plan": [
+        {
+          "order": 1,
+          "action": "Recover disk headroom",
+          "acceptance": "Mac >=25 GiB; VPS >=15 GiB; evidence preserved"
+        },
+        {
+          "order": 2,
+          "action": "Finish 0.95 exact replay",
+          "acceptance": "8 of 8 frozen windows sealed; no sibling generated"
+        },
+        {
+          "order": 3,
+          "action": "Implement and preregister funnel v6",
+          "acceptance": "Deduplication, input-hash scheduling, capacity metric, truthful statuses"
+        },
+        {
+          "order": 4,
+          "action": "Run one canonical 0.90 fresh challenger",
+          "acceptance": "Untouched reserve only; <=8 windows; no retuning"
+        },
+        {
+          "order": 5,
+          "action": "Advance or close the family",
+          "acceptance": "Fresh pass -> 25-fill fixed-forward checkpoint; fresh fail -> close"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "research_status_plan",
+      "label": "PolyMomentum strategy research status and plan, August 8, 2026",
+      "path": "deploy/promotions/evidence/strategy_registry/20260808_strategy_research_status_and_plan.json",
+      "query": {
+        "description": "Reviewed strategy and operational evidence snapshot.",
+        "engine": "sqlite-and-system-health",
+        "language": "sql",
+        "sql": "SELECT h.fingerprint, h.status, j.stage, j.status, j.payload_json FROM hypotheses h LEFT JOIN jobs j ON j.hypothesis_fingerprint = h.fingerprint WHERE h.created_at >= '2026-08-03T00:00:00Z';",
+        "filters": [
+          "no live candidate",
+          "binary-complement strategy metrics sealed"
+        ],
+        "metric_definitions": [
+          "Net PnL includes executable cost and fees."
+        ],
+        "executed_at": "2026-08-08T08:12:57Z"
+      }
+    }
+  ]
+}

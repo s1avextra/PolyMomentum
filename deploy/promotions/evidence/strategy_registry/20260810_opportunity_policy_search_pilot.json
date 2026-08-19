@@ -1,0 +1,858 @@
+{
+  "schema_version": "opportunity_policy_search_v1",
+  "generated_at": "2026-08-10T15:49:01Z",
+  "dataset_seal": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/dataset.seal.json",
+    "sha256": "b21c1131b0b11010fce385e2ac2ae040083179a2eb9505b86d317174a0631aff"
+  },
+  "labels_manifest": {
+    "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/opportunity_table_v1_pilot/discovery-labels.manifest.json",
+    "sha256": "6bfe2ce3e0bcd5dfd36279105a615862b70b98eafc76dd6aa4ed10fad41f6435"
+  },
+  "dataset_sha256": "29016932ba246d82273c74b1153b20f3e32c3373322380200544ca1e05c782f9",
+  "causal_feature_semantics_version": "late_window_causal_features_v1",
+  "source_opportunity_table_reads": 1,
+  "in_memory_policy_evaluation_passes": 1,
+  "fresh_holdout_outcomes_accessed": false,
+  "policy_grid_sha256": "b782ce5ad041f9a6426c0beec6b58a14d4bd4b5513019287f12fe65500a0e0f9",
+  "policies_evaluated": 7290,
+  "minimum_calibration_support": 20,
+  "minimum_policy_support": 20,
+  "safety_margin": 0.02,
+  "calibration_cells": [
+    {
+      "key": "t120:down:m0:d1:v0",
+      "support": 6,
+      "wins": 5,
+      "win_rate": 0.8333333333333334,
+      "wilson_lower": 0.4364971778135299
+    },
+    {
+      "key": "t120:up:m0:d1:v0",
+      "support": 6,
+      "wins": 3,
+      "win_rate": 0.5,
+      "wilson_lower": 0.1876163064826505
+    },
+    {
+      "key": "t180:down:m0:d1:v0",
+      "support": 6,
+      "wins": 5,
+      "win_rate": 0.8333333333333334,
+      "wilson_lower": 0.4364971778135299
+    },
+    {
+      "key": "t180:up:m0:d1:v0",
+      "support": 6,
+      "wins": 3,
+      "win_rate": 0.5,
+      "wilson_lower": 0.1876163064826505
+    },
+    {
+      "key": "t240:down:m0:d1:v0",
+      "support": 6,
+      "wins": 6,
+      "win_rate": 1.0,
+      "wilson_lower": 0.6096657120978346
+    },
+    {
+      "key": "t240:up:m0:d1:v0",
+      "support": 6,
+      "wins": 4,
+      "win_rate": 0.6666666666666666,
+      "wilson_lower": 0.299993315138392
+    }
+  ],
+  "calibration_rows": 36,
+  "discovery_rows": 0,
+  "fresh_holdout_rows": 0,
+  "observable_rows": 35,
+  "fully_executable_rows": 35,
+  "eligible_policy_count": 0,
+  "top_diagnostics": [
+    {
+      "policy_id": "00101c35aec4061feb55157ff3ac975ca792b19e1bde398b2fb4198535f9608d",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "001ddfb2d92325f08edd7cfba49178a1f6dbcd31004602a562c2e85e80a309b2",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 1.0,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "up",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "0027cf412b5eb2cb95d17950c1e83361e91ee7270aa26c21922250952015fa7f",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 100,
+        "maximum_ask": 0.9,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00329cd4c365121745a2160a64a8de18e62b12c94b9f739deb25bb6971fe727e",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "down",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "003c49449de6741f8f8af0e5f74ed946896ac6407eade50033056982dd19a0c4",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "004392baa2ec1d2e3ac5bcd4fd9a59243b66cb62a2822fc3e1f700b4aa53d54f",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "up",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "004903fc6a9530fa0f3788c1dde250abbda2267d05d4a8ec5008b7dcbb3b5282",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.95,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "004dcede43cc54b481c9e88362d8c5b220538d131d2fd6eda4bd7bbbbc9f2363",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 1.0,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "0059ee4fd83b05cd6b8bcb7cde3bf2e7341d8b90e194840fd9cde984b9d597c1",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.95,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "up",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "005b85406614188a48d752baf15589e8529d0c44b1c1e3b4e7c3045f7e714afe",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 100,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 1.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "0069ed342aecad8c9df17e79e9121b2c4f6215a134563b02cb2dc58e57ae1793",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.95,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "up",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "006e4f866fdf61d421dd93fc8da2cef2c82ae05a6e3d7e74301f433ee042c100",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "up",
+        "maximum_annualized_volatility": 5.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "007ca5f397eda1413e6328c87305c372cdf50ab63c506d6f1c3730402efe86d5",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "down",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "0083deb17fefe4e64a6ce5cddda8023b1c72e8def50022b455e16ef26905257c",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.9,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "down",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "008e1037133819c3ff68e1e5e164189019c4e924ec829dcafbb15f1a96d5c738",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 1.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "009026cf173ceb0ffc4468b7318615539daa99b3a5c33486cb7ad732b6796cdd",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "both",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "009619112a3d1734a55ff8191ba504d7b854177bb2a6ced7d563749161b6df78",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 100,
+        "maximum_ask": 0.95,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "down",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00a277b7a6de57c4855690a2c83b0d195864c8a20a5255ab4737c1d2ed1cf3a2",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 1.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00a567ba770a1d892d3bc84e9da3261f2efac6369a4d898c0ac2b121f5eb75af",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 1.0,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "up",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00b542cacc33ae29900da5528587260ccb8f22a6c8e81a855c6317bbbee6d728",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 1.0,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "down",
+        "maximum_annualized_volatility": 1.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00ba5abc3774e004e1cd84553c73c036a26888625d8391efdefc81800d188d1c",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.95,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "both",
+        "maximum_annualized_volatility": 1.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00c6db721a14b7baba0e4343739429adfc4d48c0c483d9e53deeb04b26b5857c",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 1.0,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -1.0,
+        "direction": "up",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00ce38abde27ca1869e806bda3ecf2f2688f432e20c186e5b822e9fca3e6f8a5",
+      "policy": {
+        "decision_seconds": 240,
+        "require_aligned_path": true,
+        "minimum_abs_move_2m_usd": 200,
+        "maximum_ask": 0.97,
+        "minimum_directional_distance_usd": 100,
+        "minimum_top_book_pressure": -0.15,
+        "direction": "down",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00d2d2b9e7147a18b11d26b7689ea17c491361b714af6c504108e97d507d61a2",
+      "policy": {
+        "decision_seconds": 120,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 0,
+        "maximum_ask": 0.9,
+        "minimum_directional_distance_usd": 0,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "up",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    },
+    {
+      "policy_id": "00d9f0b562ec8493a67b867f302bd11ea847820e2363976b64ac6519e163b89e",
+      "policy": {
+        "decision_seconds": 180,
+        "require_aligned_path": false,
+        "minimum_abs_move_2m_usd": 100,
+        "maximum_ask": 0.85,
+        "minimum_directional_distance_usd": 200,
+        "minimum_top_book_pressure": 0.15,
+        "direction": "down",
+        "maximum_annualized_volatility": 2.0
+      },
+      "raw_discovery_support": 0,
+      "calibrated_discovery_support": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "wilson_win_rate_lower": null,
+      "average_break_even_probability": null,
+      "economic_payoff_proxy_usd": 0.0,
+      "fresh_causal_support": 0,
+      "fresh_calibrated_support": 0,
+      "discovery_trace_sha256": null,
+      "fresh_support_trace_sha256": null,
+      "discovery_eligible": false,
+      "rejection_reasons": [
+        "insufficient_discovery_support",
+        "aggregate_wilson_not_above_break_even_margin",
+        "nonpositive_fee_aware_payoff_proxy"
+      ]
+    }
+  ],
+  "exact_replay_plan": {
+    "status": "empty",
+    "eligible_policy_count": 0,
+    "unique_replay_count": 0,
+    "avoided_replay_count": 0,
+    "equivalence_reduction_fraction": null,
+    "entries": []
+  },
+  "verdict": "no_candidate_survived_discovery"
+}

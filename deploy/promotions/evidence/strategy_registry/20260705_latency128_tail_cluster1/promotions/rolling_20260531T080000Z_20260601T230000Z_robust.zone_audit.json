@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "report_count": 5,
+  "variant_name": "all_c0.60_z0.80_e0.07_ev-1.00_p0.75-0.85_sc2.0_minrv1_rv2_sf10_sg2.0_ss0.00_ms1.00_md0_mp-1.00_fbL2d0.00z0.90tk_selreqdirection-down_tk",
+  "params_hash": "01c2b9c8cbe57328154f2d8e57c9df81dc18f74cbda072642c7c23ebcc398ab6",
+  "max_zone_trade_share": 0.7,
+  "min_zone_trades": 0,
+  "min_zone_pnl": 0.0,
+  "total": {
+    "trades": 6,
+    "wins": 6,
+    "losses": 0,
+    "win_rate": 1.0,
+    "total_pnl": 7.134850000000001,
+    "total_fees": 0.42155,
+    "dominant_zone": "primary",
+    "dominant_zone_trade_share": 0.8333333333333334,
+    "wilson_win_rate_lower": 0.6096569663469354
+  },
+  "zones": [
+    {
+      "zone": "early",
+      "trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "win_rate": 1.0,
+      "pnl": 1.2815799999999995,
+      "trade_share": 0.16666666666666666,
+      "passes_min_trades": true,
+      "passes_min_pnl": true
+    },
+    {
+      "zone": "primary",
+      "trades": 5,
+      "wins": 5,
+      "losses": 0,
+      "win_rate": 1.0,
+      "pnl": 5.85327,
+      "trade_share": 0.8333333333333334,
+      "passes_min_trades": true,
+      "passes_min_pnl": true
+    }
+  ],
+  "folds": [
+    {
+      "label": "harness_sweep",
+      "start": "2026-05-31T08:00:00+00:00",
+      "end": "2026-05-31T15:00:00+00:00",
+      "trades": 3,
+      "wins": 3,
+      "losses": 0,
+      "total_pnl": 3.73559,
+      "total_fees": 0.21861,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 0.6666666666666666,
+      "zones": [
+        {
+          "zone": "early",
+          "trades": 1,
+          "wins": 1,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 1.2815799999999995,
+          "trade_share": 0.3333333333333333,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        },
+        {
+          "zone": "primary",
+          "trades": 2,
+          "wins": 2,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 2.45401,
+          "trade_share": 0.6666666666666666,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        }
+      ]
+    },
+    {
+      "label": "harness_sweep",
+      "start": "2026-05-31T16:00:00+00:00",
+      "end": "2026-05-31T23:00:00+00:00",
+      "trades": 2,
+      "wins": 2,
+      "losses": 0,
+      "total_pnl": 2.42411,
+      "total_fees": 0.14279,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 1.0,
+      "zones": [
+        {
+          "zone": "primary",
+          "trades": 2,
+          "wins": 2,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 2.42411,
+          "trade_share": 1.0,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        }
+      ]
+    },
+    {
+      "label": "harness_sweep",
+      "start": "2026-06-01T00:00:00+00:00",
+      "end": "2026-06-01T07:00:00+00:00",
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "total_pnl": -0.0,
+      "total_fees": -0.0,
+      "dominant_zone": null,
+      "dominant_zone_trade_share": null,
+      "zones": []
+    },
+    {
+      "label": "harness_sweep",
+      "start": "2026-06-01T08:00:00+00:00",
+      "end": "2026-06-01T15:00:00+00:00",
+      "trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 0.97515,
+      "total_fees": 0.06015,
+      "dominant_zone": "primary",
+      "dominant_zone_trade_share": 1.0,
+      "zones": [
+        {
+          "zone": "primary",
+          "trades": 1,
+          "wins": 1,
+          "losses": 0,
+          "win_rate": 1.0,
+          "pnl": 0.97515,
+          "trade_share": 1.0,
+          "passes_min_trades": true,
+          "passes_min_pnl": true
+        }
+      ]
+    },
+    {
+      "label": "harness_sweep",
+      "start": "2026-06-01T16:00:00+00:00",
+      "end": "2026-06-01T23:00:00+00:00",
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "total_pnl": -0.0,
+      "total_fees": -0.0,
+      "dominant_zone": null,
+      "dominant_zone_trade_share": null,
+      "zones": []
+    }
+  ],
+  "pass": false,
+  "rejections": [
+    "zone primary trade share 0.8333 above maximum 0.7000"
+  ]
+}

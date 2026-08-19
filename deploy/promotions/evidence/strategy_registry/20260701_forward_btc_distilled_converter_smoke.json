@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T10:50:00Z",
+  "purpose": "Implement and smoke-test the forward BTC book data path after PMXT/Gamma remap audit found no fresh btc-updown-5m coverage in the tested PMXT hour.",
+  "verdict": {
+    "promotion_ready": false,
+    "live_ready": false,
+    "status": "KEEP_REPLAY_RESEARCH",
+    "summary": "The forward recorder can now be converted into the existing distilled replay-cache format, but promotion still needs enough resolved forward windows, BTC tape alignment, and feed-forward validation."
+  },
+  "pmxt_remap_audit": {
+    "hour": "2026-06-29T00:00:00Z",
+    "pmxt_rows": 36365580,
+    "pmxt_market_count": 14440,
+    "pmxt_asset_count": 28880,
+    "gamma_resolved_open_markets": 12614,
+    "gamma_resolved_closed_markets": 1814,
+    "closed_btc_related_markets": 25,
+    "closed_btc_updown_5m_matches": 0,
+    "exact_gamma_btc_5m_condition_overlap": 0,
+    "exact_gamma_btc_5m_token_overlap": 0,
+    "interpretation": "A deterministic PMXT market -> Gamma metadata bridge exists, but the tested fresh PMXT hour does not contain the target btc-updown-5m condition IDs or token IDs."
+  },
+  "change": {
+    "command": "convert-recorded-btc-books",
+    "input": "record-btc-books output directory containing gamma_market_cache.json and market_ws_frames.jsonl",
+    "output": [
+      "<hour>.v1.candles.jsonl.gz",
+      "manifest.json"
+    ],
+    "integration_point": "Existing harness/eval-cache shared-distilled reader via --shared-distilled-dir",
+    "safety": [
+      "read-only conversion",
+      "validates every emitted event against Gamma token-to-market mapping",
+      "writes distilled files atomically via tmp file then rename",
+      "does not place orders or alter live strategy state"
+    ]
+  },
+  "smoke_conversion": {
+    "input_dir": "/private/tmp/polymomentum_record_btc_books_smoke_20260701",
+    "output_dir": "/private/tmp/polymomentum_forward_distilled_smoke_20260701",
+    "command": "./rust_engine/target/debug/polymomentum-engine convert-recorded-btc-books --input-dir /private/tmp/polymomentum_record_btc_books_smoke_20260701 --output-dir /private/tmp/polymomentum_forward_distilled_smoke_20260701",
+    "manifest": "/private/tmp/polymomentum_forward_distilled_smoke_20260701/manifest.json",
+    "distilled_file": "/private/tmp/polymomentum_forward_distilled_smoke_20260701/2026-07-01T09.v1.candles.jsonl.gz",
+    "raw_frames": 9056,
+    "json_messages": 9061,
+    "book_events": 288,
+    "change_events": 17284,
+    "jsonl_lines": 17572,
+    "token_outcomes": 6,
+    "skipped_unknown_market": 0,
+    "skipped_unknown_token": 0,
+    "skipped_missing_fields": 0,
+    "skipped_other_messages": 131
+  },
+  "verification": {
+    "cargo_fmt_check": "passed: cargo fmt --manifest-path rust_engine/Cargo.toml --check",
+    "targeted_converter_test": "passed: cargo test --manifest-path rust_engine/Cargo.toml recorded_book_converter_emits_distilled_events",
+    "targeted_recorder_test": "passed: cargo test --manifest-path rust_engine/Cargo.toml record_market_ws_stats_tracks_books_and_price_changes",
+    "cargo_build": "passed: cargo build --manifest-path rust_engine/Cargo.toml",
+    "distilled_gzip_json_check": "passed: 17572 parseable JSONL records; first event book, last event chg",
+    "manifest_json_check": "passed: jq extracted stats/hours/token_count"
+  },
+  "remaining_gap": "The distilled cache solves the orderbook-data format gap. It does not yet solve market resolution attachment, BTC reference tape alignment, or the need for enough resolved feed-forward windows/trades/losses to satisfy strict promotion gates."
+}

@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-15T03:27:09Z",
+  "status": "KEEP_REPLAY_RESEARCH",
+  "live_ready": false,
+  "question": "Can a fixed causal entry-persistence or executable exit lifecycle remove the strict-42 clustered losses without creating new losses?",
+  "baseline": {
+    "strategy": "primary_v6_volfloor_300",
+    "params_hash": "a5d67641653ae85a853aab531060a240eade257e32fd5bf0e46392c7934302d5",
+    "latency_ms": 202,
+    "folds": 42,
+    "trades": 102,
+    "wins": 79,
+    "losses": 23,
+    "total_pnl_usd": 13.54,
+    "wilson_lower_bound": 0.6843,
+    "profitable_eligible_reports": 19,
+    "eligible_reports": 39,
+    "loss_burst": 4,
+    "last_half_pnl_usd": -4.34,
+    "a_plus_pass": false
+  },
+  "cohort": {
+    "cluster_window_folds": [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "cluster_loss_folds": [29, 31, 32, 33, 34, 36, 37, 39, 40, 41],
+    "tail_trades": 40,
+    "tail_terminal_winners": 30,
+    "tail_terminal_losses": 10,
+    "tail_baseline_pnl_usd": -16.0665,
+    "tail_baseline_profitable_folds": 3
+  },
+  "screens": [
+    {
+      "name": "two_second_entry_persistence",
+      "status": "reject",
+      "rule": {
+        "recheck_window_seconds": [2.0, 3.0],
+        "require_same_direction": true,
+        "minimum_recheck_edge": 0.07,
+        "missing_recheck": "reject"
+      },
+      "pass_criteria": {
+        "retain_every_cluster_winner": false,
+        "remove_at_least_one_cluster_loss": true
+      },
+      "results": {
+        "trades": 27,
+        "wins": 17,
+        "losses": 10,
+        "matched_entries": 27,
+        "available_rechecks": 21,
+        "retained_trades": 9,
+        "retained_wins": 4,
+        "retained_losses": 5,
+        "removed_wins": 13,
+        "removed_losses": 5
+      },
+      "reason": "The rule removed 76% of known winners while removing only half of known losses."
+    },
+    {
+      "name": "executable_profit_lock",
+      "status": "reject",
+      "rule": {
+        "arm_pnl_usd": 0.5,
+        "exit_floor_pnl_usd": 0.1,
+        "order_latency_ms": 202,
+        "retry_cooldown_seconds": 1.0,
+        "fee_rate": 0.07,
+        "execution": "visible-bid FOK with trigger-time worst-price limit"
+      },
+      "pass_criteria": {
+        "convert_at_least_one_terminal_loss": true,
+        "make_no_terminal_winner_negative": false,
+        "improve_tail_total_pnl": true
+      },
+      "results": {
+        "armed_winners": 30,
+        "armed_losses": 3,
+        "exited_winners": 10,
+        "exited_losses": 3,
+        "converted_losses": 3,
+        "harmed_winners": 3,
+        "baseline_total_pnl_usd": -16.0665,
+        "counterfactual_total_pnl_usd": -13.15413,
+        "delta_pnl_usd": 2.91237,
+        "baseline_profitable_folds": 3,
+        "counterfactual_profitable_folds": 5
+      },
+      "reason": "The mechanism improved aggregate tail PnL but created three new losing trades after measured-latency execution."
+    },
+    {
+      "name": "thirty_second_late_loss_cut",
+      "status": "reject",
+      "rule": {
+        "decision_seconds_before_close": 30.0,
+        "exit_if_fee_inclusive_executable_pnl_below_usd": 0.0,
+        "order_latency_ms": 202,
+        "retry_cooldown_seconds": 1.0,
+        "fee_rate": 0.07,
+        "execution": "visible-bid FOK with signal-time worst-price limit"
+      },
+      "pass_criteria": {
+        "make_no_terminal_winner_negative": false,
+        "improve_tail_total_pnl": true,
+        "turn_at_least_one_negative_fold_positive": true
+      },
+      "results": {
+        "exit_decisions": 9,
+        "exit_fills": 9,
+        "harmed_winners": 2,
+        "baseline_total_pnl_usd": -16.0665,
+        "counterfactual_total_pnl_usd": -8.98572,
+        "delta_pnl_usd": 7.08078,
+        "baseline_profitable_folds": 3,
+        "counterfactual_profitable_folds": 5,
+        "negative_folds_turned_positive": 2
+      },
+      "reason": "The loss cut improved aggregate tail PnL but created two new losing trades, including a large fold-40 deterioration."
+    }
+  ],
+  "fixed_horizon_diagnostics": [
+    {"seconds_after_fill": 5, "terminal_group": "loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -0.23844},
+    {"seconds_after_fill": 5, "terminal_group": "win", "available": 30, "negative_marks": 23, "positive_marks": 7, "median_pnl_usd": -0.18277},
+    {"seconds_after_fill": 15, "terminal_group": "loss", "available": 10, "negative_marks": 9, "positive_marks": 1, "median_pnl_usd": -0.53699},
+    {"seconds_after_fill": 15, "terminal_group": "win", "available": 30, "negative_marks": 15, "positive_marks": 15, "median_pnl_usd": 0.00724},
+    {"seconds_after_fill": 30, "terminal_group": "loss", "available": 10, "negative_marks": 9, "positive_marks": 1, "median_pnl_usd": -0.63147},
+    {"seconds_after_fill": 30, "terminal_group": "win", "available": 30, "negative_marks": 14, "positive_marks": 16, "median_pnl_usd": 0.14752},
+    {"seconds_after_fill": 60, "terminal_group": "loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -2.17788},
+    {"seconds_after_fill": 60, "terminal_group": "win", "available": 29, "negative_marks": 7, "positive_marks": 22, "median_pnl_usd": 0.32362},
+    {"seconds_after_fill": 90, "terminal_group": "loss", "available": 10, "negative_marks": 7, "positive_marks": 3, "median_pnl_usd": -2.10861},
+    {"seconds_after_fill": 90, "terminal_group": "win", "available": 29, "negative_marks": 3, "positive_marks": 26, "median_pnl_usd": 0.59918}
+  ],
+  "fold_comparison": [
+    {"fold": 29, "trades": 6, "baseline_pnl_usd": -0.24369, "profit_lock_pnl_usd": -1.85157, "late_loss_cut_pnl_usd": -2.27184},
+    {"fold": 30, "trades": 3, "baseline_pnl_usd": 4.50786, "profit_lock_pnl_usd": 2.73596, "late_loss_cut_pnl_usd": 4.50786},
+    {"fold": 31, "trades": 2, "baseline_pnl_usd": -3.53932, "profit_lock_pnl_usd": 1.88408, "late_loss_cut_pnl_usd": -3.53932},
+    {"fold": 32, "trades": 1, "baseline_pnl_usd": -5.01516, "profit_lock_pnl_usd": -5.01516, "late_loss_cut_pnl_usd": -2.05036},
+    {"fold": 33, "trades": 2, "baseline_pnl_usd": -3.60591, "profit_lock_pnl_usd": -5.0065, "late_loss_cut_pnl_usd": -3.60591},
+    {"fold": 34, "trades": 1, "baseline_pnl_usd": -5.07776, "profit_lock_pnl_usd": -5.07776, "late_loss_cut_pnl_usd": -3.415},
+    {"fold": 35, "trades": 5, "baseline_pnl_usd": 6.28189, "profit_lock_pnl_usd": 2.61903, "late_loss_cut_pnl_usd": 6.28189},
+    {"fold": 36, "trades": 3, "baseline_pnl_usd": -2.96842, "profit_lock_pnl_usd": -2.96842, "late_loss_cut_pnl_usd": 0.68464},
+    {"fold": 37, "trades": 2, "baseline_pnl_usd": -4.13251, "profit_lock_pnl_usd": -0.10581, "late_loss_cut_pnl_usd": -2.88458},
+    {"fold": 38, "trades": 5, "baseline_pnl_usd": 6.25365, "profit_lock_pnl_usd": 4.54233, "late_loss_cut_pnl_usd": 6.25365},
+    {"fold": 39, "trades": 1, "baseline_pnl_usd": -5.12096, "profit_lock_pnl_usd": -5.12096, "late_loss_cut_pnl_usd": -5.04939},
+    {"fold": 40, "trades": 4, "baseline_pnl_usd": -2.23532, "profit_lock_pnl_usd": -3.37934, "late_loss_cut_pnl_usd": -7.80973},
+    {"fold": 41, "trades": 5, "baseline_pnl_usd": -1.17085, "profit_lock_pnl_usd": 3.58999, "late_loss_cut_pnl_usd": 3.91237}
+  ],
+  "method": {
+    "entry_persistence_source": "strict-42 one-Hz post-gate calibration opportunities plus exact baseline trade rows",
+    "lifecycle_source": "strict-42 exact baseline fills plus reconstructed target-token PMXT v2 book/change streams",
+    "book_contract": "snapshot replacement plus price-level changes in timestamp order",
+    "exit_quote": "full-size visible bids only; insufficient depth fails closed",
+    "fee_contract": "shares * 0.07 * p * (1-p), rounded to 1e-5",
+    "latency_contract": "202 ms order insertion; FOK limit fixed at signal-time worst visible bid",
+    "limitations": [
+      "The lifecycle screens are standalone causal reconstructions, not integrated harness variants.",
+      "The screens intentionally stop before exact 42-fold engine replay because each predeclared causal gate failed.",
+      "No neighboring recheck delay, PnL threshold, or seconds-before-close value was searched after rejection.",
+      "The freshest resolved sample remains too small for promotion evidence."
+    ]
+  },
+  "verdict": {
+    "grade": "A- research system; strategy remains below A+",
+    "strategy_adjustment": "none",
+    "reason": "Every fixed lifecycle mechanism either removed too many winners or created new losses. Aggregate tail-PnL improvement alone is insufficient for promotion.",
+    "next_mechanism_class": "new causal information or payoff geometry validated on a fresh fully resolved window, not another threshold on the same lifecycle cohort"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": "opportunity_liquidity_decision_v1",
+  "generated_at": "2026-08-11T15:08:24Z",
+  "family_id": "pure_cross_token_liquidity_dislocation_v1",
+  "preregistration": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260811_pure_cross_token_liquidity_dislocation_preregistration.json",
+    "sha256": "1b89cafd14277a629983e9b47b1e8524064cfb6c803416364e36a79fed613e90"
+  },
+  "liquidity_search_report": {
+    "path": "logs/strategy-research/opportunity-liquidity/pure_cross_token_liquidity_dislocation_v1.search.json",
+    "sha256": "31c1372912d71fccbb17620a20dbcd9a19a02e0e1402bd4142f759ec9653e1ec"
+  },
+  "exact_replay_report": {
+    "path": "logs/strategy-research/opportunity-liquidity/pure_cross_token_liquidity_dislocation_v1.latency128.exact.json",
+    "sha256": "36a7df185e76f99a951353b9ab2dd8f3f57895673980172c4180c562bad93714"
+  },
+  "fixed_advancement_wilson_edge": 0.02,
+  "maximum_exact_replays": 2,
+  "exact_replays_consumed": 2,
+  "fresh_holdout_outcomes_accessed": false,
+  "trace_decisions": [
+    {
+      "discovery_trace_sha256": "abeaaf9945e008db9dc0c5c5eb83daa53d3cda17431890bfcda52422fe47d013",
+      "representative_policy_id": "2a58298cc02b6b5690654697694bdfb5f825dc36da98880c68cc63eb82095080",
+      "decision_seconds": 180,
+      "fills": 65,
+      "wins": 37,
+      "losses": 28,
+      "point_estimate_edge": 0.041915942618765856,
+      "wilson_edge": -0.07898507986954467,
+      "total_pnl_usd": 7.288650485989004,
+      "decision": "reject_trace"
+    },
+    {
+      "discovery_trace_sha256": "f56447c0ec22626895aa1575c4c0003bb1a88fdc7ee748673da9ef5c6de6318c",
+      "representative_policy_id": "42a459ca32d1e57165784409358359f1c9ac63258afbb7a5a3c36cbe3ab3d047",
+      "decision_seconds": 180,
+      "fills": 61,
+      "wins": 34,
+      "losses": 27,
+      "point_estimate_edge": 0.03388669295442237,
+      "wilson_edge": -0.09045667929446671,
+      "total_pnl_usd": 0.8140685313582532,
+      "decision": "reject_trace"
+    }
+  ],
+  "decision": "reject_family_keep_fresh_sealed",
+  "reason": "no bounded exact-replay liquidity trace cleared the fixed Wilson edge and positive-PnL gate",
+  "terminal": true,
+  "search_budget_exhausted": true,
+  "more_evidence_allowed": false,
+  "fresh_gate_opened": false
+}

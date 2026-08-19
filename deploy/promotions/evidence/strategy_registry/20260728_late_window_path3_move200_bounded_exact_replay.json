@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-28T07:50:28Z",
+  "status": "RESEARCH_ONLY_BOUNDED_EXACT_REPLAY_COMPLETE",
+  "hypothesis": {
+    "fingerprint": "4d5804434690d0755fc175f6da61143df0f5d37a7947f70fb5ff42d39157792e",
+    "title": "Three-minute path with a $200 two-minute displacement",
+    "rule": {
+      "operator": "path_and_move",
+      "path_minutes": 3,
+      "minimum_two_minute_move_usd": 200
+    },
+    "executable_selectivity": {
+      "require_tags": {
+        "article_path_3m": "aligned"
+      },
+      "require_tag_values": {
+        "article_move_2m": [
+          "aligned_ge_200"
+        ]
+      }
+    },
+    "compiled_variant_sha256": "6882f208a60759837a650a2aaa3d6664b0bd591633a7e5aec061795595fd4d1d"
+  },
+  "public_directional_screen": {
+    "source_snapshot_sha256": "e6da327f31e4b9c3cdcd3cbc2b898ec8e7ee8b48e8937bc9631276d4097bdffd",
+    "evaluator_version": "late_window_public_v5",
+    "signals": 31,
+    "wins": 31,
+    "losses": 0,
+    "directions": {
+      "up": 16,
+      "down": 15
+    },
+    "wilson_95_lower": 0.889744604539564,
+    "fresh_pre_forward_signals": 1,
+    "interpretation": "The public screen supports testing the mechanism, but the fresh subgroup is too small for promotion."
+  },
+  "exact_l2_policy": {
+    "replay_semantics_version": 6,
+    "mode": "backtest",
+    "latency_ms": 202,
+    "fill_model": "visible L2 taker bookwalk with FOK limit",
+    "fees_included": true,
+    "maximum_preregistered_windows": 2,
+    "job_id": "1c0f5811-a511-4e6b-94fc-6f1a07cc40b4",
+    "job_status": "completed",
+    "completion_reason": "bounded exact replay complete"
+  },
+  "exact_l2_windows": [
+    {
+      "start": "2026-05-04T08:00:00Z",
+      "end": "2026-05-04T15:00:00Z",
+      "public_signals": 5,
+      "trades": 5,
+      "wins": 5,
+      "losses": 0,
+      "fills_success": 5,
+      "fills_failed": 0,
+      "unresolved_fills": 0,
+      "fill_rate": 1.0,
+      "net_pnl_usd": 28.02107,
+      "fees_usd": 0.84923,
+      "breaker_tripped": false,
+      "report_sha256": "0a777b6f503d73b9020e0328ee45066fb05842d07e7ae4eb1b89e7391b35148b",
+      "btc_tape_sha256": "21a6a488bba7083e0cc490243fd41bd7aa0ef7fbfcfbdbd753f3e3853a383a2d"
+    },
+    {
+      "start": "2026-04-21T08:00:00Z",
+      "end": "2026-04-21T15:00:00Z",
+      "public_signals": 3,
+      "trades": 3,
+      "wins": 3,
+      "losses": 0,
+      "fills_success": 3,
+      "fills_failed": 0,
+      "unresolved_fills": 0,
+      "fill_rate": 1.0,
+      "net_pnl_usd": 4.68243,
+      "fees_usd": 0.1753,
+      "breaker_tripped": false,
+      "report_sha256": "f8f56b83f370d448a93d98760b728fca099e591594f2244e61fe8a526e95df49",
+      "btc_tape_sha256": "04e6831491fb76504177e3da46b91fad5d0d753105c3d1c5e2e9034ac93f1c7b"
+    }
+  ],
+  "aggregate": {
+    "windows": 2,
+    "trades": 8,
+    "wins": 8,
+    "losses": 0,
+    "fills_success": 8,
+    "fills_failed": 0,
+    "unresolved_fills": 0,
+    "fill_rate": 1.0,
+    "net_pnl_usd": 32.7035,
+    "fees_usd": 1.02453,
+    "average_pnl_per_trade_usd": 4.0879375,
+    "breaker_tripped": false
+  },
+  "decision": {
+    "classification": "promising_research_candidate",
+    "live_ready": false,
+    "paper_ready": false,
+    "promotion_ready": false,
+    "reason": "The bounded historical exact replay is positive after fees, but eight trades and one fresh public signal are insufficient to establish a durable edge.",
+    "next_gate": "Run the frozen rule once on the newest fully resolved disjoint window with enough opportunities; do not retune from these two windows."
+  },
+  "separation_from_protected_forward": {
+    "binary_complement_750_floor_changed": false,
+    "explanation": "The 750-condition floor applies to the separately preregistered binary-complement powered forward confirmation, not to this historical exploration funnel."
+  }
+}

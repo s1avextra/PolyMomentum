@@ -1,9 +1,9 @@
 //! Backtest fill models for synthetic order book fills.
 //!
 //! Models:
-//! - [`OneTickTaker`]   — touch + 1 tick adverse (default for market orders)
-//! - [`BookWalkTaker`]  — walks real L2 depth, falls back to one-tick adverse
-//! - [`Maker`]          — probabilistic post-at-touch with taker fallback
+//! - [`BookWalkTaker`]  — executable VWAP across visible L2 depth
+//! - [`OneTickTaker`]   — synthetic fallback for crossed limit orders
+//! - [`Maker`]          — probabilistic resting limit fill, no auto-fallback
 //! - [`Perfect`]        — touch fill, no slippage (sanity baseline)
 //!
 //! All return `FillResult` with `success=false` and a `reason` when the
@@ -11,6 +11,7 @@
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 
 pub const DEFAULT_TICK: f64 = 0.01;
 
@@ -29,10 +30,13 @@ pub enum FillReason {
     None,
     Empty,
     Invalid,
+    InsufficientDepth,
     LimitNotCrossed,
     LimitMissingPrice,
     MakerFill,
     TakerFallback,
+    PostOnlyCross,
+    MakerUnfilled,
 }
 
 impl FillReason {
@@ -41,10 +45,13 @@ impl FillReason {
             FillReason::None => "",
             FillReason::Empty => "size <= 0",
             FillReason::Invalid => "invalid book",
+            FillReason::InsufficientDepth => "insufficient_depth",
             FillReason::LimitNotCrossed => "limit not crossed",
             FillReason::LimitMissingPrice => "limit price required",
             FillReason::MakerFill => "maker_fill",
             FillReason::TakerFallback => "taker_fallback",
+            FillReason::PostOnlyCross => "post_only_cross",
+            FillReason::MakerUnfilled => "maker_unfilled",
         }
     }
 }
@@ -56,7 +63,7 @@ pub enum Side {
 }
 
 impl Side {
-    pub fn from_str(s: &str) -> Option<Side> {
+    pub fn parse(s: &str) -> Option<Side> {
         match s.to_lowercase().as_str() {
             "buy" | "b" => Some(Side::Buy),
             "sell" | "s" => Some(Side::Sell),
@@ -86,6 +93,33 @@ fn one_tick_adverse_price(side: Side, best_bid: f64, best_ask: f64, tick_size: f
     p.clamp(tick_size, 1.0 - tick_size)
 }
 
+pub fn round_price_to_tick(price: f64, tick_size: f64) -> f64 {
+    let tick = tick_size.max(0.0001);
+    ((price / tick).round() * tick).clamp(tick, 1.0 - tick)
+}
+
+pub fn ceil_buy_price_to_tick(price: f64, tick_size: f64) -> f64 {
+    let tick = tick_size.max(0.0001);
+    ((price / tick - 1e-12).ceil() * tick).clamp(tick, 1.0 - tick)
+}
+
+pub fn resting_limit_price(
+    side: Side,
+    best_bid: f64,
+    best_ask: f64,
+    tick_size: f64,
+) -> Option<f64> {
+    if best_bid <= 0.0 || best_ask <= 0.0 || best_bid >= best_ask {
+        return None;
+    }
+    let tick = tick_size.max(0.0001);
+    let price = match side {
+        Side::Buy => best_ask - tick,
+        Side::Sell => best_bid + tick,
+    };
+    Some(round_price_to_tick(price, tick))
+}
+
 /// Synthetic-book taker fill model. Market orders pay touch + 1 tick adverse;
 /// limit orders that cross fill at touch.
 #[derive(Debug, Clone, Copy)]
@@ -95,7 +129,9 @@ pub struct OneTickTaker {
 
 impl Default for OneTickTaker {
     fn default() -> Self {
-        Self { tick_size: DEFAULT_TICK }
+        Self {
+            tick_size: DEFAULT_TICK,
+        }
     }
 }
 
@@ -109,10 +145,10 @@ impl OneTickTaker {
         order_type: OrderType,
         limit_price: Option<f64>,
     ) -> FillResult {
-        if size <= 0.0 {
+        if size <= 0.0 || !size.is_finite() {
             return failed(FillReason::Empty);
         }
-        if best_bid <= 0.0 || best_ask <= 0.0 || best_bid >= best_ask {
+        if !valid_binary_book(best_bid, best_ask) {
             return failed(FillReason::Invalid);
         }
 
@@ -121,6 +157,9 @@ impl OneTickTaker {
                 let Some(lp) = limit_price else {
                     return failed(FillReason::LimitMissingPrice);
                 };
+                if !lp.is_finite() || !(0.0..=1.0).contains(&lp) {
+                    return failed(FillReason::Invalid);
+                }
                 match side {
                     Side::Buy if lp >= best_ask => (best_ask, 0.0),
                     Side::Sell if lp <= best_bid => (best_bid, 0.0),
@@ -148,8 +187,9 @@ impl OneTickTaker {
     }
 }
 
-/// Walks real L2 depth (bid/ask vectors). If size exceeds depth, fills the
-/// remainder at one-tick adverse from the last known level.
+/// Walks real L2 depth (bid/ask vectors) and rejects orders that exceed the
+/// visible book. Inventing liquidity beyond the last level understates tail
+/// execution risk.
 #[derive(Debug, Clone, Copy)]
 pub struct BookWalkTaker {
     pub tick_size: f64,
@@ -157,7 +197,9 @@ pub struct BookWalkTaker {
 
 impl Default for BookWalkTaker {
     fn default() -> Self {
-        Self { tick_size: DEFAULT_TICK }
+        Self {
+            tick_size: DEFAULT_TICK,
+        }
     }
 }
 
@@ -169,8 +211,9 @@ impl BookWalkTaker {
         size: f64,
         bids: &[(f64, f64)],
         asks: &[(f64, f64)],
+        limit_price: Option<f64>,
     ) -> FillResult {
-        if size <= 0.0 {
+        if size <= 0.0 || !size.is_finite() {
             return failed(FillReason::Empty);
         }
         let levels: &[(f64, f64)] = match side {
@@ -180,29 +223,42 @@ impl BookWalkTaker {
         if levels.is_empty() {
             return failed(FillReason::Empty);
         }
+        if limit_price.is_some_and(|price| !price.is_finite() || !(0.0..=1.0).contains(&price)) {
+            return failed(FillReason::Invalid);
+        }
 
         let mut remaining = size;
         let mut total_cost = 0.0;
+        let mut touch = None;
         for &(price, avail) in levels {
             if remaining <= 0.0 {
                 break;
             }
+            if !price.is_finite()
+                || !avail.is_finite()
+                || !(0.0..=1.0).contains(&price)
+                || price == 0.0
+                || avail <= 0.0
+            {
+                continue;
+            }
+            if limit_price.is_some_and(|limit| match side {
+                Side::Buy => price > limit + 1e-12,
+                Side::Sell => price + 1e-12 < limit,
+            }) {
+                break;
+            }
+            touch.get_or_insert(price);
             let take = remaining.min(avail);
             total_cost += take * price;
             remaining -= take;
         }
-        if remaining > 0.0 {
-            let last = levels[levels.len() - 1].0;
-            let synth = match side {
-                Side::Buy => last + self.tick_size,
-                Side::Sell => (last - self.tick_size).max(self.tick_size),
-            };
-            total_cost += remaining * synth;
+        if remaining > 1e-9 || touch.is_none() {
+            return failed(FillReason::InsufficientDepth);
         }
 
         let vwap = total_cost / size;
-        let touch = levels[0].0;
-        let slippage = (vwap - touch).abs();
+        let slippage = (vwap - touch.expect("validated visible touch")).abs();
         FillResult {
             filled_size: size,
             fill_price: vwap,
@@ -214,11 +270,12 @@ impl BookWalkTaker {
     }
 }
 
-/// Maker-first probabilistic fill. With `fill_prob` we post inside the spread
-/// (touch ∓ 1 tick) at 0% fee; otherwise we cross with one-tick adverse.
+/// Post-only-style maker fill. Limit orders must rest; if they would cross
+/// the visible touch they reject instead of silently becoming takers.
 pub struct Maker {
     pub fill_prob: f64,
     pub tick_size: f64,
+    seed: Option<u64>,
     rng: StdRng,
 }
 
@@ -228,44 +285,54 @@ impl Maker {
             Some(s) => StdRng::seed_from_u64(s),
             None => StdRng::from_entropy(),
         };
-        Self { fill_prob, tick_size, rng }
+        Self {
+            fill_prob,
+            tick_size,
+            seed,
+            rng,
+        }
     }
 
+    #[allow(dead_code)]
     pub fn fill(
         &mut self,
         side: Side,
         size: f64,
         best_bid: f64,
         best_ask: f64,
+        order_type: OrderType,
+        limit_price: Option<f64>,
     ) -> FillResult {
-        if size <= 0.0 {
+        self.fill_with_key(
+            side,
+            size,
+            best_bid,
+            best_ask,
+            order_type,
+            limit_price,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_with_key(
+        &mut self,
+        side: Side,
+        size: f64,
+        best_bid: f64,
+        best_ask: f64,
+        order_type: OrderType,
+        limit_price: Option<f64>,
+        deterministic_key: Option<&str>,
+    ) -> FillResult {
+        if size <= 0.0 || !size.is_finite() {
             return failed(FillReason::Empty);
         }
-        if best_bid <= 0.0 || best_ask <= 0.0 || best_bid >= best_ask {
+        if !valid_binary_book(best_bid, best_ask) {
             return failed(FillReason::Invalid);
         }
 
-        if self.rng.gen::<f64>() < self.fill_prob {
-            // Maker fill at improvement vs touch.
-            let fill_price = match side {
-                Side::Buy => (best_ask - self.tick_size).max(self.tick_size),
-                Side::Sell => (best_bid + self.tick_size).min(1.0 - self.tick_size),
-            };
-            let touch = match side {
-                Side::Buy => best_ask,
-                Side::Sell => best_bid,
-            };
-            let improvement = (touch - fill_price).abs();
-            FillResult {
-                filled_size: size,
-                fill_price,
-                fill_cost: fill_price * size * side.cost_sign(),
-                slippage_per_share: -improvement, // negative = improvement
-                success: true,
-                reason: FillReason::MakerFill,
-            }
-        } else {
-            // Taker fallback.
+        if matches!(order_type, OrderType::Market) {
             let fill_price = one_tick_adverse_price(side, best_bid, best_ask, self.tick_size);
             let touch = match side {
                 Side::Buy => best_ask,
@@ -279,8 +346,56 @@ impl Maker {
                 success: true,
                 reason: FillReason::TakerFallback,
             }
+        } else {
+            let Some(lp) = limit_price else {
+                return failed(FillReason::LimitMissingPrice);
+            };
+            if !lp.is_finite() || !(0.0..=1.0).contains(&lp) {
+                return failed(FillReason::Invalid);
+            }
+            let eps = 1e-9;
+            match side {
+                Side::Buy if lp >= best_ask - eps => return failed(FillReason::PostOnlyCross),
+                Side::Sell if lp <= best_bid + eps => return failed(FillReason::PostOnlyCross),
+                Side::Buy if lp + eps < best_bid => return failed(FillReason::MakerUnfilled),
+                Side::Sell if lp - eps > best_ask => return failed(FillReason::MakerUnfilled),
+                _ => {}
+            }
+
+            let draw = match (self.seed, deterministic_key) {
+                (Some(seed), Some(key)) => deterministic_unit_interval(seed, key),
+                _ => self.rng.gen::<f64>(),
+            };
+            if draw >= self.fill_prob {
+                return failed(FillReason::MakerUnfilled);
+            }
+
+            let touch = match side {
+                Side::Buy => best_ask,
+                Side::Sell => best_bid,
+            };
+            let improvement = (touch - lp).abs();
+            FillResult {
+                filled_size: size,
+                fill_price: lp,
+                fill_cost: lp * size * side.cost_sign(),
+                slippage_per_share: -improvement,
+                success: true,
+                reason: FillReason::MakerFill,
+            }
         }
     }
+}
+
+fn deterministic_unit_interval(seed: u64, key: &str) -> f64 {
+    let mut hasher = Sha256::new();
+    hasher.update(seed.to_le_bytes());
+    hasher.update(key.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    let n = u64::from_le_bytes(bytes);
+    (n as f64) / ((u64::MAX as f64) + 1.0)
 }
 
 /// Sanity baseline — fills at touch with zero slippage.
@@ -289,8 +404,11 @@ pub struct Perfect;
 
 impl Perfect {
     pub fn fill(&self, side: Side, size: f64, best_bid: f64, best_ask: f64) -> FillResult {
-        if size <= 0.0 {
+        if size <= 0.0 || !size.is_finite() {
             return failed(FillReason::Empty);
+        }
+        if !valid_binary_book(best_bid, best_ask) {
+            return failed(FillReason::Invalid);
         }
         let price = match side {
             Side::Buy => best_ask,
@@ -305,6 +423,14 @@ impl Perfect {
             reason: FillReason::None,
         }
     }
+}
+
+fn valid_binary_book(best_bid: f64, best_ask: f64) -> bool {
+    best_bid.is_finite()
+        && best_ask.is_finite()
+        && best_bid > 0.0
+        && best_ask <= 1.0
+        && best_bid < best_ask
 }
 
 fn failed(reason: FillReason) -> FillResult {
@@ -351,21 +477,49 @@ mod tests {
     fn book_walk_vwaps_across_levels() {
         let f = BookWalkTaker::default();
         let asks = vec![(0.50, 100.0), (0.60, 50.0)];
-        let r = f.fill(Side::Buy, 130.0, &[], &asks);
+        let r = f.fill(Side::Buy, 130.0, &[], &asks, None);
         assert!(r.success);
         let expected_vwap = (0.50 * 100.0 + 0.60 * 30.0) / 130.0;
         assert!((r.fill_price - expected_vwap).abs() < 1e-9);
     }
 
     #[test]
-    fn book_walk_falls_through_with_synthetic_remainder() {
+    fn book_walk_rejects_insufficient_visible_depth() {
         let f = BookWalkTaker::default();
         let asks = vec![(0.50, 50.0)];
-        let r = f.fill(Side::Buy, 100.0, &[], &asks);
+        let r = f.fill(Side::Buy, 100.0, &[], &asks, None);
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::InsufficientDepth);
+    }
+
+    #[test]
+    fn book_walk_skips_invalid_levels_without_poisoning_slippage() {
+        let f = BookWalkTaker::default();
+        let asks = vec![(f64::NAN, 10.0), (0.50, 10.0)];
+        let r = f.fill(Side::Buy, 5.0, &[], &asks, None);
+
         assert!(r.success);
-        // 50@0.50 + 50@0.51 → vwap = 0.505
-        let expected = (0.50 * 50.0 + 0.51 * 50.0) / 100.0;
-        assert!((r.fill_price - expected).abs() < 1e-9);
+        assert_eq!(r.fill_price, 0.50);
+        assert_eq!(r.slippage_per_share, 0.0);
+    }
+
+    #[test]
+    fn book_walk_respects_fok_limit() {
+        let f = BookWalkTaker::default();
+        let asks = vec![(0.50, 2.0), (0.60, 10.0)];
+        let r = f.fill(Side::Buy, 3.0, &[], &asks, Some(0.50));
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::InsufficientDepth);
+    }
+
+    #[test]
+    fn fill_models_reject_non_finite_books_and_sizes() {
+        assert!(
+            !OneTickTaker::default()
+                .fill(Side::Buy, f64::NAN, 0.50, 0.52, OrderType::Market, None,)
+                .success
+        );
+        assert!(!Perfect.fill(Side::Buy, 1.0, f64::NAN, 0.52).success);
     }
 
     #[test]
@@ -381,9 +535,91 @@ mod tests {
     fn maker_with_seed_is_deterministic() {
         let mut a = Maker::new(0.65, DEFAULT_TICK, Some(42));
         let mut b = Maker::new(0.65, DEFAULT_TICK, Some(42));
-        let ra = a.fill(Side::Buy, 1.0, 0.50, 0.52);
-        let rb = b.fill(Side::Buy, 1.0, 0.50, 0.52);
+        let ra = a.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        let rb = b.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
         assert!((ra.fill_price - rb.fill_price).abs() < 1e-12);
         assert_eq!(ra.reason, rb.reason);
+    }
+
+    #[test]
+    fn seeded_maker_fill_key_is_independent_of_call_order() {
+        let mut a = Maker::new(0.65, DEFAULT_TICK, Some(42));
+        let a_first = a.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-a"),
+        );
+        let a_second = a.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-b"),
+        );
+
+        let mut b = Maker::new(0.65, DEFAULT_TICK, Some(42));
+        let b_second = b.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-b"),
+        );
+        let b_first = b.fill_with_key(
+            Side::Buy,
+            1.0,
+            0.50,
+            0.52,
+            OrderType::Limit,
+            Some(0.51),
+            Some("order-a"),
+        );
+
+        assert_eq!(a_first.success, b_first.success);
+        assert_eq!(a_first.reason, b_first.reason);
+        assert_eq!(a_second.success, b_second.success);
+        assert_eq!(a_second.reason, b_second.reason);
+    }
+
+    #[test]
+    fn maker_limit_crossing_rejects_post_only() {
+        let mut maker = Maker::new(1.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.52));
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::PostOnlyCross);
+    }
+
+    #[test]
+    fn maker_limit_fills_at_resting_limit_when_probability_hits() {
+        let mut maker = Maker::new(1.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        assert!(r.success);
+        assert_eq!(r.reason, FillReason::MakerFill);
+        assert!((r.fill_price - 0.51).abs() < 1e-9);
+        assert!(r.slippage_per_share < 0.0);
+    }
+
+    #[test]
+    fn maker_limit_can_remain_unfilled() {
+        let mut maker = Maker::new(0.0, DEFAULT_TICK, Some(42));
+        let r = maker.fill(Side::Buy, 1.0, 0.50, 0.52, OrderType::Limit, Some(0.51));
+        assert!(!r.success);
+        assert_eq!(r.reason, FillReason::MakerUnfilled);
+    }
+
+    #[test]
+    fn resting_limit_quotes_one_tick_inside_touch() {
+        let buy = resting_limit_price(Side::Buy, 0.50, 0.52, DEFAULT_TICK).unwrap();
+        let sell = resting_limit_price(Side::Sell, 0.50, 0.52, DEFAULT_TICK).unwrap();
+        assert!((buy - 0.51).abs() < 1e-9);
+        assert!((sell - 0.51).abs() < 1e-9);
     }
 }

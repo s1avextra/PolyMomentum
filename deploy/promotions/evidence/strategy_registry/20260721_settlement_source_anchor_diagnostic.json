@@ -1,0 +1,227 @@
+{
+  "data_quality": {
+    "book_invalid_condition_seconds": 37,
+    "fresh_official_anchor_condition_seconds": 1389,
+    "fresh_official_anchor_orientation_seconds": 2778,
+    "official_current_stale_over_10s_condition_seconds": 14,
+    "paired_book_valid_condition_seconds": 1403,
+    "possible_candidate_condition_seconds": 1440,
+    "promotion_or_exact_replay_eligible": false,
+    "published_price_to_beat_matches": 24,
+    "published_price_to_beat_max_abs_difference_usd": 7.275957614183426e-12,
+    "quality_assessment": "SHARE_WITH_CAVEATS_FOR_LABEL_FREE_MODEL_SPECIFICATION_SCREEN_ONLY"
+  },
+  "decision": {
+    "a_plus_claim": false,
+    "active_binary_complement_block_changed": false,
+    "candidate_preregistration_warranted": true,
+    "live_trading": "OFF",
+    "profitability_claim": false,
+    "required_next_evidence": "a disjoint post-registration block under a frozen official-source freshness and edge contract, followed by exact measured-latency replay only if the screen passes",
+    "runtime_or_live_strategy_changed": false,
+    "same_block_second_hypothesis_score_permitted": false
+  },
+  "decision_question": "Does anchoring fair value to the official Chainlink settlement process materially change fee-aware edge decisions while all other model inputs remain fixed?",
+  "generated_at": "2026-07-21T07:48:06.809285+00:00",
+  "limitations": [
+    "The diagnostic contains no strategy confidence, z-score, state, terminal labels, fills, or realized PnL; orientation-level edge decisions are not trades.",
+    "The source capture has only 24 markets, incomplete one-hour warm-up, reference-tape gaps, and 865 native CLOB timestamp regressions.",
+    "Fourteen paired-book-valid seconds fail the candidate 10-second official-current freshness limit and are excluded.",
+    "The edge disagreements are chronologically concentrated: 30 in the first 12 markets and 185 in the last 12.",
+    "The candidate retains Binance volatility and momentum; it tests settlement anchoring, not a fully Chainlink-derived forecast process.",
+    "Exact profitability still requires causal signal gates, measured latency, L2 fills, fees, stateful sizing, breadth, and tail tests."
+  ],
+  "mechanism_assessment": {
+    "both_directions_affected": true,
+    "chronological_concentration_observed": true,
+    "distinct_decision_information_observed": true,
+    "distributed_across_markets": true,
+    "interpretation": "The official settlement anchor is not algebraically redundant with the proxy anchor and changes a material number of fee-aware edge decisions. The effect is broad across markets and directions but concentrated in the second chronological half, so profitability and stability remain unknown.",
+    "why_preregistration_is_warranted": "The candidate corrects source alignment to the contract being priced, all 24 official strikes reproduce exactly, and decision disagreements are nonzero without labels or threshold search."
+  },
+  "mechanism_id": "settlement_source_anchor_v1",
+  "model_contract": {
+    "alternate_thresholds_tested": 0,
+    "baseline_anchor": "Binance RTDS current price divided by Binance RTDS five-minute window open",
+    "candidate_anchor": "latest causal Chainlink RTDS current price divided by the published Chainlink price-to-beat window open",
+    "missing_or_stale_action": "reject_row",
+    "official_current_max_age_ms": 10000,
+    "official_open_max_age_ms": 2000,
+    "unchanged_inputs": [
+      "Binance one-hour realized volatility with floor 0.30",
+      "Binance momentum and direction signal",
+      "binary option formula and 0.05 annual risk-free rate",
+      "paired executable asks",
+      "Polymarket 0.07 crypto taker fee formula",
+      "price band 0.10 through 0.85",
+      "minimum fee-aware edge 0.07"
+    ]
+  },
+  "schema_version": 1,
+  "source_authority": {
+    "active_forward_block_loaded": false,
+    "capture": "abandoned fresh-block-canary captured 2026-07-15T06:49Z through 2026-07-15T08:50Z",
+    "capture_conditions": 24,
+    "official_market_rule_example": "https://polymarket.com/event/btc-updown-5m-1784098200",
+    "official_rtds_documentation": "https://docs.polymarket.com/market-data/websocket/rtds",
+    "price_to_beat_manifest": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_settlement_anchor_price_to_beat_manifest.json",
+    "resolution_manifest_loaded": false,
+    "source_sha256": {
+      "2026-07-15T06.v1.candles.jsonl.gz": "9c5c59d0e71d88fc0745e8f28ea64076cc6e1afac2fcbf49bf50cb68759e5238",
+      "2026-07-15T07.v1.candles.jsonl.gz": "01ed7f4a315c6a23ad5e0b3386032e169024a980db65352f062d3bcbaccb5dd4",
+      "2026-07-15T08.v1.candles.jsonl.gz": "f08dd8224c13329ccc944f883501e725425b71448db6b2f9e4f2f06a85ab8cb9",
+      "binance_btcusdt_rtds.csv": "a35f0831be0ae2880435ac4e1051f6e40164e2f38d46bcc0b35457797800b9de",
+      "chainlink_btcusd.csv": "caa86f114881e6ca79a83ce1be1532623af46ad9d869ebeef95c16175a93aa5d",
+      "manifest.json": "43a722ae7fbdc407513b1b16fa82602cc73b244e481a891ca9b594de7bf7588e",
+      "rust_engine/src/backtest/btc_history.rs": "f19d88f704f272d7cf7ddc106c7f9f03c1acaf298add0f5e8f76d2e69bb28b1b",
+      "rust_engine/src/backtest/harness.rs": "5ea335ce79c9a0c061b44ee1479da2a6e06ae8d2365902f264df3f6f61372216",
+      "rust_engine/src/fair_value.rs": "660a91f43c3b77e26c16cb370cf887c93c1d0e562e26156a865c0310f6356585",
+      "rust_engine/src/strategy/decision.rs": "5bc2f98a6a9e7eafa0dce66fe005beafb9247c790fb58e980d76ccc3e2a33ad0"
+    },
+    "strategy_outcomes_loaded": false,
+    "terminal_labels_loaded": false
+  },
+  "status": "LABEL_FREE_SETTLEMENT_SOURCE_ANCHOR_SHOWS_DISTINCT_DECISION_SELECTIVITY_PREREGISTRATION_WARRANTED",
+  "structural_results": {
+    "edge_disagreement_rate": 0.07739380849532038,
+    "fresh_official_anchor": {
+      "abs_fair_probability_delta": {
+        "max": 0.23354981543852243,
+        "mean": 0.024079983682670766,
+        "min": 0.0,
+        "n": 1389,
+        "p50": 0.02023274404531128,
+        "p90": 0.055125344702577475,
+        "p99": 0.07842990232984554
+      },
+      "abs_move_difference_usd": {
+        "max": 43.71794659634179,
+        "mean": 3.62461511855532,
+        "min": 0.00021490168728632852,
+        "n": 1389,
+        "p50": 3.1869225569389528,
+        "p90": 7.038487527245889,
+        "p99": 12.25135546782425
+      },
+      "both_pass": 106,
+      "conditions": 24,
+      "conditions_with_edge_disagreement": 21,
+      "direction_disagreements": 34,
+      "edge_disagreements_by_chronological_half": {
+        "first": 30,
+        "second": 185
+      },
+      "edge_disagreements_by_direction": {
+        "down": 91,
+        "up": 124
+      },
+      "maximum_condition_edge_disagreements": 35,
+      "neither_pass": 2457,
+      "official_only_passes": 103,
+      "orientation_edge_disagreements": 215,
+      "proxy_only_passes": 112,
+      "states": 1389
+    },
+    "full_paired_book_valid_population": {
+      "abs_fair_probability_delta": {
+        "max": 0.23354981543852243,
+        "mean": 0.02451741291358348,
+        "min": 0.0,
+        "n": 1403,
+        "p50": 0.020494158751083957,
+        "p90": 0.0574017437541113,
+        "p99": 0.07840552472373459
+      },
+      "abs_move_difference_usd": {
+        "max": 43.71794659634179,
+        "mean": 3.6804782315708935,
+        "min": 0.00021490168728632852,
+        "n": 1403,
+        "p50": 3.2165034332938376,
+        "p90": 7.092705344407295,
+        "p99": 12.160762260517668
+      },
+      "both_pass": 106,
+      "conditions": 24,
+      "direction_disagreements": 34,
+      "fair_probability_delta": {
+        "max": 0.23354981543852243,
+        "mean": 0.005153609159652908,
+        "min": -0.10422107189303109,
+        "n": 1403,
+        "p50": 0.0024225948516364837,
+        "p90": 0.051591505652526765,
+        "p99": 0.07739296196729394
+      },
+      "fresh_official_anchor": {
+        "abs_fair_probability_delta": {
+          "max": 0.23354981543852243,
+          "mean": 0.024079983682670766,
+          "min": 0.0,
+          "n": 1389,
+          "p50": 0.02023274404531128,
+          "p90": 0.055125344702577475,
+          "p99": 0.07842990232984554
+        },
+        "abs_move_difference_usd": {
+          "max": 43.71794659634179,
+          "mean": 3.62461511855532,
+          "min": 0.00021490168728632852,
+          "n": 1389,
+          "p50": 3.1869225569389528,
+          "p90": 7.038487527245889,
+          "p99": 12.25135546782425
+        },
+        "both_pass": 106,
+        "conditions": 24,
+        "conditions_with_edge_disagreement": 21,
+        "direction_disagreements": 34,
+        "edge_disagreements_by_chronological_half": {
+          "first": 30,
+          "second": 185
+        },
+        "edge_disagreements_by_direction": {
+          "down": 91,
+          "up": 124
+        },
+        "maximum_condition_edge_disagreements": 35,
+        "neither_pass": 2457,
+        "official_only_passes": 103,
+        "orientation_edge_disagreements": 215,
+        "proxy_only_passes": 112,
+        "states": 1389
+      },
+      "move_difference_usd": {
+        "max": 43.71794659634179,
+        "mean": 0.8127280983677293,
+        "min": -15.606753802567255,
+        "n": 1403,
+        "p50": 0.7198866640683264,
+        "p90": 6.886595431319437,
+        "p99": 11.313629478100784
+      },
+      "neither_pass": 2485,
+      "official_age_over_10s": 14,
+      "official_current_age_ms": {
+        "max": 24000,
+        "mean": 217.3913043478261,
+        "min": 0,
+        "n": 1403,
+        "p50": 0,
+        "p90": 0.0,
+        "p99": 9980.000000000018
+      },
+      "official_only_passes": 103,
+      "orientation_edge_disagreements": 215,
+      "proxy_only_passes": 112,
+      "states": 1403
+    },
+    "official_only_pass_rate": 0.037077033837293015,
+    "proxy_only_pass_rate": 0.040316774658027354,
+    "published_price_to_beat_verification": {
+      "exact_matches_within_1e_9_usd": 24,
+      "markets": 24,
+      "maximum_absolute_difference_usd": 7.275957614183426e-12
+    }
+  }
+}

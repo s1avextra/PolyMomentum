@@ -1,0 +1,55 @@
+{
+  "schema_version": "opportunity_probability_bounded_decision_v1",
+  "generated_at": "2026-08-11T12:51:49Z",
+  "family_id": "external_causal_probability_dislocation_v1",
+  "preregistration": {
+    "path": "deploy/promotions/evidence/strategy_registry/20260811_external_causal_probability_dislocation_preregistration.json",
+    "sha256": "e1b8208d133f1f6e7db7ece20c1dc4fe73449536a0019ed91733ee40a1400a63"
+  },
+  "probability_search_report": {
+    "path": "logs/strategy-research/opportunity-probability-search/external_causal_probability_dislocation_v1.report.json",
+    "sha256": "e8fc4433a86d605a74d124168a50922f21ad4f50d1a91de773104bd0100efb44"
+  },
+  "exact_replay_report": {
+    "path": "logs/strategy-research/opportunity-exact-replay/external_causal_probability_dislocation_v1.latency128.report.json",
+    "sha256": "c4b558833bf191fb69856f7407d108ede4a41287373907675fdc99dec86fc2d7"
+  },
+  "fixed_advancement_wilson_edge": 0.02,
+  "maximum_exact_replays": 2,
+  "exact_replays_consumed": 2,
+  "fresh_holdout_outcomes_accessed": false,
+  "trace_decisions": [
+    {
+      "discovery_trace_sha256": "e2cb980bf74b5620e701012c84d1ab84315de05323f664f98d6423f821817135",
+      "representative_policy_id": "5d4147f5bd234ab8bedf21624787a4ca2f37fe8d9f5dda9cbba4634b9b1c186c",
+      "decision_seconds": 180,
+      "maximum_ask": 0.85,
+      "fills": 32,
+      "wins": 25,
+      "losses": 7,
+      "point_estimate_edge": 0.17152034156347207,
+      "wilson_edge": 0.002720405071036658,
+      "total_pnl_usd": 48.0016801434852,
+      "decision": "rejected_failed_fixed_exact_gate"
+    },
+    {
+      "discovery_trace_sha256": "17031cdcf4c27e7e54890e6f8b1c2e6a9f2b045e6392f451d2bd3b52bf07af02",
+      "representative_policy_id": "aab90c1278be577d4ef1accfac400546292593e8eb99dd6c869f8fddee9c5f08",
+      "decision_seconds": 120,
+      "maximum_ask": 0.9,
+      "fills": 37,
+      "wins": 26,
+      "losses": 11,
+      "point_estimate_edge": 0.07720308108108098,
+      "wilson_edge": -0.08333098073297829,
+      "total_pnl_usd": 33.5283125902183,
+      "decision": "rejected_failed_fixed_exact_gate"
+    }
+  ],
+  "decision": "reject_family_keep_fresh_sealed",
+  "reason": "Every bounded exact trace failed the fixed 0.02 Wilson edge advancement gate; preregistration forbids more hours or variants.",
+  "terminal": true,
+  "search_budget_exhausted": true,
+  "more_evidence_allowed": false,
+  "fresh_gate_opened": false
+}

@@ -1,0 +1,132 @@
+{
+  "data_quality": {
+    "grain": "one causal end-of-second paired-book state per condition-second, expanded to two orientations only for pair-gate exposure",
+    "native_timestamp_regressions_observed": 865,
+    "promotion_or_exact_replay_eligible": false,
+    "quality_assessment": "SHARE_WITH_CAVEATS_FOR_LABEL_FREE_OPERATIONAL_DIAGNOSTIC_ONLY",
+    "skipped_malformed_raw": 0,
+    "skipped_unknown_market": 0,
+    "skipped_unknown_token": 0,
+    "timestamp_policy": "preserve native file order; clamp each condition source timestamp to its monotone seen maximum before sampling"
+  },
+  "decision": {
+    "a_plus_claim": false,
+    "live_trading": "OFF",
+    "profitability_claim": false,
+    "research_action": "Use schema-6 post-floor timing and decision-ask attribution as authoritative; do not infer loss removal or profitability from this label-free feasibility bound.",
+    "strategy_adjustment": "NO_PARAMETER_OR_RULE_CHANGE_DURING_FROZEN_FORWARD_BLOCK"
+  },
+  "decision_question": "When paired-book validity blocks an otherwise individually valid orientation, how long does recovery take and how much does the executable ask move?",
+  "generated_at": "2026-07-21T07:29:19.885167+00:00",
+  "limitations": [
+    "Only 24 diagnostic markets from one capture are observed.",
+    "Potential orientations are not strategy candidates because signal, edge, state, and terminal outcomes are intentionally absent.",
+    "One-hertz sampling can miss sub-second invalidity and recovery.",
+    "Ask change omits measured latency, depth traversal, fills, fees, and any direction change while waiting.",
+    "Timestamp clamping prevents time travel but cannot reconstruct an unavailable independent receive timestamp."
+  ],
+  "mechanism_assessment": {
+    "active_binary_complement_rule_changed": false,
+    "interpretation": "This diagnostic bounds how often paired validity can delay an otherwise book-valid orientation and the associated top-ask movement. It cannot determine whether those orientation-seconds are actual baseline candidates or whether a delay removes losses.",
+    "paired_validity_observed_role": "ONLY_SOURCE_OF_POTENTIAL_SELECTION_DELAY_IN_SOURCE_CAPTURE",
+    "residual_clause_observed_role": "NO_INCREMENTAL_REJECTIONS_IN_SOURCE_CAPTURE"
+  },
+  "mechanism_id": "binary_complement_coherence_v1",
+  "methodology": {
+    "alternate_thresholds_tested": 0,
+    "ask_change": "recovery chosen ask minus pre-delay chosen ask; positive values erode edge",
+    "candidate_interval_elapsed_seconds": [
+      120,
+      180
+    ],
+    "pair_only_exposure": "chosen side individually valid while the opposite side is invalid",
+    "recovery": "first later same-condition sample where both books are valid and the frozen two-tick residual rule passes",
+    "sampling": "end-of-second causal state"
+  },
+  "schema_version": 1,
+  "source_authority": {
+    "active_forward_block_loaded": false,
+    "capture": "abandoned fresh-block-canary captured 2026-07-15T06:49Z through 2026-07-15T08:50Z",
+    "capture_conditions": 24,
+    "distilled_files": [
+      "2026-07-15T06.v1.candles.jsonl.gz",
+      "2026-07-15T07.v1.candles.jsonl.gz",
+      "2026-07-15T08.v1.candles.jsonl.gz"
+    ],
+    "resolution_manifest_loaded": false,
+    "sha256": {
+      "2026-07-15T06.v1.candles.jsonl.gz": "9c5c59d0e71d88fc0745e8f28ea64076cc6e1afac2fcbf49bf50cb68759e5238",
+      "2026-07-15T07.v1.candles.jsonl.gz": "01ed7f4a315c6a23ad5e0b3386032e169024a980db65352f062d3bcbaccb5dd4",
+      "2026-07-15T08.v1.candles.jsonl.gz": "f08dd8224c13329ccc944f883501e725425b71448db6b2f9e4f2f06a85ab8cb9",
+      "manifest.json": "43a722ae7fbdc407513b1b16fa82602cc73b244e481a891ca9b594de7bf7588e"
+    },
+    "strategy_outcomes_loaded": false,
+    "terminal_labels_loaded": false
+  },
+  "status": "LABEL_FREE_PAIRED_BOOK_WAIT_COST_QUANTIFIED_ACTIVE_RULE_UNCHANGED",
+  "structural_results": {
+    "candidate_interval": {
+      "condition_seconds": 1440,
+      "conditions_with_pair_invalidity": 1,
+      "invalid_pair_condition_seconds": 37,
+      "invalid_reason_counts_by_side": {
+        "invalid_top": 74
+      },
+      "orientation_seconds": 2880,
+      "valid_pair_condition_seconds": 1403,
+      "valid_pair_coverage": 0.9743055555555555
+    },
+    "invalid_pair_episodes": {
+      "conditions": 1,
+      "count": 2,
+      "duration_sample_seconds": {
+        "count": 2,
+        "max": 27,
+        "mean": 18.5,
+        "min": 10,
+        "p50": 18.5,
+        "p90": 25.3,
+        "p99": 26.830000000000002
+      }
+    },
+    "pair_gate_exposure": {
+      "adverse_chosen_ask_change": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p90": null,
+        "p99": null
+      },
+      "ask_deteriorations": 0,
+      "ask_improvements": 0,
+      "ask_unchanged": 0,
+      "chosen_ask_change": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p90": null,
+        "p99": null
+      },
+      "conditions": 0,
+      "directions": {},
+      "opposite_invalid_reasons": {},
+      "pair_only_exposed_orientation_seconds": 0,
+      "recovered_within_market": 0,
+      "recovery_delay_seconds": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p90": null,
+        "p99": null
+      },
+      "share_of_all_orientation_seconds": 0.0,
+      "unrecovered_within_market": 0
+    }
+  }
+}

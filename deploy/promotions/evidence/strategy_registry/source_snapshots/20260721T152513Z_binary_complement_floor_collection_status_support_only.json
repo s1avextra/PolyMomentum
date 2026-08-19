@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-21T15:25:13Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "state": "COLLECTING",
+  "target_terminal_conditions": 750,
+  "unique_ready_terminal_conditions": 345,
+  "new_segments_completed": 18,
+  "maximum_new_segments": 96,
+  "strategy_metrics_disclosed": false,
+  "stopping_rule": "condition support only; no strategy outcome or rate is inspected"
+}

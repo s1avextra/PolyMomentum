@@ -1,0 +1,76 @@
+{
+  "artifacts": {
+    "economic": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_economic_screen.json",
+      "sha256": "3b15d823a4682f39e5d4fcad533f7cbf89d873806c963a97731b926e5476f5bc"
+    },
+    "forward": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fixed_forward_gate.json",
+      "sha256": "038393f17f0fca3f6f01939622dcdf3fa1d66d80bd9a4f90cb367929d3939247"
+    },
+    "holdout": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_fresh_holdout.json",
+      "sha256": "aa9e9de5c238289a170f69fd7301263f71f99b887442154f8b30d45cf0fa9ed6"
+    },
+    "public": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_public_screen.json",
+      "sha256": "0a2537ab2c4fe9ef069a06363115d3520635fc60e6d76610f9e85b48ce0798a4"
+    },
+    "variant": {
+      "path": "deploy/promotions/evidence/strategy_registry/20260803_late_window_path_or_move_453a052d5233_variant.json",
+      "sha256": "d4688cc7f9aa4052e92a53522b9935a4bb4090321ee7729d28a8a4bf3006b9f5"
+    }
+  },
+  "asymmetric_payoff_risk": {
+    "implied_break_even_accuracy": 0.9960885594447723,
+    "maximum_stake_usd": 5.0,
+    "minimum_all_win_forward_fills_for_one_sided_95pct_lower_bound": 765,
+    "observed_mean_net_win_usd": 0.01963400000000013,
+    "observed_total_net_pnl_usd": 0.09817000000000066,
+    "public_accuracy": 0.9962574850299402,
+    "public_wilson_95_lower": 0.9912689367840432,
+    "raw_one_maximum_stake_loss_robustness": false,
+    "wilson_margin_over_break_even": -0.004819622660729106,
+    "wins_to_recover_one_maximum_stake_loss": 255
+  },
+  "coverage": {
+    "active_window_fraction": 0.625,
+    "active_windows": 5,
+    "execution_attempts": 5,
+    "fills": 5,
+    "public_signals": 16,
+    "signal_to_attempt_rate": 0.3125,
+    "windows": 8
+  },
+  "decision": {
+    "economic_screen_checks": {
+      "maximum_loss_recovery_wins": false,
+      "minimum_mean_net_win": false,
+      "positive_net_pnl": true,
+      "public_wilson_above_break_even": false
+    },
+    "economic_screen_passed": false,
+    "fixed_forward_confirmation_required": true,
+    "fixed_forward_status": "blocked_failed_economic_screen",
+    "official_resolution_parity_required": true,
+    "paper_or_live_authorized": false,
+    "reason": "Rejected by the fee-aware economic gate: the mean net win is too small, one maximum-stake loss requires 255 average wins to recover, and the public Wilson lower bound is below break-even.",
+    "research_eligibility_only": true
+  },
+  "frozen_rule": {
+    "direction": "both",
+    "maximum_entry_price": 1.0,
+    "minimum_book_pressure": -1.0,
+    "minimum_decision_buffer_usd": 100,
+    "minimum_two_minute_move_usd": 200,
+    "operator": "path_or_move",
+    "path_minutes": 4,
+    "settlement_sigma_buffer": 0.1
+  },
+  "generated_at": "2026-08-03T00:00:00Z",
+  "hypothesis_fingerprint": "453a052d5233917bd2ee0353d12683db7926e395dfd2a4df54f015ba1a401018",
+  "live_ready": false,
+  "research_only": true,
+  "schema_version": 1,
+  "status": "rejected"
+}

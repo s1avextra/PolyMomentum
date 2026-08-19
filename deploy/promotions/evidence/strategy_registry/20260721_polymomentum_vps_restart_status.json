@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-07-21T09:09:30Z",
+  "status": "POLYMOMENTUM_SERVICES_RESTARTED_BOUNDED_COLLECTION_RESUMED",
+  "service_observation": {
+    "engine": {
+      "active": true,
+      "pid": 312811,
+      "venue": "paper_only"
+    },
+    "telegram": {
+      "active": true,
+      "pid": 312823
+    },
+    "health_timer_active": true,
+    "soak_timer_active": true,
+    "failed_polymomentum_units": 0,
+    "restart_warnings": 0,
+    "one_shot_units_exit_zero": true
+  },
+  "bounded_collection": {
+    "sealed_support_before_restart": 310,
+    "target_terminal_conditions": 750,
+    "interrupted_session": "binary-complement-block1-floor-019",
+    "interrupted_session_disposition": "FAIL_CLOSED_UNSCORED",
+    "active_session": "binary-complement-block1-floor-020",
+    "measurement_schema": 5,
+    "pid": 313828,
+    "started_at": "2026-07-21T09:09:30Z",
+    "strategy_metrics_disclosed": false,
+    "strategy_score_emitted": false
+  },
+  "capacity_observation": {
+    "disk_used_percent": 85,
+    "approximately_free_gib": 11
+  },
+  "authority": {
+    "source": "read-only VPS process, systemd, and disk inspection after the authorized PolyMomentum restart",
+    "production_strategy_changed": false,
+    "paper_strategy_changed": false,
+    "active_forward_outcomes_accessed": false
+  }
+}

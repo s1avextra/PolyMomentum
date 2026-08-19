@@ -1,0 +1,74 @@
+{
+  "schema_version": "strategy_finding_funnel_v3",
+  "generated_at": "2026-08-11T19:24:45Z",
+  "reason_for_shift": "The first cross-venue screen combined predictive, lag, spread, and full-depth requirements in one cheap gate. This left at most 2 older and 6 recent observations, so it tested a sparse execution intersection rather than the underlying directional thesis.",
+  "principles": [
+    "Do not lower or add thresholds to a scored family.",
+    "Measure predictive validity before paying the cost of execution simulation.",
+    "Keep labels physically absent from source coverage and feature-distribution stages.",
+    "Use fresh fully resolved windows only after fixed discovery and exact-execution gates pass.",
+    "Keep every family budget terminal: one preregistration, one discovery score, at most two exact traces."
+  ],
+  "stages": [
+    {
+      "stage": 0,
+      "name": "source_and_causality",
+      "inputs": "sealed coordinates plus outcome-free source adapters",
+      "checks": ["checksums", "timestamp units", "closed-bucket availability", "coordinate coverage", "gap and staleness bounds"],
+      "labels_allowed": false,
+      "execution_model_allowed": false,
+      "advance_when": "coverage and causal timestamp contracts are complete"
+    },
+    {
+      "stage": 1,
+      "name": "raw_predictive_screen",
+      "inputs": "fixed source-only directional rules and discovery-only labels",
+      "checks": ["older sign stability", "recent support", "recent directional edge", "partition breadth"],
+      "labels_allowed": "older and recent discovery only",
+      "execution_model_allowed": false,
+      "advance_when": "the same fixed rule has adequate support and positive directional edge in both chronological partitions"
+    },
+    {
+      "stage": 2,
+      "name": "marketability_screen",
+      "inputs": "stage-1 trace joined to causal quotes",
+      "checks": ["selected ask", "fee-aware break-even", "top-quote payoff proxy", "available-signal rate"],
+      "labels_allowed": "same discovery labels, no new search",
+      "execution_model_allowed": "top quote only",
+      "advance_when": "positive fee-aware proxy economics without changing the stage-1 rule"
+    },
+    {
+      "stage": 3,
+      "name": "exact_execution_replay",
+      "inputs": "at most two execution-distinct traces",
+      "checks": ["128 ms latency", "full L2 depth", "fill failure", "fees", "Wilson edge", "PnL"],
+      "labels_allowed": "same discovery labels",
+      "execution_model_allowed": "exact cached PMXT replay",
+      "advance_when": "Wilson edge is at least +0.02 and PnL is positive"
+    },
+    {
+      "stage": 4,
+      "name": "fresh_resolved_holdout",
+      "inputs": "newest fully resolved sealed windows",
+      "checks": ["unchanged trace", "support", "edge", "tail concentration", "execution parity"],
+      "labels_allowed": "fresh only after stage 3 opens the gate",
+      "execution_model_allowed": "exact cached replay",
+      "advance_when": "fixed fresh gate passes; otherwise terminal rejection"
+    }
+  ],
+  "next_family_contract": {
+    "family": "independent source-only directional mechanism",
+    "required_change": "implement a manifest-driven generic runner with separate raw_predictive and marketability outputs",
+    "forbidden": [
+      "rescore cross_venue_lead_lag_residual_v1",
+      "reuse its observed outcomes to choose thresholds",
+      "add hours or exact traces to any terminal family",
+      "use VPS paper mode for a backtestable question"
+    ]
+  },
+  "runtime_authorization": {
+    "vps_change": false,
+    "paper_orders": false,
+    "live_orders": false
+  }
+}

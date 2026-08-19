@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "mode": "research_only",
+  "state_dir": "logs/strategy-research",
+  "engine_path": "rust_engine/target/release/polymomentum-engine",
+  "registry_path": "docs/strategy_registry.json",
+  "maximum_exact_l2_shortlist": 2,
+  "architecture_migration": {
+    "legacy_candidate_generation_enabled": false,
+    "legacy_exact_replay_enabled": false,
+    "reason": "opportunity_table_v1_migration",
+    "opportunity_policy_search": {
+      "enabled": true,
+      "dataset_seal": "logs/strategy-research/opportunity-datasets/chronological_expanded_20260811.seal.json",
+      "labels_manifest": "logs/strategy-research/opportunity-labels/chronological_expanded_20260811.labels.manifest.json",
+      "pmxt_cache_dir": "data/pmxt_v2_cache",
+      "minimum_calibration_support": 20,
+      "minimum_policy_support": 20,
+      "safety_margin": 0.02,
+      "latency_ms": 128,
+      "pilot_only": false
+    },
+    "superseded_exact_fingerprints": {
+      "b9f18a4f6d05648be8cb223f7996e82e95ef448341ff60dde8d1fe084b49cc99": {
+        "reference_fingerprint": "78af669b730768411b781e11f3b1f6085024f2de324df3f30a6e5d0d93b8f548",
+        "matching_windows": 3,
+        "reason": "execution-equivalent 0.95 trace already rejected; preserve partial evidence and stop duplicate replay"
+      }
+    }
+  },
+  "economic_screen": {
+    "enabled": true,
+    "cached_family_screen": "deploy/promotions/evidence/strategy_registry/20260722_late_window_article_family_top_of_book_screen.json",
+    "minimum_conditions": 10,
+    "minimum_mean_one_share_payoff": 0.0,
+    "minimum_unit_profit_factor": 1.0,
+    "maximum_loss_recovery_wins": 50,
+    "exact_minimum_mean_net_win_usd": 0.1,
+    "require_exact_public_wilson_above_break_even": true
+  },
+  "resource_policy": {
+    "minimum_cpu_count": 8,
+    "minimum_free_disk_gib": 20,
+    "maximum_load_per_cpu": 1.0,
+    "command_timeout_seconds": 900
+  },
+  "llm": {
+    "base_url_env": "POLYMOMENTUM_LLM_BASE_URL",
+    "default_base_url": "http://127.0.0.1:1234/v1",
+    "model_env": "POLYMOMENTUM_LLM_MODEL",
+    "default_model": "gemma4-12b-qat-uncensored-hauhaucs-balanced",
+    "connect_timeout_seconds": 2,
+    "request_timeout_seconds": 60,
+    "maximum_output_tokens": 1400,
+    "maximum_concurrency": 1,
+    "prompt_policy": "public_aggregate_only"
+  },
+  "exact_replay": {
+    "enabled": true,
+    "bankroll_usd": 100,
+    "maximum_windows_per_hypothesis": 8,
+    "policy_reconciliation_fingerprints": [
+      "78af669b730768411b781e11f3b1f6085024f2de324df3f30a6e5d0d93b8f548",
+      "665a77e998e1e343803c671e9e7a6e5e7cc96ec43ef8b3bc91a6faa585fdca20"
+    ],
+    "latency_ms": 202,
+    "threads": 2,
+    "timeout_seconds": 1800,
+    "binance_archive_base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s",
+    "historical_gates": {
+      "minimum_fills": 5,
+      "minimum_fill_rate": 0.8,
+      "minimum_signal_to_attempt_rate": 0.25,
+      "enforce_minimum_signal_to_attempt_rate": false,
+      "minimum_active_window_fraction": 0.5,
+      "minimum_positive_active_window_fraction": 0.5,
+      "minimum_direction_fills": 2,
+      "require_both_directions": true,
+      "require_one_maximum_stake_loss_robustness": false,
+      "maximum_unresolved_fills": 0
+    }
+  },
+  "fresh_holdout": {
+    "enabled": true,
+    "maximum_windows_per_hypothesis": 8,
+    "maximum_retries_per_job": 3,
+    "gates": {
+      "minimum_fills": 5,
+      "minimum_fill_rate": 0.8,
+      "minimum_signal_to_attempt_rate": 0.25,
+      "enforce_minimum_signal_to_attempt_rate": false,
+      "minimum_active_window_fraction": 0.5,
+      "minimum_positive_active_window_fraction": 0.5,
+      "minimum_direction_fills": 2,
+      "require_both_directions": true,
+      "require_one_maximum_stake_loss_robustness": false,
+      "maximum_unresolved_fills": 0
+    }
+  },
+  "fixed_forward_confirmation": {
+    "enabled": true,
+    "requires_economic_screen": true,
+    "minimum_checkpoint_fills": 25,
+    "maximum_target_fills": 1000,
+    "confidence_alpha": 0.05,
+    "maximum_retries_per_job": 3,
+    "gates": {
+      "minimum_fill_rate": 0.8,
+      "minimum_signal_to_attempt_rate": 0.25,
+      "enforce_minimum_signal_to_attempt_rate": true,
+      "minimum_active_window_fraction": 0.5,
+      "minimum_positive_active_window_fraction": 0.5,
+      "minimum_direction_fills": 2,
+      "require_both_directions": true,
+      "require_one_maximum_stake_loss_robustness": true,
+      "maximum_unresolved_fills": 0
+    }
+  },
+  "official_resolution": {
+    "required_source_kind": "chainlink_btc_usd_data_stream",
+    "settlement_tape_pattern": "data/chainlink/btc_{date}.csv"
+  },
+  "bounded_vps_shadow": {
+    "enabled": true,
+    "maximum_duration_seconds": 9000,
+    "minimum_shadow_resolutions": 24,
+    "venue": "paper_only",
+    "live_trading_authorized": false
+  },
+  "public_refresh": {
+    "enabled": true,
+    "start_date": "2026-04-16",
+    "resolution_lag_days": 1,
+    "fresh_holdout_days": 14,
+    "recent_discovery_days": 30,
+    "download_timeout_seconds": 120,
+    "binance_archive_base_url": "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1m"
+  },
+  "lanes": {
+    "baseline_evolution": {
+      "minimum_interval_seconds": 86400,
+      "required_replay_semantics_version": "6",
+      "minimum_reports": 3,
+      "minimum_distinct_windows": 3,
+      "seed": 42,
+      "population": 16,
+      "generations": 3,
+      "elite_count": 4,
+      "top": 5,
+      "reports": [
+        "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_fresh7_latency202_report.json",
+        "deploy/promotions/evidence/strategy_registry/20260715_probability_calibration_support_grid_fresh7_latency202_report.json",
+        "logs/strategy-research/exact-l2/path3_move200_fold029/reports/fold_001_20260606T080000Z_20260606T150000Z_sweep.json",
+        "logs/strategy-research/exact-l2/path3_move200_may04_08_15/reports/fold_001_20260504T080000Z_20260504T150000Z_sweep.json"
+      ]
+    },
+    "late_window_mechanisms": {
+      "minimum_interval_seconds": 1800,
+      "public_snapshot": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722_late_window_article_family_signals.jsonl.gz",
+      "base_variant": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
+      "stage_1_gates": {
+        "minimum_signals": 30,
+        "minimum_group_signals": 10,
+        "minimum_group_accuracy": 0.55,
+        "minimum_wilson_lower": 0.50,
+        "minimum_fresh_signals": 5,
+        "maximum_fresh_windows": 8
+      }
+    }
+  }
+}

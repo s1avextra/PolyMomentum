@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T16:35:30Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "PRE_SCORE_EXACT_REPLAY_TICK_PARITY_HARDENED_FORWARD_METRICS_SEALED",
+  "decision_question": "Does exact replay apply the same causal market tick to signal features, executable entry quotes, maker prices, stored position state, and executable exits?",
+  "defect": {
+    "before": "The research harness derived a causal per-condition tick for paired-book features, but taker entry sizing, maker resting prices, stored position tick state, and settlement-basis sell limits still used metadata or the static 0.01 default. Cached live-replay also used the static 0.01 default for entry sizing and maker prices.",
+    "risk": "After a causal 0.01-to-0.001 transition, replay could round a visible 0.971 ask to a 0.98 FOK ceiling, reduce the budgeted share count, change the fee-aware edge decision, and round an executable 0.029 sell limit down to 0.02. That is an execution-parity defect even when signal features are causal.",
+    "severity": "high_for_exact_replay",
+    "observed_forward_strategy_metrics_inspected": false,
+    "observed_forward_trade_or_screen_metrics_disclosed": false,
+    "active_capture_data_invalidated": false
+  },
+  "repair_contract": {
+    "condition_state": "Initialize from a valid causal Gamma minimum_tick_size or 0.01, then persist 0.001 per condition after a replayed positive top bid or ask crosses below 0.04 or above 0.96.",
+    "taker_entry": "Pass the causal condition tick into visible-depth budget sizing and the FOK worst-price ceiling.",
+    "maker_entry": "Use the same causal condition tick for the post-only resting price in preflight, sizing, and order construction.",
+    "position_state": "Store the causal decision-time tick in the simulated position rather than rereading static metadata.",
+    "exits": "Use the latest persistent causal condition tick for exact opposite-leg buys and settlement-basis sells, including transitions that occur after entry.",
+    "cached_live_replay": "Maintain the same persistent per-condition causal tick state and use it in entry quote construction.",
+    "production_behavior_changed": false,
+    "capture_format_changed": false,
+    "scorer_schema_or_rule_changed": false,
+    "recollection_required": false
+  },
+  "fee_and_order_contract_audit": {
+    "crypto_taker_fee_rate": 0.07,
+    "maker_fee_rate": 0.0,
+    "formula": "shares * fee_rate * price * (1 - price)",
+    "rounding": "five decimal places; values that round below 0.00001 become zero",
+    "fok_semantics": "visible-depth book walk rejects any quantity not fully executable at or inside the submitted limit after the latency interval",
+    "market_order_representation": "a market buy is modeled as a marketable limit with an explicit FOK ceiling",
+    "multi_level_fee_approximation": "Replay applies the fee once at aggregate VWAP. Because p*(1-p) is concave, this is at least the size-weighted per-level fee before rounding. Aggregate L2 cannot reconstruct how size at one price was split across maker matches, so match-level five-decimal rounding remains an explicit exact-replay limitation.",
+    "systematic_profitability_inflation_found": false,
+    "exact_match_level_rounding_parity_proven": false
+  },
+  "implementation": {
+    "harness_file": "rust_engine/src/backtest/harness.rs",
+    "harness_sha256_before_execution_parity_repair": "2558f0888c1bf6a4df050b10de372ae320f5c98ebb321733572128c504b4f916",
+    "harness_sha256_after_execution_parity_repair": "5ea335ce79c9a0c061b44ee1479da2a6e06ae8d2365902f264df3f6f61372216",
+    "live_replay_file": "rust_engine/src/live/replay.rs",
+    "live_replay_sha256_after_execution_parity_repair": "29d120c6d01a533ed83e3d55e02714a9f29e2c646f5f84e362daf406004de0d4",
+    "sizing_file": "rust_engine/src/execution/sizing.rs",
+    "sizing_sha256": "3c656cb6e17637e8986a7d83ca01018db2561c439dbd51d8bc687f7f3b901691",
+    "fee_file": "rust_engine/src/execution/fees.rs",
+    "fee_sha256": "bfcfbd5d77acda12b38e0a2d86878898e262f3797fb83d7366e5e5625a9956d6",
+    "fill_model_file": "rust_engine/src/backtest/fill_model.rs",
+    "fill_model_sha256": "02570bc1895e98bb1f33aaadf5c5282645c7d3a715febab97dc32acd9dade4e2",
+    "scorer_file": "rust_engine/src/strategy_builder.rs",
+    "scorer_sha256_unchanged": "6a02eaafff3353535fe02203f121d73b335d6fb7c8e394a7e57063ec6436d2f2",
+    "tests_added": [
+      "taker_quote_uses_the_causal_market_tick",
+      "live_replay_persists_causal_tick_state_per_condition",
+      "exit_uses_latest_causal_tick_after_post_entry_transition"
+    ]
+  },
+  "deployed_measurement_v7": {
+    "path": "/opt/polymomentum/tools/polymomentum-engine-measurement-v7",
+    "sha256": "5f89c797c0e5eb0ca4758a89eaa4a16e00b1480894b17cf5c9926878175277a0",
+    "linux_x86_64_linkage_verified": true,
+    "strategy_builder_help_verified_as_polymomentum": true,
+    "production_binary_replaced": false,
+    "active_v5_capture_interrupted": false,
+    "active_v5_capture_unit": "polymomentum-binary-complement-block1-floor-v5-20260720b.service",
+    "active_v5_capture_restarts": 0,
+    "scoring_requirement": "v7 retains the reproduction-hardened scorer hash from v6 and may score the sealed block.",
+    "exact_replay_requirement": "Any post-two-block exact replay must use v7 or a later binary with the pinned harness, live-replay, sizing, fee, fill-model, and scorer hashes."
+  },
+  "validation": {
+    "red_test": "PASS: the entry and cached-replay tests initially failed to compile because causal tick state was not exposed; the post-entry transition test then reproduced the stale exit limit as 0.02 instead of 0.029.",
+    "cargo_test": "PASS: 504 passed (453 library + 51 binary), 0 failed; doc-tests 0",
+    "cargo_clippy": "PASS: all targets with warnings denied after allowing the two documented pre-existing unrelated lints",
+    "cargo_fmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "forward_scores_disclosed": 0
+  },
+  "external_sources": [
+    {
+      "title": "Polymarket Orders Overview",
+      "url": "https://docs.polymarket.com/trading/orders/overview",
+      "use": "All orders are limit orders under the hood; FOK requires the entire order to execute immediately, and order prices must respect the market tick."
+    },
+    {
+      "title": "Polymarket Fees",
+      "url": "https://docs.polymarket.com/trading/fees",
+      "use": "Crypto takers use fee rate 0.07, makers pay zero, the binary fee curve is applied at match time, and fees use five-decimal precision."
+    }
+  ],
+  "decision": {
+    "safe_to_continue_sealed_collection": true,
+    "safe_to_score_below_750": false,
+    "fixed_strategy_rule_or_gate_changed": false,
+    "exact_replay_contract_changed": true,
+    "current_grade": "A-",
+    "a_plus_claim": false,
+    "profitability_claim": false,
+    "next_step": "Continue the sealed first block to 750 unique officially aligned terminal conditions and score exactly once with measurement-v7. If two disjoint blocks pass, use the same v7 causal execution contract for exact measured-latency replay."
+  }
+}

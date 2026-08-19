@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-07-21T11:14:04Z",
+  "status": "TWO_CHALLENGERS_REJECTED_NO_RUNTIME_CHANGE",
+  "scope": "Immutable validation pins for the preregistered DVOL source-feasibility and empirical standardized-return CDF screens.",
+  "dvol_volatility_max_v1": {
+    "decision": "REJECTED_BEFORE_LABELS",
+    "reason": "The registered two-hour freshness rule covers 33.33333333333333% of possible forecasts versus the frozen 99% minimum.",
+    "labels_downloaded": 0,
+    "artifacts": {
+      "preregistration": {
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_preregistration.json",
+        "sha256": "7bec4bf3a7c2ceae20da15e2b4ceb7c11fcbd1b2f7fb028f1db6195a5e9e7c2a"
+      },
+      "source_feasibility": {
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_dvol_volatility_max_source_feasibility.json",
+        "sha256": "3f29511a4437fcd70ebb7874060dbc7f8cb60e5fe8ca546708b9f23cf4cb55af"
+      },
+      "source_snapshot": {
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_btcdvol_usdc_1y.json.gz",
+        "sha256": "832ee2d1e77e53b6028e89b606e6bb80e00309245c6c105539629d06958899b8"
+      },
+      "validator": {
+        "path": "scripts/validate_dvol_volatility_source_feasibility.py",
+        "sha256": "f7b5e751fcce4a69560dcdc0260a192f1ea4a2fbcc4165723881cf94c3a92b8a"
+      }
+    }
+  },
+  "empirical_standardized_return_cdf_v1": {
+    "decision": "PUBLIC_PROXY_CALIBRATION_REJECTED_NO_RETUNING",
+    "reason": "Aggregate Brier improvement passes its magnitude floor, but aggregate log loss, both bootstrap lower bounds, the first older subwindow, 120-second log loss, and both overconfidence-tail scores fail frozen gates.",
+    "artifacts": {
+      "preregistration": {
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_preregistration.json",
+        "sha256": "f475a3945008cd2d63d875997590d3fa8314c299fde77e2ea2c07dbb7f5ecd09"
+      },
+      "analysis": {
+        "path": "scripts/analyze_empirical_return_cdf.py",
+        "sha256": "9c8d5f38c4049058b32ff2439c6f4091c480fba7ada55d561d957d40def95673"
+      },
+      "evidence": {
+        "path": "deploy/promotions/evidence/strategy_registry/20260721_empirical_return_cdf_public_calibration.json",
+        "sha256": "84481bb920ec8f217ff7d334b685e1f0b717f0dffdfcf2bc8a8cada245722330"
+      },
+      "forecast_snapshot": {
+        "path": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_empirical_return_cdf_forecasts.jsonl.gz",
+        "sha256": "7b28e9c5038a7ca16bfc172e1c51307e4cfa096767010f720b293ede3f8abc95"
+      },
+      "validator": {
+        "path": "scripts/validate_empirical_return_cdf.py",
+        "sha256": "ad1bc718ecf9a73a55eed24ea003f882f271d3d92dc52a77e8561716e9f6e7ba"
+      },
+      "executed_notebook": {
+        "path": "docs/notebooks/strategy_empirical_return_cdf_public_calibration_2026-07-21.ipynb",
+        "sha256": "eb8359aa7b3422ce8ef0b1e4efeeb952041c4b2e7d7fac393497499cd8249e71"
+      }
+    }
+  },
+  "authority_limits": {
+    "strategy_variant_authorized": false,
+    "exact_strategy_replay_authorized": false,
+    "runtime_change_authorized": false,
+    "paper_or_live_trading_authorized": false,
+    "profitability_claim": false,
+    "a_plus_claim": false,
+    "active_binary_complement_score_unsealed": false
+  }
+}

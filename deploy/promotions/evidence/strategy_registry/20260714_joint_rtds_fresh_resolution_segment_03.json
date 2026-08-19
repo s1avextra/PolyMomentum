@@ -1,0 +1,298 @@
+{
+  "a_plus_gate": {
+    "btc_tape_ready": true,
+    "official_settlement_source_ready": true,
+    "proxy_btc_alignment_ready": true,
+    "resolution_manifest_ready": true,
+    "settlement_alignment_ready": true,
+    "terminal_ground_truth_ready": true,
+    "verdict": "FORWARD_GROUND_TRUTH_READY_NEEDS_SAMPLE_SIZE"
+  },
+  "btc_tape": {
+    "boundary_coverage_ready": true,
+    "first_timestamp_ms": 1784040554000,
+    "internal_gap_ready": true,
+    "last_timestamp_ms": 1784046851000,
+    "max_allowed_gap_ms": 5000,
+    "max_internal_gap_ms": 3000,
+    "median_interval_ms": 1000,
+    "required_end_ms": 1784045400000,
+    "required_start_ms": 1784043600000,
+    "rows": 6201,
+    "settlement_source_kind": "chainlink_btc_usd_data_stream",
+    "settlement_source_kind_input": "auto",
+    "source": {
+      "kind": "csv",
+      "path": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z/chainlink_btcusd.csv",
+      "provenance": {
+        "detected_settlement_source_kind": "chainlink_btc_usd_data_stream",
+        "malformed_rows": 0,
+        "official_chainlink_provenance_ready": true,
+        "rows": 6201,
+        "source_column_present": true,
+        "source_values": [
+          "chainlink_btc_usd_data_stream"
+        ]
+      }
+    }
+  },
+  "generated_at": "2026-07-14T21:29:58.673909039+00:00",
+  "markets": [
+    {
+      "active": true,
+      "btc_close": 64728.69273728167,
+      "btc_direction": "down",
+      "btc_move": -28.96588760715531,
+      "btc_open": 64757.65862488883,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784043900,
+      "closed": true,
+      "condition_id": "0x3c3959b04e299f1f7d5514bb3c870afe070188d62c5d6bc0fd3a29615695315d",
+      "end_date": "2026-07-14T15:45:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 11:40AM-11:45AM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784043600,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 0.0,
+          "token_id": "34039701719961600112440141252417575983904229128906485876767266717981976760541"
+        },
+        {
+          "name": "Down",
+          "price": 1.0,
+          "token_id": "101499188032719524799232328921175933668269633916004216759023635753657884682398"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 11:40AM-11:45AM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784043600",
+      "terminal_direction": "down",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64822.7966619028,
+      "btc_direction": "up",
+      "btc_move": 134.11666190280084,
+      "btc_open": 64688.68,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784045400,
+      "closed": true,
+      "condition_id": "0x493ec8e66aede7f4e55c5d354ec5d862561c5440c9c3b1f17954fcffc7b7cb7f",
+      "end_date": "2026-07-14T16:10:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 12:05PM-12:10PM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784045100,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 1.0,
+          "token_id": "83399240320856251593380843434213167054696055017607979271601228241042909498262"
+        },
+        {
+          "name": "Down",
+          "price": 0.0,
+          "token_id": "63702865391629460698019594302101892505095644212704142803088724823531579044394"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 12:05PM-12:10PM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784045100",
+      "terminal_direction": "up",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64775.41853293506,
+      "btc_direction": "up",
+      "btc_move": 46.72579565338674,
+      "btc_open": 64728.69273728167,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784044200,
+      "closed": true,
+      "condition_id": "0x61b1bf9ed98ba420a12bac4b13760df3622baadaabcafd195422075627227928",
+      "end_date": "2026-07-14T15:50:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 11:45AM-11:50AM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784043900,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 1.0,
+          "token_id": "6178261687539843332831796132506437985052688239926306322550617725061763292612"
+        },
+        {
+          "name": "Down",
+          "price": 0.0,
+          "token_id": "47754980983830318323123838420718516310089460577051138712191757578283229608126"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 11:45AM-11:50AM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784043900",
+      "terminal_direction": "up",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64688.68,
+      "btc_direction": "down",
+      "btc_move": -10.215197972589522,
+      "btc_open": 64698.89519797259,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784045100,
+      "closed": true,
+      "condition_id": "0x79687657681313c7a33d3513914d2efad864a74e5728ee6336286797f457eb11",
+      "end_date": "2026-07-14T16:05:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 12:00PM-12:05PM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784044800,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 0.0,
+          "token_id": "14810945303470810760190616688980620474567231847094638256558673581933813423980"
+        },
+        {
+          "name": "Down",
+          "price": 1.0,
+          "token_id": "77366176179567854943051062762020550730535955389511016096875400610892445076537"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 12:00PM-12:05PM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784044800",
+      "terminal_direction": "down",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64546.185343143195,
+      "btc_direction": "down",
+      "btc_move": -229.23318979186297,
+      "btc_open": 64775.41853293506,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784044500,
+      "closed": true,
+      "condition_id": "0x8b870be031cbbc2e26f8a51e583101fa3a08f7bcb1f70500e1c272c78c8eff4c",
+      "end_date": "2026-07-14T15:55:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 11:50AM-11:55AM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784044200,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 0.0,
+          "token_id": "20886461718343821739063849171532202733036246783456679686765398581276952722456"
+        },
+        {
+          "name": "Down",
+          "price": 1.0,
+          "token_id": "15997831797978024953329774929327624985200122051112175312587875589001319768011"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 11:50AM-11:55AM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784044200",
+      "terminal_direction": "down",
+      "window_seconds": 300
+    },
+    {
+      "active": true,
+      "btc_close": 64698.89519797259,
+      "btc_direction": "up",
+      "btc_move": 152.70985482939432,
+      "btc_open": 64546.185343143195,
+      "btc_settlement_source_kind": "chainlink_btc_usd_data_stream",
+      "close_ts_s": 1784044800,
+      "closed": true,
+      "condition_id": "0xbd4d76fca406102131b40a2997e8bd50505c0cdd749a3d8f4777097ff9d45007",
+      "end_date": "2026-07-14T16:00:00Z",
+      "event_title": "Bitcoin Up or Down - July 14, 11:55AM-12:00PM ET",
+      "official_resolution_source": {
+        "description": "This market will resolve to \"Up\" if the Bitcoin price at the end of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\".\nThe resolution source for this market is information from Chainlink, specifically the BTC/USD data stream available at https://data.chain.link/streams/btc-usd.\nPlease note that this market is about the price according to Chainlink data stream BTC/USD, not according to other sources or spot markets.",
+        "kind": "chainlink_btc_usd_data_stream",
+        "resolution_source": "https://data.chain.link/streams/btc-usd"
+      },
+      "official_source_matches_btc_tape": true,
+      "open_ts_s": 1784044500,
+      "outcomes": [
+        {
+          "name": "Up",
+          "price": 1.0,
+          "token_id": "64227525278627367726652371713089583716807050950656880829012605929704482463317"
+        },
+        {
+          "name": "Down",
+          "price": 0.0,
+          "token_id": "71929896881090463089831124358380583845243752917884711316141890361481587870129"
+        }
+      ],
+      "proxy_settlement_aligned": true,
+      "question": "Bitcoin Up or Down - July 14, 11:55AM-12:00PM ET",
+      "settlement_aligned": true,
+      "slug": "btc-updown-5m-1784044500",
+      "terminal_direction": "up",
+      "window_seconds": 300
+    }
+  ],
+  "official_settlement_sources": {
+    "chainlink_btc_usd_data_stream": 6,
+    "kinds": [
+      "chainlink_btc_usd_data_stream"
+    ],
+    "known": 6,
+    "matched_to_btc_tape": 6,
+    "mismatched_to_btc_tape": 0,
+    "unknown": 0
+  },
+  "output": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z_segments/segment_03/resolution_manifest.json",
+  "schema_version": 1,
+  "source_manifest": "/opt/polymomentum/logs/latency/vps_joint_rtds_fresh_20260714T144900Z_segments/segment_03/manifest.json",
+  "stats": {
+    "btc_tape_covered": 6,
+    "btc_tape_missing": 0,
+    "closed": 6,
+    "gamma_refreshed": 6,
+    "markets": 6,
+    "oracle_checks": 6,
+    "oracle_disagreements": 0,
+    "oracle_ties": 0,
+    "pending": 0,
+    "proxy_oracle_checks": 6,
+    "proxy_oracle_disagreements": 0,
+    "proxy_oracle_ties": 0,
+    "terminal": 6
+  }
+}

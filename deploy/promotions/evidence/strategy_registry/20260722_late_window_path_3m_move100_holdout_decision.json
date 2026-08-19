@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:51:55.781777+00:00",
+  "mechanism_id": "late_window_article_family_v1",
+  "candidate_id": "late_window_path_3m_and_move_2m_100_literal_taker",
+  "status": "HOLDOUT_GATE_FAILED",
+  "authority": {
+    "registration_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_registration.json",
+    "registration_sha256": "f0f65b8bb329a56344f6fcfbd0984ad701a11c2fff7d70582d735e1816537e57",
+    "holdout_evidence_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_holdout.json",
+    "holdout_evidence_sha256": "cf9605fc77e79214565f67cdc17fa49ef2e58614cfd5e87e781b7f7ffc6bda65",
+    "raw_reports_archive_path": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_raw_reports.tar.gz",
+    "raw_reports_archive_sha256": "7e8dcbf6a836de1117e7a39183aee508e6f93765e1df9dfed58971e7318c4195"
+  },
+  "integrity": {
+    "checks": {
+      "candidate_is_only_reported_result": true,
+      "variant_path_matches_registration": true,
+      "variant_hash_matches_registration": true,
+      "all_source_hashes_recompute": true,
+      "holdout_windows_match_registration": true,
+      "all_sources_use_registered_latency": true,
+      "raw_reports_archive_present": true
+    },
+    "passed": true
+  },
+  "gates": {
+    "minimum_fills": {
+      "observed": 33,
+      "required": 20,
+      "passed": true
+    },
+    "minimum_fill_rate": {
+      "observed": 1.0,
+      "required": 0.8,
+      "passed": true
+    },
+    "positive_total_net_pnl": {
+      "observed_usd": 4.300910000000003,
+      "passed": true
+    },
+    "positive_mean_net_pnl_per_fill": {
+      "observed_usd": 0.13033060606060615,
+      "passed": true
+    },
+    "minimum_fraction_positive_active_folds": {
+      "observed": 1.0,
+      "required": 0.5,
+      "active_folds": 10,
+      "passed": true
+    },
+    "direction_rule": {
+      "directions": {
+        "down": {
+          "fills": 20,
+          "total_pnl_usd": 2.6912100000000025,
+          "applicable": true,
+          "passed": true
+        },
+        "up": {
+          "fills": 13,
+          "total_pnl_usd": 1.609700000000001,
+          "applicable": true,
+          "passed": true
+        }
+      },
+      "passed": true
+    },
+    "maximum_unresolved_fills": {
+      "observed": 0,
+      "required_maximum": 0,
+      "passed": true
+    },
+    "maximum_resolution_disagreements": {
+      "observed": 0,
+      "required_maximum": 0,
+      "passed": true
+    },
+    "loss_robustness": {
+      "observed_pnl_after_one_average_full_loss_usd": -0.7123957575757549,
+      "required": "greater than zero",
+      "passed": false
+    }
+  },
+  "decision": {
+    "progression_passed": false,
+    "bounded_forward_measurement_design_permitted": false,
+    "paper_or_live_runtime_change_authorized": false,
+    "profitability_or_a_plus_claim": false
+  },
+  "interpretation": "The literal price-insensitive candidate failed because its holdout profit does not survive one average observed-size full loss. Do not retune this holdout; register any price-aware or staged-entry successor as a new mechanism."
+}

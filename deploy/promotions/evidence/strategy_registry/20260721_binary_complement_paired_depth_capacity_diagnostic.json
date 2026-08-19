@@ -1,0 +1,125 @@
+{
+  "decision": {
+    "a_plus_claim": false,
+    "next_step": "Do not register or implement a paired-depth challenger; preserve the sealed primary block and rely on schema-6 attribution to test paired-book validity without multiplying hypotheses.",
+    "paired_depth_challenger_preregistered": false,
+    "profitability_claim": false,
+    "strategy_rule_changed": false,
+    "threshold_registered": false
+  },
+  "decision_question": "Does paired-book depth capacity add stable structural selectivity beyond the observed-inert complement residual?",
+  "five_round_stability": {
+    "always_fail": 6,
+    "always_pass": 92,
+    "complete_five_round_markets": 98,
+    "markets_with_any_flip": 0,
+    "matched_ratio_range": {
+      "max": 0.0006453427965005254,
+      "min": 0.0,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "maximum_flips": 0,
+    "mixed": 0
+  },
+  "generated_at": "2026-07-21T07:11:33Z",
+  "limitations": [
+    "Five snapshots over roughly nine seconds cannot establish longer-horizon persistence.",
+    "The population is non-candle and may not match five-minute BTC market liquidity.",
+    "No terminal labels, historical trade rows, fills, latency, or PnL are present."
+  ],
+  "mechanism_assessment": {
+    "capacity_interpretation": "Dollar-notional capacity rejects some states but is outcome-label and price asymmetric rather than a direction-neutral paired-book signal.",
+    "distinct_pair_signal_observed": false,
+    "existing_control_overlap": "Chosen-book minimum depth and executable FOK capacity already control the directly actionable liquidity boundary.",
+    "matched_depth_interpretation": "Complement-side top-three share depth is effectively mirrored; the fixed 0.25 symmetry rule is inert in all 490 valid states."
+  },
+  "methodology": {
+    "candidate_fields": [
+      "minimum four-side top-three notional capacity",
+      "minimum matched-depth ratio"
+    ],
+    "economic_reference": "$10 top-three notional equals the standing maximum per-market exposure; diagnostic only, not outcome-fitted",
+    "matched_depth_pairs": [
+      "YES bid vs NO ask",
+      "YES ask vs NO bid"
+    ],
+    "top_book_policy": "derive best bid by maximum price, best ask by minimum price, and depth from the nearest three valid levels"
+  },
+  "population": {
+    "definition": "top 100 active, accepting, non-crypto, non-negative-risk binary CLOB markets by volume24hr after deterministic filtering of 500 Gamma rows",
+    "markets": 100,
+    "missing_or_invalid_states": 10,
+    "possible_paired_states": 500,
+    "rounds": 5,
+    "valid_paired_states": 490
+  },
+  "schema_version": 1,
+  "source_authority": {
+    "active_forward_block_loaded": false,
+    "manifest": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books_manifest.json",
+    "snapshot": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260721_non_candle_public_books.json.gz",
+    "snapshot_sha256": "5fd25a3e78e1f46c556b1adcb6e05d0939f5fd475d4ddf48136863588fc78811",
+    "strategy_outcomes_loaded": false,
+    "terminal_labels_loaded": false
+  },
+  "status": "LABEL_FREE_PAIRED_DEPTH_CHALLENGER_REJECTED_AS_NON_DISTINCT",
+  "structural_results": {
+    "coverage_counts": {
+      "entry_capacity_10usd": 470,
+      "four_side_capacity_10usd": 460,
+      "matched_depth_ratio_0_25": 490,
+      "no_entry_capacity_10usd": 490,
+      "yes_entry_capacity_10usd": 470
+    },
+    "coverage_rates": {
+      "entry_capacity_10usd": 0.9591836734693877,
+      "four_side_capacity_10usd": 0.9387755102040817,
+      "matched_depth_ratio_0_25": 1.0,
+      "no_entry_capacity_10usd": 1.0,
+      "yes_entry_capacity_10usd": 0.9591836734693877
+    },
+    "disagreement": {
+      "depth_ratio_vs_residual_nonzero": 0,
+      "four_side_vs_residual": 30,
+      "opposite_capacity_incremental_if_no_chosen": 20,
+      "opposite_capacity_incremental_if_yes_chosen": 0
+    },
+    "min_entry_ask_capacity_usd": {
+      "max": 65889.9539,
+      "min": 1.85156,
+      "p10": 15.96425,
+      "p50": 510.19731,
+      "p90": 7853.499420000001
+    },
+    "min_exit_bid_capacity_usd": {
+      "max": 122560.4766,
+      "min": 2.9200000000000004,
+      "p10": 22.77736,
+      "p50": 599.316605,
+      "p90": 12840.7203
+    },
+    "min_four_side_capacity_usd": {
+      "max": 65889.9539,
+      "min": 1.85156,
+      "p10": 12.4779,
+      "p50": 401.85685,
+      "p90": 7577.75774
+    },
+    "min_matched_depth_ratio": {
+      "max": 1.0,
+      "min": 0.8451908165966944,
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0
+    },
+    "timestamp_skew_ms": {
+      "max": 2,
+      "min": 0,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    }
+  }
+}

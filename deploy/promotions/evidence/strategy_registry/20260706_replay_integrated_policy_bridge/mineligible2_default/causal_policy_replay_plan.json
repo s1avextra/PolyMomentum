@@ -1,0 +1,29 @@
+{
+  "candidate_filter": {
+    "include_failed": false,
+    "top": 20
+  },
+  "candidates": [],
+  "latency_audit_json": null,
+  "latency_ms": 128,
+  "methodology": [
+    "Read causal-policy-search candidates and use only runtime-supported harness require/deny args.",
+    "Generate one rolling-history replay manifest per selected candidate.",
+    "Static search stats are carried as context only; replay manifests are the required next evidence before promotion credit."
+  ],
+  "mode": "dry_run",
+  "output": "deploy/promotions/evidence/strategy_registry/20260706_replay_integrated_policy_bridge/mineligible2_default/causal_policy_replay_plan.json",
+  "profile": "a_plus5m_tail_low_exposure",
+  "replay_window": {
+    "end": "2026-06-01T07:00:00Z",
+    "fold_hours": 8,
+    "start": "2026-05-31T08:00:00Z",
+    "window_minutes": 5.0
+  },
+  "schema_version": 1,
+  "search_ok": false,
+  "search_report_count": 3,
+  "selected_count": 0,
+  "source_search": "deploy/promotions/evidence/strategy_registry/20260706_policy_search_min_eligible_gate/polymomentum_low_exposure_policy_search_mineligible2_20260706.json",
+  "zone_mode": "all"
+}

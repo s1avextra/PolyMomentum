@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-07-21T18:32:29Z",
+  "state": "COLLECTING",
+  "target_terminal_conditions": 750,
+  "unique_ready_terminal_conditions": 352,
+  "new_segments_completed": 19,
+  "maximum_new_segments": 96,
+  "strategy_metrics_disclosed": false
+}

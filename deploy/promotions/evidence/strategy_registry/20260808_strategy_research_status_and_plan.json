@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08T08:12:57Z",
+  "scope": "PolyMomentum research-loop evidence and operational readiness review",
+  "decision": {
+    "promotion_ready": false,
+    "live_candidate_count": 0,
+    "recommendation": "Restore measurement capacity, finish the single in-flight exact replay, then advance one canonical low-price challenger under an amended preregistered policy. Do not generate more grid variants or restart a stale strategy runtime.",
+    "live_trading_authorized": false
+  },
+  "source_integrity": {
+    "research_ledger": {
+      "logical_path": "strategy-research/research.sqlite3",
+      "sha256": "3e0aec205ef2ed88322a93d41211e28ada2bcbe9868c3f70d4a377bfa35565b4"
+    },
+    "research_status": {
+      "logical_path": "strategy-research/status.json",
+      "sha256": "218d3782916ae951c4391ab3ee010ad1a898e8d93693fdb810f3e580f34278e7"
+    },
+    "research_config": {
+      "path": "deploy/strategy-research-loop.json",
+      "sha256": "321b0b706b090d942cf42f56e510997a6b6cf9b933fe2cf2324a5060d9a9d5fe"
+    },
+    "strategy_registry": {
+      "path": "docs/strategy_registry.json",
+      "sha256": "94cebc6a3d7e6b9931ca7cf6f3781517459e745df4c8538305679756ca1b4702"
+    }
+  },
+  "research_status": {
+    "latest_completed_cycle": "2026-08-08T08:04:16Z",
+    "cycle_result": "deferred_resource_gate",
+    "public_snapshot_latest_fully_resolved_day": "2026-08-06",
+    "late_window_hypotheses_created_since_2026_08_03": 24,
+    "status_counts": {
+      "historical_insufficient_support": 7,
+      "rejected_stage_1": 6,
+      "rejected_historical_exact": 4,
+      "rejected_economic_screen": 4,
+      "rejected_fresh_holdout": 1,
+      "holdout_insufficient_support": 1,
+      "eligible_for_exact_l2": 1
+    },
+    "baseline_evolution": {
+      "completed_runs": 7,
+      "candidates_per_run": 36,
+      "passing_candidates_per_run": 0,
+      "same_top_genome_hash_each_run": "7c0b4a5de983fafd4c9eac52bd3fe096d392d05a928fd53feea4b280995a52ad",
+      "finding": "The deterministic lane repeated the same result without a source-report change."
+    }
+  },
+  "candidate_results": [
+    {
+      "fingerprint_prefix": "ac963ee9fc",
+      "candidate": "3m path-only, both directions, cap 0.97",
+      "historical_exact_windows": 8,
+      "historical_exact_fills": 45,
+      "historical_exact_net_pnl_usd": 61.21195,
+      "fresh_windows": null,
+      "fresh_fills": null,
+      "fresh_net_pnl_usd": null,
+      "verdict": "rejected_historical_exact",
+      "why": "Direction robustness failed: up +69.86156 USD, down -8.64961 USD."
+    },
+    {
+      "fingerprint_prefix": "19ad0e2cea",
+      "candidate": "3m path + 2m move >=100 USD, both directions, cap 0.97",
+      "historical_exact_windows": 8,
+      "historical_exact_fills": 13,
+      "historical_exact_net_pnl_usd": 19.28177,
+      "fresh_windows": 7,
+      "fresh_active_windows": 2,
+      "fresh_fills": 3,
+      "fresh_net_pnl_usd": 0.69519,
+      "verdict": "holdout_insufficient_support",
+      "why": "Only 3 fills; fill rate 0.75 and active-window fraction 0.286 missed their gates."
+    },
+    {
+      "fingerprint_prefix": "ea25a91720",
+      "candidate": "3m path-only, up only, cap 0.97",
+      "historical_exact_windows": 8,
+      "historical_exact_fills": 27,
+      "historical_exact_net_pnl_usd": 101.4476,
+      "fresh_windows": 8,
+      "fresh_active_windows": 8,
+      "fresh_fills": 24,
+      "fresh_wins": 20,
+      "fresh_losses": 4,
+      "fresh_net_pnl_usd": -9.82591,
+      "verdict": "rejected_fresh_holdout",
+      "why": "The strong historical result reversed on the frozen fresh holdout."
+    },
+    {
+      "fingerprint_prefix": "665a77e998",
+      "candidate": "3m path + 2m move >=100 USD, both directions, cap 0.90",
+      "historical_exact_windows": 8,
+      "historical_exact_fills": 6,
+      "historical_exact_net_pnl_usd": 3.16499,
+      "fresh_capacity_signals": 8,
+      "verdict": "rejected_historical_exact_under_v5",
+      "why": "All recorded historical replay gates passed except signal-to-attempt rate: 0.176 versus 0.25. The later exact-economic gate was not evaluated. Treat this as a low-capacity research challenger, not a retroactive pass."
+    },
+    {
+      "fingerprint_prefix": "78af669b73",
+      "candidate": "3m path + 2m move >=100 USD, both directions, cap 0.95",
+      "public_signals": 751,
+      "public_accuracy": 0.982689747,
+      "public_wilson_95_lower": 0.970610262,
+      "cached_economic_conditions": 14,
+      "cached_economic_mean_one_share_payoff": 0.015373505,
+      "historical_exact_windows_completed": 3,
+      "historical_exact_windows_preregistered": 8,
+      "historical_exact_fills_so_far": 6,
+      "historical_exact_net_pnl_usd_so_far": -1.0047,
+      "verdict": "in_progress",
+      "why": "Five preregistered exact windows remain; no conclusion is valid before they finish."
+    }
+  ],
+  "validation_checks": {
+    "fresh_19ad_window_rows": 7,
+    "fresh_19ad_distinct_windows": 7,
+    "fresh_19ad_recomputed_trades": 3,
+    "fresh_19ad_recomputed_net_pnl_usd": 0.69519,
+    "fresh_ea25_window_rows": 8,
+    "fresh_ea25_distinct_windows": 8,
+    "fresh_ea25_recomputed_trades": 24,
+    "fresh_ea25_recomputed_net_pnl_usd": -9.82591,
+    "aggregate_matches_window_rows": true
+  },
+  "efficiency_findings": {
+    "execution_equivalent_exact_groups": [
+      {
+        "variants": 3,
+        "fills": 3,
+        "net_pnl_usd": -2.02822
+      },
+      {
+        "variants": 3,
+        "fills": 6,
+        "net_pnl_usd": 3.16499
+      },
+      {
+        "variants": 2,
+        "fills": 0,
+        "net_pnl_usd": 0.0
+      },
+      {
+        "variants": 2,
+        "fills": 1,
+        "net_pnl_usd": -5.02996
+      }
+    ],
+    "finding": "Ten parameter variants collapsed to four exact outcome signatures, so six full exact replays produced no new execution evidence."
+  },
+  "operational_readiness": {
+    "dev_mac": {
+      "launch_agent_loaded": true,
+      "launch_agent_last_exit_code": 0,
+      "last_cycle_resource_gate_passed": false,
+      "free_disk_gib": 16.88,
+      "required_free_disk_gib": 20,
+      "rust_debug_build_artifacts_gib": 40,
+      "loop_owned_pmxt_cache_gib": 17
+    },
+    "vps": {
+      "observed_at": "2026-08-08T08:08:57Z",
+      "system_state": "degraded",
+      "polymomentum_engine": "failed",
+      "engine_failed_since": "2026-07-25T16:57:07Z",
+      "engine_failure_cause": "preflight disk watermark",
+      "free_disk_gib": 4.9,
+      "filesystem_size_gib": 72,
+      "engine_minimum_free_gib": 10,
+      "engine_minimum_free_fraction": 0.15,
+      "polymomentum_logs_gib": 16,
+      "latency_logs_gib": 6.9,
+      "forward_capture_logs_gib": 5.6,
+      "session_logs_gib": 3.0,
+      "measurement_binary_present": true,
+      "telegram_monitor": "active",
+      "healthcheck_timer": "active",
+      "soak_report_timer": "active",
+      "kill_switch_present": false,
+      "promotion_artifact_status": "stale_research",
+      "live_candidate_count": 0
+    },
+    "binary_complement_support_only": {
+      "session_020_sealed": true,
+      "session_020_support_at_seal": 329,
+      "session_020_capture_verified": true,
+      "session_020_resolution_ready": true,
+      "session_020_resolution_verdict": "ALL_ADMISSIBLE_GROUPS_READY",
+      "session_020_frames_deleted_after_verification": true,
+      "total_sealed_support_after_session_022": 352,
+      "preregistered_floor": 750,
+      "collector_status": "failed_disk_gate",
+      "sealed_strategy_metrics_inspected": false
+    }
+  },
+  "plan": [
+    {
+      "order": 1,
+      "action": "Recover disk headroom on the dev Mac and VPS",
+      "acceptance": "Dev free disk >=25 GiB; VPS free disk >=15 GiB; preflight disk checks pass. Preserve sealed evidence and do not touch shared or peer-private directories."
+    },
+    {
+      "order": 2,
+      "action": "Finish the five remaining exact-L2 windows for 78af669b73",
+      "acceptance": "All eight preregistered windows are sealed into one verdict; no new hypothesis is generated during the run."
+    },
+    {
+      "order": 3,
+      "action": "Amend the research funnel before any new replay",
+      "acceptance": "Execution-equivalent variants reuse one replay; unchanged baseline inputs do not rerun; signal-to-attempt is a capacity diagnostic when minimum fills and window breadth pass; status names identify the actual failed stage."
+    },
+    {
+      "order": 4,
+      "action": "Preregister one canonical 0.90 path+move challenger under the amended policy",
+      "acceptance": "Use only untouched global-reserve windows, at most eight; no parameter retuning and no sibling grid variants."
+    },
+    {
+      "order": 5,
+      "action": "Advance only on fresh executable economics",
+      "acceptance": "If fresh gates pass, run payoff-derived fixed-forward confirmation from a 25-fill checkpoint, official Chainlink parity, then a bounded measurement-only VPS shadow. Otherwise close the continuation family."
+    }
+  ],
+  "caveats": [
+    "The current 0.95 candidate is incomplete and its interim PnL is not a verdict.",
+    "The 0.90 candidate failed the preregistered v5 policy and cannot be relabeled as a pass; it requires a new policy registration before any untouched fresh test.",
+    "The public snapshot currently ends on 2026-08-06 because the latest cycle was deferred by the disk resource gate.",
+    "Binary-complement candidate outcomes, rates, scores and PnL remain sealed below its separate 750-condition floor.",
+    "No current evidence authorizes live trading or a production candidate."
+  ]
+}

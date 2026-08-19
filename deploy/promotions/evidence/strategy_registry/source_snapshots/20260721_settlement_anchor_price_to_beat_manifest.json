@@ -1,0 +1,225 @@
+{
+  "generated_at": "2026-07-21T07:48:06.809285+00:00",
+  "pages": [
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64926.421,
+      "open_ts_s": 1784098200,
+      "page_sha256": "afd8fd3342c3c12c654c917c16ab17ae60d7403bf1fb16b3772baa590009eb26",
+      "published_price_to_beat": 64926.420999999995,
+      "slug": "btc-updown-5m-1784098200",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784098200"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64872.29407079552,
+      "open_ts_s": 1784098500,
+      "page_sha256": "d58a6b75db0db3e29c43e32cb6366503a2f58a5fabeb4e23bc95c271f7991ff6",
+      "published_price_to_beat": 64872.29407079552,
+      "slug": "btc-updown-5m-1784098500",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784098500"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64770.81086704597,
+      "open_ts_s": 1784098800,
+      "page_sha256": "880c3b749a557b32875466d7a48f15749e4dd5a8a420894efddcaf6c71bbcc6e",
+      "published_price_to_beat": 64770.81086704597,
+      "slug": "btc-updown-5m-1784098800",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784098800"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64755.970135957774,
+      "open_ts_s": 1784099100,
+      "page_sha256": "e3c770d58e1f719154d253738bbe80cb906c4aa0a59bee408294f2596833768a",
+      "published_price_to_beat": 64755.970135957774,
+      "slug": "btc-updown-5m-1784099100",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784099100"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64765.026,
+      "open_ts_s": 1784099400,
+      "page_sha256": "bf1e45b9a8303501cdd6eac27392b54e98894d9cf425ba1b13084236011083e1",
+      "published_price_to_beat": 64765.026,
+      "slug": "btc-updown-5m-1784099400",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784099400"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64823.7494349285,
+      "open_ts_s": 1784099700,
+      "page_sha256": "6f6a33554bc9a3f4144d7fab1ee8e5f53269cdb3341670f44c292c6b8c3160b9",
+      "published_price_to_beat": 64823.7494349285,
+      "slug": "btc-updown-5m-1784099700",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784099700"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64762.76709840366,
+      "open_ts_s": 1784100000,
+      "page_sha256": "fd3fc985825d45f9d658c3b1ffe85b921c499514c4e3d220887d73262939af1e",
+      "published_price_to_beat": 64762.76709840366,
+      "slug": "btc-updown-5m-1784100000",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784100000"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64603.26474744127,
+      "open_ts_s": 1784100300,
+      "page_sha256": "0b0d012ef22d7fa525b15f7182ee0a1bef1f3ee4fde61e150dc688581e0d3474",
+      "published_price_to_beat": 64603.26474744127,
+      "slug": "btc-updown-5m-1784100300",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784100300"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64485.52890901513,
+      "open_ts_s": 1784100600,
+      "page_sha256": "9cb7baeab1b479bc1193d1466d1dc76b7272f80db3b833532b455bf2ba43a1cd",
+      "published_price_to_beat": 64485.52890901513,
+      "slug": "btc-updown-5m-1784100600",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784100600"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64508.16751977199,
+      "open_ts_s": 1784100900,
+      "page_sha256": "bf7d8c3ca6495524efa8315345e84a1c2af243f83847a4dd40d2a044dcf0edd6",
+      "published_price_to_beat": 64508.167519771996,
+      "slug": "btc-updown-5m-1784100900",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784100900"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64553.24714200542,
+      "open_ts_s": 1784101200,
+      "page_sha256": "b1e7f613f37fb23e8ff339e335ffc929e44b999deb492f722008dd6245502a6b",
+      "published_price_to_beat": 64553.24714200542,
+      "slug": "btc-updown-5m-1784101200",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784101200"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64556.95613583111,
+      "open_ts_s": 1784101500,
+      "page_sha256": "52f03408e2a03bbe8277ee485ca926ac06d5f047563763edbc1db9ed9c417194",
+      "published_price_to_beat": 64556.95613583111,
+      "slug": "btc-updown-5m-1784101500",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784101500"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64554.62189175876,
+      "open_ts_s": 1784101800,
+      "page_sha256": "38be5a2537c51c63d5c4724e4d04b8ad2e597442c74c2628e2eea5970bf4e721",
+      "published_price_to_beat": 64554.62189175876,
+      "slug": "btc-updown-5m-1784101800",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784101800"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64543.151079357005,
+      "open_ts_s": 1784102100,
+      "page_sha256": "06e3663a1f776598d6b638d7ccca393ec4f02eca3386b0030e443d83b4711499",
+      "published_price_to_beat": 64543.151079357005,
+      "slug": "btc-updown-5m-1784102100",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784102100"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64501.991,
+      "open_ts_s": 1784102400,
+      "page_sha256": "92b3bb1f36e8840682e832d9d829ac0b5c14ca7365788cad5ed83de56895dba5",
+      "published_price_to_beat": 64501.990999999995,
+      "slug": "btc-updown-5m-1784102400",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784102400"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64630.24049883178,
+      "open_ts_s": 1784102700,
+      "page_sha256": "d546af787bb9fd20e9d389974dc88ab463603af5eefb746d84f9b5649574773d",
+      "published_price_to_beat": 64630.24049883178,
+      "slug": "btc-updown-5m-1784102700",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784102700"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64522.141146639435,
+      "open_ts_s": 1784103000,
+      "page_sha256": "7bd1e3bbcceec41bde817aaf1a7debf0c3b3964a952e1bcc441f89f38a8d02db",
+      "published_price_to_beat": 64522.14114663944,
+      "slug": "btc-updown-5m-1784103000",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784103000"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64535.87911653099,
+      "open_ts_s": 1784103300,
+      "page_sha256": "6ceaecfae719397678845938735c1f10d631b693dca850f5828520114b8581bf",
+      "published_price_to_beat": 64535.879116530996,
+      "slug": "btc-updown-5m-1784103300",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784103300"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64570.48394,
+      "open_ts_s": 1784103600,
+      "page_sha256": "72fd7823ba8c0ba1193052942012a180600ccb67c35f35d1fdef4dc73161d804",
+      "published_price_to_beat": 64570.483940000006,
+      "slug": "btc-updown-5m-1784103600",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784103600"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64554.12323490169,
+      "open_ts_s": 1784103900,
+      "page_sha256": "89c9561f9482e9be280f17c36609bf663cdd6ee12bb4a6ec92592712053b70d1",
+      "published_price_to_beat": 64554.12323490169,
+      "slug": "btc-updown-5m-1784103900",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784103900"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64592.82217210813,
+      "open_ts_s": 1784104200,
+      "page_sha256": "16de808407f57c2e1a7c79c41f8c5ca4cc5b16d103debed070194680e54dff4b",
+      "published_price_to_beat": 64592.82217210813,
+      "slug": "btc-updown-5m-1784104200",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784104200"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64624.524065,
+      "open_ts_s": 1784104500,
+      "page_sha256": "0dafc042b36eb653233792649ed3cb555a6ea29e3730efb5182b5bc89a58ba89",
+      "published_price_to_beat": 64624.524065,
+      "slug": "btc-updown-5m-1784104500",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784104500"
+    },
+    {
+      "absolute_difference_usd": 0.0,
+      "captured_chainlink_open": 64675.10135929091,
+      "open_ts_s": 1784104800,
+      "page_sha256": "5885c33606cfdf17d465ddffdb7dba93f4021bd52f9aecf3eb5d86f401385901",
+      "published_price_to_beat": 64675.10135929091,
+      "slug": "btc-updown-5m-1784104800",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784104800"
+    },
+    {
+      "absolute_difference_usd": 7.275957614183426e-12,
+      "captured_chainlink_open": 64688.70258987979,
+      "open_ts_s": 1784105100,
+      "page_sha256": "339b2b1944c849202a03ec03ef3668f66aad956a06bdad5e84c21298ad8075a1",
+      "published_price_to_beat": 64688.70258987978,
+      "slug": "btc-updown-5m-1784105100",
+      "url": "https://polymarket.com/event/btc-updown-5m-1784105100"
+    }
+  ],
+  "schema_version": 1,
+  "selection": "all 24 markets in the retained label-free source-anchor diagnostic",
+  "source_page_contents_retained": false,
+  "status": "PUBLIC_PRICE_TO_BEAT_MATCHES_CAPTURED_CHAINLINK_OPEN_24_OF_24"
+}

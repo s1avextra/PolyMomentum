@@ -5,7 +5,6 @@ set -euo pipefail
 APP_DIR="/opt/polymomentum"
 ENV_DIR="/etc/polymomentum"
 ENV_FILE="$ENV_DIR/env"
-KILL_DIR="/tmp/polymomentum"
 
 echo "=== PolyMomentum VPS Setup (Rust-only) ==="
 
@@ -20,13 +19,13 @@ command -v cargo &>/dev/null || (
     source "$HOME/.cargo/env"
 )
 
-# 3. Service user, app dirs, kill-switch dir.
+# 3. Service user and app dirs.
 id polymomentum &>/dev/null || useradd -r -s /bin/false -d "$APP_DIR" polymomentum
 mkdir -p \
     "$APP_DIR/logs/"{candle,sessions} \
     "$APP_DIR/data" \
-    "$KILL_DIR"
-chown -R polymomentum:polymomentum "$APP_DIR" "$KILL_DIR"
+    "$APP_DIR/control"
+chown -R polymomentum:polymomentum "$APP_DIR"
 
 # 4. Secrets directory — outside the deploy tree.
 mkdir -p "$ENV_DIR"
@@ -39,17 +38,32 @@ POLY_API_KEY=
 POLY_API_SECRET=
 POLY_API_PASSPHRASE=
 PRIVATE_KEY=
-POLYGON_RPC_URL=https://polygon-rpc.com
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
+POLY_BASE_URL=https://clob.polymarket.com
+POLY_GAMMA_URL=https://gamma-api.polymarket.com
 
 # Slack alerter — REQUIRED in live mode (set ALERT_REQUIRED=1 to fail fast)
 SLACK_WEBHOOK_URL=
+ALERT_WEBHOOK_URL=
 ALERT_REQUIRED=1
+
+# Venue safety gate. paper_only is the only default that can start without
+# legal/account-specific sign-off.
+VENUE=paper_only
+OPERATOR_COUNTRY=
+POLYMOMENTUM_VENUE_COMPLIANCE_OK=0
+POLYMARKET_US_API_ENABLED=0
+CLOB_V2_READY=0
+POLYMOMENTUM_LIVE_RECONCILIATION_READY=0
+CANDLE_SETTLEMENT_ALIGNMENT_READY=false
 
 # Logging
 RUST_LOG=info
+BANKROLL_USD=100
+CANDLE_PAPER_BREAKER_RESET_ON_START=0
 
 # Operational kill switch (touch this file from any shell to halt trading)
-KILL_SWITCH_PATH=/tmp/polymomentum/KILL
+KILL_SWITCH_PATH=/opt/polymomentum/control/KILL
 ENVEOF
     chmod 640 "$ENV_FILE"
     chown root:polymomentum "$ENV_FILE"
@@ -59,14 +73,20 @@ fi
 # 5. Drop the healthcheck script alongside the binary (no /current/ release tree).
 HERE="$(cd "$(dirname "$0")" && pwd)"
 install -m 0755 "$HERE/healthcheck.sh" "$APP_DIR/healthcheck.sh"
+install -m 0755 "$HERE/soak-report.sh" "$APP_DIR/soak-report.sh"
 chown polymomentum:polymomentum "$APP_DIR/healthcheck.sh"
+chown polymomentum:polymomentum "$APP_DIR/soak-report.sh"
 
 # 6. Systemd units.
 cp "$HERE/polymomentum-engine.service" /etc/systemd/system/
 cp "$HERE/polymomentum-healthcheck.service" /etc/systemd/system/
 cp "$HERE/polymomentum-healthcheck.timer" /etc/systemd/system/
+cp "$HERE/polymomentum-soak-report.service" /etc/systemd/system/
+cp "$HERE/polymomentum-soak-report.timer" /etc/systemd/system/
+cp "$HERE/polymomentum-telegram-monitor.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable polymomentum-healthcheck.timer 2>/dev/null || true
+systemctl enable polymomentum-soak-report.timer 2>/dev/null || true
 
 echo
 echo "=== Done. Next: ==="

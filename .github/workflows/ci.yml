@@ -2,52 +2,36 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "codex/**"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Install uv
-        run: pip install uv
-
-      - name: Install dependencies (with execution + dev extras)
-        run: uv pip install --system ".[dev,execution]"
-
-      - name: Install ruff and mypy
-        run: pip install ruff mypy
-
-      - name: Lint (ruff check)
-        run: ruff check src/ tests/ scripts/
-
-      - name: Type check (mypy, non-blocking)
-        # Mypy starts permissive — strict mode comes after Phase 3
-        continue-on-error: true
-        run: mypy --ignore-missing-imports --no-strict-optional src/polymomentum
-
-      - name: Run unit tests with coverage
-        run: |
-          pip install pytest-cov
-          pytest tests/ -v --cov=polymomentum --cov-report=term-missing --cov-fail-under=20
-
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -55,30 +39,42 @@ jobs:
             rust_engine/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust_engine/Cargo.lock', 'rust_engine/Cargo.toml') }}
 
-      - name: Build rust_engine (release)
+      - name: Format
         working-directory: rust_engine
-        run: cargo build --release --locked
+        run: cargo fmt --all -- --check
 
-      - name: Cargo test
+      - name: Clippy
         working-directory: rust_engine
-        run: cargo test --release --locked
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-  smoke-test:
+      - name: Test
+        working-directory: rust_engine
+        run: cargo test --locked
+
+      - name: Release build
+        working-directory: rust_engine
+        run: cargo build --release --locked --bin polymomentum-engine
+
+      - name: Registry audit (blocking)
+        run: |
+          ./rust_engine/target/release/polymomentum-engine strategy-builder registry-audit \
+            --output /tmp/registry_audit.json
+          ok=$(python3 -c "import json; print(json.load(open('/tmp/registry_audit.json'))['ok'])")
+          echo "registry-audit ok=$ok"
+          test "$ok" = "True"
+
+  python:
     runs-on: ubuntu-latest
-    needs: [python]
-    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
         with:
-          python-version: "3.14"
+          persist-credentials: false
 
       - name: Install uv
-        run: pip install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
 
-      - name: Install dependencies
-        run: uv pip install --system ".[dev,execution]"
-
-      - name: API smoke test
-        run: python scripts/smoke_test.py
+      - name: Pytest (research loop)
+        run: uv run --group dev pytest tests/ -q

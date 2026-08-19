@@ -12,6 +12,15 @@
 ///
 /// Max residual error ≤ 1.5e-7 (per A&S 7.1.26 bound).
 pub fn norm_cdf(x: f64) -> f64 {
+    if x.is_nan() {
+        return 0.5;
+    }
+    if x == f64::INFINITY {
+        return 1.0;
+    }
+    if x == f64::NEG_INFINITY {
+        return 0.0;
+    }
     0.5 * (1.0 + erf_abramowitz_stegun(x / std::f64::consts::SQRT_2))
 }
 
@@ -44,7 +53,16 @@ pub fn binary_option_price_with_rate(
     volatility: f64,
     risk_free_rate: f64,
 ) -> f64 {
-    if spot <= 0.0 || strike <= 0.0 || days_to_expiry <= 0.0 || volatility < 0.01 {
+    if !spot.is_finite()
+        || !strike.is_finite()
+        || !days_to_expiry.is_finite()
+        || !volatility.is_finite()
+        || !risk_free_rate.is_finite()
+        || spot <= 0.0
+        || strike <= 0.0
+        || days_to_expiry <= 0.0
+        || volatility < 0.01
+    {
         return 0.5;
     }
 
@@ -60,12 +78,7 @@ pub fn binary_option_price_with_rate(
 mod tests {
     use super::*;
 
-    fn binary_option_price_with_rate_default(
-        spot: f64,
-        strike: f64,
-        days: f64,
-        vol: f64,
-    ) -> f64 {
+    fn binary_option_price_with_rate_default(spot: f64, strike: f64, days: f64, vol: f64) -> f64 {
         binary_option_price_with_rate(spot, strike, days, vol, 0.05)
     }
 
@@ -114,5 +127,16 @@ mod tests {
             let diff = (norm_cdf(x) + norm_cdf(-x) - 1.0).abs();
             assert!(diff < 1e-12, "symmetry failed at x={}: diff={}", x, diff);
         }
+    }
+
+    #[test]
+    fn non_finite_inputs_fail_to_neutral_probability() {
+        assert_eq!(norm_cdf(f64::NAN), 0.5);
+        assert_eq!(norm_cdf(f64::INFINITY), 1.0);
+        assert_eq!(norm_cdf(f64::NEG_INFINITY), 0.0);
+        assert_eq!(
+            binary_option_price_with_rate(f64::NAN, 70_000.0, 1.0, 0.5, 0.05),
+            0.5
+        );
     }
 }

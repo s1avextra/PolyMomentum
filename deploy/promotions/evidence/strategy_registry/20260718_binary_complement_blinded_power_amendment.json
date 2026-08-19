@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-18T16:14:37Z",
+  "updated_at": "2026-07-18T18:37:07Z",
+  "mechanism_id": "binary_complement_coherence_v1",
+  "status": "BLINDED_POWER_AMENDMENT_REGISTERED_BEFORE_FORWARD_SCORE",
+  "decision": {
+    "original_minimum_terminal_conditions_per_block": 100,
+    "amended_minimum_terminal_conditions_per_block": 750,
+    "forward_metrics_seen_before_decision": false,
+    "strategy_rule_changed": false,
+    "rate_gates_changed": false,
+    "source_and_freshness_integrity_strengthened": true,
+    "latency_or_baseline_identity_changed": false,
+    "threshold_or_neighbor_search_permitted": false
+  },
+  "decision_question": "How many terminal conditions are needed for the already-frozen retention, loss-removal, and Wilson gates to be informative at the observed baseline firing rate?",
+  "pre_score_integrity_hardening": {
+    "recorded_at": "2026-07-18T16:44:19Z",
+    "forward_metrics_seen": false,
+    "initial_screen_schema_version": 2,
+    "screen_schema_version_after_descriptive_diagnostics": 3,
+    "screen_schema_version": 4,
+    "descriptive_diagnostics_recorded_at": "2026-07-18T18:05:51Z",
+    "descriptive_diagnostics_gating_use": "none",
+    "descriptive_diagnostics_change_strategy_rule_or_rate_gate": false,
+    "strategy_rule_or_rate_gate_changed": false,
+    "collection_path_recorded_at": "2026-07-18T17:32:11Z",
+    "collection_path_strategy_metrics_seen": false,
+    "admissible_only_replay_storage": true,
+    "zero_admissible_segment_action": "record rejected status; do not convert; delete only the session-owned frame log when explicitly enabled",
+    "support_stopping_rule": "unique officially resolved post-registration condition IDs only",
+    "support_stopping_rule_uses_strategy_outcomes_or_rates": false,
+    "support_count_integrity_gate": "only fully sealed segments with complete ready resolution groups, positive distilled events, and exact resolution-manifest cardinality contribute support",
+    "maximum_new_segments": 96,
+    "measurement_only": true,
+    "later_prescore_economic_alignment": {
+      "registered_at": "2026-07-18T18:37:07Z",
+      "forward_metrics_seen": false,
+      "strategy_feature_or_two_tick_rule_changed": false,
+      "classification_rate_thresholds_changed": false,
+      "economic_gate_set_changed": true,
+      "minimum_fee_aware_unit_profit_factor": 1.20,
+      "minimum_fee_aware_unit_payoff_ratio": 0.20,
+      "source": "deploy/promotions/evidence/strategy_registry/20260718_binary_complement_prescore_unit_economics_amendment.json"
+    }
+  },
+  "source_authority": {
+    "historical_trade_source": "deploy/promotions/evidence/strategy_registry/20260714_volatility_floor_strict42_latency202_exact_aggregate.json",
+    "historical_trade_source_sha256": "a0a2b811af91c25c0c494cc1811f629b368fd3c8855fa7489e488998cc865951",
+    "historical_condition_source": "deploy/promotions/evidence/strategy_registry/20260715_probability_opportunity_calibration_strict42.json",
+    "historical_condition_source_sha256": "e0910ca812d6d2fe5ab664d02127b24fb832953127efaf93814d080631a9832c",
+    "original_preregistration": "deploy/promotions/evidence/strategy_registry/20260715_binary_complement_coherence_preregistration.json",
+    "original_preregistration_sha256_before_amendment": "01d099ff8adabf6d57f1a237c4e7ac537f4da0564ba83ceacd49843b7de48e56",
+    "forward_capture_state_at_amendment": "segment 003 was still recording and had not been finalized, replayed, or scored",
+    "forward_opportunity_reports_generated": 0,
+    "forward_screen_artifacts_generated": 0
+  },
+  "historical_nuisance_parameters": {
+    "terminal_conditions": 631,
+    "baseline_candidates": 102,
+    "baseline_winners": 79,
+    "baseline_losses": 23,
+    "baseline_candidate_rate_per_condition": 0.16164817749603805,
+    "baseline_loss_rate_per_condition": 0.036450079239302696,
+    "registered_winner_retention": 0.9,
+    "registered_loss_removal": 0.3,
+    "registered_candidate_retention_floor": 0.7,
+    "registered_wilson_95_lower_floor": 0.7
+  },
+  "old_floor_diagnostic": {
+    "terminal_conditions": 100,
+    "expected_baseline_candidates": 16.1648177496038,
+    "expected_baseline_losses": 3.6450079239302693,
+    "expected_selected_candidates_at_registered_effect": 13.819607843137256,
+    "expected_selected_win_rate_at_registered_effect": 0.8153669724770642,
+    "expected_wilson_95_lower_at_registered_effect": 0.5241,
+    "interpretation": "The old floor is suitable only as a pipeline smoke test. It is underpowered for the registered effect and makes loss removal depend on only a few observations."
+  },
+  "amended_floor_diagnostic": {
+    "terminal_conditions": 750,
+    "expected_baseline_candidates": 121.23613312202853,
+    "expected_baseline_losses": 27.33755942947702,
+    "probability_of_at_least_100_baseline_candidates": 0.9861,
+    "probability_of_at_least_15_baseline_losses": 0.9966,
+    "expected_selected_candidates_at_registered_effect": 103.64500792393027,
+    "expected_selected_winners_at_registered_effect": 84.50871632329635,
+    "expected_selected_win_rate_at_registered_effect": 0.8153669724770642,
+    "expected_wilson_95_lower_at_registered_effect": 0.7322,
+    "minimum_default_24_condition_segments_if_all_conditions_are_admissible": 32,
+    "interpretation": "The amended floor gives the screen approximately 100 selected observations at its registered effect size and makes both Wilson and loss-removal evidence decision-useful."
+  },
+  "method": {
+    "candidate_support_probability": "Exact Binomial(n, 102/631) upper-tail probability.",
+    "loss_support_probability": "Exact Binomial(n, 23/631) upper-tail probability.",
+    "registered_effect_selected_rate": "(79/102 * 0.90) + (23/102 * 0.70).",
+    "registered_effect_selected_win_rate": "(79/102 * 0.90) divided by the registered-effect selected rate.",
+    "wilson": "Two-sided 95% Wilson lower bound with z=1.959963984540054, evaluated at rounded expected counts.",
+    "sample_size_rule": "Choose a fixed condition count before forward scoring; do not stop based on observed winners, losses, residuals, or screen rates."
+  },
+  "collection_boundary": {
+    "segment_003_plus_segments_004_007": "operational stability canary only",
+    "score_before_750_conditions": "forbidden",
+    "labeled_opportunity_generation_before_750_conditions": "forbidden by replay-wrapper preflight",
+    "paired_book_freshness": "both recorded book ages must be finite and <= 30000 ms",
+    "screen_source_hashes": "all opportunity and resolution inputs are SHA-256 pinned and revalidated by the repeat audit",
+    "extended_block_1_collection": "after the 120-condition stability canary, collect at most 96 additional 24-window segments and stop when 750 unique ready conditions are present",
+    "extended_collection_disclosure": "condition support count only; winner, loss, residual, retention, Wilson, PnL, and opportunity metrics remain sealed",
+    "extended_collection_storage": "convert and retain only condition IDs admitted by the causal-tape audit",
+    "score_once_at_or_above_750_conditions": true,
+    "block_2_floor": 750,
+    "block_2_disjoint_and_unchanged": true,
+    "paper_or_live_trading_authorized": false
+  },
+  "limitations": [
+    "The 102 / 631 firing rate uses exact executed baseline trades as a conservative proxy for reconstructed baseline-eligible opportunity conditions; exposure and state gates can suppress executions, so the forward screen may contain more baseline candidates.",
+    "Historical firing and loss rates are nuisance-parameter estimates and may drift; the fixed 750-condition floor avoids adapting to that drift after collection begins.",
+    "The amendment improves support but does not prove profitability, fillability, payoff geometry, breadth, or tail stability.",
+    "Passing two screens still authorizes only one exact measured-latency runtime replay candidate, not live or paper trading."
+  ]
+}

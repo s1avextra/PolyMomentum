@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-05-24T09:21:09.730045+00:00",
+  "source_report_hash": "4cb7ad76f0d5eeb2558942d1118bda072d1f54d8c27a40f73f7e3436f554eafa",
+  "source_label": "aggregate_3d",
+  "source_window": "2026-05-20T03:00:00+00:00..2026-05-24T02:00:00+00:00",
+  "selected_strategy": {
+    "name": "candle_momentum",
+    "version": "1",
+    "params_hash": "d6f02682adf2c22a20a32cbaa9212657daebda48c61cde59e5622f9be8553e74",
+    "risk_profile": "position_pct=0.0500;max_per_market_usd=20.00;stress_dd_cap=0.2400"
+  },
+  "strategy_params": {
+    "default_fee_rate": 0.072,
+    "maker_fee_rate": 0.0,
+    "maker_fill_prob": 0.65,
+    "maker_seed": 42,
+    "max_per_market_usd": 20.0,
+    "max_projected_stressed_drawdown_pct": 0.24,
+    "microstructure": {
+      "max_spread": 1.0,
+      "min_book_depth": 0.0,
+      "min_book_pressure": -1.0
+    },
+    "min_confidence": 0.4,
+    "min_edge": 0.03,
+    "name": "early_c0.40_z0.70_e0.03_ev-1.00_p0.10-0.75_sf10_sg1.0_ss0.00_ms1.00_md0_mp-1.00_mk",
+    "position_pct": 0.05,
+    "prefer_maker": true,
+    "skip_dead_zone": true,
+    "use_perfect_fill": false,
+    "zone_config": {
+      "dead_zone_hi": 0.9,
+      "dead_zone_lo": 0.8,
+      "early_min_confidence": 0.4,
+      "early_min_edge": 0.03,
+      "early_min_z": 0.7,
+      "edge_cap": 0.25,
+      "late_min_confidence": 1.1,
+      "late_min_edge": 1.0,
+      "late_min_z": 100.0,
+      "max_price": 0.75,
+      "min_ev_buffer": -1.0,
+      "min_price": 0.1,
+      "primary_min_z": 100.0,
+      "settlement_guard_minutes": 1.0,
+      "settlement_min_abs_move_usd": 10.0,
+      "settlement_sigma_buffer": 0.0,
+      "terminal_min_confidence": 1.1,
+      "terminal_min_edge": 1.0,
+      "terminal_min_z": 100.0
+    }
+  },
+  "data_manifest_hash": "04f9ff9d403c41e226f457d9dcb7148e1ff0224815def9bc8aa0b9f84c890931",
+  "market_count": 864,
+  "trades": 208,
+  "win_rate": 0.7403846153846154,
+  "total_pnl": 121.36000000000004,
+  "avg_pnl": 0.5834615384615387,
+  "total_fees": 0.0,
+  "sharpe_like": 1.74944042548093,
+  "dominant_zone": "early",
+  "dominant_zone_trade_share": 1.0,
+  "risk_notes": [
+    "selected variant has 25 failed execution attempts: {\"maker_unfilled\": 14, \"post_only_cross\": 11}",
+    "dominant zone early carries 100.0% of selected trades",
+    "wilson win-rate lower bound 95%: 0.677",
+    "multi-report gate: reports=3 profitable=3 min_profitable=3 min_daily_trades=30 min_daily_pnl=0.00 worst_daily_pnl=7.92"
+  ],
+  "promotion_gate": {
+    "min_trades": 180,
+    "min_losses": 1,
+    "min_zone_count": 1,
+    "min_win_rate": 0.7,
+    "min_wilson_win_rate_lower": 0.65,
+    "min_total_pnl": 100.0,
+    "min_sharpe_like": 0.0,
+    "max_unresolved_fills": 0,
+    "max_failed_fills": 30,
+    "max_zone_trade_share": 1.0,
+    "require_complete_data": true
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "ok": true,
+  "mode": "paper",
+  "venue": "paper_only",
+  "release_manifest": {
+    "schema_version": 1,
+    "package": "polymomentum-engine",
+    "version": "0.2.0",
+    "git_sha": "9f5862a9ed6571e19e65ce1e53a0c94e97b48d0d",
+    "build_timestamp": "2026-05-24T14:36:25Z",
+    "binary_path": "/opt/polymomentum/staging/codex-audit1-9f5862a/polymomentum-engine",
+    "mode": "paper",
+    "venue": "paper_only",
+    "config_hash": "43109a5d840f1cb10cfb72fe313c5d06a2eb658c4b9c24fa1ea1d32d81d33eda",
+    "promotion": {
+      "status": "ok",
+      "path": "/opt/polymomentum/staging/codex-audit1-9f5862a/promotion_candidate_continuous_grid_early_stresscap024_aggregate_20260520_24.json",
+      "detail": "promoted 224 trades from aggregate_3d",
+      "source_report_hash": "db2bddb8e0cf28878bf4c2ade8c4bbb2e4d772d47699da8e5cb7c55444e05b82",
+      "data_manifest_hash": "142e4010ff6fe89d868fe016b4c14645061fb378805eb4917290f3209f3e0813",
+      "strategy": {
+        "name": "candle_momentum",
+        "version": "1",
+        "params_hash": "a40d2eb7bc3f1747636f9dfbf4790f3ad4d2c745483d5a6e07da2284b6789df9",
+        "risk_profile": "position_pct=0.0500;max_per_market_usd=20.00;stress_dd_cap=0.2400"
+      },
+      "trades": 224,
+      "win_rate": 0.7723214285714286,
+      "total_pnl": 154.59000000000003
+    }
+  },
+  "checks": [
+    {
+      "name": "runtime_mode",
+      "status": "ok",
+      "detail": "mode=paper"
+    },
+    {
+      "name": "venue_config",
+      "status": "ok",
+      "detail": "venue=paper_only"
+    },
+    {
+      "name": "peer_private_paths",
+      "status": "ok",
+      "detail": "runtime paths stay out of peer bot private directories"
+    },
+    {
+      "name": "data_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/data exists"
+    },
+    {
+      "name": "logs_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs exists"
+    },
+    {
+      "name": "session_log_dir",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs/sessions exists"
+    },
+    {
+      "name": "state_db_parent",
+      "status": "ok",
+      "detail": "/opt/polymomentum/logs/candle exists"
+    },
+    {
+      "name": "kill_switch",
+      "status": "ok",
+      "detail": "kill switch absent at /opt/polymomentum/KILL"
+    },
+    {
+      "name": "promotion_artifact",
+      "status": "ok",
+      "detail": "loaded promoted strategy hash=a40d2eb7bc3f1747636f9dfbf4790f3ad4d2c745483d5a6e07da2284b6789df9 trades=224"
+    },
+    {
+      "name": "settlement_alignment",
+      "status": "ok",
+      "detail": "CANDLE_SETTLEMENT_ALIGNMENT_READY=true"
+    },
+    {
+      "name": "candle_window",
+      "status": "ok",
+      "detail": "CANDLE_WINDOW_MINUTES=5"
+    },
+    {
+      "name": "paper_bankroll",
+      "status": "ok",
+      "detail": "BANKROLL_USD=100.00"
+    },
+    {
+      "name": "live_safeguard",
+      "status": "ok",
+      "detail": "paper mode does not initialize live CLOB order placement"
+    }
+  ]
+}

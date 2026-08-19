@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-22T07:57:12Z",
+  "mechanism_id": "late_window_article_family_v1",
+  "status": "POSTRUN_RUSTFMT_ONLY_BINARY_HASH_UNCHANGED",
+  "frozen_registration": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_holdout_registration.json",
+  "source_hashes": {
+    "momentum_rs_before_rustfmt": "1942ecb32a2db4c2b1004491ff26ec76fb15840dd7278aa8271ebcb531df2682",
+    "momentum_rs_after_rustfmt": "be9b47aec3db7a8e90659e637afc62337d97e2643e85530f240e38356bf99881",
+    "decision_rs_before_rustfmt": "700406ab904852dae600a5ef0ba0540ea59f7006b232eaf7ce045b0d49207301",
+    "decision_rs_after_rustfmt": "3b514e341a2d57fb244b81342629dc5ba186741db378a6039f9a55c2eec0585a"
+  },
+  "binary_integrity": {
+    "exact_replay_binary": "rust_engine/target/release/polymomentum-engine",
+    "sha256_before_rustfmt": "cd1d42f261ac5c8459df133319e61d0dd318c18a885eb4c73f5eb0abbad71238",
+    "sha256_after_rustfmt_and_release_rebuild": "cd1d42f261ac5c8459df133319e61d0dd318c18a885eb4c73f5eb0abbad71238",
+    "unchanged": true
+  },
+  "verification": {
+    "cargo_fmt_check": "PASS",
+    "cargo_test_lib": "498 passed, 0 failed",
+    "article_feature_tests": "2 passed, 0 failed",
+    "decision_evidence_checks": "82 passed"
+  },
+  "interpretation": "Formatting occurred only after every holdout replay completed. The optimized binary hash is byte-identical before and after the formatting-only source change."
+}

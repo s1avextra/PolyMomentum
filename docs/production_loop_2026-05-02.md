@@ -1,0 +1,536 @@
+# Production loop - 2026-05-02
+
+Scope: local diagnostics and local PMXT cache only. No VPS service, peer bot
+directory, peer systemd unit, or shared parquet cache was modified.
+
+## Code changes
+
+- Migrated the raw CLOB order signer and order wire body to the documented CLOB
+  V2 shape in the previous commit on this branch.
+- Corrected authenticated CLOB header names to the current `POLY_*` form.
+- Added read-only authenticated CLOB diagnostics:
+  `clob orders`, `clob order <id>`, and `clob trades`.
+- Added authenticated `clob heartbeat` support and a live-mode heartbeat loop
+  so automated/live maker orders do not miss CLOB heartbeat safety.
+- Added a `wallet` ready/not-ready line based on pUSD, both V2 pUSD allowances,
+  and POL gas.
+- Added visible PMXT/Gamma/harness progress output for long archive backtests.
+
+Official references checked:
+
+- https://docs.polymarket.com/v2-migration
+- https://docs.polymarket.com/trading/orders/create
+- https://docs.polymarket.com/api-reference/authentication
+- https://docs.polymarket.com/api-reference/orders/get-active-orders
+- https://docs.polymarket.com/api-reference/orders/get-order-by-id
+- https://docs.polymarket.com/api-reference/trades/get-trades
+- https://docs.polymarket.com/api-reference/orders/heartbeat
+- https://docs.polymarket.com/developers/CLOB/websocket/wss-user
+
+## Paper loop
+
+Latest post-change run:
+
+- Session: `/private/tmp/polymomentum-prodloop3/logs/sessions/session_20260502_073912.jsonl`
+- Duration: about 1.1 minutes.
+- Feeds connected: Binance, Bybit, OKX, Binance alt, Bybit alt.
+- Gamma markets fetched: 3,146.
+- Active candle contracts scanned: 124.
+- Session diagnostics: `ok=true`.
+- Events: 787 total, 0 malformed.
+- Signal evaluations: 390.
+- Decision trades: 0.
+- Execution attempts: 0.
+- Orders placed/filled/rejected: 0/0/0.
+- System errors/fatal errors: 0/0.
+- Replay validation: `total=390 mismatches=0 (0.00%)`.
+
+Interpretation: current paper runtime plumbing is healthy, but the short sample
+remains inert. It proves schema/replay/runtime liveness, not alpha.
+
+## Backtest loop
+
+Session sweep:
+
+```bash
+polymomentum-engine sweep --session session_20260502_073912.jsonl --min-trades 0
+```
+
+Result:
+
+- All default strategy variants produced 0 trades because the paper session had
+  no decision trades and no resolutions.
+- Parser/replay compatibility is confirmed for the latest session schema.
+- No statistical strategy conclusion can be drawn from this run.
+
+Archive harness attempt:
+
+- Command used one cached local PMXT hour:
+  `2026-04-25T10:00:00Z`, cache
+  `/Users/ttoomm/Documents/PolyMomentum/data/pmxt_cache`, BTC tape
+  `/private/tmp/pm_btc_ticks_20260425.csv`, `--threads 1`.
+- Sandbox run failed on Gamma network access after PMXT condition-id discovery.
+- Network-enabled run was stopped after more than 20 minutes with no user-visible
+  progress.
+
+Fix from that attempt:
+
+- Added explicit PMXT/Gamma/harness progress output so long archive runs show
+  where they are spending time.
+
+Remaining archive issue:
+
+- One-hour parquet harness latency is still too slow for an inner production
+  loop unless the hour is pre-distilled or the sidecar/shared candle cache is
+  reused.
+
+## Cached live replay loop
+
+Reason for this loop: paper/live parity can be tested much faster and more
+causally by replaying cached PMXT L2 events through the same live decision and
+diagnostics path, with a cached BTC tape as the exchange-price feed. This is
+the missing bridge between research backtests and production paper/live runs.
+
+New command:
+
+```bash
+polymomentum-engine live-replay \
+  --start 2026-04-25T10:00:00Z \
+  --end 2026-04-25T10:00:00Z \
+  --cache-dir /Users/ttoomm/Documents/PolyMomentum/data/pmxt_cache \
+  --btc-csv /private/tmp/pm_btc_ticks_20260425.csv \
+  --session-log-dir /private/tmp/polymomentum-live-replay/sessions \
+  --max-contracts 1
+```
+
+Resource controls:
+
+- Cache-only by default; missing PMXT hours fail unless `--allow-download` is
+  explicit.
+- Cached Gamma metadata is used by default; the expensive archive condition-id
+  scan plus network Gamma fill is only enabled by `--allow-gamma-fetch`.
+- `--max-contracts` caps the replay universe for short diagnostics, so a live
+  replay smoke does not contend with local or VPS peer bot workloads.
+- The command now fails fast if the BTC CSV range does not overlap the replay
+  hour. The failed guard test caught the invalid pairing of
+  `2026-04-23T00:00:00Z` with `/private/tmp/pm_btc_ticks_20260425.csv`.
+
+Latest capped replay:
+
+- Session: `/private/tmp/polymomentum-live-replay/sessions/session_20260502_081034.jsonl`
+- Hour: `2026-04-25T10:00:00Z`.
+- Contracts: 1.
+- PMXT events loaded/processed: 219,023 / 219,023.
+- Orders placed/filled/rejected: 1/1/0.
+- Diagnostics: `ok=true`, 0 malformed, 0 system errors, 0 fatal errors.
+- Replay validation: `total=119748 mismatches=0 (0.00%)`.
+
+Current limitation: this proves deterministic decision/diagnostics/fill-model
+parity on cached public data. It cannot prove authenticated live exchange
+behavior, user WebSocket reconciliation, allowance failures, or live CLOB
+reject semantics; those still require paper/live canary loops with credentials.
+
+## Preflight
+
+Paper preflight:
+
+- `ok=true`.
+- Runtime paths are under `/private/tmp/polymomentum-prodloop2`.
+- Peer private path guard passes.
+- Paper mode does not initialize live CLOB order placement.
+
+Live-shaped local preflight:
+
+- Venue/compliance and CLOB V2 flag can pass with explicit env.
+- It still fails safely without live credentials and `ALERT_REQUIRED=1`.
+- This was only a local dry preflight; no order endpoint was posted.
+
+## Current grade
+
+Current state: C+.
+
+Paper runtime, V2 order-shape readiness, and cached live replay parity improved,
+but production capital still needs authenticated user-channel reconciliation
+evidence, funded canary evidence, promotion artifact evidence, and broader
+archive replay coverage.
+
+## Next steps
+
+1. Add authenticated user WebSocket reconciliation and feed order/trade events
+   into `OrderManager`.
+2. Add REST fallback reconciliation using `clob orders`, `clob order`, and
+   `clob trades`; never record a live fill until exchange state confirms it.
+3. Run `wallet` on the VPS and require `live_ready yes` before any live canary.
+4. Run 24-48h current binary in VPS paper mode with daily diagnostics:
+   session ok, replay mismatches, order lifecycle counts, unresolved positions,
+   feed gaps, Gamma errors, and CLOB REST health.
+5. Pre-distill target PMXT hours or use the shared distilled candle cache before
+   broad harness/sweep work.
+6. Promote only a backtest variant with sufficient out-of-sample trades, positive
+   net PnL after fees/slippage, and no single-window concentration.
+7. Only after steps 1-6, run a tiny live canary with manual supervision,
+   alerting enabled, and reconciliation logs checked order by order.
+
+## A+ readiness iteration - 2026-05-02 08:40 UTC
+
+Target A+ gates:
+
+1. Fail closed before live unless venue/compliance, CLOB V2 signing, valid
+   credentials, alerting, and live reconciliation are explicitly ready.
+2. Consume authenticated CLOB user-channel `order` and `trade` events and
+   reconcile them into the local order state machine by venue order ID.
+3. Keep local production loops resource-bounded: cache-only metadata by default,
+   no archive-wide scans unless explicitly requested, and short `--max-contracts`
+   diagnostics for replay/backtest.
+4. Prove the current code with tests, a short real paper run, cached live replay,
+   and bounded archive harness.
+
+Implemented in this iteration:
+
+- Added authenticated CLOB user-channel parser/feed for the documented
+  `wss://ws-subscriptions-clob.polymarket.com/ws/user` subscription shape.
+- Added order-manager reconciliation helpers keyed by venue order ID.
+- Live runtime now subscribes to active condition IDs in live mode and reconciles
+  user-channel order/trade events into `OrderManager` plus session JSONL
+  `order.reconciled` / `order.filled` / `order.rejected` evidence.
+- Live preflight now fails unless
+  `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1` is set.
+- Live preflight now rejects malformed `PRIVATE_KEY` values instead of treating
+  any non-empty string as credential-ready.
+- `harness` now supports `--max-contracts` and uses cached Gamma metadata by
+  default; archive-wide condition-id scans/Gamma fetches require
+  `--allow-gamma-fetch`.
+
+Official references checked for this iteration:
+
+- https://docs.polymarket.com/market-data/websocket/user-channel
+- https://docs.polymarket.com/api-reference/wss/user
+- https://docs.polymarket.com/api-reference/authentication
+- https://docs.polymarket.com/api-reference/trade/get-single-order-by-id
+- https://docs.polymarket.com/api-reference/trade/get-trades
+
+Fresh verification:
+
+- Unit/integration tests: `cargo test` passed, 125 lib tests + 125 binary tests.
+- Paper run: `/private/tmp/polymomentum-a-plus/logs/sessions/session_20260502_083808.jsonl`
+  - Duration: about 2 minutes.
+  - Feeds connected: Binance, Bybit, OKX, Binance alt, Bybit alt.
+  - Active candle contracts scanned: 119.
+  - Diagnostics: `ok=true`, 921 events, 453 signal evaluations, 0 malformed,
+    0 system/fatal errors.
+  - Replay validation: `total=453 mismatches=0 (0.00%)`.
+- Cached live replay:
+  `/private/tmp/polymomentum-live-replay/sessions/session_20260502_085542.jsonl`
+  - 1 BTC candle contract, 219,023 PMXT events processed.
+  - Orders placed/filled/rejected: 1/1/0.
+  - Diagnostics: `ok=true`, 0 malformed, 0 system/fatal errors.
+  - Replay validation: `total=119748 mismatches=0 (0.00%)`.
+- Bounded archive harness:
+  `/private/tmp/polymomentum-a-plus/harness_20260425T10_max1.json`
+  - 1 BTC candle contract, 9 variants, 1 hour, `--threads 1`.
+  - Best variant in this tiny smoke: `loose_maker`, 1 trade, +$6.72.
+  - This validates harness plumbing only; one trade is not promotion evidence.
+- Live-shaped preflight:
+  - Fails closed when `POLYMOMENTUM_LIVE_RECONCILIATION_READY` is absent.
+  - Passes structurally with valid hex key, explicit international venue,
+    compliance acknowledgement, CLOB V2 flag, reconciliation-ready flag, and
+    alerting. This used test credentials only and did not place orders.
+
+Current grade after this iteration: B.
+
+Why not A+ yet:
+
+- No real authenticated user-channel session has been observed with production
+  credentials.
+- No wallet run has proven pUSD balance, both V2 pUSD allowances, and POL gas
+  on the Dublin VPS.
+- No 24-48h VPS paper soak has produced daily diagnostics under shared-resource
+  conditions.
+- No promotion artifact has enough out-of-sample trades and positive net PnL.
+- No funded $1 live canary has been reconciled order by order.
+
+A+ promotion checklist:
+
+1. Run `wallet` on the VPS and require `live_ready yes`.
+2. Run live-shaped preflight on VPS with real credentials, real alerting, and
+   `POLYMOMENTUM_LIVE_RECONCILIATION_READY=1`.
+3. Run 24-48h VPS paper mode with diagnostics every 6h and no peer bot resource
+   degradation.
+4. Run bounded archive harness over many cached/distilled hours, then expand
+   only on a dev box; promote only with sufficient OOS trades and positive net
+   fees/slippage-adjusted PnL.
+5. Run a supervised $1 live canary and require CLOB user-channel/REST evidence
+   for every accepted, filled, canceled, or rejected order.
+
+## A+ readiness iteration - 2026-05-02 12:20 UTC
+
+Target A+ gates tightened:
+
+1. Live startup must verify wallet readiness from chain state, not merely
+   private-key shape.
+2. Wallet diagnostics must distinguish "wallet empty/not approved" from "RPC
+   read failed".
+3. VPS work must not start a second PolyMomentum runtime while an existing
+   orphan process is still running.
+
+Implemented locally:
+
+- Added `polymomentum-engine wallet --json` with `live_ready` and readiness
+  detail.
+- Live `preflight` and `live` startup now append a fail-closed `live_wallet`
+  check in live mode.
+- Wallet balance/allowance reads now propagate RPC failures instead of silently
+  converting failed calls into zero balances.
+- VPS setup template now exposes `CLOB_V2_READY` and
+  `POLYMOMENTUM_LIVE_RECONCILIATION_READY` explicitly.
+
+Fresh local verification:
+
+- Unit/integration tests: `cargo test` passed, 126 lib tests + 126 binary tests.
+- Live-shaped preflight with valid test key and unreachable RPC:
+  `ok=false`, with `live_wallet` failing on `wallet fetch failed: fetch pUSD
+  balance`.
+
+VPS inspection before deployment:
+
+- Host time checked at `2026-05-02T12:15:16Z`.
+- `polymomentum-engine.service` is inactive, but an orphan
+  `/opt/polymomentum/polymomentum-engine` process owned by `polymomentum` has
+  been running for about 7 days.
+- `adgts` is active; `polyarbitrage` service is inactive, while its collector
+  process is active. No peer private directories were read.
+- Because an orphan PolyMomentum runtime exists, do not enable/restart the
+  systemd service until that process is intentionally drained or stopped.
+
+VPS execution after deployment:
+
+- Built Linux candidate `7d24032` on the VPS as a one-off constrained build
+  (`CARGO_BUILD_JOBS=1`, `nice -n 10`) because the local dev box is macOS/ARM
+  and no Linux cross-toolchain was available. This is not acceptable as the
+  long-term build path; use CI/dev-box Linux artifacts next.
+- Installed candidate as `/opt/polymomentum/polymomentum-engine`; paper
+  preflight passed with release manifest `git_sha=7d24032`.
+- Stopped only the unmanaged orphan PolyMomentum process. It had cwd
+  `/opt/polymomentum/releases/2026-04-15T130625Z (deleted)` and no session file
+  descriptor open.
+- Started `polymomentum-engine.service` in paper mode under systemd.
+  - `ActiveState=active`, `SubState=running`, `NRestarts=0`.
+  - Resource limits visible: `CPUQuota=80%`, `MemoryMax=512M`, `TasksMax=256`.
+  - Healthcheck timer active/waiting.
+- Peer status after start:
+  - `adgts`: active/running.
+  - `polyarbitrage`: active/running.
+
+Candidate paper evidence:
+
+- Isolated pre-service VPS candidate run:
+  `/opt/polymomentum/a_plus_candidate_20260502T1400Z/logs/sessions/session_20260502_135842.jsonl`
+  - All public feeds connected.
+  - Gamma fetched 5,246 markets initially; scanner found 111 active candle
+    contracts.
+  - Diagnostics: `ok=true`, 881 events, 429 signal evaluations, 2 orders
+    placed/filled, 2 resolutions, 0 rejects, 0 malformed, 0 errors.
+  - Replay validation: `total=429 mismatches=0 (0.00%)`.
+- Managed systemd paper run:
+  `/opt/polymomentum/logs/sessions/session_20260502_140326.jsonl`
+  - All public feeds connected.
+  - Gamma fetched 5,446 markets; scanner found 120 active candle contracts.
+  - Diagnostics after first minutes: `ok=true`, 817 events, 398 signal
+    evaluations, 0 malformed, 0 system/fatal errors.
+  - Replay validation: `total=398 mismatches=0 (0.00%)`.
+
+Live-readiness blockers found on VPS:
+
+- Wallet is not live-ready:
+  - Address has about 5.38 POL and 6.03 USDC.e.
+  - pUSD balance is 0.
+  - CTF Exchange V2 pUSD allowance is 0.
+  - Neg Risk CTF Exchange V2 pUSD allowance is 0.
+  - New `live_wallet` preflight check fails closed.
+- Production env is not configured for live:
+  - No explicit `VENUE`, `OPERATOR_COUNTRY`,
+    `POLYMOMENTUM_VENUE_COMPLIANCE_OK`, `CLOB_V2_READY`, or
+    `POLYMOMENTUM_LIVE_RECONCILIATION_READY` in `/etc/polymomentum/env`.
+  - No promotion artifact configured.
+- Disk is an operational blocker:
+  - Root filesystem is 93% used; healthcheck raised `HEALTH[disk_full]`.
+  - PolyMomentum-owned sizes: releases ~712 MB, logs ~190 MB, data ~97 MB,
+    old `.venv` ~432 MB. Cleaning enough to get below 90% requires an explicit
+    retention decision because most candidates are pre-existing artifacts.
+
+Current grade after this iteration: A- for paper-mode operations, not A+.
+
+Why still not A+:
+
+- Live is intentionally blocked by wallet readiness and missing promotion
+  artifact.
+- Disk pressure is above the healthcheck threshold.
+- Only a short VPS paper soak has run; A+ still needs 24-48h managed paper
+  evidence under systemd.
+- Build/deploy needs a proper Linux artifact path instead of building on the
+  VPS.
+
+## Follow-up hardening on 2026-05-02T14:53Z
+
+Cleanup completed on the Dublin VPS without touching peer private directories
+or shared PMXT parquet caches:
+
+- Killed stale PolyMomentum-only shell probe PID `375071`.
+- Removed unused PolyMomentum generated artifacts:
+  - `/opt/polymomentum/.pytest_cache`
+  - `/opt/polymomentum/a_plus_candidate_20260502T1400Z`
+  - legacy `/opt/polymomentum/.venv`
+  - legacy `/opt/polymomentum/rust_engine/target`
+  - old release `snapshots` and `snapshots2` directories.
+- Ran `journalctl --vacuum-size=800M` and `apt-get clean`.
+- Root filesystem improved from 93% used / 5.5 GB free to 86% used / 10 GB
+  free.
+- PolyMomentum footprint dropped to about 334 MB.
+- Peer services remained active: `adgts`, `polyarbitrage`, and
+  `polyarbitrage-collector`.
+
+Operational bug found and fixed:
+
+- Managed paper mode was inheriting `BANKROLL_USD=0` from
+  `/etc/polymomentum/env`, so it evaluated signals but could not exercise paper
+  fills.
+- Updated `/etc/polymomentum/env` to `BANKROLL_USD=100` and restarted only
+  `polymomentum-engine.service`.
+- Fresh process environment now has `BANKROLL_USD=100`.
+- Fresh risk state shows `bankroll=100`, `available=60`.
+
+New state-of-the-art guardrails implemented in code:
+
+- Paper preflight now fails closed when `BANKROLL_USD <= 0`.
+- Backtest promotion now selects the best variant that passes all gates rather
+  than blindly selecting the highest PnL candidate.
+- Promotion gates now reject unresolved fills by default, require non-negative
+  Sharpe-like score by default, and reject variants with more than 70% of trades
+  concentrated in one timing zone.
+- Promotion artifacts now record Sharpe-like score and dominant-zone share.
+- Deploy script now refuses local non-Linux release builds and accepts a
+  prebuilt Linux x86_64 artifact via `--binary`.
+- GitHub Actions workflow added to build/test/package the Linux x86_64 engine
+  artifact with SHA256.
+- Soak-report systemd timer added. It writes atomic JSON reports under
+  `/opt/polymomentum/logs/soak/` every 6h with preflight, diagnostics,
+  replay-validation, disk, resource, wallet, and peer-service state.
+
+Latest evidence:
+
+- Soak report:
+  `/opt/polymomentum/logs/soak/soak_20260502T145325Z.json`
+  - `ok=true`
+  - mode `paper`
+  - diagnostics `ok=true`
+  - replay validation `total=702 mismatches=0 (0.00%)`
+  - peers active: `adgts`, `polyarbitrage`, `polyarbitrage-collector`
+- Fresh managed paper session:
+  `/opt/polymomentum/logs/sessions/session_20260502_145117.jsonl`
+  - 75-second slice: 579 signal evaluations, 0 malformed lines, 0 errors.
+  - Replay validation: `total=579 mismatches=0 (0.00%)`.
+  - No trades in this short slice because every evaluation skipped; paper
+    trading is no longer bankroll-blocked.
+
+Current grade after follow-up: A for paper-mode operations.
+
+Remaining A+ blockers:
+
+- Deploy the newly committed Linux artifact from CI so the VPS binary enforces
+  the new zero-bankroll preflight gate.
+- Generate and configure a promoted strategy artifact from sufficient OOS
+  backtest evidence.
+- Run the 24-48h managed paper soak with the 6h soak timer enabled.
+- Live remains intentionally blocked until pUSD balance/allowances, live CLOB
+  V2 readiness, reconciliation readiness, venue-compliance flags, and the
+  promotion artifact are all present.
+
+## CI artifact deployment on 2026-05-03T01:55Z
+
+Executed the next A+ production-loop step from `codex/audit1`:
+
+- Pushed branch `codex/audit1` to GitHub.
+- CI run `25266118714` built the first Linux x86_64 artifact for commit
+  `a3544d9`.
+- Added a deployable branch prerelease publishing step because GitHub Actions
+  artifact downloads require API authentication outside the runner.
+- CI run `25266376583` built and published prerelease asset
+  `ci-codex-audit1` for commit `1da342e`.
+- Downloaded release asset
+  `polymomentum-engine-linux-x86_64`; verified SHA256
+  `6c7d95483a3ade26f8c166d204949e29e57002c29e6ce2059efb6822f8063e77`.
+- Verified binary target locally as Linux x86_64 ELF.
+- Deployed the verified binary to the Dublin VPS with `deploy.sh --binary`.
+
+Peer coexistence:
+
+- First deploy attempt aborted before restart because `adgts` was
+  `deactivating`.
+- Waited until peers settled, then ran remote preflight and restarted only
+  `polymomentum-engine.service`.
+- After restart all services were active:
+  `adgts`, `polyarbitrage`, `polyarbitrage-collector`,
+  `polymomentum-engine`, `polymomentum-soak-report.timer`, and
+  `polymomentum-healthcheck.timer`.
+- PolyMomentum release manifest now reports:
+  - `git_sha=1da342e82c20bb808a8c1b277f4d662e5decb363`
+  - `build_timestamp=2026-05-03T01:11:55Z`
+  - mode `paper`
+  - venue `paper_only`
+
+Clean-state reset:
+
+- Fresh binary preflight passed with `paper_bankroll=ok` and
+  `BANKROLL_USD=100.00`.
+- Found stale paper PnL in `/opt/polymomentum/logs/candle/state.db`
+  (`total_pnl=1681.2951`, 96 old paper trades), which made the post-deploy
+  bankroll look like `1781.3`.
+- Backed up the DB to
+  `/opt/polymomentum/logs/candle/state.db.bak.20260503T014839Z`.
+- Cleared only PolyMomentum paper/risk tables and restarted only
+  `polymomentum-engine.service`.
+
+Fresh post-reset paper evidence:
+
+- Session:
+  `/opt/polymomentum/logs/sessions/session_20260503_014839.jsonl`
+- Diagnostics:
+  - `ok=true`
+  - 1,283 signal evaluations
+  - 2 paper orders placed
+  - 2 paper orders filled
+  - 0 rejects
+  - 0 malformed lines
+  - 0 system/fatal errors
+- Replay validation: `total=1283 mismatches=0 (0.00%)`.
+- Soak report:
+  `/opt/polymomentum/logs/soak/soak_20260503T015449Z.json`
+  - `ok=true`
+  - preflight `ok=true`
+  - diagnostics `ok=true`
+  - replay exit `0`
+  - peers active.
+
+Backtest promotion status:
+
+- Local PMXT cache is available for 72 hours across
+  `2026-04-23T00` through `2026-04-25T23`.
+- BTC tick CSV coverage is available for
+  `2026-04-25T09:59:44Z` through `2026-04-26T00:00:00Z`.
+- A one-hour harness smoke for `2026-04-25T10` was started locally with cached
+  PMXT data and BTC CSV, but was stopped after about 11 minutes because a
+  single-hour replay did not complete promptly.
+- Do not run that promotion workload on the VPS. The remaining promotion step
+  needs either local long-running batch time or a cache/distilled replay
+  acceleration pass before a sufficient OOS artifact can be generated.
+
+Current grade: A for deployed paper-mode runtime with clean bankroll, CI
+artifact deployment, active soak reporting, and first fresh order/fill evidence.
+
+Still not A+:
+
+- No promoted strategy artifact yet; the backtest harness path is too slow for
+  the available local turn window.
+- 24-48h soak evidence has started but cannot be compressed into a short run.
+- Live remains blocked by wallet pUSD balance/allowances and live compliance /
+  reconciliation flags.

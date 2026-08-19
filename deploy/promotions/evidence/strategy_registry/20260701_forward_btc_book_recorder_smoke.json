@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T09:43:07Z",
+  "git_head_before_change": "0bcb7ce05b4baf524f2916783689b4352835a6fe",
+  "git_head_before_change_summary": "0bcb7ce docs: record fresh pmxt orderbook coverage",
+  "purpose": "Test the fresh BTC 5m data path after PMXT/Gamma overlap probes showed no usable post-2026-06-12T03:00:00Z archive coverage.",
+  "verdict": {
+    "promotion_ready": false,
+    "live_ready": false,
+    "status": "KEEP_REPLAY_RESEARCH",
+    "summary": "Historical PMXT/Gamma overlap is still missing for fresh BTC 5m replay, but forward live Gamma+CLOB market data can be collected with the new bounded read-only recorder."
+  },
+  "historical_pmxt_overlap_probe": {
+    "hour": "2026-06-29T00:00:00Z",
+    "pmxt_cache_dir": "/private/tmp/polymomentum_pmxt_overlap_probe_jun29_00",
+    "gamma_cache_dir": "/private/tmp/polymomentum_gamma_overlap_probe_jun29_00",
+    "pmxt_condition_ids": 14440,
+    "gamma_btc_5m_condition_ids": 12,
+    "condition_id_overlap": 0,
+    "pmxt_token_ids": 28880,
+    "gamma_btc_5m_token_ids": 24,
+    "token_id_overlap": 0,
+    "interpretation": "The fresh PMXT parquet exists and contains many markets, but neither condition IDs nor token IDs overlap the Gamma BTC 5m universe for the probed hour."
+  },
+  "forward_recorder_change": {
+    "command": "record-btc-books",
+    "scope": "Read-only exact BTC candle slug discovery plus Polymarket market-websocket frame capture.",
+    "writes": [
+      "gamma_market_cache.json",
+      "market_ws_frames.jsonl",
+      "summary.json"
+    ],
+    "does_not": [
+      "place orders",
+      "read wallet balances",
+      "mutate strategy state",
+      "claim PMXT-compatible replay coverage"
+    ]
+  },
+  "forward_recorder_smoke": {
+    "command": "./rust_engine/target/debug/polymomentum-engine record-btc-books --duration-seconds 20 --windows 3 --out-dir /private/tmp/polymomentum_record_btc_books_smoke_20260701",
+    "out_dir": "/private/tmp/polymomentum_record_btc_books_smoke_20260701",
+    "summary": "/private/tmp/polymomentum_record_btc_books_smoke_20260701/summary.json",
+    "frames_jsonl": "/private/tmp/polymomentum_record_btc_books_smoke_20260701/market_ws_frames.jsonl",
+    "gamma_market_cache": "/private/tmp/polymomentum_record_btc_books_smoke_20260701/gamma_market_cache.json",
+    "duration_seconds": 20,
+    "slugs": [
+      "btc-updown-5m-1782898800",
+      "btc-updown-5m-1782899100",
+      "btc-updown-5m-1782899400"
+    ],
+    "condition_ids": [
+      "0x06968d78a01c7b2f8172d966404e72323739357c9de578de973740c8c524c030",
+      "0x3223e407772d3c74f11117725f0f4eacd2e367892c5e6d7aae9420765892ab26",
+      "0xfb7267b7d6f604fe2e14b90a569352f2ca8ad03a3ea1837e3d0080708340a1bb"
+    ],
+    "token_ids": 6,
+    "seen_token_ids": 6,
+    "frames": 9056,
+    "json_messages": 9061,
+    "book_messages": 288,
+    "price_change_messages": 8642,
+    "other_messages": 131,
+    "bytes": 6445986,
+    "jsonl_lines": 9056,
+    "sample_parse": {
+      "first_frame_type": "array",
+      "first_frame_event_type": "book",
+      "subsequent_frame_event_type": "price_change"
+    }
+  },
+  "verification": {
+    "cargo_fmt_check": "passed",
+    "cargo_build": "passed: cargo build --manifest-path rust_engine/Cargo.toml",
+    "cargo_release_build": "passed: cargo build --release --manifest-path rust_engine/Cargo.toml",
+    "targeted_test": "passed: cargo test --manifest-path rust_engine/Cargo.toml record_market_ws_stats_tracks_books_and_price_changes",
+    "live_capture_smoke": "passed: nonzero frames, all subscribed tokens seen"
+  },
+  "remaining_gap": "The recorder proves forward L2 collection is viable, but promotion still needs conversion into replayable PMXT-like events, BTC tape alignment, market resolution attachment, and enough resolved folds/trades/losses for robust gates."
+}
