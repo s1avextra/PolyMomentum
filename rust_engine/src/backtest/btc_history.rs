@@ -361,6 +361,23 @@ impl BTCHistory {
         self.partial_twap(start_ms, end_ms, end_ms)
     }
 
+    /// Trailing time-weighted average over `[t_ms - window_ms, t_ms)` — the
+    /// value of a "TWAP-60s"-style stream at instant `t_ms`. This is the
+    /// resolving quantity of post-2026-08-08 candle markets as EMPIRICALLY
+    /// identified (parity 100% at |margin|>$20 vs official resolutions,
+    /// evidence 20260819_official_twap_semantics_identification.json):
+    /// Up iff trailing60(close) >= trailing60(open). Fail-closed like
+    /// `twap_between`.
+    pub fn trailing_twap(&self, t_ms: i64, window_ms: i64) -> Option<f64> {
+        if window_ms <= 0 {
+            return None;
+        }
+        if self.timestamps_ms.last().is_none_or(|last| *last < t_ms) {
+            return None;
+        }
+        self.partial_twap(t_ms - window_ms, t_ms, t_ms)
+    }
+
     /// Causal partial TWAP: the time-weighted average of `[start_ms, as_of_ms]`
     /// for a window ending at `end_ms`, using only ticks observable at
     /// `as_of_ms`. This is the strategy-side feature: at `as_of_ms` the final

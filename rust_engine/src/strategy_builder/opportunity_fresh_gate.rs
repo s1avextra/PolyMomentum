@@ -187,16 +187,24 @@ pub fn run_fresh_gate(input: FreshGateInput) -> Result<FreshGateVerdict> {
     for op in &selected {
         let window_seconds = op.elapsed_seconds + op.remaining_seconds;
         let close_ms = op.window_start_ms + (window_seconds * 1000.0).round() as i64;
-        let twap = tape
-            .twap_between(op.window_start_ms, close_ms)
+        // Empirically confirmed official semantics: trailing-60s stream at
+        // close vs at open, ties Up (see
+        // 20260819_official_twap_semantics_identification.json).
+        let stream_open = tape
+            .trailing_twap(op.window_start_ms, 60_000)
             .with_context(|| {
                 format!(
-                    "settlement tape cannot resolve fresh window starting {}",
+                    "settlement tape cannot compute the opening stream value for window {}",
                     op.window_start_ms
                 )
             })?;
-        // Official rule: TWAP >= open resolves Up (ties Up).
-        let outcome = if twap >= op.btc_open { "up" } else { "down" };
+        let stream_close = tape.trailing_twap(close_ms, 60_000).with_context(|| {
+            format!(
+                "settlement tape cannot compute the closing stream value for window {}",
+                op.window_start_ms
+            )
+        })?;
+        let outcome = if stream_close >= stream_open { "up" } else { "down" };
         let won = outcome == op.signal_direction;
         if won {
             wins += 1;

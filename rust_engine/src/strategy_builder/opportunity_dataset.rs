@@ -417,10 +417,19 @@ fn join_discovery_labels(
     (labels, stats)
 }
 
-/// TWAP-era labels: the resolving quantity is the step-function TWAP of the
-/// settlement tape over the full window, and the official rule text resolves
-/// TWAP >= open as Up — exact ties are Up, not excluded. `terminal_btc`
-/// carries the TWAP value (column name kept for schema compatibility).
+/// Milliseconds of the trailing stream window the venue resolves on
+/// ("btc-usd-twap-60s" per live market descriptions).
+const OFFICIAL_STREAM_WINDOW_MS: i64 = 60_000;
+
+/// TWAP-era labels under the EMPIRICALLY CONFIRMED official semantics:
+/// Up iff trailing-60s TWAP at window close >= trailing-60s TWAP at window
+/// open (parity 100% at |margin|>$20 against official resolutions; near-tie
+/// residual is proxy-source noise — see
+/// 20260819_official_twap_semantics_identification.json). Exact ties are Up
+/// per the rule text. `terminal_btc` carries the close-side stream value
+/// (column name kept for schema compatibility). NOTE: the earlier
+/// whole-window-average formula agreed with official resolutions on only
+/// 81% of windows and must never be reintroduced.
 fn join_twap_labels(
     opportunities: &[CausalOpportunity],
     tape: &crate::backtest::btc_history::BTCHistory,
@@ -439,19 +448,22 @@ fn join_twap_labels(
         }
         let window_seconds = opportunity.elapsed_seconds + opportunity.remaining_seconds;
         let close_ms = opportunity.window_start_ms + (window_seconds * 1000.0).round() as i64;
-        let Some(twap) = tape.twap_between(opportunity.window_start_ms, close_ms) else {
+        let (Some(stream_open), Some(stream_close)) = (
+            tape.trailing_twap(opportunity.window_start_ms, OFFICIAL_STREAM_WINDOW_MS),
+            tape.trailing_twap(close_ms, OFFICIAL_STREAM_WINDOW_MS),
+        ) else {
             stats.missing_label_rows += 1;
             continue;
         };
-        if twap == opportunity.btc_open {
+        if stream_close == stream_open {
             // Visible in the manifest, but still labeled: official ties go Up.
             stats.tie_rows += 1;
         }
-        let terminal_direction = if twap >= opportunity.btc_open { "up" } else { "down" };
+        let terminal_direction = if stream_close >= stream_open { "up" } else { "down" };
         let won = Some(opportunity.signal_direction == terminal_direction);
         labels.push(OpportunityLabel {
             opportunity_id: opportunity.opportunity_id.clone(),
-            terminal_btc: twap,
+            terminal_btc: stream_close,
             terminal_direction: terminal_direction.to_string(),
             won,
         });
@@ -894,7 +906,9 @@ mod tests {
         opp_up_tie.remaining_seconds = 180.0;
         let open = opp_up_tie.btc_open;
         let mut tape = BTCHistory::default();
-        tape.timestamps_ms.push(start);
+        // Flat tape from 60s BEFORE the window (the trailing stream at the
+        // open needs pre-window history) through the close.
+        tape.timestamps_ms.push(start - 60_000);
         tape.prices.push(open);
         tape.timestamps_ms.push(start + 300_000);
         tape.prices.push(open);

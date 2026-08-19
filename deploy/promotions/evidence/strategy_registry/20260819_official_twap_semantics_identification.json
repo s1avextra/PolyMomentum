@@ -1,0 +1,43 @@
+{
+ "schema_version": 1,
+ "registration": "official_twap_semantics_identification_20260819",
+ "windows": 510,
+ "scores": {
+  "D_t60end_vs_t60_0": {
+   "n": 510,
+   "agree": 477,
+   "parity": 0.93529
+  },
+  "F_t60end_vs_spot0": {
+   "n": 510,
+   "agree": 451,
+   "parity": 0.88431
+  },
+  "G_lastmin_vs_spot0": {
+   "n": 510,
+   "agree": 451,
+   "parity": 0.88431
+  },
+  "B_meanspot_vs_t60_0": {
+   "n": 510,
+   "agree": 421,
+   "parity": 0.82549
+  },
+  "E_meanspot_incl_vs_spot0": {
+   "n": 510,
+   "agree": 416,
+   "parity": 0.81569
+  },
+  "A_meanspot_vs_spot0": {
+   "n": 510,
+   "agree": 415,
+   "parity": 0.81373
+  },
+  "C_meant60_vs_t60_0": {
+   "n": 510,
+   "agree": 405,
+   "parity": 0.79412
+  }
+ },
+ "best": "D_t60end_vs_t60_0"
+}

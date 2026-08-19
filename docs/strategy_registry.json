@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-19T05:44:33.772566+00:00",
+  "updated_at": "2026-08-19T07:15:57.077205+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -136,19 +136,21 @@
       "strategy_id": "cheap_side_twap_v1",
       "version_id": "sv_42c7693b554ee030",
       "parent_id": "partial_twap_lock_v2",
-      "status": "candidate",
-      "reason": "First candidate-status entry in registry history. 10-day executed-trade reconstruction of the PMXT gap (public Gamma closed-market identity + data-api trade prints + Binance-1s TWAP labels): cheap-bucket (ask<=0.55) signal-side entries at the 240s decision show n=85, WR 76.5%, break-even 27.2%, point edge +0.493, Wilson edge +0.392, positive EVERY day Aug 9-18 with no adaptation decay. Clears the power-corrected discovery gate ~30x over. NOT promoted: one-shot fresh gate on untouched Aug 19+ capture data (>=40 selected entries), exact L2 replay at measured latency, and Chainlink parity remain ahead.",
+      "status": "rejected",
+      "reason": "INVALIDATED by the free official-resolution parity audit before any fresh or live exposure: Gamma outcomePrices agree with the Binance-1s TWAP proxy labels on only 81.4% of the 510 study windows, and under OFFICIAL labels the cheap bucket inverts to WR 17.6% (15/85), point edge -0.096, Wilson edge -0.162. The discovery edge was a label-semantics artifact, most plausibly the official baseline/resolving quantity being the trailing-60s TWAP STREAM values rather than spot: the rule text reads 'price at the beginning' with the resolution source being the btc-usd-twap-60s stream. Candidate status was never promoted; no fresh outcome was consumed; no live order existed.",
       "artifact_path": null,
       "metrics_path": null,
       "evidence_paths": [
         "deploy/promotions/evidence/strategy_registry/20260819_adaptation_persistence_study.json",
-        "deploy/promotions/evidence/strategy_registry/20260819_cheap_side_twap_v1_preregistration.md"
+        "deploy/promotions/evidence/strategy_registry/20260819_cheap_side_twap_v1_preregistration.md",
+        "deploy/promotions/evidence/strategy_registry/20260819_official_resolution_parity.json"
       ],
       "notes": [
-        "Fresh-gate mechanics: opportunity-fresh-gate with consumed marker; terminal rule fail->tombstone, no retuning. Economics/capacity study is a promotion prerequisite."
+        "Fresh-gate mechanics: opportunity-fresh-gate with consumed marker; terminal rule fail->tombstone, no retuning. Economics/capacity study is a promotion prerequisite.",
+        "Follow-up is label CORRECTION, not retuning: empirically identify the official TWAP semantics by parity-ranking candidate label formulas on the same free data, then re-derive the landscape under confirmed semantics as a new registration. All future labels must use official Gamma resolutions directly."
       ],
       "first_seen_at": "2026-08-19T05:44:33.772566+00:00",
-      "updated_at": "2026-08-19T05:44:33.772566+00:00",
+      "updated_at": "2026-08-19T07:15:57.077205+00:00",
       "events": [
         {
           "at": "2026-08-19T05:44:33.772566+00:00",
@@ -160,6 +162,17 @@
           ],
           "notes": [
             "Fresh-gate mechanics: opportunity-fresh-gate with consumed marker; terminal rule fail->tombstone, no retuning. Economics/capacity study is a promotion prerequisite."
+          ]
+        },
+        {
+          "at": "2026-08-19T07:15:57.077205+00:00",
+          "status": "rejected",
+          "reason": "INVALIDATED by the free official-resolution parity audit before any fresh or live exposure: Gamma outcomePrices agree with the Binance-1s TWAP proxy labels on only 81.4% of the 510 study windows, and under OFFICIAL labels the cheap bucket inverts to WR 17.6% (15/85), point edge -0.096, Wilson edge -0.162. The discovery edge was a label-semantics artifact, most plausibly the official baseline/resolving quantity being the trailing-60s TWAP STREAM values rather than spot: the rule text reads 'price at the beginning' with the resolution source being the btc-usd-twap-60s stream. Candidate status was never promoted; no fresh outcome was consumed; no live order existed.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260819_official_resolution_parity.json"
+          ],
+          "notes": [
+            "Follow-up is label CORRECTION, not retuning: empirically identify the official TWAP semantics by parity-ranking candidate label formulas on the same free data, then re-derive the landscape under confirmed semantics as a new registration. All future labels must use official Gamma resolutions directly."
           ]
         }
       ]
