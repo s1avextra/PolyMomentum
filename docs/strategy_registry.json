@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-19T08:13:28.879670+00:00",
+  "updated_at": "2026-08-19T08:58:20.153050+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -629,19 +629,21 @@
       "version_id": "sv_8e4262279f63e126",
       "parent_id": "cheap_side_twap_v1",
       "status": "candidate",
-      "reason": "Twice-independently-confirmed under OFFICIAL labels and executed third-party entry prices: buy the BTC-momentum side at the 240s decision when priced (0.55, 0.92]. Primary sample n=132 Wilson edge +0.022/+0.042 (9/10 days positive); DISJOINT-hours confirmation n=152, WR 91.4% vs BE 80.8%, Wilson edge +0.051, positive ALL 10 days. Mechanism explained by the confirmed trailing-60s-stream resolution semantics: smoothed closes suppress last-minute reversals while band prices still carry reversal premium; cheap side and complement are negative, extreme favorites fee-erased. No threshold search: the band is the union of pre-existing calibration buckets that clear fees, fixed before the disjoint fetch.",
+      "reason": "Capacity/economics prerequisite satisfied at analysis level: median executed band notional $976/event across all 284 discovery windows (zero empty events, ~57 events/day full coverage); gross $28-550/day at $5-100 stakes before explicitly-listed haircuts. Fresh gate and fill-rate evidence remain the open prerequisites.",
       "artifact_path": null,
       "metrics_path": null,
       "evidence_paths": [
         "deploy/promotions/evidence/strategy_registry/20260819_complement_and_band_disjoint_study.json",
         "deploy/promotions/evidence/strategy_registry/20260819_official_resolution_parity.json",
-        "deploy/promotions/evidence/strategy_registry/20260819_signal_favorite_band_official_v1_preregistration.md"
+        "deploy/promotions/evidence/strategy_registry/20260819_signal_favorite_band_official_v1_preregistration.md",
+        "deploy/promotions/evidence/strategy_registry/20260819_band_capacity_study.json"
       ],
       "notes": [
-        "Fresh gate: one-shot on capture-campaign books via exact L2 replay + official-resolution labels, >=110 band entries (~6-10 days), Wilson edge > +0.02, fail -> tombstone. Promotion additionally requires capacity/economics and live fill-rate evidence."
+        "Fresh gate: one-shot on capture-campaign books via exact L2 replay + official-resolution labels, >=110 band entries (~6-10 days), Wilson edge > +0.02, fail -> tombstone. Promotion additionally requires capacity/economics and live fill-rate evidence.",
+        "Economics doc: docs/band_economics_2026-08-19.md"
       ],
       "first_seen_at": "2026-08-19T08:13:28.879670+00:00",
-      "updated_at": "2026-08-19T08:13:28.879670+00:00",
+      "updated_at": "2026-08-19T08:58:20.153050+00:00",
       "events": [
         {
           "at": "2026-08-19T08:13:28.879670+00:00",
@@ -654,6 +656,17 @@
           ],
           "notes": [
             "Fresh gate: one-shot on capture-campaign books via exact L2 replay + official-resolution labels, >=110 band entries (~6-10 days), Wilson edge > +0.02, fail -> tombstone. Promotion additionally requires capacity/economics and live fill-rate evidence."
+          ]
+        },
+        {
+          "at": "2026-08-19T08:58:20.153050+00:00",
+          "status": "candidate",
+          "reason": "Capacity/economics prerequisite satisfied at analysis level: median executed band notional $976/event across all 284 discovery windows (zero empty events, ~57 events/day full coverage); gross $28-550/day at $5-100 stakes before explicitly-listed haircuts. Fresh gate and fill-rate evidence remain the open prerequisites.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260819_band_capacity_study.json"
+          ],
+          "notes": [
+            "Economics doc: docs/band_economics_2026-08-19.md"
           ]
         }
       ]
