@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-17T17:30:35.450047+00:00",
+  "updated_at": "2026-08-19T05:02:43.403100+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -441,6 +441,38 @@
           ],
           "notes": [
             "Successor v2 may recalibrate lock-strength floors to the observed distribution (e.g. 0.25/0.5/1.0) as a NEW registration - this one never opened fresh outcomes so the redesign is not tuning-on-outcomes. Blocking prerequisite for any TWAP-era family: resume fresh book capture (VPS) since the archive outage makes it the only source."
+          ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "partial_twap_lock_v2",
+      "version_id": "sv_f869a41f6924c88d",
+      "parent_id": "partial_twap_lock_v1",
+      "status": "questionable",
+      "reason": "8.1x data expansion via --distilled-input (57 canary-captured hours, 1872 rows, 1609 TWAP discovery labels) still terminates insufficient_support_data_blocked: max per-policy recent support 24 vs the 100-fill gate. Structural causes: discovery era lost the most hours to capture gaps, cheap-ask (<=0.55) lead-matched events are naturally rare, and single-book tables discard lead-side mismatches. Diagnostic-only signal remains strongly positive (recent point edges +0.6 at cheap caps, n=3-4). Fresh (263 rows, Aug 11 04:00-16:00) never opened; budget unspent.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_screen.json",
+        "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_preregistration.md"
+      ],
+      "notes": [
+        "Forward path is structural, not threshold-tuning: (a) capture campaign accumulates fresh TWAP-era books daily; (b) a v3 family should use the paired-book feature store so the lead-favoured side is executable regardless of signal side, roughly doubling eligible support; (c) adaptation-persistence must be answered on Aug 19+ data before any live consideration."
+      ],
+      "first_seen_at": "2026-08-19T05:02:43.403100+00:00",
+      "updated_at": "2026-08-19T05:02:43.403100+00:00",
+      "events": [
+        {
+          "at": "2026-08-19T05:02:43.403100+00:00",
+          "status": "questionable",
+          "reason": "8.1x data expansion via --distilled-input (57 canary-captured hours, 1872 rows, 1609 TWAP discovery labels) still terminates insufficient_support_data_blocked: max per-policy recent support 24 vs the 100-fill gate. Structural causes: discovery era lost the most hours to capture gaps, cheap-ask (<=0.55) lead-matched events are naturally rare, and single-book tables discard lead-side mismatches. Diagnostic-only signal remains strongly positive (recent point edges +0.6 at cheap caps, n=3-4). Fresh (263 rows, Aug 11 04:00-16:00) never opened; budget unspent.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_screen.json",
+            "deploy/promotions/evidence/strategy_registry/20260819_partial_twap_lock_v2_preregistration.md"
+          ],
+          "notes": [
+            "Forward path is structural, not threshold-tuning: (a) capture campaign accumulates fresh TWAP-era books daily; (b) a v3 family should use the paired-book feature store so the lead-favoured side is executable regardless of signal side, roughly doubling eligible support; (c) adaptation-persistence must be answered on Aug 19+ data before any live consideration."
           ]
         }
       ]

@@ -31,14 +31,18 @@ import json
 import zipfile
 from pathlib import Path
 
-OLDER_BOUNDARY = int(dt.datetime(2026, 8, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp())
-DISCOVERY_BOUNDARY = int(dt.datetime(2026, 8, 9, 17, 0, tzinfo=dt.timezone.utc).timestamp())
+DEFAULT_OLDER_BOUNDARY = "2026-08-09T00:00:00Z"
+DEFAULT_DISCOVERY_BOUNDARY = "2026-08-09T17:00:00Z"
 
 
-def era_tag(window_start: int) -> str:
-    if window_start < OLDER_BOUNDARY:
+def parse_rfc(ts: str) -> int:
+    return int(dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+
+
+def era_tag(window_start: int, older_before: int, discovery_before: int) -> str:
+    if window_start < older_before:
         return "older"
-    if window_start < DISCOVERY_BOUNDARY:
+    if window_start < discovery_before:
         return "recent_discovery"
     return "fresh_holdout"
 
@@ -70,7 +74,13 @@ def main() -> None:
     ap.add_argument("--span-end", required=True, help="RFC3339, exclusive")
     ap.add_argument("--windows-out", required=True)
     ap.add_argument("--tape-out", required=True)
+    ap.add_argument("--older-before", default=DEFAULT_OLDER_BOUNDARY,
+                    help="windows before this are tagged older")
+    ap.add_argument("--discovery-before", default=DEFAULT_DISCOVERY_BOUNDARY,
+                    help="windows before this (and >= older-before) are recent_discovery; later ones fresh_holdout")
     args = ap.parse_args()
+    older_before = parse_rfc(args.older_before)
+    discovery_before = parse_rfc(args.discovery_before)
 
     span_start = int(dt.datetime.fromisoformat(args.span_start.replace("Z", "+00:00")).timestamp())
     span_end = int(dt.datetime.fromisoformat(args.span_end.replace("Z", "+00:00")).timestamp())
@@ -90,7 +100,7 @@ def main() -> None:
     for ws in range(span_start, span_end, 300):
         start = dt.datetime.fromtimestamp(ws, dt.timezone.utc)
         row = {
-            "chronological_window": era_tag(ws),
+            "chronological_window": era_tag(ws, older_before, discovery_before),
             "p0": opens[ws],
             "p60": opens[ws + 60],
             "p120": opens[ws + 120],
