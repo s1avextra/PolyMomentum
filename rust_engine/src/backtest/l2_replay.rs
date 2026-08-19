@@ -317,6 +317,33 @@ impl L2BacktestEngine {
                 self.pending_orders.push(order);
             }
         }
+
+        // End-of-stream: orders still pending when the tape runs out were
+        // previously dropped silently, desyncing the resolver's 1:1
+        // fill/decision pairing (a hard crash downstream). No fill is
+        // granted after the last event — the book beyond the stream is
+        // unknowable — so each becomes an explicit failure record.
+        if !self.pending_orders.is_empty() {
+            let stranded: Vec<BacktestOrder> = self.pending_orders.drain(..).collect();
+            let mut failures = Vec::with_capacity(stranded.len());
+            for order in stranded {
+                let fill_ts = order.timestamp_s + self.latency.insert_ms as f64 / 1000.0;
+                failures.push(BacktestFill {
+                    order,
+                    fill_timestamp_s: fill_ts,
+                    fill_price: 0.0,
+                    filled_size: 0.0,
+                    cost: 0.0,
+                    fee: 0.0,
+                    slippage: 0.0,
+                    book_age_ms: 0.0,
+                    success: false,
+                    reason: "stream_end_unfilled".to_string(),
+                });
+            }
+            self.fills.extend(failures.iter().cloned());
+            strategy.on_fills(&failures);
+        }
     }
 
     fn record_history(&mut self, token_id: &str, ts: f64, mid: f64) {
@@ -660,6 +687,26 @@ mod tests {
         assert!(f.success);
         assert!((f.fill_price - 0.52).abs() < 1e-9); // ten shares fit at the visible ask
         assert!((f.fill_timestamp_s - 1.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stream_end_converts_pending_orders_to_explicit_failures() {
+        // The order fires on the FINAL event; no later event exists to flush
+        // it. It must become a stream_end_unfilled failure record (keeping
+        // the resolver's fill/decision pairing intact), never a silent drop
+        // and never a fill against an unknowable post-stream book.
+        let mut e = L2BacktestEngine::new(
+            FillModel::BookWalkTaker(BookWalkTaker::default()),
+            StaticLatencyConfig { insert_ms: 50 },
+        );
+        let mut s = OneShotBuy { fired: false };
+        let events = vec![snap_event("t", 1.0, 0.50, 0.52)];
+        e.replay(events, &mut s, DEFAULT_CRYPTO_TAKER_FEE_RATE);
+        assert_eq!(e.fills.len(), 1);
+        let f = &e.fills[0];
+        assert!(!f.success);
+        assert_eq!(f.reason, "stream_end_unfilled");
+        assert_eq!(f.filled_size, 0.0);
     }
 
     #[test]

@@ -1969,7 +1969,7 @@ pub async fn run_harness(
             .iter()
             .map(|state| state.breaker.clone())
             .collect();
-        let run = |(idx, v): (usize, &StrategyVariant)| -> BacktestResults {
+        let run = |(idx, v): (usize, &StrategyVariant)| -> Result<BacktestResults> {
             let fm = build_fill_model(v);
             let mut engine = L2BacktestEngine::new(fm, cfg.latency);
             let mut strategy = CandleBacktestStrategy::new_with_breaker_and_fair_value_history(
@@ -2012,15 +2012,15 @@ pub async fn run_harness(
                 &decisions,
                 &windows,
                 &cfg.settlement_btc_history,
-            );
+            )?;
             results.breaker = breaker;
             results.diagnostics = diagnostics;
-            results
+            Ok(results)
         };
         let per_variant: Vec<BacktestResults> = if let Some(pool) = &local_pool {
-            pool.install(|| variants.par_iter().enumerate().map(run).collect())
+            pool.install(|| variants.par_iter().enumerate().map(run).collect::<Result<Vec<_>>>())?
         } else {
-            variants.par_iter().enumerate().map(run).collect()
+            variants.par_iter().enumerate().map(run).collect::<Result<Vec<_>>>()?
         };
 
         // Persist this hour's per-variant results BEFORE merging — so an
@@ -2274,7 +2274,7 @@ async fn run_harness_continuous(
         }
     }
 
-    Ok(states
+    states
         .into_iter()
         .map(|mut state| {
             state.strategy.settle_all_positions();
@@ -2287,16 +2287,16 @@ async fn run_harness_continuous(
                 &decisions,
                 &windows,
                 &cfg.settlement_btc_history,
-            );
+            )?;
             results.breaker = breaker;
             results.diagnostics = diagnostics;
-            HarnessRun {
+            Ok(HarnessRun {
                 variant: state.variant,
                 results,
                 calibration_opportunities,
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Pause sentinel: `<checkpoint_dir>/PAUSE` exists, OR the `stop_flag` was

@@ -517,13 +517,15 @@ pub struct CandleWindow {
 
 /// Resolve a list of fills + decisions against the BTC tape. Each fill must
 /// carry a `condition_id` (via `BacktestFill.order.condition_id`) that can be
-/// looked up in `windows`.
+/// looked up in `windows`. A fill/decision misalignment returns an error
+/// carrying both counts and sample condition ids instead of panicking the
+/// whole harness run.
 pub fn resolve_fills(
     fills: &[BacktestFill],
     decisions: &[CandleDecision],
     windows: &[CandleWindow],
     btc_history: &BTCHistory,
-) -> BacktestResults {
+) -> anyhow::Result<BacktestResults> {
     let entry_fills: Vec<&BacktestFill> = fills
         .iter()
         .filter(|fill| {
@@ -531,11 +533,26 @@ pub fn resolve_fills(
                 && !fill.order.intent_id.contains(":complete_set_lock:")
         })
         .collect();
-    assert_eq!(
-        entry_fills.len(),
-        decisions.len(),
-        "resolve_fills: entry fills and decisions must align 1:1"
-    );
+    if entry_fills.len() != decisions.len() {
+        let sample_fills: Vec<&str> = entry_fills
+            .iter()
+            .map(|fill| fill.order.condition_id.as_str())
+            .take(3)
+            .collect();
+        let sample_decisions: Vec<&str> = decisions
+            .iter()
+            .map(|decision| decision.zone.as_str())
+            .take(3)
+            .collect();
+        anyhow::bail!(
+            "resolve_fills: entry fills ({}) and decisions ({}) must align 1:1; \
+             fill cids {:?} vs decision cids {:?}",
+            entry_fills.len(),
+            decisions.len(),
+            sample_fills,
+            sample_decisions,
+        );
+    }
 
     let window_by_cid: BTreeMap<String, &CandleWindow> = windows
         .iter()
@@ -712,7 +729,7 @@ pub fn resolve_fills(
             results.unresolved_fills.push(hedge_fill.clone());
         }
     }
-    results
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -819,7 +836,7 @@ mod tests {
         let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("up")];
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
         assert_eq!(res.n_trades(), 1);
         let t = &res.trades[0];
         assert!(t.won);
@@ -837,7 +854,7 @@ mod tests {
         let windows = vec![mk_window("c1", None)];
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("down")]; // BTC went up, we predicted down → loss
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
         assert_eq!(res.n_trades(), 1);
         let t = &res.trades[0];
         assert!(!t.won);
@@ -855,7 +872,7 @@ mod tests {
         ];
         let decisions = vec![mk_decision("down")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.execution_attempts, 2);
         assert_eq!(res.fills_success, 2);
@@ -880,7 +897,7 @@ mod tests {
         ];
         let decisions = vec![mk_decision("down")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.n_trades(), 1);
         assert!(res.unresolved_fills.is_empty());
@@ -899,7 +916,7 @@ mod tests {
         ];
         let decisions = vec![mk_decision("up")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.execution_attempts, 2);
         assert_eq!(res.fills_success, 2);
@@ -937,7 +954,7 @@ mod tests {
         let fills = vec![entry, failed_hedge];
         let decisions = vec![mk_decision("up")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.execution_attempts, 2);
         assert_eq!(res.fills_failed, 1);
@@ -954,7 +971,7 @@ mod tests {
         let fills = vec![mk_fill("c1", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("down")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.n_trades(), 1);
         let t = &res.trades[0];
@@ -971,7 +988,7 @@ mod tests {
         let h = mk_history();
         let fills = vec![mk_fill("missing", 0.40, 10.0, 0.10)];
         let decisions = vec![mk_decision("up")];
-        let res = resolve_fills(&fills, &decisions, &[], &h);
+        let res = resolve_fills(&fills, &decisions, &[], &h).unwrap();
         assert_eq!(res.n_trades(), 0);
         assert_eq!(res.unresolved_fills.len(), 1);
     }
@@ -983,7 +1000,7 @@ mod tests {
         let fills = vec![mk_failed_fill("maker_unfilled")];
         let decisions = vec![mk_decision("up")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
 
         assert_eq!(res.n_trades(), 0);
         assert_eq!(res.fills_failed, 1);
@@ -1001,7 +1018,7 @@ mod tests {
         ];
         let decisions = vec![mk_decision("up"), mk_decision("down")];
 
-        let res = resolve_fills(&fills, &decisions, &windows, &h);
+        let res = resolve_fills(&fills, &decisions, &windows, &h).unwrap();
         let pnl = res.pnl_diagnostics();
 
         assert_eq!(pnl.trades, 2);
@@ -1038,7 +1055,7 @@ mod tests {
             .regime
             .attach_orderbook_quality_inputs(Some(0.006), Some(120.0));
 
-        let res = resolve_fills(&fills, &[decision], &windows, &h);
+        let res = resolve_fills(&fills, &[decision], &windows, &h).unwrap();
         let by_regime = res.by_regime();
         let by_bucket = res.by_causal_bucket();
 
