@@ -47,14 +47,26 @@ pub struct OpportunityExactReplayInput {
     pub policy_search_report_path: PathBuf,
     pub cache_dir: PathBuf,
     pub output_path: PathBuf,
+    /// When set, hour books come from `<dir>/<hour>.v1.candles.jsonl.gz`
+    /// (forward-capture converter output) instead of PMXT parquets —
+    /// the exact-replay path for capture-campaign hours the archive never
+    /// published (e.g. the signal_favorite_band fresh gate).
+    pub distilled_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReplaySourceHour {
     pub hour: String,
     pub pmxt_parquet: HashedSource,
+    /// "pmxt_parquet" | "distilled_v1"; absent in pre-2026-08-19 reports.
+    #[serde(default = "default_replay_book_source_kind")]
+    pub book_source_kind: String,
     pub target_condition_count: usize,
     pub decoded_target_events: usize,
+}
+
+fn default_replay_book_source_kind() -> String {
+    "pmxt_parquet".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -309,26 +321,48 @@ pub fn replay(input: OpportunityExactReplayInput) -> Result<OpportunityExactRepl
             .iter()
             .map(|target| target.opportunity.condition_id.clone())
             .collect::<HashSet<_>>();
-        let pmxt_path = loader.cache_path_for_hour(hour);
-        if !pmxt_path.is_file() {
-            bail!(
-                "exact replay requires cached PMXT hour at {}",
-                pmxt_path.display()
-            );
-        }
-        let pmxt_sha256 = sha256_file(&pmxt_path)?;
-        let events = loader
-            .load_cached_hour(hour, Some(&condition_ids))
-            .with_context(|| format!("row-filter exact-replay PMXT hour {hour}"))?;
+        let (events, source_path, source_sha256, book_source_kind) = match &input.distilled_dir {
+            Some(dir) => {
+                let distilled_path =
+                    dir.join(format!("{}.v1.candles.jsonl.gz", hour.format("%Y-%m-%dT%H")));
+                if !distilled_path.is_file() {
+                    bail!(
+                        "exact replay requires distilled hour at {}",
+                        distilled_path.display()
+                    );
+                }
+                let sha = sha256_file(&distilled_path)?;
+                let (mut events, _cids) =
+                    crate::backtest::distill::read_distilled(&distilled_path)
+                        .with_context(|| format!("read distilled {}", distilled_path.display()))?;
+                events.retain(|event| condition_ids.contains(&event.market_id));
+                (events, distilled_path, sha, "distilled_v1".to_string())
+            }
+            None => {
+                let pmxt_path = loader.cache_path_for_hour(hour);
+                if !pmxt_path.is_file() {
+                    bail!(
+                        "exact replay requires cached PMXT hour at {}",
+                        pmxt_path.display()
+                    );
+                }
+                let sha = sha256_file(&pmxt_path)?;
+                let events = loader
+                    .load_cached_hour(hour, Some(&condition_ids))
+                    .with_context(|| format!("row-filter exact-replay PMXT hour {hour}"))?;
+                (events, pmxt_path, sha, "pmxt_parquet".to_string())
+            }
+        };
         if events.is_empty() {
-            bail!("exact-replay PMXT hour {hour} contains zero target events");
+            bail!("exact-replay book source for hour {hour} contains zero target events");
         }
         source_pmxt_hours.push(ReplaySourceHour {
             hour: hour.to_rfc3339_opts(SecondsFormat::Secs, true),
             pmxt_parquet: HashedSource {
-                path: pmxt_path.display().to_string(),
-                sha256: pmxt_sha256,
+                path: source_path.display().to_string(),
+                sha256: source_sha256,
             },
+            book_source_kind,
             target_condition_count: condition_ids.len(),
             decoded_target_events: events.len(),
         });

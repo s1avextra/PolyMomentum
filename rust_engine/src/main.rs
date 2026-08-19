@@ -1551,6 +1551,10 @@ enum StrategyBuilderCommand {
         /// PMXT v2 parquet cache containing every discovery hour in the plan.
         #[arg(long)]
         cache_dir: String,
+        /// Read hour books from `<dir>/<hour>.v1.candles.jsonl.gz` (forward
+        /// capture) instead of PMXT parquets.
+        #[arg(long)]
+        distilled_dir: Option<String>,
         /// Atomic JSON exact-replay report.
         #[arg(long)]
         output: String,
@@ -3739,6 +3743,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
             labels_manifest,
             policy_search_report,
             cache_dir,
+            distilled_dir,
             output,
         } => {
             let result = strategy_builder::opportunity_replay::replay(
@@ -3748,6 +3753,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     policy_search_report_path: std::path::PathBuf::from(policy_search_report),
                     cache_dir: std::path::PathBuf::from(cache_dir),
                     output_path: std::path::PathBuf::from(output),
+                    distilled_dir: distilled_dir.map(std::path::PathBuf::from),
                 },
             );
             match result {
