@@ -1,0 +1,2041 @@
+{
+ "schema_version": 1,
+ "registration": "band_capacity_study_20260819",
+ "band": [
+  0.55,
+  0.92
+ ],
+ "band_windows_measured": 284,
+ "days_covered": 10,
+ "entry_window_s": 30,
+ "executed_band_notional_per_event_usd": {
+  "p25": 434.24,
+  "median": 975.85,
+  "p75": 1534.23,
+  "mean": 1075.74,
+  "zero_volume_events": 0
+ },
+ "events_per_day_at_full_coverage": 56.8,
+ "daily_models_at_point_edge_0.10": [
+  {
+   "stake_usd": 5,
+   "avg_fillable_usd_per_event": 4.99,
+   "share_of_events_with_full_stake_depth": 0.996,
+   "gross_expected_usd_per_day": 28.33
+  },
+  {
+   "stake_usd": 20,
+   "avg_fillable_usd_per_event": 19.88,
+   "share_of_events_with_full_stake_depth": 0.989,
+   "gross_expected_usd_per_day": 112.92
+  },
+  {
+   "stake_usd": 50,
+   "avg_fillable_usd_per_event": 49.24,
+   "share_of_events_with_full_stake_depth": 0.965,
+   "gross_expected_usd_per_day": 279.7
+  },
+  {
+   "stake_usd": 100,
+   "avg_fillable_usd_per_event": 96.78,
+   "share_of_events_with_full_stake_depth": 0.944,
+   "gross_expected_usd_per_day": 549.69
+  }
+ ],
+ "haircuts_not_applied": [
+  "our order adds demand and competes with the measured prints (measured volume is a LOWER bound on depth but an UPPER bound on what we can take without moving price)",
+  "fill rate for OUR taker order is unproven until live/exact-replay evidence",
+  "edge decay/adaptation after our own participation",
+  "VPS latency vs print timing"
+ ],
+ "rows": [
+  {
+   "window_start": 1786239900,
+   "prints": 120,
+   "shares": 1844.431399,
+   "notional_usd": 1557.98,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786251600,
+   "prints": 48,
+   "shares": 481.586024,
+   "notional_usd": 412.84,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786252800,
+   "prints": 123,
+   "shares": 1227.642342,
+   "notional_usd": 1085.35,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786254000,
+   "prints": 41,
+   "shares": 672.1517990000001,
+   "notional_usd": 577.91,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786254900,
+   "prints": 16,
+   "shares": 102.10929800000001,
+   "notional_usd": 93.35,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786266600,
+   "prints": 7,
+   "shares": 59.374424,
+   "notional_usd": 49.69,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786269000,
+   "prints": 101,
+   "shares": 2063.076245999999,
+   "notional_usd": 1878.81,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786269300,
+   "prints": 6,
+   "shares": 34.260858,
+   "notional_usd": 31.52,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786282500,
+   "prints": 14,
+   "shares": 190.727041,
+   "notional_usd": 169.84,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786283400,
+   "prints": 1,
+   "shares": 1.884613,
+   "notional_usd": 1.47,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786297200,
+   "prints": 72,
+   "shares": 1377.4429850000001,
+   "notional_usd": 1016.86,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786312500,
+   "prints": 21,
+   "shares": 318.210368,
+   "notional_usd": 291.4,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786323900,
+   "prints": 112,
+   "shares": 1760.8419890000005,
+   "notional_usd": 1492.59,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786324200,
+   "prints": 92,
+   "shares": 989.8585650000002,
+   "notional_usd": 831.66,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786324800,
+   "prints": 36,
+   "shares": 406.1953290000001,
+   "notional_usd": 271.3,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786325100,
+   "prints": 14,
+   "shares": 238.69194000000005,
+   "notional_usd": 154.74,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786326000,
+   "prints": 67,
+   "shares": 1110.4174759999999,
+   "notional_usd": 803.78,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786338000,
+   "prints": 46,
+   "shares": 343.596649,
+   "notional_usd": 309.31,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786339500,
+   "prints": 27,
+   "shares": 403.503007,
+   "notional_usd": 358.88,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786353300,
+   "prints": 133,
+   "shares": 1079.0483480000007,
+   "notional_usd": 945.53,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786353600,
+   "prints": 37,
+   "shares": 417.368348,
+   "notional_usd": 376.88,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786355400,
+   "prints": 154,
+   "shares": 1645.2929950000014,
+   "notional_usd": 1423.0,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786355700,
+   "prints": 81,
+   "shares": 1272.890114,
+   "notional_usd": 1124.75,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786383300,
+   "prints": 94,
+   "shares": 1720.2247780000007,
+   "notional_usd": 1491.59,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786384200,
+   "prints": 91,
+   "shares": 1520.1699530000003,
+   "notional_usd": 1328.91,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786396800,
+   "prints": 149,
+   "shares": 2428.7941609999993,
+   "notional_usd": 1874.42,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786397400,
+   "prints": 137,
+   "shares": 2313.6780639999997,
+   "notional_usd": 1911.15,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786398600,
+   "prints": 138,
+   "shares": 2151.66851,
+   "notional_usd": 1855.38,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786411500,
+   "prints": 169,
+   "shares": 2677.1535489999997,
+   "notional_usd": 2161.36,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786413300,
+   "prints": 4,
+   "shares": 15.17391,
+   "notional_usd": 13.96,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786424400,
+   "prints": 83,
+   "shares": 1871.9046959999998,
+   "notional_usd": 1655.68,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786424700,
+   "prints": 54,
+   "shares": 340.50339199999996,
+   "notional_usd": 307.88,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786425000,
+   "prints": 55,
+   "shares": 606.599391,
+   "notional_usd": 520.39,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786427700,
+   "prints": 106,
+   "shares": 1194.200474,
+   "notional_usd": 1041.72,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786440900,
+   "prints": 61,
+   "shares": 834.0606189999997,
+   "notional_usd": 666.76,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786441800,
+   "prints": 170,
+   "shares": 3955.4793169999984,
+   "notional_usd": 3308.47,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786455000,
+   "prints": 41,
+   "shares": 1251.439577,
+   "notional_usd": 1028.82,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786455300,
+   "prints": 93,
+   "shares": 1301.7360720000006,
+   "notional_usd": 1084.11,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786456200,
+   "prints": 16,
+   "shares": 379.01910399999997,
+   "notional_usd": 348.7,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786468500,
+   "prints": 52,
+   "shares": 566.498087,
+   "notional_usd": 481.01,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786470900,
+   "prints": 93,
+   "shares": 1355.579228,
+   "notional_usd": 1223.43,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786483500,
+   "prints": 92,
+   "shares": 1144.808292,
+   "notional_usd": 900.47,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786484400,
+   "prints": 118,
+   "shares": 1858.8735319999998,
+   "notional_usd": 1599.11,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786484700,
+   "prints": 119,
+   "shares": 3333.073721,
+   "notional_usd": 2938.56,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786485000,
+   "prints": 41,
+   "shares": 1018.1551999999999,
+   "notional_usd": 924.77,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786485300,
+   "prints": 16,
+   "shares": 146.027108,
+   "notional_usd": 133.08,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786496700,
+   "prints": 8,
+   "shares": 156.87325900000002,
+   "notional_usd": 143.43,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786511100,
+   "prints": 80,
+   "shares": 1228.715133,
+   "notional_usd": 1094.17,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786511700,
+   "prints": 18,
+   "shares": 212.77246099999994,
+   "notional_usd": 195.17,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786512000,
+   "prints": 44,
+   "shares": 1282.429931,
+   "notional_usd": 1154.04,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786525200,
+   "prints": 83,
+   "shares": 1136.2851690000007,
+   "notional_usd": 940.85,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786525800,
+   "prints": 77,
+   "shares": 2258.3682409999997,
+   "notional_usd": 2010.58,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786527600,
+   "prints": 56,
+   "shares": 1128.4601890000001,
+   "notional_usd": 989.51,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786539900,
+   "prints": 24,
+   "shares": 597.5673429999999,
+   "notional_usd": 541.66,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786542000,
+   "prints": 20,
+   "shares": 442.94480700000014,
+   "notional_usd": 327.13,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786542900,
+   "prints": 110,
+   "shares": 3142.722163,
+   "notional_usd": 2580.96,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786554300,
+   "prints": 141,
+   "shares": 3223.8309690000006,
+   "notional_usd": 2738.85,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786554600,
+   "prints": 128,
+   "shares": 2883.363351,
+   "notional_usd": 2452.97,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786555500,
+   "prints": 168,
+   "shares": 3370.9614510000015,
+   "notional_usd": 2834.4,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786555800,
+   "prints": 6,
+   "shares": 123.29780000000001,
+   "notional_usd": 113.43,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786557000,
+   "prints": 63,
+   "shares": 1754.0170609999993,
+   "notional_usd": 1290.57,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786568400,
+   "prints": 23,
+   "shares": 264.39759000000004,
+   "notional_usd": 197.47,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786569600,
+   "prints": 104,
+   "shares": 1928.7211460000005,
+   "notional_usd": 1383.52,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786570200,
+   "prints": 131,
+   "shares": 2888.7153620000017,
+   "notional_usd": 2422.81,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786570800,
+   "prints": 168,
+   "shares": 4637.061055999999,
+   "notional_usd": 3683.85,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786571100,
+   "prints": 50,
+   "shares": 477.652066,
+   "notional_usd": 422.52,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786582800,
+   "prints": 74,
+   "shares": 1009.3071849999999,
+   "notional_usd": 914.93,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786584300,
+   "prints": 71,
+   "shares": 812.422225,
+   "notional_usd": 715.86,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786585500,
+   "prints": 23,
+   "shares": 125.862521,
+   "notional_usd": 113.96,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786598400,
+   "prints": 78,
+   "shares": 1226.435403,
+   "notional_usd": 980.59,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786598700,
+   "prints": 1,
+   "shares": 29.7619,
+   "notional_usd": 25.0,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786628400,
+   "prints": 75,
+   "shares": 1229.9519799999998,
+   "notional_usd": 879.46,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786628700,
+   "prints": 129,
+   "shares": 2370.441311000001,
+   "notional_usd": 1905.93,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786640700,
+   "prints": 176,
+   "shares": 3657.7894700000006,
+   "notional_usd": 2908.18,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786641900,
+   "prints": 1,
+   "shares": 25.543475,
+   "notional_usd": 23.5,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786642200,
+   "prints": 26,
+   "shares": 358.22398899999996,
+   "notional_usd": 328.11,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786655100,
+   "prints": 59,
+   "shares": 890.4286179999998,
+   "notional_usd": 799.61,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786655700,
+   "prints": 115,
+   "shares": 1235.1473770000002,
+   "notional_usd": 1111.59,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786657500,
+   "prints": 145,
+   "shares": 2921.0520829999987,
+   "notional_usd": 2248.79,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786657800,
+   "prints": 33,
+   "shares": 572.6709609999999,
+   "notional_usd": 470.66,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786658100,
+   "prints": 94,
+   "shares": 1027.543255,
+   "notional_usd": 878.14,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786669200,
+   "prints": 35,
+   "shares": 1550.1206889999999,
+   "notional_usd": 1353.86,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786671000,
+   "prints": 12,
+   "shares": 371.309229,
+   "notional_usd": 249.1,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786671900,
+   "prints": 34,
+   "shares": 501.8747609999999,
+   "notional_usd": 443.27,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786672200,
+   "prints": 67,
+   "shares": 1838.2657729999999,
+   "notional_usd": 1218.2,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786686000,
+   "prints": 45,
+   "shares": 829.2997170000001,
+   "notional_usd": 678.86,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786686600,
+   "prints": 66,
+   "shares": 836.2058040000001,
+   "notional_usd": 697.45,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786686900,
+   "prints": 17,
+   "shares": 150.019128,
+   "notional_usd": 135.45,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786701300,
+   "prints": 13,
+   "shares": 37.403240000000004,
+   "notional_usd": 33.99,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786714500,
+   "prints": 95,
+   "shares": 3918.861058000001,
+   "notional_usd": 2830.15,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786714800,
+   "prints": 159,
+   "shares": 4099.811959000001,
+   "notional_usd": 3341.48,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786715400,
+   "prints": 57,
+   "shares": 1444.5999800000002,
+   "notional_usd": 1278.48,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786726800,
+   "prints": 48,
+   "shares": 690.6943850000001,
+   "notional_usd": 607.24,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786728600,
+   "prints": 139,
+   "shares": 1813.0193889999996,
+   "notional_usd": 1445.12,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786742100,
+   "prints": 154,
+   "shares": 3536.829941000001,
+   "notional_usd": 2909.49,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786756500,
+   "prints": 42,
+   "shares": 904.47055,
+   "notional_usd": 803.4,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786758000,
+   "prints": 66,
+   "shares": 1143.6770660000002,
+   "notional_usd": 987.85,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786758300,
+   "prints": 68,
+   "shares": 828.5594970000001,
+   "notional_usd": 684.98,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786758900,
+   "prints": 19,
+   "shares": 205.09490600000004,
+   "notional_usd": 182.54,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786770900,
+   "prints": 186,
+   "shares": 2385.170723,
+   "notional_usd": 1813.59,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786771800,
+   "prints": 19,
+   "shares": 369.136614,
+   "notional_usd": 242.37,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786798800,
+   "prints": 29,
+   "shares": 657.004142,
+   "notional_usd": 553.06,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786800000,
+   "prints": 68,
+   "shares": 1245.9012669999997,
+   "notional_usd": 1094.3,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786800600,
+   "prints": 12,
+   "shares": 127.83412799999999,
+   "notional_usd": 114.84,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786801800,
+   "prints": 112,
+   "shares": 2284.961158999999,
+   "notional_usd": 1835.19,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786814100,
+   "prints": 13,
+   "shares": 362.593064,
+   "notional_usd": 331.71,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786815000,
+   "prints": 36,
+   "shares": 837.6416910000002,
+   "notional_usd": 557.39,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786816200,
+   "prints": 117,
+   "shares": 1974.763818,
+   "notional_usd": 1454.44,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786830300,
+   "prints": 55,
+   "shares": 1723.9836689999997,
+   "notional_usd": 1407.83,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786830600,
+   "prints": 20,
+   "shares": 389.961623,
+   "notional_usd": 339.51,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786830900,
+   "prints": 45,
+   "shares": 621.41814,
+   "notional_usd": 463.58,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786859100,
+   "prints": 53,
+   "shares": 496.18703700000003,
+   "notional_usd": 449.93,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786886400,
+   "prints": 57,
+   "shares": 1449.752767,
+   "notional_usd": 1286.55,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786914300,
+   "prints": 33,
+   "shares": 379.42963299999997,
+   "notional_usd": 338.08,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786928700,
+   "prints": 195,
+   "shares": 1888.6276089999994,
+   "notional_usd": 1494.72,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786929000,
+   "prints": 102,
+   "shares": 2151.315844,
+   "notional_usd": 1818.84,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786929900,
+   "prints": 133,
+   "shares": 1869.4934970000002,
+   "notional_usd": 1584.45,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786930500,
+   "prints": 98,
+   "shares": 1514.876185,
+   "notional_usd": 1317.97,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786930800,
+   "prints": 232,
+   "shares": 3755.2801029999996,
+   "notional_usd": 3026.54,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786942800,
+   "prints": 187,
+   "shares": 1885.1998880000008,
+   "notional_usd": 1534.88,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786944600,
+   "prints": 152,
+   "shares": 2739.727875999998,
+   "notional_usd": 2324.88,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786945200,
+   "prints": 34,
+   "shares": 509.97330400000004,
+   "notional_usd": 467.02,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786973700,
+   "prints": 24,
+   "shares": 215.69830900000002,
+   "notional_usd": 190.94,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786974000,
+   "prints": 205,
+   "shares": 3328.0155779999986,
+   "notional_usd": 2708.24,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786974300,
+   "prints": 173,
+   "shares": 2612.5317070000006,
+   "notional_usd": 2003.64,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786986000,
+   "prints": 56,
+   "shares": 1150.1780700000002,
+   "notional_usd": 1026.04,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787003700,
+   "prints": 60,
+   "shares": 854.8288789999999,
+   "notional_usd": 765.09,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787032500,
+   "prints": 33,
+   "shares": 812.0231209999998,
+   "notional_usd": 681.35,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787046600,
+   "prints": 157,
+   "shares": 2579.336377000001,
+   "notional_usd": 2025.45,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787060400,
+   "prints": 65,
+   "shares": 1320.1345740000002,
+   "notional_usd": 838.03,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787089800,
+   "prints": 104,
+   "shares": 2589.270723,
+   "notional_usd": 2321.14,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1787090100,
+   "prints": 59,
+   "shares": 1302.0924939999993,
+   "notional_usd": 1177.55,
+   "sample": "primary"
+  },
+  {
+   "window_start": 1786245900,
+   "prints": 150,
+   "shares": 1706.5617860000002,
+   "notional_usd": 1388.35,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786246800,
+   "prints": 23,
+   "shares": 250.86907199999996,
+   "notional_usd": 223.28,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786247400,
+   "prints": 26,
+   "shares": 326.048439,
+   "notional_usd": 293.76,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786247700,
+   "prints": 73,
+   "shares": 720.1500509999998,
+   "notional_usd": 604.28,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786260300,
+   "prints": 37,
+   "shares": 561.675406,
+   "notional_usd": 493.82,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786261800,
+   "prints": 61,
+   "shares": 482.22800999999987,
+   "notional_usd": 432.91,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786273800,
+   "prints": 13,
+   "shares": 51.80299800000001,
+   "notional_usd": 47.66,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786276200,
+   "prints": 12,
+   "shares": 71.55768699999999,
+   "notional_usd": 52.82,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786289700,
+   "prints": 39,
+   "shares": 917.4723480000002,
+   "notional_usd": 800.12,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786290600,
+   "prints": 54,
+   "shares": 589.568225,
+   "notional_usd": 531.59,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786303200,
+   "prints": 76,
+   "shares": 667.3983729999998,
+   "notional_usd": 598.32,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786304100,
+   "prints": 105,
+   "shares": 1246.3075800000001,
+   "notional_usd": 1096.83,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786304400,
+   "prints": 86,
+   "shares": 1324.1390229999997,
+   "notional_usd": 1093.1,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786316400,
+   "prints": 10,
+   "shares": 221.911201,
+   "notional_usd": 162.38,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786318500,
+   "prints": 42,
+   "shares": 490.5219049999999,
+   "notional_usd": 438.23,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786332900,
+   "prints": 107,
+   "shares": 2020.1824490000004,
+   "notional_usd": 1636.85,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786345800,
+   "prints": 6,
+   "shares": 79.480027,
+   "notional_usd": 56.22,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786346100,
+   "prints": 24,
+   "shares": 297.882525,
+   "notional_usd": 198.91,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786347000,
+   "prints": 92,
+   "shares": 1312.8442249999998,
+   "notional_usd": 1060.88,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786347300,
+   "prints": 79,
+   "shares": 1099.139407,
+   "notional_usd": 875.31,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786348500,
+   "prints": 117,
+   "shares": 1014.7300099999995,
+   "notional_usd": 889.89,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786360800,
+   "prints": 138,
+   "shares": 1745.9867289999997,
+   "notional_usd": 1270.72,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786361700,
+   "prints": 89,
+   "shares": 1157.334957,
+   "notional_usd": 1015.41,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786374900,
+   "prints": 27,
+   "shares": 456.56451,
+   "notional_usd": 399.71,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786377000,
+   "prints": 86,
+   "shares": 1869.5720939999999,
+   "notional_usd": 1678.1,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786388700,
+   "prints": 15,
+   "shares": 334.100004,
+   "notional_usd": 285.41,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786389000,
+   "prints": 104,
+   "shares": 1842.1388160000004,
+   "notional_usd": 1456.15,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786389900,
+   "prints": 10,
+   "shares": 385.789552,
+   "notional_usd": 353.19,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786391400,
+   "prints": 76,
+   "shares": 1324.4886719999995,
+   "notional_usd": 1131.78,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786403100,
+   "prints": 32,
+   "shares": 654.3888649999999,
+   "notional_usd": 596.97,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786404300,
+   "prints": 94,
+   "shares": 1937.285271,
+   "notional_usd": 1577.78,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786404900,
+   "prints": 103,
+   "shares": 1735.0691160000008,
+   "notional_usd": 1532.27,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786405500,
+   "prints": 157,
+   "shares": 1792.9116260000005,
+   "notional_usd": 1334.34,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786405800,
+   "prints": 124,
+   "shares": 2126.1125459999994,
+   "notional_usd": 1763.93,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786417500,
+   "prints": 199,
+   "shares": 2865.700012000004,
+   "notional_usd": 2215.28,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786418700,
+   "prints": 100,
+   "shares": 879.0718169999999,
+   "notional_usd": 790.98,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786419000,
+   "prints": 42,
+   "shares": 610.1214669999999,
+   "notional_usd": 543.15,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786419300,
+   "prints": 45,
+   "shares": 309.62044399999996,
+   "notional_usd": 282.01,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786419600,
+   "prints": 16,
+   "shares": 296.62310699999995,
+   "notional_usd": 265.71,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786431600,
+   "prints": 28,
+   "shares": 536.796721,
+   "notional_usd": 456.88,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786431900,
+   "prints": 83,
+   "shares": 1164.920934,
+   "notional_usd": 843.96,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786432800,
+   "prints": 47,
+   "shares": 1736.4787240000003,
+   "notional_usd": 1379.82,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786447200,
+   "prints": 162,
+   "shares": 2079.788818,
+   "notional_usd": 1728.91,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786460700,
+   "prints": 130,
+   "shares": 2985.5302219999994,
+   "notional_usd": 2618.22,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786461300,
+   "prints": 130,
+   "shares": 2570.298701,
+   "notional_usd": 2080.93,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786461600,
+   "prints": 146,
+   "shares": 3268.733940000001,
+   "notional_usd": 2860.21,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786462800,
+   "prints": 120,
+   "shares": 1933.0656370000002,
+   "notional_usd": 1604.63,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786474800,
+   "prints": 19,
+   "shares": 676.759059,
+   "notional_usd": 503.82,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786476000,
+   "prints": 150,
+   "shares": 2670.896532999998,
+   "notional_usd": 2242.67,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786476300,
+   "prints": 173,
+   "shares": 3014.7846839999997,
+   "notional_usd": 2460.86,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786477200,
+   "prints": 31,
+   "shares": 1204.90561,
+   "notional_usd": 1080.9,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786477500,
+   "prints": 130,
+   "shares": 2201.7345609999998,
+   "notional_usd": 1640.12,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786491000,
+   "prints": 19,
+   "shares": 252.670839,
+   "notional_usd": 158.07,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786491900,
+   "prints": 74,
+   "shares": 749.6134539999999,
+   "notional_usd": 631.11,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786503900,
+   "prints": 57,
+   "shares": 569.7604460000001,
+   "notional_usd": 502.27,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786504500,
+   "prints": 127,
+   "shares": 2295.2965950000003,
+   "notional_usd": 1899.04,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786506000,
+   "prints": 23,
+   "shares": 618.388618,
+   "notional_usd": 537.52,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786520700,
+   "prints": 127,
+   "shares": 1539.2280480000004,
+   "notional_usd": 1262.35,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786532400,
+   "prints": 10,
+   "shares": 231.71584099999998,
+   "notional_usd": 211.35,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786533000,
+   "prints": 159,
+   "shares": 2413.6496450000004,
+   "notional_usd": 2077.49,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786533900,
+   "prints": 52,
+   "shares": 1298.8164469999997,
+   "notional_usd": 1149.02,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786534800,
+   "prints": 134,
+   "shares": 1693.791046,
+   "notional_usd": 1454.33,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786547700,
+   "prints": 109,
+   "shares": 2908.1294110000003,
+   "notional_usd": 2436.63,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786548300,
+   "prints": 69,
+   "shares": 1758.5935519999998,
+   "notional_usd": 1257.59,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786549800,
+   "prints": 39,
+   "shares": 842.1482110000001,
+   "notional_usd": 495.25,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786561200,
+   "prints": 71,
+   "shares": 1134.166207999999,
+   "notional_usd": 986.28,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786563300,
+   "prints": 125,
+   "shares": 2227.833355,
+   "notional_usd": 1834.22,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786564200,
+   "prints": 147,
+   "shares": 3975.175233999999,
+   "notional_usd": 3166.12,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786575900,
+   "prints": 50,
+   "shares": 486.01947499999994,
+   "notional_usd": 441.15,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786576200,
+   "prints": 168,
+   "shares": 2702.429087999999,
+   "notional_usd": 2181.22,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786577100,
+   "prints": 52,
+   "shares": 718.1993459999995,
+   "notional_usd": 623.77,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786577700,
+   "prints": 18,
+   "shares": 140.54721099999998,
+   "notional_usd": 128.6,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786578600,
+   "prints": 75,
+   "shares": 942.5093269999999,
+   "notional_usd": 814.23,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786590900,
+   "prints": 146,
+   "shares": 2090.2148950000005,
+   "notional_usd": 1770.28,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786591800,
+   "prints": 146,
+   "shares": 1532.009902,
+   "notional_usd": 1229.22,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786592100,
+   "prints": 134,
+   "shares": 1208.52929,
+   "notional_usd": 872.59,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786593000,
+   "prints": 103,
+   "shares": 1508.8101890000003,
+   "notional_usd": 1352.8,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786593300,
+   "prints": 4,
+   "shares": 55.289,
+   "notional_usd": 50.73,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786604700,
+   "prints": 107,
+   "shares": 1507.059508,
+   "notional_usd": 1018.79,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786605000,
+   "prints": 151,
+   "shares": 2965.4738279999965,
+   "notional_usd": 2479.05,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786606200,
+   "prints": 140,
+   "shares": 1853.9742360000005,
+   "notional_usd": 1626.92,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786606500,
+   "prints": 75,
+   "shares": 1928.026006,
+   "notional_usd": 1498.11,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786606800,
+   "prints": 76,
+   "shares": 1751.9032820000004,
+   "notional_usd": 1544.07,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786607700,
+   "prints": 3,
+   "shares": 14.98,
+   "notional_usd": 10.62,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786618800,
+   "prints": 41,
+   "shares": 516.2303509999999,
+   "notional_usd": 349.0,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786622100,
+   "prints": 22,
+   "shares": 220.021564,
+   "notional_usd": 133.67,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786633800,
+   "prints": 64,
+   "shares": 2331.3688230000002,
+   "notional_usd": 1477.81,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786634100,
+   "prints": 50,
+   "shares": 1474.705092,
+   "notional_usd": 1172.38,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786635300,
+   "prints": 50,
+   "shares": 1401.283759,
+   "notional_usd": 1179.31,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786636200,
+   "prints": 23,
+   "shares": 156.274543,
+   "notional_usd": 142.0,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786648500,
+   "prints": 74,
+   "shares": 1269.8941559999998,
+   "notional_usd": 970.84,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786649400,
+   "prints": 11,
+   "shares": 255.68120199999998,
+   "notional_usd": 144.57,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786649700,
+   "prints": 64,
+   "shares": 892.908183,
+   "notional_usd": 815.27,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786650300,
+   "prints": 10,
+   "shares": 99.863063,
+   "notional_usd": 71.89,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786662300,
+   "prints": 68,
+   "shares": 706.781284,
+   "notional_usd": 598.69,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786662600,
+   "prints": 129,
+   "shares": 1273.4227990000009,
+   "notional_usd": 1015.9,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786663200,
+   "prints": 121,
+   "shares": 1777.0627940000006,
+   "notional_usd": 1548.98,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786663800,
+   "prints": 130,
+   "shares": 1477.405316,
+   "notional_usd": 1061.13,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786664400,
+   "prints": 50,
+   "shares": 570.04957,
+   "notional_usd": 516.38,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786679400,
+   "prints": 71,
+   "shares": 1176.335903,
+   "notional_usd": 1061.53,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786692300,
+   "prints": 18,
+   "shares": 674.9943549999999,
+   "notional_usd": 585.62,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786719900,
+   "prints": 13,
+   "shares": 393.16095899999993,
+   "notional_usd": 358.77,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786720500,
+   "prints": 143,
+   "shares": 3070.833887,
+   "notional_usd": 2634.55,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786722000,
+   "prints": 28,
+   "shares": 904.9671430000003,
+   "notional_usd": 824.52,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786722300,
+   "prints": 89,
+   "shares": 1894.3227860000006,
+   "notional_usd": 1676.61,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786734300,
+   "prints": 146,
+   "shares": 2716.077322,
+   "notional_usd": 2038.21,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786734900,
+   "prints": 7,
+   "shares": 283.160809,
+   "notional_usd": 254.72,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786737000,
+   "prints": 68,
+   "shares": 945.8763970000001,
+   "notional_usd": 814.54,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786749900,
+   "prints": 173,
+   "shares": 3184.555881,
+   "notional_usd": 2746.2,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786751400,
+   "prints": 54,
+   "shares": 1122.3774700000001,
+   "notional_usd": 926.58,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786762800,
+   "prints": 4,
+   "shares": 82.993594,
+   "notional_usd": 74.1,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786766100,
+   "prints": 40,
+   "shares": 800.3900300000003,
+   "notional_usd": 652.46,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786777200,
+   "prints": 16,
+   "shares": 657.11182,
+   "notional_usd": 580.7,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786779000,
+   "prints": 20,
+   "shares": 403.09622900000005,
+   "notional_usd": 342.76,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786780200,
+   "prints": 134,
+   "shares": 3303.1446370000017,
+   "notional_usd": 2635.21,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786793100,
+   "prints": 26,
+   "shares": 296.8484859999999,
+   "notional_usd": 262.89,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786808700,
+   "prints": 20,
+   "shares": 222.88122599999997,
+   "notional_usd": 202.65,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786809300,
+   "prints": 76,
+   "shares": 1091.944172,
+   "notional_usd": 978.12,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786835400,
+   "prints": 4,
+   "shares": 238.181808,
+   "notional_usd": 209.6,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786835700,
+   "prints": 49,
+   "shares": 1704.4502340000001,
+   "notional_usd": 1414.33,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786849500,
+   "prints": 103,
+   "shares": 1356.680299,
+   "notional_usd": 1163.43,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786849800,
+   "prints": 149,
+   "shares": 2179.2178639999997,
+   "notional_usd": 1765.02,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786851000,
+   "prints": 79,
+   "shares": 1554.676278,
+   "notional_usd": 1242.86,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786851600,
+   "prints": 155,
+   "shares": 2323.5814699999987,
+   "notional_usd": 1886.97,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786852200,
+   "prints": 117,
+   "shares": 2188.616296999999,
+   "notional_usd": 1911.55,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786852500,
+   "prints": 140,
+   "shares": 2359.9312740000014,
+   "notional_usd": 1988.61,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786878300,
+   "prints": 105,
+   "shares": 1339.806332,
+   "notional_usd": 1018.64,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786878900,
+   "prints": 61,
+   "shares": 413.6416209999998,
+   "notional_usd": 375.14,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786879800,
+   "prints": 65,
+   "shares": 1284.9409399999995,
+   "notional_usd": 970.38,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786893600,
+   "prints": 27,
+   "shares": 400.04085899999995,
+   "notional_usd": 271.55,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786908000,
+   "prints": 34,
+   "shares": 589.0481390000001,
+   "notional_usd": 401.32,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786924500,
+   "prints": 46,
+   "shares": 793.2514150000001,
+   "notional_usd": 685.51,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786936800,
+   "prints": 136,
+   "shares": 1743.6248309999994,
+   "notional_usd": 1560.88,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786950600,
+   "prints": 225,
+   "shares": 3123.002924000001,
+   "notional_usd": 2284.77,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786952400,
+   "prints": 11,
+   "shares": 52.494493000000006,
+   "notional_usd": 47.77,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786952700,
+   "prints": 23,
+   "shares": 542.51557,
+   "notional_usd": 489.24,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786964400,
+   "prints": 79,
+   "shares": 1102.400672,
+   "notional_usd": 973.58,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786965300,
+   "prints": 81,
+   "shares": 2347.3052790000006,
+   "notional_usd": 1845.66,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786966800,
+   "prints": 89,
+   "shares": 1487.7167200000006,
+   "notional_usd": 1319.54,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786979400,
+   "prints": 174,
+   "shares": 3122.0662130000014,
+   "notional_usd": 2751.19,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786994100,
+   "prints": 47,
+   "shares": 452.6720169999999,
+   "notional_usd": 404.3,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1786996500,
+   "prints": 68,
+   "shares": 1429.9690459999995,
+   "notional_usd": 1251.59,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787008800,
+   "prints": 21,
+   "shares": 869.133425,
+   "notional_usd": 703.74,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787023500,
+   "prints": 76,
+   "shares": 1231.3634110000003,
+   "notional_usd": 998.03,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787037300,
+   "prints": 8,
+   "shares": 534.865468,
+   "notional_usd": 486.26,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787053200,
+   "prints": 105,
+   "shares": 1968.6544529999996,
+   "notional_usd": 1469.48,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787065200,
+   "prints": 82,
+   "shares": 1936.7535650000011,
+   "notional_usd": 1463.56,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787067000,
+   "prints": 76,
+   "shares": 1815.4088020000002,
+   "notional_usd": 1515.13,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787067300,
+   "prints": 89,
+   "shares": 841.3828639999999,
+   "notional_usd": 631.78,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787094900,
+   "prints": 142,
+   "shares": 1787.3472919999997,
+   "notional_usd": 1471.2,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787096100,
+   "prints": 83,
+   "shares": 1186.5061439999997,
+   "notional_usd": 1063.17,
+   "sample": "disjoint"
+  },
+  {
+   "window_start": 1787097000,
+   "prints": 30,
+   "shares": 683.468173,
+   "notional_usd": 603.38,
+   "sample": "disjoint"
+  }
+ ]
+}
