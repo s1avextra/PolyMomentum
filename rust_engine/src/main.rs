@@ -1397,6 +1397,30 @@ enum StrategyBuilderCommand {
         #[arg(long, default_value = "close_vs_open")]
         resolution_rule: String,
     },
+    /// Locked ONE-SHOT fresh-holdout gate: consumes a sealed dataset's fresh
+    /// rows exactly once for one frozen policy. The consumed marker is
+    /// written before any outcome is computed; fresh labels never touch disk.
+    OpportunityFreshGate {
+        /// Sealed causal opportunity dataset JSON.
+        #[arg(long)]
+        dataset_seal: String,
+        /// Settlement tape CSV resolving the fresh windows (TWAP rule).
+        #[arg(long)]
+        settlement_tape: String,
+        /// Frozen policy JSON: {family, decision_seconds, lock_strength_min,
+        /// ask_cap, min_lock_fraction, advancement_margin}.
+        #[arg(long)]
+        policy: String,
+        /// The family's preregistration document (hash-pinned into the verdict).
+        #[arg(long)]
+        preregistration: String,
+        /// Directory holding one-shot consumed markers.
+        #[arg(long, default_value = "logs/strategy-research/consumed")]
+        consumed_dir: String,
+        /// Terminal verdict JSON output path.
+        #[arg(long)]
+        output: String,
+    },
     /// Search a bounded policy grid in one pass and collapse exact-replay traces.
     OpportunityPolicySearch {
         /// Sealed causal opportunity dataset JSON.
@@ -3504,6 +3528,36 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                 ),
                 Err(error) => {
                     eprintln!("strategy-builder opportunity-labels failed: {error:#}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        StrategyBuilderCommand::OpportunityFreshGate {
+            dataset_seal,
+            settlement_tape,
+            policy,
+            preregistration,
+            consumed_dir,
+            output,
+        } => {
+            let result = strategy_builder::opportunity_fresh_gate::run_fresh_gate(
+                strategy_builder::opportunity_fresh_gate::FreshGateInput {
+                    dataset_seal_path: std::path::PathBuf::from(dataset_seal),
+                    settlement_tape_path: std::path::PathBuf::from(settlement_tape),
+                    policy_path: std::path::PathBuf::from(policy),
+                    preregistration_path: std::path::PathBuf::from(preregistration),
+                    consumed_dir: std::path::PathBuf::from(consumed_dir),
+                    output_path: std::path::PathBuf::from(output),
+                },
+            );
+            match result {
+                Ok(verdict) => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&verdict)
+                        .expect("serialize fresh-gate verdict")
+                ),
+                Err(error) => {
+                    eprintln!("strategy-builder opportunity-fresh-gate failed: {error:#}");
                     std::process::exit(2);
                 }
             }

@@ -159,6 +159,9 @@ pub(crate) struct CausalOpportunity {
     pub fee_aware_net_win_usd: Option<f64>,
     pub fee_aware_max_loss_usd: Option<f64>,
     pub btc_open: f64,
+    /// Feature-semantics v2 columns; None when reading v1-era tables.
+    pub partial_twap_lead_usd: Option<f64>,
+    pub twap_locked_fraction: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -603,6 +606,8 @@ fn read_opportunities(path: &Path) -> Result<Vec<CausalOpportunity>> {
                 fee_aware_net_win_usd: optional_f64(&batch, "fee_aware_net_win_usd", row)?,
                 fee_aware_max_loss_usd: optional_f64(&batch, "fee_aware_max_loss_usd", row)?,
                 btc_open: required_f64(&batch, "btc_open", row)?,
+                partial_twap_lead_usd: optional_f64_column(&batch, "partial_twap_lead_usd", row)?,
+                twap_locked_fraction: optional_f64_column(&batch, "twap_locked_fraction", row)?,
             });
         }
     }
@@ -728,6 +733,15 @@ fn optional_f64(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<f6
     Ok((!array.is_null(row)).then(|| array.value(row)))
 }
 
+/// Like `optional_f64` but tolerates the COLUMN itself being absent —
+/// for feature-semantics-v2 columns read from v1-era tables.
+fn optional_f64_column(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<f64>> {
+    if batch.column_by_name(name).is_none() {
+        return Ok(None);
+    }
+    optional_f64(batch, name, row)
+}
+
 fn required_bool(batch: &RecordBatch, name: &str, row: usize) -> Result<bool> {
     optional_bool(batch, name, row)?.with_context(|| format!("{name} is unexpectedly null"))
 }
@@ -792,6 +806,8 @@ mod tests {
             fee_aware_net_win_usd: Some(4.0),
             fee_aware_max_loss_usd: Some(5.0),
             btc_open: 100.0,
+            partial_twap_lead_usd: None,
+            twap_locked_fraction: None,
         }
     }
 

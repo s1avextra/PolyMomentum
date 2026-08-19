@@ -32,6 +32,7 @@ use crate::strategy::spec::stable_json_hash;
 
 pub mod opportunity_cross_venue;
 pub mod opportunity_dataset;
+pub mod opportunity_fresh_gate;
 pub mod opportunity_feature_store;
 pub mod opportunity_flow;
 pub mod opportunity_liquidity;
