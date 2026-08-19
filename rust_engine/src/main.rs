@@ -226,6 +226,50 @@ enum Command {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Backfill an official Chainlink Data Streams settlement tape CSV
+    /// (`timestamp_ms,price`) over a historical range via /reports/page.
+    /// Requires credentials whose plan includes historical access.
+    ChainlinkBackfill {
+        /// Data Streams REST endpoint.
+        #[arg(
+            long,
+            env = "CHAINLINK_DATA_STREAMS_REST_URL",
+            default_value = data::chainlink::DEFAULT_DATA_STREAMS_REST_URL
+        )]
+        endpoint: String,
+        /// Single Data Streams feed ID (e.g. the btc-usd-twap-60s stream
+        /// Polymarket settles on).
+        #[arg(long = "feed-id")]
+        feed_id: String,
+        #[arg(
+            long = "api-key",
+            env = "CHAINLINK_DATA_STREAMS_API_KEY",
+            hide_env_values = true
+        )]
+        api_key: String,
+        #[arg(
+            long = "hmac-secret",
+            visible_alias = "api-secret",
+            env = "CHAINLINK_DATA_STREAMS_HMAC_SECRET",
+            hide_env_values = true
+        )]
+        hmac_secret: String,
+        /// Inclusive UTC range start (RFC3339).
+        #[arg(long)]
+        start: String,
+        /// Exclusive UTC range end (RFC3339).
+        #[arg(long)]
+        end: String,
+        /// Implied decimals of the stream's integer price.
+        #[arg(long, default_value_t = 18)]
+        price_decimals: u32,
+        /// Reports per page request.
+        #[arg(long, default_value_t = 1000)]
+        page_limit: u32,
+        /// Output settlement tape CSV (`timestamp_ms,price`), atomic write.
+        #[arg(long)]
+        output: String,
+    },
     /// Refresh converted forward BTC captures with terminal Gamma outcomes.
     FinalizeRecordedBtcBooks {
         /// Directory produced by convert-recorded-btc-books.
@@ -2648,6 +2692,34 @@ async fn main() {
             .await
             {
                 eprintln!("chainlink-data-streams-probe failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Command::ChainlinkBackfill {
+            endpoint,
+            feed_id,
+            api_key,
+            hmac_secret,
+            start,
+            end,
+            price_decimals,
+            page_limit,
+            output,
+        } => {
+            if let Err(e) = cmd_chainlink_backfill(
+                &endpoint,
+                &feed_id,
+                &api_key,
+                &hmac_secret,
+                &start,
+                &end,
+                price_decimals,
+                page_limit,
+                &output,
+            )
+            .await
+            {
+                eprintln!("chainlink-backfill failed: {e:#}");
                 std::process::exit(1);
             }
         }
@@ -8666,6 +8738,120 @@ fn forward_latency_counts_above_ms(sorted: &[f64]) -> serde_json::Value {
         );
     }
     serde_json::Value::Object(counts)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_chainlink_backfill(
+    endpoint: &str,
+    feed_id: &str,
+    api_key: &str,
+    hmac_secret: &str,
+    start: &str,
+    end: &str,
+    price_decimals: u32,
+    page_limit: u32,
+    output: &str,
+) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    let start_s = chrono::DateTime::parse_from_rfc3339(start)
+        .context("--start must be RFC3339")?
+        .timestamp();
+    let end_s = chrono::DateTime::parse_from_rfc3339(end)
+        .context("--end must be RFC3339")?
+        .timestamp();
+    if end_s <= start_s {
+        bail!("--end must be after --start");
+    }
+    if api_key.trim().is_empty() || hmac_secret.trim().is_empty() {
+        bail!("Chainlink credentials are empty; historical access needs a valid subscription key");
+    }
+    let client =
+        data::chainlink::ChainlinkDataStreamsClient::new(endpoint, api_key, hmac_secret);
+
+    let mut rows: Vec<(i64, f64)> = Vec::new();
+    let mut cursor = start_s;
+    let mut pages = 0u32;
+    loop {
+        let (status, reports, error) = client
+            .reports_page(feed_id, cursor, page_limit)
+            .await?;
+        if status == 401 || status == 403 {
+            bail!(
+                "Data Streams rejected historical access (HTTP {status}): {} — credential/plan \
+                 problem, not a range problem",
+                error.unwrap_or_default(),
+            );
+        }
+        if status != 200 {
+            bail!("reports page HTTP {status}: {}", error.unwrap_or_default());
+        }
+        if reports.is_empty() {
+            break;
+        }
+        pages += 1;
+        let mut advanced = false;
+        for report in &reports {
+            let Some(ts) = report.observations_timestamp else {
+                continue;
+            };
+            if ts >= end_s {
+                advanced = true;
+                cursor = end_s;
+                break;
+            }
+            if ts < cursor {
+                continue;
+            }
+            let Some(price) = report
+                .decoded_price
+                .as_deref()
+                .and_then(|raw| data::chainlink::decode_stream_price(raw, price_decimals))
+            else {
+                bail!("report at {ts} carries an undecodable price; refusing a gappy tape");
+            };
+            rows.push((ts * 1000, price));
+            cursor = ts + 1;
+            advanced = true;
+        }
+        if cursor >= end_s {
+            break;
+        }
+        if !advanced {
+            bail!("reports page did not advance the cursor; aborting to avoid an infinite loop");
+        }
+    }
+    if rows.is_empty() {
+        bail!("no reports in range — plan may exclude this history or the feed id is wrong");
+    }
+    rows.sort_by_key(|(ts, _)| *ts);
+    rows.dedup_by_key(|(ts, _)| *ts);
+
+    let out_path = std::path::Path::new(output);
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let tmp = out_path.with_extension(format!("tmp.{}", std::process::id()));
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        writeln!(f, "timestamp_ms,price")?;
+        for (ts_ms, price) in &rows {
+            writeln!(f, "{ts_ms},{price}")?;
+        }
+        f.sync_all().ok();
+    }
+    std::fs::rename(&tmp, out_path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), out_path.display()))?;
+    let span_s = rows.last().unwrap().0 / 1000 - rows.first().unwrap().0 / 1000;
+    println!(
+        "chainlink-backfill: {} reports over {}s ({} pages) -> {}",
+        rows.len(),
+        span_s,
+        pages,
+        out_path.display(),
+    );
+    Ok(())
 }
 
 async fn cmd_chainlink_data_streams_probe(

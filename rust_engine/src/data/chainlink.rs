@@ -70,6 +70,48 @@ impl ChainlinkDataStreamsClient {
         }
     }
 
+    /// Historical page: reports for `feed_id` starting at `start_timestamp_s`,
+    /// ascending, up to `limit` (Data Streams caps pages server-side). Used
+    /// by the settlement-tape backfill; requires a subscription whose plan
+    /// includes historical access — a 401/403 here is a credential/plan
+    /// problem, not a code path problem.
+    pub async fn reports_page(
+        &self,
+        feed_id: &str,
+        start_timestamp_s: i64,
+        limit: u32,
+    ) -> Result<(u16, Vec<ChainlinkReportSummary>, Option<String>)> {
+        let full_path = format!(
+            "/api/v1/reports/page?feedID={feed_id}&startTimestamp={start_timestamp_s}&limit={limit}"
+        );
+        let timestamp_ms = chrono::Utc::now().timestamp_millis().to_string();
+        let auth = chainlink_auth_headers(
+            &self.api_key,
+            &self.api_secret,
+            "GET",
+            &full_path,
+            "",
+            &timestamp_ms,
+        );
+        let url = format!("{}{}", self.base_url, full_path);
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", auth.authorization)
+            .header("X-Authorization-Timestamp", auth.timestamp_ms)
+            .header("X-Authorization-Signature-SHA256", auth.signature_sha256)
+            .send()
+            .await
+            .with_context(|| format!("request Chainlink reports page {feed_id}"))?;
+        let status = resp.status();
+        let text = resp.text().await.context("read reports page body")?;
+        if !status.is_success() {
+            return Ok((status.as_u16(), Vec::new(), Some(text)));
+        }
+        let raw: Value = serde_json::from_str(&text).context("parse reports page JSON")?;
+        Ok((status.as_u16(), parse_chainlink_report_page(&raw), None))
+    }
+
     pub async fn latest_report(&self, feed_id: &str) -> Result<ChainlinkRestProbe> {
         let full_path = format!("/api/v1/reports/latest?feedID={feed_id}");
         let timestamp_ms = chrono::Utc::now().timestamp_millis().to_string();
@@ -164,6 +206,39 @@ pub fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC key length error");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())
+}
+
+/// Parse a `/reports/page` response: `{"reports": [...]}` ascending.
+pub fn parse_chainlink_report_page(value: &Value) -> Vec<ChainlinkReportSummary> {
+    value
+        .get("reports")
+        .and_then(Value::as_array)
+        .map(|reports| {
+            reports
+                .iter()
+                .filter_map(|report| {
+                    parse_chainlink_report_summary(&serde_json::json!({ "report": report }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Decode a Data Streams int-string price (18 implied decimals for crypto
+/// streams) into an f64 USD price. Fail-closed: malformed input is None.
+pub fn decode_stream_price(raw: &str, decimals: u32) -> Option<f64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let negative = raw.starts_with('-');
+    let digits = raw.trim_start_matches('-');
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let value = digits.parse::<f64>().ok()?;
+    let scaled = value / 10f64.powi(decimals as i32);
+    Some(if negative { -scaled } else { scaled })
 }
 
 pub fn parse_chainlink_report_summary(value: &Value) -> Option<ChainlinkReportSummary> {
@@ -261,6 +336,33 @@ mod tests {
         );
         assert_eq!(auth.authorization, "api-key");
         assert_eq!(auth.signature_sha256.len(), 64);
+    }
+
+    #[test]
+    fn report_page_parses_ascending_reports() {
+        let value = serde_json::json!({
+            "reports": [
+                {"feedID": "0xfeed", "observationsTimestamp": "100", "price": "115000000000000000000000"},
+                {"feedID": "0xfeed", "observationsTimestamp": "101", "price": "115001000000000000000000"}
+            ]
+        });
+        let page = parse_chainlink_report_page(&value);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].observations_timestamp, Some(100));
+        assert_eq!(page[1].decoded_price.as_deref(), Some("115001000000000000000000"));
+        assert!(parse_chainlink_report_page(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn stream_price_decoding_is_fail_closed() {
+        // 115000 USD with 18 implied decimals.
+        let p = decode_stream_price("115000000000000000000000", 18).unwrap();
+        assert!((p - 115_000.0).abs() < 1e-6, "got {p}");
+        assert!(decode_stream_price("", 18).is_none());
+        assert!(decode_stream_price("12a4", 18).is_none());
+        assert!(decode_stream_price("0x1234", 18).is_none());
+        let neg = decode_stream_price("-1000000000000000000", 18).unwrap();
+        assert!((neg + 1.0).abs() < 1e-12);
     }
 
     #[test]
