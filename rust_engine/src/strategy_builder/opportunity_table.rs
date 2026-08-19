@@ -41,6 +41,11 @@ pub struct OpportunityTableInput {
     pub stake_usd: f64,
     pub fee_rate: f64,
     pub max_rows: usize,
+    /// When set, book events come from this v1 distilled candles file
+    /// (`<hour>.v1.candles.jsonl.gz`, the forward-capture converter's
+    /// output) instead of a cached PMXT parquet. Unlocks hours the PMXT
+    /// archive never published — e.g. the frozen canary's captured books.
+    pub distilled_input: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,7 +171,14 @@ pub struct OpportunityTableManifest {
     pub generated_at: String,
     pub hour: String,
     pub signals: HashedSource,
+    /// Hash-pinned book source. Historically always a PMXT parquet (field
+    /// name kept for manifest compatibility); `book_source_kind`
+    /// distinguishes distilled forward-capture sources.
     pub pmxt_parquet: HashedSource,
+    /// "pmxt_parquet" | "distilled_v1". Pre-2026-08-19 manifests lack the
+    /// field and default to pmxt_parquet.
+    #[serde(default = "default_book_source_kind")]
+    pub book_source_kind: String,
     pub output: HashedSource,
     pub row_count: usize,
     pub observable_book_rows: usize,
@@ -188,30 +200,58 @@ pub fn create(input: OpportunityTableInput) -> Result<OpportunityTableManifest> 
         .map(|signal| signal.raw.condition_id.clone())
         .collect::<HashSet<_>>();
 
-    if !input.cache_dir.is_dir() {
-        bail!(
-            "measurement-only opportunity table requires an existing cache directory at {}",
-            input.cache_dir.display()
-        );
-    }
-    let loader = PMXTv2Loader::new(&input.cache_dir);
-    let pmxt_path = loader.cache_path_for_hour(hour);
-    if input.output_path == pmxt_path || input.manifest_path == pmxt_path {
-        bail!("output paths must never replace the source PMXT parquet");
-    }
-    if !pmxt_path.is_file() {
-        bail!(
-            "measurement-only opportunity table requires cached PMXT hour at {}",
-            pmxt_path.display()
-        );
-    }
-    let pmxt_sha256 = sha256_file(&pmxt_path)?;
-    let events = loader
-        .load_cached_hour(hour, Some(&condition_ids))
-        .context("row-filter cached PMXT hour")?;
+    let (events, source_path, source_sha256, book_source_kind) = match &input.distilled_input {
+        Some(distilled_path) => {
+            if input.output_path == *distilled_path || input.manifest_path == *distilled_path {
+                bail!("output paths must never replace the distilled source");
+            }
+            if !distilled_path.is_file() {
+                bail!(
+                    "distilled book source not found at {}",
+                    distilled_path.display()
+                );
+            }
+            let sha = sha256_file(distilled_path)?;
+            let (mut events, _cids) = crate::backtest::distill::read_distilled(distilled_path)
+                .with_context(|| format!("read distilled {}", distilled_path.display()))?;
+            events.retain(|event| condition_ids.contains(&event.market_id));
+            (
+                events,
+                distilled_path.clone(),
+                sha,
+                "distilled_v1".to_string(),
+            )
+        }
+        None => {
+            if !input.cache_dir.is_dir() {
+                bail!(
+                    "measurement-only opportunity table requires an existing cache directory at {}",
+                    input.cache_dir.display()
+                );
+            }
+            let loader = PMXTv2Loader::new(&input.cache_dir);
+            let pmxt_path = loader.cache_path_for_hour(hour);
+            if input.output_path == pmxt_path || input.manifest_path == pmxt_path {
+                bail!("output paths must never replace the source PMXT parquet");
+            }
+            if !pmxt_path.is_file() {
+                bail!(
+                    "measurement-only opportunity table requires cached PMXT hour at {}",
+                    pmxt_path.display()
+                );
+            }
+            let sha = sha256_file(&pmxt_path)?;
+            let events = loader
+                .load_cached_hour(hour, Some(&condition_ids))
+                .context("row-filter cached PMXT hour")?;
+            (events, pmxt_path, sha, "pmxt_parquet".to_string())
+        }
+    };
+    let pmxt_path = source_path;
+    let pmxt_sha256 = source_sha256;
     if events.is_empty() {
         bail!(
-            "PMXT hour {} contains zero events for the {} target condition IDs; reject this hour as an upstream coverage gap",
+            "book source for hour {} contains zero events for the {} target condition IDs; reject this hour as an upstream coverage gap",
             hour.to_rfc3339_opts(SecondsFormat::Secs, true),
             condition_ids.len()
         );
@@ -240,6 +280,7 @@ pub fn create(input: OpportunityTableInput) -> Result<OpportunityTableManifest> 
             path: pmxt_path.display().to_string(),
             sha256: pmxt_sha256,
         },
+        book_source_kind,
         output: HashedSource {
             path: input.output_path.display().to_string(),
             sha256: output_sha256,
@@ -691,6 +732,10 @@ fn measure_book(
     }
 }
 
+fn default_book_source_kind() -> String {
+    "pmxt_parquet".to_string()
+}
+
 /// Step-function partial TWAP over `[0, elapsed_seconds)` from the window
 /// open plus 60-second checkpoints: price on `[60i, 60(i+1))` is the
 /// checkpoint observed at `60i`. Fail-closed: any REQUIRED checkpoint
@@ -1007,6 +1052,7 @@ mod tests {
             stake_usd: 5.0,
             fee_rate: 0.07,
             max_rows: 100,
+            distilled_input: None,
         };
         assert!(validate_policy(&input)
             .unwrap_err()

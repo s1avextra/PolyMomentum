@@ -1110,6 +1110,10 @@ enum StrategyBuilderCommand {
         /// Strict causal signal JSONL. Unknown fields, including outcomes, are rejected.
         #[arg(long)]
         signals: String,
+        /// Read books from this v1 distilled candles file instead of a PMXT
+        /// parquet — unlocks forward-capture hours the archive never had.
+        #[arg(long)]
+        distilled_input: Option<String>,
         /// PMXT v2 cache directory. Defaults to PMXT_V2_CACHE_DIR/shared/local detection.
         #[arg(long)]
         cache_dir: Option<String>,
@@ -3039,6 +3043,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
         StrategyBuilderCommand::OpportunityTable {
             hour,
             signals,
+            distilled_input,
             cache_dir,
             output,
             manifest,
@@ -3058,6 +3063,7 @@ async fn cmd_strategy_builder(command: StrategyBuilderCommand) {
                     stake_usd,
                     fee_rate,
                     max_rows,
+                    distilled_input: distilled_input.map(std::path::PathBuf::from),
                 },
             );
             match result {
