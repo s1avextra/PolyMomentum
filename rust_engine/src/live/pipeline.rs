@@ -1258,8 +1258,64 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Maker timeout sweep: request venue cancels for resting GTC orders
+    /// older than `CANDLE_MAKER_TIMEOUT_S`. The cancel is only an ACTION —
+    /// no local lifecycle state is mutated from its response; authoritative
+    /// truth arrives via the user channel and the REST reconciliation pass
+    /// that runs immediately after in the same recovery tick. An ambiguous
+    /// cancel therefore leaves the order treated as possibly-live, exactly
+    /// like an ambiguous submit.
+    async fn sweep_resting_maker_orders(&self) {
+        let Some(clob) = self.clob.clone() else {
+            return;
+        };
+        let timeout_s = self.settings.candle_maker_timeout_s.max(1.0);
+        let now = nonzero_ts_or_now(0.0);
+        let stale: Vec<(String, String)> = {
+            let manager = self.order_manager.lock().await;
+            self.live_pending_positions
+                .lock()
+                .await
+                .keys()
+                .filter_map(|intent_id| {
+                    let order = manager.get(intent_id)?;
+                    crate::execution::order_manager::resting_timeout_candidate(
+                        order, now, timeout_s,
+                    )
+                    .map(|venue_id| (intent_id.clone(), venue_id.to_string()))
+                })
+                .collect()
+        };
+        for (intent_id, venue_order_id) in stale {
+            let outcome = clob.write().await.cancel_order(&venue_order_id).await;
+            match outcome {
+                Ok(_) => tracing::info!(
+                    %intent_id,
+                    order_id = %venue_order_id,
+                    timeout_s,
+                    "resting maker order cancel accepted; awaiting authoritative reconciliation"
+                ),
+                Err(error) if error.kind == SubmitFailureKind::DefinitiveReject => {
+                    tracing::warn!(
+                        %intent_id,
+                        order_id = %venue_order_id,
+                        error = %error.message,
+                        "venue refused maker-timeout cancel (likely already terminal); REST pass will resolve"
+                    );
+                }
+                Err(error) => tracing::warn!(
+                    %intent_id,
+                    order_id = %venue_order_id,
+                    error = %error.message,
+                    "ambiguous maker-timeout cancel; order treated as possibly live"
+                ),
+            }
+        }
+    }
+
     async fn live_recovery_loop(self: Arc<Self>) {
         loop {
+            self.sweep_resting_maker_orders().await;
             match self.reconcile_live_orders_once().await {
                 Ok(()) => {
                     let was_locked = {

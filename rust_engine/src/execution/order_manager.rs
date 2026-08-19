@@ -350,6 +350,30 @@ impl OrderManager {
     }
 }
 
+/// A resting GTC order eligible for the maker timeout sweep: live on the
+/// venue (submitted/acked/partially filled) with a known venue id, and
+/// older than `timeout_s`. FOK orders never rest and are never returned.
+/// Returns the venue order id to cancel.
+pub fn resting_timeout_candidate(
+    order: &ManagedOrder,
+    now_ts: f64,
+    timeout_s: f64,
+) -> Option<&str> {
+    if order.intent.order_type != "GTC" {
+        return None;
+    }
+    if !matches!(
+        order.state,
+        OrderState::Submitted | OrderState::Acked | OrderState::PartiallyFilled
+    ) {
+        return None;
+    }
+    if now_ts - order.created_ts < timeout_s.max(0.0) {
+        return None;
+    }
+    order.venue_order_id.as_deref()
+}
+
 fn transition_allowed(current: OrderState, next: OrderState) -> bool {
     use OrderState::*;
     matches!(
@@ -522,5 +546,56 @@ mod tests {
             manager.intent_id_for_venue_order_id("0xvenue").as_deref(),
             Some(id.as_str())
         );
+    }
+
+    fn gtc_order(state: OrderState, created_ts: f64, venue_id: Option<&str>) -> ManagedOrder {
+        let strategy = StrategySpec::new("test", "1", "hash", "risk");
+        let signal = Signal {
+            market_id: "0xabc".to_string(),
+            token_id: "tok".to_string(),
+            direction: "up".to_string(),
+            fair_price: 0.6,
+            edge: 0.1,
+            confidence: 0.7,
+            diagnostics: serde_json::json!({}),
+        };
+        ManagedOrder {
+            intent: OrderIntent::deterministic(
+                strategy, &signal, "buy", "GTC", Some(0.5), 10.0, "test", "1",
+            ),
+            state,
+            venue_order_id: venue_id.map(str::to_string),
+            requested_size: 10.0,
+            filled_size: 0.0,
+            avg_fill_price: 0.0,
+            total_fees: 0.0,
+            reject_reason: None,
+            created_ts,
+            updated_ts: created_ts,
+        }
+    }
+
+    #[test]
+    fn timeout_sweep_selects_only_aged_resting_gtc_with_venue_id() {
+        let now = 1_000.0;
+        // Aged, acked, venue id known -> candidate.
+        let aged = gtc_order(OrderState::Acked, now - 5.0, Some("0xv1"));
+        assert_eq!(resting_timeout_candidate(&aged, now, 3.0), Some("0xv1"));
+        // Too young -> not yet.
+        let young = gtc_order(OrderState::Acked, now - 1.0, Some("0xv2"));
+        assert_eq!(resting_timeout_candidate(&young, now, 3.0), None);
+        // No venue id (submit ambiguous) -> REST recovery owns it, not the sweep.
+        let no_venue = gtc_order(OrderState::Submitted, now - 5.0, None);
+        assert_eq!(resting_timeout_candidate(&no_venue, now, 3.0), None);
+        // Terminal -> never.
+        let filled = gtc_order(OrderState::Filled, now - 5.0, Some("0xv3"));
+        assert_eq!(resting_timeout_candidate(&filled, now, 3.0), None);
+        // FOK never rests.
+        let mut fok = gtc_order(OrderState::Acked, now - 5.0, Some("0xv4"));
+        fok.intent.order_type = "FOK".to_string();
+        assert_eq!(resting_timeout_candidate(&fok, now, 3.0), None);
+        // Partially filled resting GTC is still cancelable.
+        let partial = gtc_order(OrderState::PartiallyFilled, now - 5.0, Some("0xv5"));
+        assert_eq!(resting_timeout_candidate(&partial, now, 3.0), Some("0xv5"));
     }
 }
