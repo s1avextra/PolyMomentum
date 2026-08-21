@@ -37,9 +37,18 @@ pub struct FreshGateInput {
 pub struct FrozenPolicy {
     pub family: String,
     pub decision_seconds: i64,
-    pub lock_strength_min: f64,
+    /// Lower executable-price bound, EXCLUSIVE (band mechanisms). Absent
+    /// or 0.0 means no floor.
+    #[serde(default)]
+    pub ask_floor: f64,
     pub ask_cap: f64,
-    pub min_lock_fraction: f64,
+    /// Partial-TWAP lock filters. `None` disables them entirely — the
+    /// signal_favorite_band family selects purely on decision time and the
+    /// executable price band, with direction = the causal BTC signal.
+    #[serde(default)]
+    pub lock_strength_min: Option<f64>,
+    #[serde(default)]
+    pub min_lock_fraction: Option<f64>,
     /// Wilson-edge margin the fresh block must clear (the +0.02 stage).
     pub advancement_margin: f64,
 }
@@ -83,30 +92,45 @@ fn policy_selects(op: &CausalOpportunity, policy: &FrozenPolicy) -> PolicyDecisi
     if decision_s != policy.decision_seconds {
         return PolicyDecision::OutOfScope;
     }
-    let Some(lock_fraction) = op.twap_locked_fraction else {
-        return PolicyDecision::OutOfScope;
+    if let Some(min_lock_fraction) = policy.min_lock_fraction {
+        let Some(lock_fraction) = op.twap_locked_fraction else {
+            return PolicyDecision::OutOfScope;
+        };
+        if lock_fraction + 1e-9 < min_lock_fraction {
+            return PolicyDecision::OutOfScope;
+        }
+    }
+    if let Some(lock_strength_min) = policy.lock_strength_min {
+        let Some(lead) = op.partial_twap_lead_usd else {
+            return PolicyDecision::OutOfScope;
+        };
+        let sigma_tail = op.btc_open
+            * op.causal_volatility
+            * (op.remaining_seconds / 31_536_000.0).sqrt();
+        if sigma_tail <= 0.0 || lead.abs() / sigma_tail < lock_strength_min {
+            return PolicyDecision::OutOfScope;
+        }
+        let lead_direction = if lead > 0.0 { "up" } else { "down" };
+        if lead_direction != op.signal_direction {
+            return PolicyDecision::LeadSideMismatch;
+        }
+    }
+    // Entry price semantics: band mechanisms (no lock filters) are
+    // preregistered as "enter within 30s of the decision" — use the v3
+    // patient-entry price (first fully-executable instant in the window).
+    // Lock-family policies keep the instantaneous decision-time book.
+    let entry_price = if policy.lock_strength_min.is_none() && policy.min_lock_fraction.is_none() {
+        op.entry30_price
+    } else {
+        if !op.book_observable || !op.stake_fully_executable {
+            return PolicyDecision::OutOfScope;
+        }
+        op.best_ask
     };
-    if lock_fraction + 1e-9 < policy.min_lock_fraction {
-        return PolicyDecision::OutOfScope;
-    }
-    let Some(lead) = op.partial_twap_lead_usd else {
-        return PolicyDecision::OutOfScope;
-    };
-    let sigma_tail = op.btc_open
-        * op.causal_volatility
-        * (op.remaining_seconds / 31_536_000.0).sqrt();
-    if sigma_tail <= 0.0 || lead.abs() / sigma_tail < policy.lock_strength_min {
-        return PolicyDecision::OutOfScope;
-    }
-    let lead_direction = if lead > 0.0 { "up" } else { "down" };
-    if lead_direction != op.signal_direction {
-        return PolicyDecision::LeadSideMismatch;
-    }
-    if !op.book_observable || !op.stake_fully_executable {
-        return PolicyDecision::OutOfScope;
-    }
-    match op.best_ask {
-        Some(ask) if ask <= policy.ask_cap + 1e-9 => PolicyDecision::Selected,
+    match entry_price {
+        Some(price) if price > policy.ask_floor + 1e-9 && price <= policy.ask_cap + 1e-9 => {
+            PolicyDecision::Selected
+        }
         _ => PolicyDecision::OutOfScope,
     }
 }
@@ -206,13 +230,15 @@ pub fn run_fresh_gate(input: FreshGateInput) -> Result<FreshGateVerdict> {
         })?;
         let outcome = if stream_close >= stream_open { "up" } else { "down" };
         let won = outcome == op.signal_direction;
+        let net_win = op.entry30_net_win_usd.or(op.fee_aware_net_win_usd);
+        let max_loss = op.entry30_max_loss_usd.or(op.fee_aware_max_loss_usd);
         if won {
             wins += 1;
-            payoff += op.fee_aware_net_win_usd.unwrap_or(0.0);
+            payoff += net_win.unwrap_or(0.0);
         } else {
-            payoff -= op.fee_aware_max_loss_usd.unwrap_or(0.0);
+            payoff -= max_loss.unwrap_or(0.0);
         }
-        if let Some(be) = op.fee_aware_break_even_probability {
+        if let Some(be) = op.entry30_break_even.or(op.fee_aware_break_even_probability) {
             break_evens.push(be);
         }
     }
@@ -291,9 +317,10 @@ mod tests {
         FrozenPolicy {
             family: "partial_twap_lock_v2".to_string(),
             decision_seconds: 240,
-            lock_strength_min: 0.25,
+            ask_floor: 0.0,
             ask_cap: 0.90,
-            min_lock_fraction: 0.6,
+            lock_strength_min: Some(0.25),
+            min_lock_fraction: Some(0.6),
             advancement_margin: 0.02,
         }
     }
@@ -327,6 +354,10 @@ mod tests {
             btc_open: 100_000.0,
             partial_twap_lead_usd: Some(lead),
             twap_locked_fraction: Some(0.8),
+            entry30_price: Some(ask),
+            entry30_break_even: Some(ask + 0.07 * ask * (1.0 - ask)),
+            entry30_net_win_usd: Some(5.0 * (1.0 / ask - 1.0)),
+            entry30_max_loss_usd: Some(5.0),
         }
     }
 
@@ -355,6 +386,41 @@ mod tests {
             policy_selects(&fresh_op("d", 0.01, 0.50), &p),
             PolicyDecision::OutOfScope
         ));
+    }
+
+
+    #[test]
+    fn band_policy_without_lock_filters_selects_on_price_band_only() {
+        // Candidate #20's mechanism: decision time + executable band, no
+        // partial-TWAP filters at all.
+        let band = FrozenPolicy {
+            family: "signal_favorite_band_official_v1".to_string(),
+            decision_seconds: 240,
+            ask_floor: 0.55,
+            ask_cap: 0.92,
+            lock_strength_min: None,
+            min_lock_fraction: None,
+            advancement_margin: 0.02,
+        };
+        // In-band ask, tiny lead, direction irrelevant to selection.
+        let mut op = fresh_op("band_in", 0.01, 0.80);
+        op.signal_direction = "down".to_string(); // lead>0 but no lead filter
+        assert!(matches!(policy_selects(&op, &band), PolicyDecision::Selected));
+        // Below the floor -> out of scope (the cheap side is NOT this candidate).
+        assert!(matches!(
+            policy_selects(&fresh_op("cheap", 0.01, 0.50), &band),
+            PolicyDecision::OutOfScope
+        ));
+        // Above the cap -> out of scope (fee-erased favorites excluded).
+        assert!(matches!(
+            policy_selects(&fresh_op("fav", 0.01, 0.95), &band),
+            PolicyDecision::OutOfScope
+        ));
+        // Band policy round-trips through JSON without the lock fields.
+        let raw = r#"{"family":"signal_favorite_band_official_v1","decision_seconds":240,"ask_floor":0.55,"ask_cap":0.92,"advancement_margin":0.02}"#;
+        let parsed: FrozenPolicy = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.lock_strength_min, None);
+        assert!((parsed.ask_floor - 0.55).abs() < 1e-12);
     }
 
     #[test]

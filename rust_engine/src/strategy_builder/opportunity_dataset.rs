@@ -162,6 +162,11 @@ pub(crate) struct CausalOpportunity {
     /// Feature-semantics v2 columns; None when reading v1-era tables.
     pub partial_twap_lead_usd: Option<f64>,
     pub twap_locked_fraction: Option<f64>,
+    /// v3 patient-entry columns; None on pre-v3 tables.
+    pub entry30_price: Option<f64>,
+    pub entry30_break_even: Option<f64>,
+    pub entry30_net_win_usd: Option<f64>,
+    pub entry30_max_loss_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -620,6 +625,10 @@ fn read_opportunities(path: &Path) -> Result<Vec<CausalOpportunity>> {
                 btc_open: required_f64(&batch, "btc_open", row)?,
                 partial_twap_lead_usd: optional_f64_column(&batch, "partial_twap_lead_usd", row)?,
                 twap_locked_fraction: optional_f64_column(&batch, "twap_locked_fraction", row)?,
+                entry30_price: optional_f64_column(&batch, "entry30_price", row)?,
+                entry30_break_even: optional_f64_column(&batch, "entry30_break_even", row)?,
+                entry30_net_win_usd: optional_f64_column(&batch, "entry30_net_win_usd", row)?,
+                entry30_max_loss_usd: optional_f64_column(&batch, "entry30_max_loss_usd", row)?,
             });
         }
     }
@@ -820,6 +829,10 @@ mod tests {
             btc_open: 100.0,
             partial_twap_lead_usd: None,
             twap_locked_fraction: None,
+            entry30_price: None,
+            entry30_break_even: None,
+            entry30_net_win_usd: None,
+            entry30_max_loss_usd: None,
         }
     }
 

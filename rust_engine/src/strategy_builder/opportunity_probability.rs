@@ -942,6 +942,10 @@ mod tests {
             btc_open: 100.0,
             partial_twap_lead_usd: None,
             twap_locked_fraction: None,
+            entry30_price: None,
+            entry30_break_even: None,
+            entry30_net_win_usd: None,
+            entry30_max_loss_usd: None,
         }
     }
 

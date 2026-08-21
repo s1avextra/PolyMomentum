@@ -26,10 +26,13 @@ use crate::execution::fees::polymarket_fee;
 use crate::strategy::spec::stable_json_hash;
 
 pub const OPPORTUNITY_TABLE_SCHEMA_VERSION: &str = "opportunity_table_v1";
-// v2 (2026-08-17): adds partial_twap_approx / partial_twap_lead_usd /
-// twap_locked_fraction for the TWAP resolution era. v1 seals stay valid;
+// v2 (2026-08-17): partial_twap_approx / partial_twap_lead_usd /
+// twap_locked_fraction. v3 (2026-08-21): patient-entry columns entry30_* —
+// the first fully-executable measurement within 30s after the decision
+// (execution modeling, outcome-free), aligning the gate with mechanisms
+// preregistered as "enter within 30s". Older seals stay valid per version;
 // dataset-seal refuses to mix semantics versions.
-pub const CAUSAL_FEATURE_SEMANTICS_VERSION: &str = "late_window_causal_features_v2";
+pub const CAUSAL_FEATURE_SEMANTICS_VERSION: &str = "late_window_causal_features_v3";
 
 #[derive(Debug, Clone)]
 pub struct OpportunityTableInput {
@@ -156,6 +159,14 @@ pub struct OpportunityRow {
     /// `elapsed / (elapsed + remaining)` — the weight of the window average
     /// already fixed by observed prices.
     pub twap_locked_fraction: f64,
+    /// Patient entry (v3): first fully-executable measurement within 30s
+    /// after the decision. None = no instant in the window could fill the
+    /// stake. Outcome-free execution modeling.
+    pub entry30_price: Option<f64>,
+    pub entry30_ts_ms: Option<i64>,
+    pub entry30_break_even: Option<f64>,
+    pub entry30_net_win_usd: Option<f64>,
+    pub entry30_max_loss_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -475,9 +486,24 @@ fn build_rows_from_events(
             event_index += 1;
         }
         let token_id = signal.raw.token_id.clone();
+        // Patient-entry measurement: the first instant within
+        // (observed_at, observed_at + 30s] at which the full stake is
+        // executable, found by rolling a CLONE of this token's book forward
+        // through the window's events. Execution modeling only — no
+        // resolution or outcome enters here.
+        let patient = patient_entry_within_30s(
+            books.get(&token_id),
+            events,
+            event_index,
+            &token_id,
+            &signal,
+            stake_usd,
+            fee_rate,
+        );
         rows.push(build_row(
             signal,
             books.get(&token_id),
+            patient,
             signals_sha256,
             pmxt_sha256,
             stake_usd,
@@ -487,9 +513,60 @@ fn build_rows_from_events(
     rows
 }
 
+const PATIENT_ENTRY_WINDOW_S: f64 = 30.0;
+
+/// First fully-executable measurement in `(observed_at, observed_at+30s]`
+/// for the signal token, or the observed-instant measurement when it is
+/// already executable. None when no instant in the window can fill the
+/// stake — the honest "no fill" record.
+fn patient_entry_within_30s(
+    book_at_signal: Option<&TokenBook>,
+    events: &[L2Event],
+    event_index_at_signal: usize,
+    token_id: &str,
+    signal: &ValidatedSignal,
+    stake_usd: f64,
+    fee_rate: f64,
+) -> Option<(BookMetrics, i64)> {
+    let at_signal = measure_book(book_at_signal, signal.observed_at, stake_usd, fee_rate);
+    if at_signal.observable && at_signal.stake_fully_executable {
+        return Some((at_signal, signal.observed_at.timestamp_millis()));
+    }
+    let mut rolled = book_at_signal.cloned()?;
+    let window_end_s =
+        signal.observed_at.timestamp_millis() as f64 / 1_000.0 + PATIENT_ENTRY_WINDOW_S;
+    for event in events.iter().skip(event_index_at_signal) {
+        if event.timestamp_s > window_end_s {
+            break;
+        }
+        let applied_ts_ms = (event.timestamp_s * 1000.0).round() as i64;
+        match &event.body {
+            L2EventBody::BookSnapshot(snapshot) if snapshot.token_id == token_id => {
+                rolled.apply_snapshot(snapshot);
+            }
+            L2EventBody::PriceChange(change) if change.token_id == token_id => {
+                rolled.apply_change(change);
+            }
+            _ => continue,
+        }
+        let measured = measure_book(
+            Some(&rolled),
+            DateTime::<Utc>::from_timestamp_millis(applied_ts_ms)
+                .unwrap_or(signal.observed_at),
+            stake_usd,
+            fee_rate,
+        );
+        if measured.observable && measured.stake_fully_executable {
+            return Some((measured, applied_ts_ms));
+        }
+    }
+    None
+}
+
 fn build_row(
     signal: ValidatedSignal,
     book: Option<&TokenBook>,
+    patient: Option<(BookMetrics, i64)>,
     signals_sha256: &str,
     pmxt_sha256: &str,
     stake_usd: f64,
@@ -602,6 +679,11 @@ fn build_row(
         partial_twap_approx,
         partial_twap_lead_usd,
         twap_locked_fraction,
+        entry30_price: patient.as_ref().and_then(|(m, _)| m.average_entry_price),
+        entry30_ts_ms: patient.as_ref().map(|(_, ts)| *ts),
+        entry30_break_even: patient.as_ref().and_then(|(m, _)| m.break_even_probability),
+        entry30_net_win_usd: patient.as_ref().and_then(|(m, _)| m.net_win),
+        entry30_max_loss_usd: patient.as_ref().and_then(|(m, _)| m.max_loss),
         fee_aware_break_even_probability: book_metrics.break_even_probability,
         fee_aware_net_win_usd: book_metrics.net_win,
         fee_aware_max_loss_usd: book_metrics.max_loss,
@@ -854,6 +936,11 @@ fn opportunity_schema() -> Arc<Schema> {
         Field::new("partial_twap_approx", DataType::Float64, true),
         Field::new("partial_twap_lead_usd", DataType::Float64, true),
         Field::new("twap_locked_fraction", DataType::Float64, false),
+        Field::new("entry30_price", DataType::Float64, true),
+        Field::new("entry30_ts_ms", DataType::Int64, true),
+        Field::new("entry30_break_even", DataType::Float64, true),
+        Field::new("entry30_net_win_usd", DataType::Float64, true),
+        Field::new("entry30_max_loss_usd", DataType::Float64, true),
     ];
     Arc::new(Schema::new(fields))
 }
@@ -942,6 +1029,11 @@ fn opportunity_batch(schema: Arc<Schema>, rows: &[OpportunityRow]) -> Result<Rec
             optional_floats(|r| r.partial_twap_approx),
             optional_floats(|r| r.partial_twap_lead_usd),
             floats(|r| r.twap_locked_fraction),
+            optional_floats(|r| r.entry30_price),
+            optional_i64s(|r| r.entry30_ts_ms),
+            optional_floats(|r| r.entry30_break_even),
+            optional_floats(|r| r.entry30_net_win_usd),
+            optional_floats(|r| r.entry30_max_loss_usd),
         ],
     )
     .context("build opportunity-table record batch")
