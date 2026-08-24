@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-19T08:58:20.153050+00:00",
+  "updated_at": "2026-08-24T04:45:18.574702+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -629,21 +629,24 @@
       "version_id": "sv_8e4262279f63e126",
       "parent_id": "cheap_side_twap_v1",
       "status": "candidate",
-      "reason": "Capacity/economics prerequisite satisfied at analysis level: median executed band notional $976/event across all 284 discovery windows (zero empty events, ~57 events/day full coverage); gross $28-550/day at $5-100 stakes before explicitly-listed haircuts. Fresh gate and fill-rate evidence remain the open prerequisites.",
+      "reason": "FRESH GATE PASSED (one-shot, consumed 2026-08-24): 222 post-freeze band entries (windows 2026-08-19T09:00Z..2026-08-24T02:05Z, all resolved), WR 93.24% vs avg BE 82.34%, point edge +0.109, Wilson edge +0.068 > +0.02 margin. Same public instrument as discovery, per the 2026-08-21 amendment (declared before touching any post-freeze data). Remaining promotion prerequisites: capture-book exact-replay fill-rate evidence and the operator's live-canary decision + wallet funding. Live is never auto-triggered.",
       "artifact_path": null,
       "metrics_path": null,
       "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260819_band_capacity_study.json",
         "deploy/promotions/evidence/strategy_registry/20260819_complement_and_band_disjoint_study.json",
         "deploy/promotions/evidence/strategy_registry/20260819_official_resolution_parity.json",
         "deploy/promotions/evidence/strategy_registry/20260819_signal_favorite_band_official_v1_preregistration.md",
-        "deploy/promotions/evidence/strategy_registry/20260819_band_capacity_study.json"
+        "deploy/promotions/evidence/strategy_registry/20260821_fresh_gate_public_v1.json",
+        "deploy/promotions/evidence/strategy_registry/20260821_signal_favorite_band_official_v1_gate_amendment.md",
+        "deploy/promotions/evidence/strategy_registry/20260824_fresh_gate_public_v1_consumed_marker.json"
       ],
       "notes": [
         "Fresh gate: one-shot on capture-campaign books via exact L2 replay + official-resolution labels, >=110 band entries (~6-10 days), Wilson edge > +0.02, fail -> tombstone. Promotion additionally requires capacity/economics and live fill-rate evidence.",
         "Economics doc: docs/band_economics_2026-08-19.md"
       ],
       "first_seen_at": "2026-08-19T08:13:28.879670+00:00",
-      "updated_at": "2026-08-19T08:58:20.153050+00:00",
+      "updated_at": "2026-08-24T04:45:18.574702+00:00",
       "events": [
         {
           "at": "2026-08-19T08:13:28.879670+00:00",
@@ -667,6 +670,20 @@
           ],
           "notes": [
             "Economics doc: docs/band_economics_2026-08-19.md"
+          ]
+        },
+        {
+          "at": "2026-08-24T04:45:18.574702+00:00",
+          "status": "candidate",
+          "reason": "FRESH GATE PASSED (one-shot, consumed 2026-08-24): 222 post-freeze band entries (windows 2026-08-19T09:00Z..2026-08-24T02:05Z, all resolved), WR 93.24% vs avg BE 82.34%, point edge +0.109, Wilson edge +0.068 > +0.02 margin. Same public instrument as discovery, per the 2026-08-21 amendment (declared before touching any post-freeze data). Remaining promotion prerequisites: capture-book exact-replay fill-rate evidence and the operator's live-canary decision + wallet funding. Live is never auto-triggered.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260821_fresh_gate_public_v1.json",
+            "deploy/promotions/evidence/strategy_registry/20260821_signal_favorite_band_official_v1_gate_amendment.md",
+            "deploy/promotions/evidence/strategy_registry/20260824_fresh_gate_public_v1_consumed_marker.json"
+          ],
+          "notes": [
+            "Fresh-sample stats match both discovery samples (93.9%/+0.118 primary, 91.4%/+0.106 disjoint, 93.2%/+0.109 fresh) - textbook out-of-sample stability.",
+            "Consumed marker frozen the 222-window sample before the single outcome read; gate is spent and cannot be re-run."
           ]
         }
       ]
