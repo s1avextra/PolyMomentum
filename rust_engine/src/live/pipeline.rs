@@ -2759,6 +2759,31 @@ impl Pipeline {
                     .values()
                     .filter(|b| live_book_age_seconds(now_ts, b.last_update_us).is_some())
                     .count();
+                // Ages for the most time-advanced (decision-relevant) contract.
+                let active_ages = contracts
+                    .iter()
+                    .filter_map(|c| {
+                        let end = parse_end(&c.end_date).ok()?;
+                        let minutes_left = (end - now).num_seconds() as f64 / 60.0;
+                        (0.0..5.0).contains(&minutes_left).then(|| {
+                            let age = |tid: &str| {
+                                books
+                                    .get(tid)
+                                    .map(|b| now_ts - b.last_update_us as f64 / 1e6)
+                                    .map(|a| format!("{a:.1}"))
+                                    .unwrap_or_else(|| "absent".to_string())
+                            };
+                            format!(
+                                "{}:up={},down={}",
+                                short_cid(&c.market.condition_id),
+                                age(&c.up_token_id),
+                                age(&c.down_token_id)
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let ws = crate::polymarket_ws::ws_counters();
                 tracing::info!(
                     cycle,
                     btc,
@@ -2766,6 +2791,14 @@ impl Pipeline {
                     contracts = contracts.len(),
                     books_total,
                     books_fresh,
+                    active_ages = %active_ages,
+                    ws_frames = ws[0],
+                    ws_book = ws[1],
+                    ws_pc = ws[2],
+                    ws_bba = ws[3],
+                    ws_drop_ts = ws[4],
+                    ws_drop_parse = ws[5],
+                    ws_drop_stale = ws[6],
                     top_skips = ?top,
                     "candle.cycle"
                 );

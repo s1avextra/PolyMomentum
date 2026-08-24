@@ -18,6 +18,7 @@
 //! old captures remain replayable in tests and diagnostics.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -136,6 +137,27 @@ fn parse_levels(raw: &Option<Vec<RawLevel>>, descending: bool) -> Vec<BookLevel>
         });
     }
     out
+}
+
+/// Diagnostic counters for the market ws intake (cumulative since start).
+pub static WS_APPLIED_BOOK: AtomicU64 = AtomicU64::new(0);
+pub static WS_APPLIED_PRICE_CHANGE: AtomicU64 = AtomicU64::new(0);
+pub static WS_APPLIED_BEST_BID_ASK: AtomicU64 = AtomicU64::new(0);
+pub static WS_DROPPED_NO_TIMESTAMP: AtomicU64 = AtomicU64::new(0);
+pub static WS_DROPPED_PARSE: AtomicU64 = AtomicU64::new(0);
+pub static WS_DROPPED_STALE_ORDER: AtomicU64 = AtomicU64::new(0);
+pub static WS_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+pub fn ws_counters() -> [u64; 7] {
+    [
+        WS_FRAMES.load(Ordering::Relaxed),
+        WS_APPLIED_BOOK.load(Ordering::Relaxed),
+        WS_APPLIED_PRICE_CHANGE.load(Ordering::Relaxed),
+        WS_APPLIED_BEST_BID_ASK.load(Ordering::Relaxed),
+        WS_DROPPED_NO_TIMESTAMP.load(Ordering::Relaxed),
+        WS_DROPPED_PARSE.load(Ordering::Relaxed),
+        WS_DROPPED_STALE_ORDER.load(Ordering::Relaxed),
+    ]
 }
 
 fn source_timestamp_us(data: &serde_json::Value) -> Option<u64> {
@@ -336,6 +358,7 @@ async fn run_session(
 }
 
 async fn handle_frame(book_state: &SharedBookState, m: Message) {
+    WS_FRAMES.fetch_add(1, Ordering::Relaxed);
     let Ok(text) = m.into_text() else { return };
     // Polymarket sometimes sends arrays of messages.
     let trimmed = text.trim();
@@ -376,6 +399,7 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
         return;
     }
     let Some(timestamp_us) = source_timestamp_us(&data) else {
+        WS_DROPPED_NO_TIMESTAMP.fetch_add(1, Ordering::Relaxed);
         return;
     };
 
@@ -399,9 +423,11 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
         }
         "book" => {
             let Ok(snap): Result<BookSnapshot, _> = serde_json::from_value(data) else {
+                WS_DROPPED_PARSE.fetch_add(1, Ordering::Relaxed);
                 return;
             };
             let Some(asset_id) = snap.asset_id else {
+                WS_DROPPED_PARSE.fetch_add(1, Ordering::Relaxed);
                 return;
             };
             let bids = parse_levels(&snap.bids, true);
@@ -418,6 +444,7 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
             let mut map = book_state.write().await;
             let state = map.entry(asset_id).or_default();
             if timestamp_us < state.last_update_us {
+                WS_DROPPED_STALE_ORDER.fetch_add(1, Ordering::Relaxed);
                 return;
             }
             state.best_bid = best_bid;
@@ -427,15 +454,18 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
             state.asks = asks;
             state.last_update_us = timestamp_us;
             record_mid_history(state, timestamp_us);
+            WS_APPLIED_BOOK.fetch_add(1, Ordering::Relaxed);
         }
         "price_change" => {
             let Ok(pc): Result<PriceChange, _> = serde_json::from_value(data) else {
+                WS_DROPPED_PARSE.fetch_add(1, Ordering::Relaxed);
                 return;
             };
             let changes = pc.price_changes.or(pc.changes).unwrap_or_default();
             if changes.is_empty() {
                 return;
             }
+            WS_APPLIED_PRICE_CHANGE.fetch_add(1, Ordering::Relaxed);
             let mut map = book_state.write().await;
             for ch in changes {
                 let Some(asset_id) = ch.asset_id.clone().or_else(|| pc.asset_id.clone()) else {
@@ -482,6 +512,7 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
             let mut map = book_state.write().await;
             let entry = map.entry(asset_id).or_default();
             if timestamp_us < entry.last_update_us {
+                WS_DROPPED_STALE_ORDER.fetch_add(1, Ordering::Relaxed);
                 return;
             }
             entry.best_bid = best_bid;
@@ -495,6 +526,7 @@ async fn apply_typed_message(book_state: &SharedBookState, t: &str, data: serde_
             };
             entry.last_update_us = timestamp_us;
             record_mid_history(entry, timestamp_us);
+            WS_APPLIED_BEST_BID_ASK.fetch_add(1, Ordering::Relaxed);
         }
         _ => {}
     }
