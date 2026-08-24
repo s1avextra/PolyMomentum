@@ -147,7 +147,7 @@ fn source_timestamp_us(data: &serde_json::Value) -> Option<u64> {
         Some(timestamp_us.round() as u64)
     }
 
-    match data.get("timestamp")? {
+    let parsed = match data.get("timestamp")? {
         serde_json::Value::String(raw) => raw
             .parse::<u64>()
             .ok()
@@ -158,6 +158,26 @@ fn source_timestamp_us(data: &serde_json::Value) -> Option<u64> {
             .and_then(|timestamp_ms| timestamp_ms.checked_mul(1_000))
             .or_else(|| number.as_f64().and_then(float_ms_to_us)),
         _ => None,
+    }?;
+    Some(clamp_timestamp_us_to_local(parsed))
+}
+
+/// A single venue message whose timestamp is mis-scaled (e.g. already in
+/// microseconds) would set `last_update_us` far into the future and make the
+/// monotonicity guard reject every later legitimate update for that token
+/// until restart. Freshness is judged against the local clock, so clamp any
+/// implausible venue timestamp to "received now" instead of trusting it.
+fn clamp_timestamp_us_to_local(timestamp_us: u64) -> u64 {
+    let now_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(timestamp_us);
+    let lower = now_us.saturating_sub(60 * 60 * 1_000_000);
+    let upper = now_us.saturating_add(10 * 1_000_000);
+    if (lower..=upper).contains(&timestamp_us) {
+        timestamp_us
+    } else {
+        now_us
     }
 }
 
@@ -605,14 +625,25 @@ mod tests {
         assert!((token.best_ask - 0.53).abs() < 1e-9);
     }
 
+    /// Millisecond timestamp within the plausibility window of
+    /// `clamp_timestamp_us_to_local`, offset back from now by `back_ms`.
+    fn recent_ms(back_ms: u64) -> u64 {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        now_ms - back_ms
+    }
+
     #[tokio::test]
     async fn applies_current_best_bid_ask() {
+        let ts_ms = recent_ms(2_000);
         let book = new_shared_book();
         apply_message_value(
             &book,
             serde_json::json!({
                 "event_type": "best_bid_ask",
-                "timestamp": 2002.5,
+                "timestamp": (ts_ms as f64) + 0.5,
                 "asset_id": "token-a",
                 "best_bid": "0.49",
                 "best_ask": "0.51"
@@ -622,17 +653,56 @@ mod tests {
         let state = book.read().await;
         let token = state.get("token-a").unwrap();
         assert!((token.mid - 0.50).abs() < 1e-9);
-        assert_eq!(token.last_update_us, 2_002_500);
+        assert_eq!(token.last_update_us, ts_ms * 1_000 + 500);
+    }
+
+    #[tokio::test]
+    async fn implausible_timestamp_is_clamped_and_cannot_poison_the_book() {
+        let book = new_shared_book();
+        // Microsecond-scaled venue timestamp: without the clamp this would
+        // set last_update_us ~1000x into the future and freeze the token.
+        let us_scaled = recent_ms(0) * 1_000;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": us_scaled.to_string(),
+                "asset_id": "token-a",
+                "bids": [{"price": "0.20", "size": "30"}],
+                "asks": [{"price": "0.80", "size": "25"}],
+            }),
+        )
+        .await;
+        let ts_ms = recent_ms(0) + 5;
+        apply_message_value(
+            &book,
+            serde_json::json!({
+                "event_type": "book",
+                "timestamp": ts_ms.to_string(),
+                "asset_id": "token-a",
+                "bids": [{"price": "0.48", "size": "30"}],
+                "asks": [{"price": "0.52", "size": "25"}],
+            }),
+        )
+        .await;
+        let state = book.read().await;
+        let token = state.get("token-a").unwrap();
+        // The later legitimate update must win despite the poisoned first one.
+        assert!((token.best_bid - 0.48).abs() < 1e-9);
+        assert_eq!(token.last_update_us, ts_ms * 1_000);
     }
 
     #[tokio::test]
     async fn applies_latest_tick_size_change_without_refreshing_book_age() {
+        let book_ms = recent_ms(30_000);
+        let tick_new_ms = recent_ms(10_000);
+        let tick_stale_ms = recent_ms(20_000);
         let book = new_shared_book();
         apply_message_value(
             &book,
             serde_json::json!({
                 "event_type": "book",
-                "timestamp": "3000",
+                "timestamp": book_ms.to_string(),
                 "asset_id": "token-a",
                 "bids": [{"price": "0.95", "size": "30"}],
                 "asks": [{"price": "0.96", "size": "25"}],
@@ -643,7 +713,7 @@ mod tests {
             &book,
             serde_json::json!({
                 "event_type": "tick_size_change",
-                "timestamp": "4000",
+                "timestamp": tick_new_ms.to_string(),
                 "asset_id": "token-a",
                 "market": "condition-a",
                 "old_tick_size": "0.01",
@@ -655,7 +725,7 @@ mod tests {
             &book,
             serde_json::json!({
                 "event_type": "tick_size_change",
-                "timestamp": "3500",
+                "timestamp": tick_stale_ms.to_string(),
                 "asset_id": "token-a",
                 "market": "condition-a",
                 "old_tick_size": "0.001",
@@ -667,18 +737,20 @@ mod tests {
         let state = book.read().await;
         let token = state.get("token-a").unwrap();
         assert_eq!(token.tick_size, Some(0.001));
-        assert_eq!(token.tick_update_us, 4_000_000);
-        assert_eq!(token.last_update_us, 3_000_000);
+        assert_eq!(token.tick_update_us, tick_new_ms * 1_000);
+        assert_eq!(token.last_update_us, book_ms * 1_000);
     }
 
     #[tokio::test]
     async fn stale_snapshot_cannot_overwrite_newer_book() {
+        let newer_ms = recent_ms(5_000);
+        let stale_ms = recent_ms(15_000);
         let book = new_shared_book();
         apply_message_value(
             &book,
             serde_json::json!({
                 "event_type": "book",
-                "timestamp": "2000",
+                "timestamp": newer_ms.to_string(),
                 "asset_id": "token-a",
                 "bids": [{"price": "0.48", "size": "30"}],
                 "asks": [{"price": "0.52", "size": "25"}],
@@ -689,7 +761,7 @@ mod tests {
             &book,
             serde_json::json!({
                 "event_type": "book",
-                "timestamp": "1000",
+                "timestamp": stale_ms.to_string(),
                 "asset_id": "token-a",
                 "bids": [{"price": "0.20", "size": "30"}],
                 "asks": [{"price": "0.80", "size": "25"}],
@@ -701,7 +773,7 @@ mod tests {
         let token = state.get("token-a").unwrap();
         assert!((token.best_bid - 0.48).abs() < 1e-9);
         assert!((token.best_ask - 0.52).abs() < 1e-9);
-        assert_eq!(token.last_update_us, 2_000_000);
+        assert_eq!(token.last_update_us, newer_ms * 1_000);
     }
 
     #[tokio::test]

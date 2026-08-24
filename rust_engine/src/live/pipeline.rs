@@ -1988,11 +1988,17 @@ impl Pipeline {
                     .filter(|s| !s.is_empty())
             })
             .collect();
-        {
+        let tokens_changed = {
             let mut tt = self.tracked_tokens.write().await;
+            let changed = *tt != token_ids;
             *tt = token_ids;
+            changed
+        };
+        // Reconnecting drops every book until the venue resends snapshots, so
+        // only churn the subscription when the token set actually changed.
+        if tokens_changed {
+            self.resub_notify.notify_one();
         }
-        self.resub_notify.notify_one();
         let market_ids: Vec<String> = contracts
             .iter()
             .map(|c| c.market.condition_id.clone())
@@ -2748,11 +2754,18 @@ impl Pipeline {
             if cycle % 30 == 0 {
                 self.monitor.record_cycle(cycle, cycle_ms, contracts.len());
                 let top = self.monitor.top_skip_reasons(5);
+                let books_total = books.len();
+                let books_fresh = books
+                    .values()
+                    .filter(|b| live_book_age_seconds(now_ts, b.last_update_us).is_some())
+                    .count();
                 tracing::info!(
                     cycle,
                     btc,
                     cycle_ms = cycle_ms,
                     contracts = contracts.len(),
+                    books_total,
+                    books_fresh,
                     top_skips = ?top,
                     "candle.cycle"
                 );
