@@ -876,13 +876,22 @@ impl Pipeline {
             // Fall back to wallet detection if private key set
             try_wallet_bankroll(&settings).await.unwrap_or(0.0)
         };
-        let risk_cfg = RiskConfig {
+        let mut risk_cfg = RiskConfig {
             initial_bankroll: bankroll,
             max_total_exposure_override: settings.max_total_exposure_usd,
             max_per_market_override: runtime_strategy.max_per_market_usd,
             actualize_on_open: matches!(mode, Mode::Live),
             ..Default::default()
         };
+        if runtime_strategy.band.is_some() {
+            // Wallet-bounded band canary: the frozen $-stake must survive a
+            // bankroll of the same magnitude, so the $ overrides above are
+            // the operative caps; fractional ratios would silently shrink
+            // the stake below the promoted policy. Loss brakes (session
+            // floor, consecutive losses) are unaffected.
+            risk_cfg.exposure_ratio = 1.0;
+            risk_cfg.max_per_market_ratio = 1.0;
+        }
         let risk = RiskManager::open(&settings.state_db_path, risk_cfg).await?;
         if matches!(mode, Mode::Paper) && settings.candle_simulated_balance_reset_on_start {
             risk.reset_simulated_session(bankroll).await?;
