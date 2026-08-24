@@ -1,0 +1,30 @@
+[Unit]
+Description=PolyMomentum band canary (signal_favorite_band_official_v1, live)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=polymomentum
+WorkingDirectory=/opt/polymomentum
+EnvironmentFile=/etc/polymomentum/env
+EnvironmentFile=/etc/polymomentum/band-canary.env
+ExecStart=/opt/polymomentum/tools/polymomentum-engine-band-v1 live --mode live --i-understand-live --promotion-artifact /opt/polymomentum/promotions/band_promotion_v1.json
+ExecStop=/bin/kill -SIGTERM $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/polymomentum /tmp/polymomentum
+
+[Install]
+WantedBy=multi-user.target
