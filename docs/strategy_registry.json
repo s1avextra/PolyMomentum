@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-24T04:45:18.574702+00:00",
+  "updated_at": "2026-08-24T06:22:24.761122+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -629,7 +629,7 @@
       "version_id": "sv_8e4262279f63e126",
       "parent_id": "cheap_side_twap_v1",
       "status": "candidate",
-      "reason": "FRESH GATE PASSED (one-shot, consumed 2026-08-24): 222 post-freeze band entries (windows 2026-08-19T09:00Z..2026-08-24T02:05Z, all resolved), WR 93.24% vs avg BE 82.34%, point edge +0.109, Wilson edge +0.068 > +0.02 margin. Same public instrument as discovery, per the 2026-08-21 amendment (declared before touching any post-freeze data). Remaining promotion prerequisites: capture-book exact-replay fill-rate evidence and the operator's live-canary decision + wallet funding. Live is never auto-triggered.",
+      "reason": "ALL promotion prerequisites satisfied: fresh gate PASSED 2026-08-24 (n=222, Wilson edge +0.068) AND capture fill-replay confirms execution realism (93/93 band-priced windows filled the $5 stake instantly at the 240s book; our avg break-even 0.8236 vs the gate's 0.8234; median visible ask notional $10k). Awaiting ONLY the operator's live-canary decision + wallet funding. Live is never auto-triggered.",
       "artifact_path": null,
       "metrics_path": null,
       "evidence_paths": [
@@ -639,6 +639,7 @@
         "deploy/promotions/evidence/strategy_registry/20260819_signal_favorite_band_official_v1_preregistration.md",
         "deploy/promotions/evidence/strategy_registry/20260821_fresh_gate_public_v1.json",
         "deploy/promotions/evidence/strategy_registry/20260821_signal_favorite_band_official_v1_gate_amendment.md",
+        "deploy/promotions/evidence/strategy_registry/20260824_capture_fill_replay.json",
         "deploy/promotions/evidence/strategy_registry/20260824_fresh_gate_public_v1_consumed_marker.json"
       ],
       "notes": [
@@ -646,7 +647,7 @@
         "Economics doc: docs/band_economics_2026-08-19.md"
       ],
       "first_seen_at": "2026-08-19T08:13:28.879670+00:00",
-      "updated_at": "2026-08-24T04:45:18.574702+00:00",
+      "updated_at": "2026-08-24T06:22:24.761122+00:00",
       "events": [
         {
           "at": "2026-08-19T08:13:28.879670+00:00",
@@ -684,6 +685,18 @@
           "notes": [
             "Fresh-sample stats match both discovery samples (93.9%/+0.118 primary, 91.4%/+0.106 disjoint, 93.2%/+0.109 fresh) - textbook out-of-sample stability.",
             "Consumed marker frozen the 222-window sample before the single outcome read; gate is spent and cannot be re-run."
+          ]
+        },
+        {
+          "at": "2026-08-24T06:22:24.761122+00:00",
+          "status": "candidate",
+          "reason": "ALL promotion prerequisites satisfied: fresh gate PASSED 2026-08-24 (n=222, Wilson edge +0.068) AND capture fill-replay confirms execution realism (93/93 band-priced windows filled the $5 stake instantly at the 240s book; our avg break-even 0.8236 vs the gate's 0.8234; median visible ask notional $10k). Awaiting ONLY the operator's live-canary decision + wallet funding. Live is never auto-triggered.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260824_capture_fill_replay.json"
+          ],
+          "notes": [
+            "Fill-rate leg run on 114 captured hours (83 usable); outcome-free pipeline.",
+            "2/93 fills walked above 0.92 on thin band-edge tops - correct non-entries under the frozen entry30_price selection."
           ]
         }
       ]

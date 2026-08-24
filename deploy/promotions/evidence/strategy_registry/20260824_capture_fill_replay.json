@@ -1,0 +1,60 @@
+{
+ "schema_version": 1,
+ "registration": "capture_fill_replay_20260824",
+ "candidate": "signal_favorite_band_official_v1",
+ "purpose": "Execution-realism promotion prerequisite: would OUR $5 taker entries have filled at the prices the (already passed) fresh gate assumed?",
+ "source": "114 captured campaign hours 2026-08-19T04..2026-08-24T01 (VPS L2 books, distilled v1); 83 hours usable at the 240s decision, 29 rejected as capture coverage gaps; span cut at 2026-08-24T00 by Binance daily availability",
+ "pipeline": "catalog -> signals -> v3 opportunity tables --distilled-input (entry30_* patient entry); outcome-free, no labels created",
+ "results": {
+  "decision_rows_240s": 994,
+  "observable_rows": 247,
+  "capture_coverage": 0.2485,
+  "unobservable_reasons": {
+   "no_book_before_observed_at": 534,
+   "invalid_top_of_book": 213
+  },
+  "instant_ask_in_band": 93,
+  "filled_within_30s": 93,
+  "fill_rate": 1.0,
+  "all_fills_instant_at_240s_book": true,
+  "filled_at_band_price": 91,
+  "out_of_band_fills": [
+   {
+    "ws": 1787174700,
+    "ask240": 0.91,
+    "avg_fill": 0.9483
+   },
+   {
+    "ws": 1787222400,
+    "ask240": 0.92,
+    "avg_fill": 0.9248
+   }
+  ],
+  "out_of_band_note": "thin top level at the band edge walked the $5 stake above 0.92; frozen policy selects on achieved entry30_price so these are correct non-entries (2/93 = 2.2%)"
+ },
+ "price_parity_vs_gate_instrument": {
+  "matched_windows_both_band": 57,
+  "diff_ours_minus_print": {
+   "mean": -0.0019,
+   "median": 0.0,
+   "p90_abs": 0.13,
+   "max_abs": 0.34
+  },
+  "avg_break_even_ours": 0.8236,
+  "avg_break_even_fresh_gate": 0.8234,
+  "signal_side_agreement": "77/77 on all matched windows",
+  "note": "large per-window diffs are symmetric fast-market jitter (both instruments sample different seconds inside [240s,270s]); zero systematic disadvantage"
+ },
+ "depth_for_sizing": {
+  "visible_ask_notional_usd_on_band_rows": {
+   "p10": 6465.8,
+   "p25": 7769.2,
+   "median": 10005.6,
+   "p75": 13449.2
+  },
+  "rows_supporting_500usd": "93/93",
+  "note": "$5-$100 stakes are 0.05%-1.5% of median visible ask notional"
+ },
+ "verdict": "FILL_REALISM_CONFIRMED",
+ "generated_at": "2026-08-24T06:22:24.759871+00:00"
+}
