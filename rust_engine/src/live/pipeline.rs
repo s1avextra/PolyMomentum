@@ -62,7 +62,7 @@ use crate::strategy::microstructure::{
     apply_causal_dynamic_tick_transition, bookwalk_buy_slippage, recent_mid_runup, BookLevelView,
     BookMicrostructure, MicrostructureConfig,
 };
-use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
+use crate::strategy::momentum::{MomentumConfig, MomentumDetector, MomentumSignal};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,6 +416,73 @@ fn is_rest_not_found(error: &str) -> bool {
     error.starts_with("HTTP 404:") || error.starts_with("HTTP 404 ")
 }
 
+/// Frozen band family: preregistered 2026-08-19, fresh-gate PASS 2026-08-24
+/// (`docs/signal_favorite_band_official_v1_preregistration_2026-08-19.md`).
+pub const BAND_FAMILY: &str = "signal_favorite_band_official_v1";
+
+/// The frozen band policy. Field set and order are part of the promotion
+/// contract: `stable_json_hash` of this struct must equal the artifact's
+/// `selected_strategy.params_hash`, so changing anything here invalidates
+/// every existing band promotion artifact (by design).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BandPolicyParams {
+    pub family: String,
+    /// Seconds after window open at which the entry attempt window begins.
+    pub decision_seconds: f64,
+    /// Patient-entry span: attempts run in [decision, decision+entry_window).
+    pub entry_window_seconds: f64,
+    /// Exclusive lower bound on the budget-aware execution VWAP.
+    pub ask_floor: f64,
+    /// Inclusive upper bound; enforced on the FOK worst price, which is
+    /// stricter than the replay's average-price bound.
+    pub ask_cap: f64,
+    pub stake_usd: f64,
+}
+
+impl BandPolicyParams {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.family != BAND_FAMILY {
+            return Err(format!("family {} != {BAND_FAMILY}", self.family));
+        }
+        if !(self.decision_seconds > 0.0 && self.decision_seconds < 300.0) {
+            return Err(format!("decision_seconds {} out of (0,300)", self.decision_seconds));
+        }
+        if !(self.entry_window_seconds > 0.0
+            && self.decision_seconds + self.entry_window_seconds <= 300.0)
+        {
+            return Err(format!(
+                "entry window [{}, {}) exceeds the 5m window",
+                self.decision_seconds,
+                self.decision_seconds + self.entry_window_seconds
+            ));
+        }
+        if !(0.0 < self.ask_floor && self.ask_floor < self.ask_cap && self.ask_cap <= 1.0) {
+            return Err(format!(
+                "band bounds ({}, {}] invalid",
+                self.ask_floor, self.ask_cap
+            ));
+        }
+        if !(self.stake_usd >= 1.0) {
+            return Err(format!("stake_usd {} below venue minimum", self.stake_usd));
+        }
+        Ok(())
+    }
+
+    /// Entry attempts run while elapsed is in [decision, decision+window).
+    pub fn in_entry_window(&self, elapsed_s: f64) -> bool {
+        elapsed_s >= self.decision_seconds
+            && elapsed_s < self.decision_seconds + self.entry_window_seconds
+    }
+
+    /// Frozen band gate on the executable quote: VWAP strictly above the
+    /// floor, FOK worst price within the cap (stricter than the replay's
+    /// average-price bound).
+    pub fn quote_clears_band(&self, vwap: f64, worst_price: f64) -> bool {
+        vwap > self.ask_floor && worst_price <= self.ask_cap
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeStrategy {
     strategy_spec: StrategySpec,
@@ -437,6 +504,7 @@ struct RuntimeStrategy {
     maker_fee_rate: f64,
     microstructure: MicrostructureConfig,
     selectivity: SelectivityFilter,
+    band: Option<BandPolicyParams>,
     source: String,
 }
 
@@ -448,6 +516,26 @@ impl RuntimeStrategy {
         }
         let artifact = crate::backtest::experiment::read_promotion(path)
             .with_context(|| format!("load promotion artifact {path}"))?;
+        if artifact.selected_strategy.name == BAND_FAMILY {
+            let params: BandPolicyParams =
+                serde_json::from_value(artifact.strategy_params.clone())
+                    .context("parse promoted strategy_params as BandPolicyParams")?;
+            params.validate().map_err(anyhow::Error::msg)?;
+            let params_hash = stable_json_hash(&params);
+            if params_hash != artifact.selected_strategy.params_hash {
+                bail!(
+                    "promotion artifact hash mismatch: strategy_params hash {} != selected_strategy hash {}",
+                    params_hash,
+                    artifact.selected_strategy.params_hash
+                );
+            }
+            return Ok(Self::band_runtime(
+                settings,
+                artifact.selected_strategy,
+                params,
+                format!("promotion:{path}"),
+            ));
+        }
         if artifact.selected_strategy.name != "candle_momentum" {
             bail!(
                 "unsupported promoted strategy {}",
@@ -525,8 +613,48 @@ impl RuntimeStrategy {
             maker_fee_rate: variant.maker_fee_rate,
             microstructure: variant.microstructure,
             selectivity: variant.selectivity,
+            band: None,
             source,
         })
+    }
+
+    /// Runtime for the frozen band family. The candle_momentum knobs below
+    /// are inert placeholders: the band branch in `scan_loop` bypasses the
+    /// candle decision path entirely. Sizing intent: position_pct=1.0 with
+    /// the $-stake enforced by MAX_POSITION_PER_MARKET_USD /
+    /// MAX_TOTAL_EXPOSURE_USD so `execute_trade`'s existing chain yields
+    /// min(bankroll, stake). stress cap 1.0 = wallet-bounded canary; the
+    /// operative loss brakes are the session-loss floor and the
+    /// consecutive-losses breaker, both of which stay active.
+    fn band_runtime(
+        settings: &Settings,
+        strategy_spec: StrategySpec,
+        params: BandPolicyParams,
+        source: String,
+    ) -> Self {
+        Self {
+            strategy_spec,
+            zone_config: ZoneConfig::from_settings(settings),
+            skip_dead_zone: false,
+            min_confidence: 1.0,
+            min_edge: 0.0,
+            decision_volatility_floor: 0.0,
+            position_pct: 1.0,
+            max_per_market_usd: params.stake_usd,
+            max_projected_stressed_drawdown_pct: 1.0,
+            degraded_after_losses: 0,
+            degraded_after_drawdown_pct: 0.0,
+            degraded_min_z: 0.0,
+            degraded_max_price: 0.0,
+            degraded_force_taker: false,
+            prefer_maker: false,
+            default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
+            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
+            microstructure: MicrostructureConfig::disabled(),
+            selectivity: SelectivityFilter::default(),
+            band: Some(params),
+            source,
+        }
     }
 
     fn from_settings(settings: &Settings) -> Self {
@@ -587,6 +715,7 @@ impl RuntimeStrategy {
             maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
             microstructure,
             selectivity: SelectivityFilter::default(),
+            band: None,
             source: "settings".to_string(),
         }
     }
@@ -2053,6 +2182,39 @@ impl Pipeline {
                     continue;
                 };
 
+                // Frozen band family replaces the candle_momentum evaluation
+                // entirely; the promoted mechanism has no confidence/z/zone
+                // model to consult.
+                if let Some(band) = self.runtime_strategy.band.clone() {
+                    match self
+                        .evaluate_band_opportunity(
+                            &band,
+                            c,
+                            &cid,
+                            &books,
+                            &ps,
+                            btc,
+                            now_ts,
+                            end,
+                            window_minutes,
+                            minutes_elapsed,
+                            minutes_left,
+                            up_price,
+                            down_price,
+                        )
+                        .await
+                    {
+                        Ok(true) => {
+                            traded_windows.insert(c.end_date.clone());
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, cid = %short_cid(&cid), "band evaluation failed");
+                        }
+                    }
+                    continue;
+                }
+
                 // Detect momentum for the contract's own asset
                 let (signal, observed_vol) = {
                     let mut moms = self.momentum.lock().await;
@@ -2592,6 +2754,233 @@ impl Pipeline {
                 sleep(Duration::from_millis(100 - elapsed_ms)).await;
             }
         }
+    }
+
+    /// One evaluation cycle of the frozen band policy for one contract.
+    /// Returns Ok(true) iff an order attempt was handed to `execute_trade`
+    /// (the caller then marks the window as consumed for this cycle).
+    ///
+    /// Entry semantics mirror the promoted replay: attempts run on every
+    /// cycle with elapsed in [decision, decision+entry_window); the first
+    /// cycle whose budget-aware quote clears the band gate places the
+    /// order, and `execute_trade`'s traded-set makes entries one-shot per
+    /// market. The settlement-alignment attestation is not consulted here:
+    /// the band's signal source is the exchange mid (per preregistration)
+    /// and its outcomes settle on official resolutions, not on a feed proxy.
+    #[allow(clippy::too_many_arguments)]
+    async fn evaluate_band_opportunity(
+        self: &Arc<Self>,
+        band: &BandPolicyParams,
+        c: &CandleContract,
+        cid: &str,
+        books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+        ps: &PriceState,
+        btc: f64,
+        now_ts: f64,
+        end: DateTime<Utc>,
+        window_minutes: f64,
+        minutes_elapsed: f64,
+        minutes_left: f64,
+        up_price: f64,
+        down_price: f64,
+    ) -> Result<bool> {
+        if c.asset != "BTC" || (window_minutes - 5.0).abs() > 0.01 {
+            return Ok(false);
+        }
+        if !band.in_entry_window(minutes_elapsed * 60.0) {
+            return Ok(false);
+        }
+
+        // Window open price via the shared per-window store, on the same
+        // price basis as `btc` so the sign comparison is internally
+        // consistent.
+        let (open_price, vol_fast, vol_slow) = {
+            let mut moms = self.momentum.lock().await;
+            let det = moms.entry(c.asset.clone()).or_insert_with(|| {
+                MomentumDetector::new(
+                    Some(ps.implied_vol),
+                    MomentumConfig {
+                        noise_z_threshold: self.settings.candle_noise_z_threshold,
+                        ..Default::default()
+                    },
+                )
+            });
+            if det.get_open_price(cid).is_none() {
+                let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
+                let open_price = if self.settings.candle_settlement_alignment_ready {
+                    ps.reference_price_near_seconds("chainlink_settlement", open_ts, 2.0)
+                } else {
+                    ps.price_near_seconds(&c.asset, open_ts, 2.0)
+                };
+                if let Some(open_price) = open_price {
+                    det.set_window_open(cid, open_price);
+                }
+            }
+            (
+                det.get_open_price(cid),
+                det.realized_vol(),
+                det.slow_realized_vol(),
+            )
+        };
+        let Some(open_price) = open_price else {
+            self.monitor
+                .record_signal_skip(cid, "band_open_price_unavailable");
+            return Ok(false);
+        };
+        if btc == open_price {
+            // No directional signal this cycle; a later cycle inside the
+            // entry window may still produce one.
+            return Ok(false);
+        }
+        let direction = if btc > open_price { "up" } else { "down" };
+        let token_id = if direction == "up" {
+            &c.up_token_id
+        } else {
+            &c.down_token_id
+        };
+
+        // Budget estimate mirrors execute_trade's sizing chain, additionally
+        // capped at the frozen stake so the quote never exceeds it.
+        let open_exposure = self.open_position_exposure().await;
+        let breaker_state = *self.breaker.lock().await;
+        let mut estimated_position =
+            self.risk.effective_bankroll().await * self.runtime_strategy.position_pct;
+        estimated_position = estimated_position
+            .min(self.risk.max_per_market().await)
+            .min(
+                self.risk
+                    .available_capital_for_exposure(open_exposure)
+                    .await,
+            )
+            .min(band.stake_usd);
+        if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
+            open_exposure,
+            self.risk.initial_bankroll().await.max(1.0),
+            self.runtime_strategy.max_projected_stressed_drawdown_pct,
+        ) {
+            estimated_position = estimated_position.min(stress_headroom);
+        }
+        if estimated_position < 1.0 {
+            self.monitor.record_signal_skip(cid, "band_no_capital");
+            return Ok(false);
+        }
+
+        let market_tick = live_market_tick_size(
+            c.market.minimum_tick_size,
+            [&c.up_token_id, &c.down_token_id],
+            books,
+        );
+        let Some(quote) = live_buy_book_quote(
+            token_id,
+            books,
+            estimated_position,
+            self.settings.live_min_order_size_shares,
+            market_tick,
+        ) else {
+            self.monitor.record_signal_skip(cid, "band_quote_unavailable");
+            return Ok(false);
+        };
+
+        if !band.quote_clears_band(quote.vwap, quote.worst_price) {
+            self.monitor
+                .record_signal_skip(cid, "band_price_out_of_range");
+            return Ok(false);
+        }
+
+        let micro = live_microstructure(token_id, books, now_ts);
+        let entry_fee_rate = c
+            .market
+            .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
+        let signal = MomentumSignal {
+            direction: direction.to_string(),
+            confidence: 1.0,
+            price_change: btc - open_price,
+            price_change_pct: if open_price > 0.0 {
+                (btc - open_price) / open_price * 100.0
+            } else {
+                0.0
+            },
+            consistency: 1.0,
+            minutes_elapsed,
+            minutes_remaining: minutes_left,
+            current_price: btc,
+            open_price,
+            z_score: 0.0,
+            reversion_count: 0,
+            directional_impulse_10s_bps: None,
+            article_path_2m: None,
+            article_path_3m: None,
+            article_path_4m: None,
+            article_move_2m_usd: None,
+        };
+        // fair_value = execution VWAP: the band mechanism carries no model
+        // fair value; its edge evidence lives in the strategy registry.
+        let mut decision = crate::strategy::decision::CandleDecision {
+            direction: direction.to_string(),
+            confidence: 1.0,
+            z_score: 0.0,
+            zone: "band".to_string(),
+            fair_value: quote.vwap,
+            market_price: quote.vwap,
+            gross_edge: 0.0,
+            entry_fee_per_share: entry_fee_rate * quote.vwap * (1.0 - quote.vwap),
+            edge: 0.0,
+            minutes_remaining: minutes_left,
+            yes_no_vig: (up_price + down_price - 1.0).max(0.0),
+            regime: Default::default(),
+        };
+        decision.regime.attach_time_inputs(now_ts);
+        decision.regime.attach_orderbook_inputs(
+            micro.best_bid,
+            micro.best_ask,
+            micro.spread,
+            micro.bid_depth,
+            micro.ask_depth,
+            micro.pressure,
+            micro.imbalance,
+        );
+
+        let eval_ts_ms = (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)) as i64;
+        self.monitor.record_signal_evaluation(&SignalEvaluation {
+            ts_ms: eval_ts_ms,
+            cid: short_cid(cid),
+            asset: c.asset.clone(),
+            open: open_price,
+            px: btc,
+            chg: signal.price_change,
+            chg_pct: signal.price_change_pct,
+            cons: 1.0,
+            z: 0.0,
+            conf: 1.0,
+            reversion_count: 0,
+            elapsed_min: minutes_elapsed,
+            remaining_min: minutes_left,
+            dir: direction.to_string(),
+            vol_fast,
+            vol_slow,
+            implied_vol: ps.implied_vol,
+            cross_boost: 0.0,
+            up_price,
+            down_price,
+            book_spread: micro.spread,
+            book_pressure: micro.pressure,
+            book_bid_depth: micro.bid_depth,
+            book_ask_depth: micro.ask_depth,
+            zone: "band".to_string(),
+            fair: decision.fair_value,
+            edge: 0.0,
+            decision_trade: true,
+            execution_attempted: true,
+            traded: false,
+            skip_reason: None,
+            skip_detail: None,
+        });
+        self.execute_trade(c, &signal, &decision, &micro, Some(quote), market_tick)
+            .await?;
+        Ok(true)
     }
 
     async fn execute_trade(
@@ -4269,6 +4658,134 @@ mod tests {
         assert_eq!(runtime.decision_volatility(0.35), 0.80);
         assert_eq!(runtime.decision_volatility(0.90), 0.90);
         assert!(runtime.decision_volatility(f64::NAN).is_nan());
+    }
+
+    fn band_params() -> BandPolicyParams {
+        BandPolicyParams {
+            family: BAND_FAMILY.to_string(),
+            decision_seconds: 240.0,
+            entry_window_seconds: 30.0,
+            ask_floor: 0.55,
+            ask_cap: 0.92,
+            stake_usd: 5.0,
+        }
+    }
+
+    fn band_promotion(params: &BandPolicyParams) -> PromotionArtifact {
+        PromotionArtifact {
+            schema_version: 1,
+            inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+            created_at: "2026-08-24T00:00:00Z".to_string(),
+            source_report_hash: "gate-hash".to_string(),
+            source_label: "fresh_gate_public_v1_20260821".to_string(),
+            source_window: "2026-08-19T09:00:00Z..2026-08-24T02:05:00Z".to_string(),
+            selected_strategy: StrategySpec::new(
+                BAND_FAMILY,
+                "1",
+                stable_json_hash(params),
+                "band-test",
+            ),
+            strategy_params: serde_json::to_value(params).unwrap(),
+            data_manifest_hash: "fill-hash".to_string(),
+            market_count: 222,
+            trades: 222,
+            win_rate: 0.9324,
+            total_pnl: 1.0,
+            avg_pnl: 0.0045,
+            total_fees: 0.1,
+            sharpe_like: 0.0,
+            dominant_zone: Some("band".to_string()),
+            dominant_zone_trade_share: Some(1.0),
+            risk_notes: Vec::new(),
+            promotion_gate: PromotionGate::default(),
+            robust_diagnostics: None,
+        }
+    }
+
+    #[test]
+    fn band_policy_bounds_match_frozen_semantics() {
+        let p = band_params();
+        assert!(p.validate().is_ok());
+        // Entry window [240, 270): first attempt at 240s, none at 270s.
+        assert!(!p.in_entry_window(239.999));
+        assert!(p.in_entry_window(240.0));
+        assert!(p.in_entry_window(269.999));
+        assert!(!p.in_entry_window(270.0));
+        // Band (0.55, 0.92]: floor exclusive on VWAP, cap inclusive on worst.
+        assert!(!p.quote_clears_band(0.55, 0.55));
+        assert!(p.quote_clears_band(0.5501, 0.5501));
+        assert!(p.quote_clears_band(0.91, 0.92));
+        assert!(!p.quote_clears_band(0.91, 0.9201));
+        assert!(p.quote_clears_band(0.92, 0.92));
+        assert!(!p.quote_clears_band(0.93, 0.93));
+    }
+
+    #[test]
+    fn band_policy_validate_rejects_bad_shapes() {
+        let mut p = band_params();
+        p.family = "other".to_string();
+        assert!(p.validate().is_err());
+
+        let mut p = band_params();
+        p.decision_seconds = 300.0;
+        assert!(p.validate().is_err());
+
+        let mut p = band_params();
+        p.entry_window_seconds = 61.0;
+        assert!(p.validate().is_err(), "entry window may not cross expiry");
+
+        let mut p = band_params();
+        p.ask_floor = 0.92;
+        assert!(p.validate().is_err());
+
+        let mut p = band_params();
+        p.stake_usd = 0.5;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn band_params_deny_unknown_fields() {
+        let mut v = serde_json::to_value(band_params()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("lock_strength_min".to_string(), serde_json::json!(0.5));
+        assert!(serde_json::from_value::<BandPolicyParams>(v).is_err());
+    }
+
+    #[test]
+    fn runtime_strategy_loads_band_promotion() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("band_promotion.json");
+        let params = band_params();
+        let artifact = band_promotion(&params);
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+
+        let runtime = RuntimeStrategy::load(&settings).unwrap();
+
+        assert_eq!(runtime.band.as_ref(), Some(&params));
+        assert_eq!(runtime.strategy_spec, artifact.selected_strategy);
+        assert!(!runtime.prefer_maker);
+        assert_eq!(runtime.position_pct, 1.0);
+        assert_eq!(runtime.max_projected_stressed_drawdown_pct, 1.0);
+        assert_eq!(runtime.degraded_after_losses, 0);
+    }
+
+    #[test]
+    fn runtime_strategy_rejects_tampered_band_params() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("band_promotion.json");
+        let params = band_params();
+        let mut artifact = band_promotion(&params);
+        // Tamper with the frozen band after hashing: must be refused.
+        artifact.strategy_params["ask_cap"] = serde_json::json!(0.95);
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+
+        let err = RuntimeStrategy::load(&settings).unwrap_err().to_string();
+        assert!(err.contains("hash mismatch"), "unexpected error: {err}");
     }
 
     #[test]

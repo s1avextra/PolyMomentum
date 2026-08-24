@@ -373,6 +373,28 @@ fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
             artifact.schema_version
         ));
     }
+    if artifact.selected_strategy.name == crate::live::pipeline::BAND_FAMILY {
+        let params: crate::live::pipeline::BandPolicyParams =
+            match serde_json::from_value(artifact.strategy_params.clone()) {
+                Ok(params) => params,
+                Err(e) => {
+                    return Some(format!(
+                        "strategy_params do not parse as BandPolicyParams: {e}"
+                    ))
+                }
+            };
+        if let Err(e) = params.validate() {
+            return Some(format!("band policy invalid: {e}"));
+        }
+        let params_hash = stable_json_hash(&params);
+        if params_hash != artifact.selected_strategy.params_hash {
+            return Some(format!(
+                "strategy_params hash {} does not match selected_strategy hash {}",
+                params_hash, artifact.selected_strategy.params_hash
+            ));
+        }
+        return None;
+    }
     if artifact.selected_strategy.name != "candle_momentum" {
         return Some(format!(
             "unsupported promoted strategy {}",
@@ -991,6 +1013,51 @@ mod tests {
     use super::*;
     use crate::backtest::experiment::{PromotionGate, CURRENT_INVENTORY_MODEL_VERSION};
     use tempfile::TempDir;
+
+    #[test]
+    fn promotion_validation_accepts_band_family_and_rejects_tampering() {
+        let params = crate::live::pipeline::BandPolicyParams {
+            family: crate::live::pipeline::BAND_FAMILY.to_string(),
+            decision_seconds: 240.0,
+            entry_window_seconds: 30.0,
+            ask_floor: 0.55,
+            ask_cap: 0.92,
+            stake_usd: 5.0,
+        };
+        let mut artifact = PromotionArtifact {
+            schema_version: 1,
+            inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+            created_at: "2026-08-24T00:00:00Z".to_string(),
+            source_report_hash: "gate-hash".to_string(),
+            source_label: "fresh_gate_public_v1_20260821".to_string(),
+            source_window: "a..b".to_string(),
+            selected_strategy: crate::strategy::spec::StrategySpec::new(
+                crate::live::pipeline::BAND_FAMILY,
+                "1",
+                stable_json_hash(&params),
+                "band-test",
+            ),
+            strategy_params: serde_json::to_value(&params).unwrap(),
+            data_manifest_hash: "fill-hash".to_string(),
+            market_count: 222,
+            trades: 222,
+            win_rate: 0.9324,
+            total_pnl: 1.0,
+            avg_pnl: 0.0045,
+            total_fees: 0.1,
+            sharpe_like: 0.0,
+            dominant_zone: Some("band".to_string()),
+            dominant_zone_trade_share: Some(1.0),
+            risk_notes: Vec::new(),
+            promotion_gate: PromotionGate::default(),
+            robust_diagnostics: None,
+        };
+        assert_eq!(promotion_validation_error(&artifact), None);
+
+        artifact.strategy_params["ask_cap"] = serde_json::json!(0.95);
+        let err = promotion_validation_error(&artifact).expect("tampered band must be rejected");
+        assert!(err.contains("does not match"), "unexpected error: {err}");
+    }
 
     fn test_settings(tmp: &TempDir) -> Settings {
         let mut s = Settings::from_env();

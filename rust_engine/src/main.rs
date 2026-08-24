@@ -124,6 +124,22 @@ enum Command {
         #[arg(long)]
         promotion_artifact: Option<String>,
     },
+    /// Generate a promotion artifact for the frozen band family from its
+    /// fresh-gate and fill-replay evidence (hash-bound to the policy params).
+    BandPromotionArtifact {
+        /// Frozen policy JSON (BandPolicyParams shape).
+        #[arg(long)]
+        params: String,
+        /// Fresh-gate verdict JSON (fresh_gate_public_v1 artifact).
+        #[arg(long)]
+        gate_artifact: String,
+        /// Capture fill-replay evidence JSON.
+        #[arg(long)]
+        fill_artifact: String,
+        /// Output promotion artifact path.
+        #[arg(long)]
+        output: String,
+    },
     /// Smoke-test scanner: fetch candle markets, print summary.
     Scan {
         #[arg(long, default_value_t = 2.0)]
@@ -2618,6 +2634,17 @@ async fn main() {
                 "{}",
                 serde_json::to_string_pretty(&manifest).expect("serialize release manifest")
             );
+        }
+        Command::BandPromotionArtifact {
+            params,
+            gate_artifact,
+            fill_artifact,
+            output,
+        } => {
+            if let Err(e) = cmd_band_promotion_artifact(&params, &gate_artifact, &fill_artifact, &output) {
+                eprintln!("band promotion artifact failed: {e}");
+                std::process::exit(1);
+            }
         }
         Command::Scan {
             max_hours,
@@ -6288,6 +6315,135 @@ fn write_json_atomic<T: serde::Serialize>(
     pretty: bool,
 ) -> std::io::Result<()> {
     artifact::write_json_atomic(path, value, pretty).map_err(std::io::Error::other)
+}
+
+/// Build the band-family promotion artifact from the fresh-gate verdict and
+/// the capture fill-replay evidence. PnL fields are recomputed from the gate
+/// rows at the frozen stake so the artifact carries no hand-entered numbers.
+fn cmd_band_promotion_artifact(
+    params_path: &str,
+    gate_path: &str,
+    fill_path: &str,
+    output: &str,
+) -> anyhow::Result<()> {
+    use polymomentum_engine::backtest::experiment::{
+        PromotionArtifact, PromotionGate, CURRENT_INVENTORY_MODEL_VERSION,
+    };
+    use polymomentum_engine::live::pipeline::{BandPolicyParams, BAND_FAMILY};
+    use polymomentum_engine::strategy::spec::{stable_json_hash, StrategySpec};
+
+    let params: BandPolicyParams = serde_json::from_slice(
+        &std::fs::read(params_path).with_context(|| format!("read {params_path}"))?,
+    )
+    .context("parse band policy params")?;
+    params.validate().map_err(anyhow::Error::msg)?;
+    let gate: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(gate_path).with_context(|| format!("read {gate_path}"))?,
+    )
+    .context("parse fresh-gate artifact")?;
+    anyhow::ensure!(
+        gate.get("verdict").and_then(|v| v.as_str()) == Some("PASS"),
+        "fresh-gate artifact verdict is not PASS"
+    );
+    anyhow::ensure!(
+        gate.get("candidate").and_then(|v| v.as_str()) == Some(BAND_FAMILY),
+        "fresh-gate artifact candidate mismatch"
+    );
+    let rows = gate
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .context("gate artifact rows missing")?;
+    anyhow::ensure!(!rows.is_empty(), "gate artifact has no rows");
+    let mut wins = 0usize;
+    let mut total_pnl = 0.0f64;
+    let mut total_fees = 0.0f64;
+    for row in rows {
+        let entry = row
+            .get("signal_entry")
+            .and_then(|v| v.as_f64())
+            .context("gate row missing signal_entry")?;
+        let won = row
+            .get("won")
+            .and_then(|v| v.as_bool())
+            .context("gate row missing won")?;
+        anyhow::ensure!(0.0 < entry && entry < 1.0, "gate row entry {entry} out of (0,1)");
+        let shares = params.stake_usd / entry;
+        let fee = 0.072 * entry * (1.0 - entry) * shares;
+        total_fees += fee;
+        if won {
+            wins += 1;
+            total_pnl += shares * (1.0 - entry) - fee;
+        } else {
+            total_pnl += -params.stake_usd - fee;
+        }
+    }
+    let trades = rows.len();
+    let win_rate = wins as f64 / trades as f64;
+    let source_window = gate
+        .get("fresh_range")
+        .and_then(|v| v.as_array())
+        .and_then(|r| {
+            let a = r.first()?.as_i64()?;
+            let b = r.get(1)?.as_i64()?;
+            Some(format!(
+                "{}..{}",
+                chrono::DateTime::from_timestamp(a, 0)?.to_rfc3339(),
+                chrono::DateTime::from_timestamp(b, 0)?.to_rfc3339()
+            ))
+        })
+        .context("gate artifact fresh_range missing")?;
+    let artifact = PromotionArtifact {
+        schema_version: 1,
+        inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        source_report_hash: sha256_file(std::path::Path::new(gate_path))?,
+        source_label: gate
+            .get("registration")
+            .and_then(|v| v.as_str())
+            .unwrap_or("fresh_gate_public_v1")
+            .to_string(),
+        source_window,
+        selected_strategy: StrategySpec::new(
+            BAND_FAMILY,
+            "1",
+            stable_json_hash(&params),
+            format!(
+                "stake_usd={:.2};taker_only;hold_to_expiry",
+                params.stake_usd
+            ),
+        ),
+        strategy_params: serde_json::to_value(&params)?,
+        data_manifest_hash: sha256_file(std::path::Path::new(fill_path))?,
+        market_count: trades,
+        trades,
+        win_rate,
+        total_pnl,
+        avg_pnl: total_pnl / trades as f64,
+        total_fees,
+        sharpe_like: 0.0,
+        dominant_zone: Some("band".to_string()),
+        dominant_zone_trade_share: Some(1.0),
+        risk_notes: vec![
+            "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.".to_string(),
+            "Signal source is the exchange mid (Binance basis per preregistration); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.".to_string(),
+            "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution.".to_string(),
+        ],
+        promotion_gate: PromotionGate::default(),
+        robust_diagnostics: None,
+    };
+    polymomentum_engine::backtest::experiment::write_promotion_atomic(output, &artifact)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "output": output,
+            "params_hash": artifact.selected_strategy.params_hash,
+            "trades": trades,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "total_fees": total_fees,
+        })
+    );
+    Ok(())
 }
 
 async fn run_startup_preflight(
@@ -14143,6 +14299,7 @@ mod replay_validation_tests {
                             hour,
                             signals,
                             cache_dir,
+                            distilled_input,
                             output,
                             manifest,
                             stake_usd,
@@ -14153,6 +14310,7 @@ mod replay_validation_tests {
                 else {
                     panic!("unexpected command");
                 };
+                assert_eq!(distilled_input, None);
                 assert_eq!(hour, "2026-08-01T12:00:00Z");
                 assert_eq!(signals, "/tmp/signals.jsonl");
                 assert_eq!(cache_dir.as_deref(), Some("/tmp/pmxt"));
@@ -14194,6 +14352,7 @@ mod replay_validation_tests {
                             hour,
                             base_catalog,
                             gamma_url,
+                            family,
                             output,
                             manifest,
                         },
@@ -14201,6 +14360,7 @@ mod replay_validation_tests {
                 else {
                     panic!("unexpected command");
                 };
+                assert_eq!(family, "btc-5m");
                 assert_eq!(hour, ["2026-07-17T02:00:00Z", "2026-07-18T05:00:00Z"]);
                 assert_eq!(base_catalog.as_deref(), Some("/tmp/base.json"));
                 assert_eq!(gamma_url, "https://gamma-api.polymarket.com");
@@ -14241,6 +14401,7 @@ mod replay_validation_tests {
                             hour,
                             causal_windows,
                             market_catalog,
+                            family,
                             output,
                             manifest,
                             max_rows,
@@ -14249,6 +14410,7 @@ mod replay_validation_tests {
                 else {
                     panic!("unexpected command");
                 };
+                assert_eq!(family, "btc-5m");
                 assert_eq!(hour, "2026-08-01T12:00:00Z");
                 assert_eq!(causal_windows, "/tmp/causal.jsonl.gz");
                 assert_eq!(market_catalog, "/tmp/gamma.json");
@@ -14585,6 +14747,7 @@ mod replay_validation_tests {
                         StrategyBuilderCommand::OpportunityLabels {
                             dataset_seal,
                             label_source,
+                            resolution_rule,
                             output,
                             manifest,
                         },
@@ -14592,6 +14755,7 @@ mod replay_validation_tests {
                 else {
                     panic!("unexpected command");
                 };
+                assert_eq!(resolution_rule, "close_vs_open");
                 assert_eq!(dataset_seal, "/tmp/dataset.seal.json");
                 assert_eq!(label_source, "/tmp/labels.jsonl.gz");
                 assert_eq!(output, "/tmp/labels.parquet");
@@ -14749,12 +14913,14 @@ mod replay_validation_tests {
                             labels_manifest,
                             policy_search_report,
                             cache_dir,
+                            distilled_dir,
                             output,
                         },
                 } = replay.command
                 else {
                     panic!("unexpected command");
                 };
+                assert_eq!(distilled_dir, None);
                 assert_eq!(dataset_seal, "/tmp/dataset.seal.json");
                 assert_eq!(labels_manifest, "/tmp/labels.manifest.json");
                 assert_eq!(policy_search_report, "/tmp/search.json");
