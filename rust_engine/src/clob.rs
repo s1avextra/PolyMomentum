@@ -53,7 +53,10 @@ struct SignedOrderRequest {
 
 #[derive(Debug, Serialize)]
 struct OrderPayload {
-    salt: String,
+    /// JSON integer on the wire: the venue's strictly-typed decoder rejects a
+    /// string salt with "Invalid order payload" (reference client sends
+    /// `int(order.salt)`). Salt is generated < 2^64 so u64 is lossless.
+    salt: u64,
     maker: String,
     signer: String,
     #[serde(rename = "tokenId")]
@@ -497,7 +500,7 @@ impl ClobClient {
         // Serialize to CLOB API format
         let payload = SignedOrderRequest {
             order: OrderPayload {
-                salt: signed.order.salt.to_string(),
+                salt: signed.order.salt as u64,
                 maker: format!("0x{}", hex::encode(signed.order.maker)),
                 signer: format!("0x{}", hex::encode(signed.order.signer)),
                 token_id: signed.order.token_id.clone(),
@@ -800,7 +803,7 @@ mod tests {
     fn signed_order_request_serializes_post_only_flag() {
         let req = SignedOrderRequest {
             order: OrderPayload {
-                salt: "1".to_string(),
+                salt: 1,
                 maker: "0x0000000000000000000000000000000000000001".to_string(),
                 signer: "0x0000000000000000000000000000000000000001".to_string(),
                 token_id: "123".to_string(),
@@ -825,6 +828,9 @@ mod tests {
         assert!(body.contains("\"orderType\":\"GTC\""));
         assert!(body.contains("\"postOnly\":true"));
         assert!(body.contains("\"deferExec\":false"));
+        // The venue's decoder requires an integer salt; a quoted salt is
+        // rejected as "Invalid order payload" (observed live 2026-08-25).
+        assert!(body.contains("\"salt\":1,"));
     }
 
     #[test]

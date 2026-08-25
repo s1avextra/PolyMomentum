@@ -80,8 +80,15 @@ impl OrderManager {
     }
 
     pub fn create_intent(&mut self, intent: OrderIntent, ts: f64) -> Result<&ManagedOrder, String> {
-        if self.orders.contains_key(&intent.intent_id) {
-            return Err(format!("duplicate intent_id {}", intent.intent_id));
+        if let Some(existing) = self.orders.get(&intent.intent_id) {
+            // A REJECTED attempt may be superseded by a retry of the same
+            // logical order (band re-entry within its window after a
+            // transient venue reject); every other state - including the
+            // other terminal states like Filled - must stay unique so a
+            // completed or in-flight order can never be double-created.
+            if existing.state != OrderState::Rejected {
+                return Err(format!("duplicate intent_id {}", intent.intent_id));
+            }
         }
         let order = ManagedOrder {
             requested_size: intent.size,
