@@ -2933,7 +2933,7 @@ impl Pipeline {
         cid: &str,
         books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
         ps: &PriceState,
-        btc: f64,
+        _decision_feed_btc: f64,
         now_ts: f64,
         end: DateTime<Utc>,
         window_minutes: f64,
@@ -2949,9 +2949,24 @@ impl Pipeline {
             return Ok(false);
         }
 
+        // The band's signal basis is the EXCHANGE mid on both ends of the
+        // sign comparison - the exact instrument the mechanism was validated
+        // with (Binance 1s opens; 93.2% WR at the fresh gate). The chainlink
+        // point-sample basis was observed live to lag whipsaws by tens of
+        // dollars at the window open, inverting the sign (2026-08-25 09:15
+        // window: chainlink-basis "up" vs Binance-basis+official "down").
+        // The settlement-alignment attestation governs the legacy candle
+        // path only; the band ignores it by design.
+        let band_px = ps.mid_price;
+        if band_px <= 0.0 {
+            self.band_skip_with_detail(cid, "band_mid_unavailable", String::new())
+                .await;
+            return Ok(false);
+        }
+        let btc = band_px;
+
         // Window open price via the shared per-window store, on the same
-        // price basis as `btc` so the sign comparison is internally
-        // consistent.
+        // exchange-mid basis so the sign comparison is internally consistent.
         let (open_price, vol_fast, vol_slow) = {
             let mut moms = self.momentum.lock().await;
             let det = moms.entry(c.asset.clone()).or_insert_with(|| {
@@ -2965,11 +2980,7 @@ impl Pipeline {
             });
             if det.get_open_price(cid).is_none() {
                 let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-                let open_price = if self.settings.candle_settlement_alignment_ready {
-                    ps.reference_price_near_seconds("chainlink_settlement", open_ts, 2.0)
-                } else {
-                    ps.price_near_seconds(&c.asset, open_ts, 2.0)
-                };
+                let open_price = ps.price_near_seconds(&c.asset, open_ts, 2.0);
                 if let Some(open_price) = open_price {
                     det.set_window_open(cid, open_price);
                 }
@@ -2982,15 +2993,10 @@ impl Pipeline {
         };
         let Some(open_price) = open_price else {
             let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-            let basis = if self.settings.candle_settlement_alignment_ready {
-                "chainlink_settlement"
-            } else {
-                "exchange_mid"
-            };
             self.band_skip_with_detail(
                 cid,
                 "band_open_price_unavailable",
-                format!("open_ts={open_ts:.0} basis={basis} tolerance_s=2.0"),
+                format!("open_ts={open_ts:.0} basis=exchange_mid tolerance_s=2.0"),
             )
             .await;
             return Ok(false);
