@@ -909,6 +909,10 @@ impl Pipeline {
             risk_cfg.exposure_ratio = 1.0;
             risk_cfg.max_per_market_ratio = 1.0;
         }
+        // An explicit BANKROLL_USD is an operator allocation (e.g. a fixed
+        // slice of a wallet shared with a peer bot) and must not be
+        // overridden by a persisted baseline from earlier auto-detection.
+        risk_cfg.pin_initial_bankroll = !matches!(mode, Mode::Paper) && settings.bankroll_usd > 0.0;
         let risk = RiskManager::open(&settings.state_db_path, risk_cfg).await?;
         if matches!(mode, Mode::Paper) && settings.candle_simulated_balance_reset_on_start {
             risk.reset_simulated_session(bankroll).await?;

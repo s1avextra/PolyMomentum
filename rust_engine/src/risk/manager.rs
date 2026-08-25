@@ -51,6 +51,10 @@ pub struct RiskConfig {
     pub max_per_market_ratio: f64,
     pub max_per_market_override: f64,
     pub actualize_on_open: bool,
+    /// True when initial_bankroll was set explicitly by the operator
+    /// (BANKROLL_USD > 0): the persisted baseline must NOT override it.
+    /// The baseline exists for continuity of auto-detected bankrolls only.
+    pub pin_initial_bankroll: bool,
 }
 
 impl Default for RiskConfig {
@@ -62,6 +66,7 @@ impl Default for RiskConfig {
             max_per_market_ratio: 0.20,
             max_per_market_override: 20.0,
             actualize_on_open: false,
+            pin_initial_bankroll: false,
         }
     }
 }
@@ -451,7 +456,15 @@ impl RiskManager {
             }
         }
         if let Some(baseline) = persisted_bankroll_baseline.filter(|v| *v > 0.0) {
-            inner.cfg.initial_bankroll = baseline;
+            if inner.cfg.pin_initial_bankroll {
+                tracing::info!(
+                    persisted = baseline,
+                    pinned = inner.cfg.initial_bankroll,
+                    "ignoring persisted bankroll baseline: explicit BANKROLL_USD is pinned"
+                );
+            } else {
+                inner.cfg.initial_bankroll = baseline;
+            }
         }
 
         let mut stmt = conn.prepare("SELECT * FROM positions")?;
