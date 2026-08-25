@@ -52,6 +52,10 @@ pub fn build_order(
     size: f64,
     side: &str,     // "BUY" or "SELL"
     tick_size: f64, // price grid step (0.01 or 0.001)
+    // Market (FOK/FAK) orders quantize amounts differently from resting
+    // limit orders: the venue requires whole-cent maker amounts on market
+    // buys and floors (not rounds) the price.
+    market_order: bool,
 ) -> Result<Order, String> {
     if token_id.is_empty() || !token_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("token_id must be a non-empty decimal uint256".to_string());
@@ -75,43 +79,72 @@ pub fn build_order(
     let maker = address_from_key(signing_key);
     let signer = maker;
 
-    // Round price to the tick grid (CLOB rejects off-grid prices)
-    let rounded_price = (price / tick_size).round() * tick_size;
-    // Clamp to valid range
+    // Amount quantization mirrors the reference client's ROUNDING_CONFIG:
+    // price decimals follow the tick (0.01→2, 0.001→3, ...), sizes carry at
+    // most 2 decimals, derived amounts at most price_dp+2 decimals. The
+    // venue enforces these ("invalid amounts ... max accuracy" rejects) and
+    // market BUY maker amounts must be whole cents.
+    let price_dp: u32 = if tick_size >= 0.1 {
+        1
+    } else if tick_size >= 0.01 {
+        2
+    } else if tick_size >= 0.001 {
+        3
+    } else {
+        4
+    };
+    let amount_dp = price_dp + 2;
+    let pow = |dp: u32| 10f64.powi(dp as i32);
+    let floor_dp = |x: f64, dp: u32| (x * pow(dp)).floor() / pow(dp);
+    let round_dp = |x: f64, dp: u32| (x * pow(dp)).round() / pow(dp);
+    // Reference dust-guard: round UP at dp+4 first so float dust just below
+    // a representable value does not floor away a whole increment.
+    let dust_floor_dp = |x: f64, dp: u32| floor_dp((x * pow(dp + 4)).ceil() / pow(dp + 4), dp);
+
+    let rounded_price = if market_order {
+        floor_dp(price, price_dp)
+    } else {
+        round_dp(price, price_dp)
+    };
     let rounded_price = rounded_price.max(tick_size).min(1.0 - tick_size);
 
-    // Round size to 2 decimal places (Polymarket standard)
-    let rounded_size = (size * 100.0).round() / 100.0;
-    if !rounded_size.is_finite() || rounded_size <= 0.0 {
-        return Err("size is not representable at CLOB precision".to_string());
-    }
+    let to_micro = |x: f64| -> Result<u128, String> {
+        let units = (x * 1_000_000.0).round();
+        if !units.is_finite() || units < 1.0 || units >= u128::MAX as f64 {
+            return Err("order amount does not fit positive uint128 base units".to_string());
+        }
+        Ok(units as u128)
+    };
 
-    let token_units = rounded_size * 1_000_000.0;
-    let cash_units = rounded_price * token_units;
-    if !token_units.is_finite()
-        || !cash_units.is_finite()
-        || token_units < 1.0
-        || cash_units < 1.0
-        || token_units >= u128::MAX as f64
-        || cash_units >= u128::MAX as f64
-    {
-        return Err("order amounts do not fit positive uint128 base units".to_string());
-    }
-
-    // Price/size to maker/taker amounts (6 decimal places, pUSD precision)
-    // The amounts must be consistent: maker_amount / taker_amount = price
-    // for the CLOB's price check to pass.
     let (maker_amount, taker_amount) = if side == "BUY" {
-        // BUY: maker pays USDC (price × size), taker pays tokens (size)
-        let taker_amt = token_units.round() as u128;
-        // Derive maker_amount from taker to ensure exact ratio
-        let maker_amt = cash_units.round() as u128;
-        (maker_amt, taker_amt)
+        if market_order {
+            // Market (FOK) BUY: maker is the USDC spend, whole cents only;
+            // taker (shares) derives from maker at the rounded price.
+            let maker_raw = floor_dp(price * size, 2);
+            if maker_raw <= 0.0 || rounded_price <= 0.0 {
+                return Err("size is not representable at CLOB precision".to_string());
+            }
+            let taker_raw = dust_floor_dp(maker_raw / rounded_price, amount_dp);
+            (to_micro(maker_raw)?, to_micro(taker_raw)?)
+        } else {
+            // Limit BUY: taker is the share size (2 decimals); maker derives
+            // from taker at the rounded price.
+            let taker_raw = floor_dp(size, 2);
+            if taker_raw <= 0.0 {
+                return Err("size is not representable at CLOB precision".to_string());
+            }
+            let maker_raw = dust_floor_dp(taker_raw * rounded_price, amount_dp);
+            (to_micro(maker_raw)?, to_micro(taker_raw)?)
+        }
     } else {
-        // SELL: maker pays tokens (size), taker pays USDC (price × size)
-        let maker_amt = token_units.round() as u128;
-        let taker_amt = cash_units.round() as u128;
-        (maker_amt, taker_amt)
+        // SELL: maker is the share size (2 decimals); taker is the USDC
+        // proceeds derived at the rounded price.
+        let maker_raw = floor_dp(size, 2);
+        if maker_raw <= 0.0 {
+            return Err("size is not representable at CLOB precision".to_string());
+        }
+        let taker_raw = dust_floor_dp(maker_raw * rounded_price, amount_dp);
+        (to_micro(maker_raw)?, to_micro(taker_raw)?)
     };
 
     let side_num = if side == "BUY" { 0u8 } else { 1u8 };
@@ -535,17 +568,31 @@ mod tests {
         assert!(decimal_to_u256(uint256_overflow).is_err());
         assert!(hex_to_address("not-an-address").is_err());
         assert!(hmac_sign_request("not base64!", "1", "GET", "/", "").is_err());
-        assert!(build_order(&key, "123", 0.5, 1.0, "buy", 0.01).is_err());
-        assert!(build_order(&key, "0", 0.5, 1.0, "BUY", 0.01).is_err());
-        assert!(build_order(&key, "123", f64::NAN, 1.0, "BUY", 0.01).is_err());
-        assert!(build_order(&key, "123", 0.5, 0.001, "BUY", 0.01).is_err());
-        assert!(build_order(&key, "123", 0.5, f64::MAX, "BUY", 0.01).is_err());
-        assert!(build_order(&key, uint256_overflow, 0.5, 1.0, "BUY", 0.01).is_err());
+        assert!(build_order(&key, "123", 0.5, 1.0, "buy", 0.01, true).is_err());
+        assert!(build_order(&key, "0", 0.5, 1.0, "BUY", 0.01, true).is_err());
+        assert!(build_order(&key, "123", f64::NAN, 1.0, "BUY", 0.01, true).is_err());
+        assert!(build_order(&key, "123", 0.5, 0.001, "BUY", 0.01, true).is_err());
+        assert!(build_order(&key, "123", 0.5, f64::MAX, "BUY", 0.01, true).is_err());
+        assert!(build_order(&key, uint256_overflow, 0.5, 1.0, "BUY", 0.01, true).is_err());
 
-        let valid = build_order(&key, "123", 0.5, 2.0, "BUY", 0.01).unwrap();
+        let valid = build_order(&key, "123", 0.5, 2.0, "BUY", 0.01, true).unwrap();
         assert_eq!(valid.side, 0);
         assert_eq!(valid.maker_amount, 1_000_000);
         assert_eq!(valid.taker_amount, 2_000_000);
+
+        // Market BUY maker amounts must be whole cents even when
+        // price*size lands off-cent (the venue's live reject 2026-08-25:
+        // "maker amount supports a max accuracy of 2 decimals").
+        let fok = build_order(&key, "123", 0.71, 7.04, "BUY", 0.01, true).unwrap();
+        assert_eq!(fok.maker_amount % 10_000, 0, "maker must be whole cents");
+        assert_eq!(fok.maker_amount, 4_990_000); // floor(0.71*7.04=4.9984, 2dp)
+        assert_eq!(fok.taker_amount % 100, 0, "shares max 4 decimals at tick 0.01");
+        assert_eq!(fok.taker_amount, 7_028_100); // floor(4.99/0.71, 4dp)
+
+        // Limit BUY keeps 2dp shares and derives maker at amount precision.
+        let gtc = build_order(&key, "123", 0.71, 7.046, "BUY", 0.01, false).unwrap();
+        assert_eq!(gtc.taker_amount, 7_040_000); // floor(7.046, 2dp)
+        assert_eq!(gtc.maker_amount, 4_998_400); // 7.04*0.71 at 4dp
 
         let mut invalid_order = valid;
         invalid_order.side = 2;

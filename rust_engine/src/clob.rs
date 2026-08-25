@@ -488,7 +488,8 @@ impl ClobClient {
 
         // Build and sign the CLOB V2 order. Fees are protocol/operator-set at
         // match time in V2 and are not part of the signed EIP-712 struct.
-        let order = signing::build_order(key, token_id, price, size, side, tick_size)
+        let market_order = matches!(order_type, "FOK" | "FAK");
+        let order = signing::build_order(key, token_id, price, size, side, tick_size, market_order)
             .map_err(|error| format!("Build order: {error}"))?;
         let signed = signing::sign_order(&order, key, neg_risk)
             .map_err(|error| format!("Sign order: {error}"))?;
