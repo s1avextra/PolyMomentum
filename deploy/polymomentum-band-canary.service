@@ -2,6 +2,11 @@
 Description=PolyMomentum band canary (signal_favorite_band_official_v1, live)
 After=network-online.target
 Wants=network-online.target
+# A persistent startup failure must become a clean stop, not an infinite
+# 10-second restart loop (preflight failures exit 2 and are excluded from
+# restarts entirely).
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -16,6 +21,7 @@ KillSignal=SIGTERM
 TimeoutStopSec=20
 Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=2
 LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal
@@ -24,7 +30,9 @@ NoNewPrivileges=true
 PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/polymomentum /tmp/polymomentum
+# NB: /tmp paths in ReadWritePaths are a reboot bomb (/tmp is wiped on boot
+# and namespace setup fails with 226/NAMESPACE when the path is absent).
+ReadWritePaths=/opt/polymomentum
 
 [Install]
 WantedBy=multi-user.target

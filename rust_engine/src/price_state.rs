@@ -59,6 +59,24 @@ impl PriceState {
         if price <= 0.0 || !price.is_finite() {
             return;
         }
+        // A single mis-scaled venue timestamp (e.g. microseconds) would
+        // become the monotonic high-water mark and silently reject every
+        // later legitimate update until restart — the same failure class as
+        // polymarket_ws::clamp_timestamp_us_to_local. Clamp implausible
+        // timestamps to "received now" before the monotonic comparison.
+        let observed_at_ms = {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(observed_at_ms);
+            let lower = now_ms - 60 * 60 * 1_000;
+            let upper = now_ms + 10 * 1_000;
+            if (lower..=upper).contains(&observed_at_ms) {
+                observed_at_ms
+            } else {
+                now_ms
+            }
+        };
         if observed_at_ms <= 0
             || self
                 .reference_observed_at_ms

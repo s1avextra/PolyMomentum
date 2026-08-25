@@ -228,6 +228,55 @@ impl SessionMonitor {
         );
     }
 
+    /// Detailed once-per-(window, reason) band-skip record: carries the
+    /// numbers the aggregate skip counter discards, so one canary run yields
+    /// the full decision-time dataset offline.
+    pub fn record_band_skip_detail(&self, contract_id: &str, reason: &str, detail: &str) {
+        self.write_event(
+            "signal",
+            "band_skip_detail",
+            json!({
+                "cid": short(contract_id, 16),
+                "reason": reason,
+                "detail": detail,
+            }),
+        );
+    }
+
+    /// Snapshot of ws intake health and book freshness for offline analysis.
+    pub fn record_ws_health(&self, counters: &[u64; 7], books_total: usize, books_fresh: usize) {
+        self.write_event(
+            "system",
+            "ws_health",
+            json!({
+                "frames": counters[0],
+                "applied_book": counters[1],
+                "applied_price_change": counters[2],
+                "applied_best_bid_ask": counters[3],
+                "dropped_no_timestamp": counters[4],
+                "dropped_parse": counters[5],
+                "dropped_stale_order": counters[6],
+                "books_total": books_total,
+                "books_fresh": books_fresh,
+            }),
+        );
+    }
+
+    /// Maps condition ids to their windows so skip-only windows can be placed
+    /// in time offline without re-querying Gamma.
+    pub fn record_contract_map(&self, rows: &[serde_json::Value]) {
+        self.write_event("system", "contract_map", json!({ "contracts": rows }));
+    }
+
+    /// Periodic on-chain wallet snapshot for the balance timeline.
+    pub fn record_wallet_snapshot(&self, pusd: f64, usdc_e: f64, pol: f64) {
+        self.write_event(
+            "system",
+            "wallet",
+            json!({ "pusd": pusd, "usdc_e": usdc_e, "pol": pol }),
+        );
+    }
+
     pub fn record_signal_skip(&self, contract_id: &str, reason: &str) {
         let mut c = self.counters.lock().unwrap();
         c.signal_skip_count += 1;

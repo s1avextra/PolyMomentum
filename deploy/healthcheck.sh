@@ -117,6 +117,19 @@ RESEARCH_STALL_HOURS="${RESEARCH_STALL_HOURS:-12}"
 if systemctl list-units --state=failed --plain --no-legend 'polymomentum-binary-complement-*' 'polymomentum-twap-era-*' 2>/dev/null | grep -q .; then
     alert "research_collector_failed" "a research capture/collector unit is in failed state — restart required"
 fi
+
+# 4b. Band canary: alert on failed state or a restart loop (>=5 starts in the
+# last 30 minutes means it is crash-looping rather than trading).
+if systemctl is-enabled polymomentum-band-canary >/dev/null 2>&1; then
+    if systemctl is-failed --quiet polymomentum-band-canary; then
+        alert "band_canary_failed" "polymomentum-band-canary is in failed state — operator attention required"
+    else
+        CANARY_STARTS=$(journalctl -u polymomentum-band-canary --since "-30 minutes" --no-pager -o cat 2>/dev/null | grep -c "Started polymomentum-band-canary" || true)
+        if [ "${CANARY_STARTS:-0}" -ge 5 ]; then
+            alert "band_canary_restart_loop" "polymomentum-band-canary restarted ${CANARY_STARTS} times in 30m — crash loop, operator attention required"
+        fi
+    fi
+fi
 # Generic capture-progress check: any active capture unit must keep producing
 # artifacts under forward-captures/.
 CAPTURES_ROOT="${CAPTURES_ROOT:-$APP_DIR/logs/forward-captures}"

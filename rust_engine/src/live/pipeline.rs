@@ -292,6 +292,11 @@ impl OraclePending {
     }
 
     fn oracle_pnl(&self, polymarket_actual: &str) -> Option<(bool, f64, bool, f64)> {
+        // Already realized (possibly in a previous process lifetime): never
+        // replay PnL into risk/breaker/ledger accounting.
+        if self.pnl_recorded {
+            return None;
+        }
         let direction = self.direction.as_deref()?;
         let entry_price = self.entry_price?;
         let size = self.size?;
@@ -853,6 +858,11 @@ pub struct Pipeline {
     breaker_tripped_at_s: Mutex<Option<i64>>,
     price_state: Arc<RwLock<PriceState>>,
     book_state: SharedBookState,
+    /// Unix seconds of the last "decision feed unavailable" record (rate limit).
+    last_btc_stall_log_s: std::sync::atomic::AtomicU64,
+    /// (cid, reason) pairs whose detailed band-skip record was already
+    /// written this process lifetime (one detail record per window+reason).
+    band_detail_logged: Mutex<HashSet<String>>,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
     resub_notify: Arc<Notify>,
     tracked_markets: Arc<RwLock<Vec<String>>>,
@@ -1197,6 +1207,8 @@ impl Pipeline {
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
+            last_btc_stall_log_s: std::sync::atomic::AtomicU64::new(0),
+            band_detail_logged: Mutex::new(HashSet::new()),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
             resub_notify: new_subscription_notify(),
             tracked_markets: Arc::new(RwLock::new(Vec::new())),
@@ -1452,10 +1464,12 @@ impl Pipeline {
     }
 
     async fn live_recovery_loop(self: Arc<Self>) {
+        let mut consecutive_failures: u32 = 0;
         loop {
             self.sweep_resting_maker_orders().await;
             match self.reconcile_live_orders_once().await {
                 Ok(()) => {
+                    consecutive_failures = 0;
                     let was_locked = {
                         let mut ready = self.live_recovery_ready.lock().await;
                         let was_locked = !*ready;
@@ -1467,6 +1481,17 @@ impl Pipeline {
                     }
                 }
                 Err(error) => {
+                    consecutive_failures += 1;
+                    // A persistently failing reconciliation keeps the order
+                    // path locked; surface it beyond the tracing log so a
+                    // stuck canary is visible in the session record.
+                    if consecutive_failures == 6 {
+                        self.monitor.record_error(
+                            "live_recovery_stuck",
+                            &format!("{consecutive_failures} consecutive failures: {error}"),
+                            true,
+                        );
+                    }
                     tracing::warn!(%error, "authenticated live-order recovery pass failed");
                 }
             }
@@ -1991,13 +2016,34 @@ impl Pipeline {
         let tokens_changed = {
             let mut tt = self.tracked_tokens.write().await;
             let changed = *tt != token_ids;
-            *tt = token_ids;
+            *tt = token_ids.clone();
             changed
         };
         // Reconnecting drops every book until the venue resends snapshots, so
         // only churn the subscription when the token set actually changed.
         if tokens_changed {
             self.resub_notify.notify_one();
+            // Evict books for tokens we no longer track: the map otherwise
+            // grows without bound (~26 tokens/hour) and is cloned every cycle.
+            let keep: HashSet<&String> = token_ids.iter().collect();
+            self.book_state
+                .write()
+                .await
+                .retain(|token, _| keep.contains(token));
+            // Refresh the offline cid->window mapping alongside.
+            let rows: Vec<serde_json::Value> = contracts
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "cid": short_cid(&c.market.condition_id),
+                        "end_date": c.end_date,
+                        "asset": c.asset,
+                        "up_token": short_cid(&c.up_token_id),
+                        "down_token": short_cid(&c.down_token_id),
+                    })
+                })
+                .collect();
+            self.monitor.record_contract_map(&rows);
         }
         let market_ids: Vec<String> = contracts
             .iter()
@@ -2051,6 +2097,14 @@ impl Pipeline {
                 *c += 1;
             }
 
+            // Kill switch must stay effective even while the price feed is
+            // down, so check it before any early continue.
+            if self.kill_switch_active() {
+                self.trip_breaker("kill_switch").await;
+                self.stop.notify_one();
+                return;
+            }
+
             let ps = self.price_state.read().await.clone();
             let btc = if self.settings.candle_settlement_alignment_ready {
                 ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10))
@@ -2059,6 +2113,21 @@ impl Pipeline {
                 ps.mid_price
             };
             if btc <= 0.0 {
+                // A dead decision feed halts trading fail-closed, but must be
+                // visible: record once per minute rather than per cycle.
+                let now_s = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let last = self.last_btc_stall_log_s.swap(now_s, std::sync::atomic::Ordering::Relaxed);
+                if now_s.saturating_sub(last) >= 60 {
+                    tracing::warn!("decision price feed unavailable (btc<=0); trading paused");
+                    self.monitor
+                        .record_error("decision_feed_unavailable", "btc<=0", true);
+                } else {
+                    self.last_btc_stall_log_s
+                        .store(last, std::sync::atomic::Ordering::Relaxed);
+                }
                 sleep(Duration::from_secs(1)).await;
                 continue;
             }
@@ -2224,6 +2293,8 @@ impl Pipeline {
                         }
                         Ok(false) => {}
                         Err(e) => {
+                            self.monitor
+                                .record_error("band_evaluation", &e.to_string(), true);
                             tracing::warn!(error = %e, cid = %short_cid(&cid), "band evaluation failed");
                         }
                     }
@@ -2784,6 +2855,9 @@ impl Pipeline {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let ws = crate::polymarket_ws::ws_counters();
+                if cycle % 300 == 0 {
+                    self.monitor.record_ws_health(&ws, books_total, books_fresh);
+                }
                 tracing::info!(
                     cycle,
                     btc,
@@ -2808,6 +2882,22 @@ impl Pipeline {
             if elapsed_ms < 100 {
                 sleep(Duration::from_millis(100 - elapsed_ms)).await;
             }
+        }
+    }
+
+    /// Writes the detailed band-skip record once per (window, reason); the
+    /// aggregate skip counter still counts every cycle. Returns quickly on
+    /// repeats. The set is capped as a leak guard.
+    async fn band_skip_with_detail(&self, cid: &str, reason: &str, detail: String) {
+        self.monitor.record_signal_skip(cid, reason);
+        let key = format!("{cid}:{reason}");
+        let mut logged = self.band_detail_logged.lock().await;
+        if logged.len() > 8192 {
+            logged.clear();
+        }
+        if logged.insert(key) {
+            drop(logged);
+            self.monitor.record_band_skip_detail(cid, reason, &detail);
         }
     }
 
@@ -2878,13 +2968,29 @@ impl Pipeline {
             )
         };
         let Some(open_price) = open_price else {
-            self.monitor
-                .record_signal_skip(cid, "band_open_price_unavailable");
+            let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
+            let basis = if self.settings.candle_settlement_alignment_ready {
+                "chainlink_settlement"
+            } else {
+                "exchange_mid"
+            };
+            self.band_skip_with_detail(
+                cid,
+                "band_open_price_unavailable",
+                format!("open_ts={open_ts:.0} basis={basis} tolerance_s=2.0"),
+            )
+            .await;
             return Ok(false);
         };
         if btc == open_price {
             // No directional signal this cycle; a later cycle inside the
             // entry window may still produce one.
+            self.band_skip_with_detail(
+                cid,
+                "band_no_direction",
+                format!("btc=open={btc:.2}"),
+            )
+            .await;
             return Ok(false);
         }
         let direction = if btc > open_price { "up" } else { "down" };
@@ -2898,15 +3004,15 @@ impl Pipeline {
         // capped at the frozen stake so the quote never exceeds it.
         let open_exposure = self.open_position_exposure().await;
         let breaker_state = *self.breaker.lock().await;
-        let mut estimated_position =
-            self.risk.effective_bankroll().await * self.runtime_strategy.position_pct;
-        estimated_position = estimated_position
-            .min(self.risk.max_per_market().await)
-            .min(
-                self.risk
-                    .available_capital_for_exposure(open_exposure)
-                    .await,
-            )
+        let bankroll = self.risk.effective_bankroll().await;
+        let per_market = self.risk.max_per_market().await;
+        let available = self
+            .risk
+            .available_capital_for_exposure(open_exposure)
+            .await;
+        let mut estimated_position = (bankroll * self.runtime_strategy.position_pct)
+            .min(per_market)
+            .min(available)
             .min(band.stake_usd);
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
@@ -2916,7 +3022,14 @@ impl Pipeline {
             estimated_position = estimated_position.min(stress_headroom);
         }
         if estimated_position < 1.0 {
-            self.monitor.record_signal_skip(cid, "band_no_capital");
+            self.band_skip_with_detail(
+                cid,
+                "band_no_capital",
+                format!(
+                    "estimated={estimated_position:.2} bankroll={bankroll:.2} per_market={per_market:.2} available={available:.2} exposure={open_exposure:.2}"
+                ),
+            )
+            .await;
             return Ok(false);
         }
 
@@ -2932,13 +3045,38 @@ impl Pipeline {
             self.settings.live_min_order_size_shares,
             market_tick,
         ) else {
-            self.monitor.record_signal_skip(cid, "band_quote_unavailable");
+            // Decompose why no executable quote exists so offline analysis
+            // can tell book absence from staleness from thin asks from a
+            // budget-below-minimum-shares constraint.
+            let detail = match books.get(token_id) {
+                None => "book_absent".to_string(),
+                Some(b) => {
+                    let age = now_ts - b.last_update_us as f64 / 1e6;
+                    let min_cost =
+                        self.settings.live_min_order_size_shares * b.best_ask.max(0.0);
+                    format!(
+                        "age_s={age:.1} ask_levels={} best_ask={:.3} budget={estimated_position:.2} min_shares_cost={min_cost:.2}",
+                        b.asks.len(),
+                        b.best_ask
+                    )
+                }
+            };
+            self.band_skip_with_detail(cid, "band_quote_unavailable", detail)
+                .await;
             return Ok(false);
         };
 
         if !band.quote_clears_band(quote.vwap, quote.worst_price) {
-            self.monitor
-                .record_signal_skip(cid, "band_price_out_of_range");
+            let bound = if quote.vwap <= band.ask_floor { "low" } else { "high" };
+            self.band_skip_with_detail(
+                cid,
+                "band_price_out_of_range",
+                format!(
+                    "bound={bound} vwap={:.4} worst={:.4} shares={:.2} dir={direction} btc={btc:.2} open={open_price:.2}",
+                    quote.vwap, quote.worst_price, quote.shares
+                ),
+            )
+            .await;
             return Ok(false);
         }
 
@@ -3031,11 +3169,23 @@ impl Pipeline {
             execution_attempted: true,
             traded: false,
             skip_reason: None,
-            skip_detail: None,
+            // Not a skip: carries the executable quote so entered windows keep
+            // their decision-time quote alongside the eventual fill record.
+            skip_detail: Some(format!(
+                "quote vwap={:.4} worst={:.4} shares={:.2}",
+                quote.vwap, quote.worst_price, quote.shares
+            )),
         });
-        self.execute_trade(c, &signal, &decision, &micro, Some(quote), market_tick)
+        let submitted = self
+            .execute_trade(c, &signal, &decision, &micro, Some(quote), market_tick)
             .await?;
-        Ok(true)
+        if !submitted {
+            // The evaluation said trade but execute_trade skipped internally;
+            // make the divergence visible instead of leaving traded:false
+            // ambiguous in the session log.
+            self.monitor.record_signal_skip(cid, "band_execute_skipped");
+        }
+        Ok(submitted)
     }
 
     async fn execute_trade(
@@ -3046,7 +3196,7 @@ impl Pipeline {
         micro: &BookMicrostructure,
         taker_quote: Option<BuyBookQuote>,
         market_tick: f64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let bankroll = self.risk.effective_bankroll().await;
         let mut position = bankroll * self.runtime_strategy.position_pct;
 
@@ -3079,7 +3229,7 @@ impl Pipeline {
             position = 1.0;
         }
         if position < 1.0 {
-            return Ok(());
+            return Ok(false);
         }
 
         let token_id = if signal.direction == "up" {
@@ -3107,7 +3257,7 @@ impl Pipeline {
                     ..Default::default()
                 };
                 let Some(fill) = simulate_paper_fill(market_price, position, &cfg) else {
-                    return Ok(());
+                    return Ok(false);
                 };
                 let expected_edge_value =
                     fill.shares * (decision.fair_value - fill.fill_price) - fill.fee;
@@ -3261,18 +3411,18 @@ impl Pipeline {
                     .await
                     .insert(contract.market.condition_id.clone(), pp);
                 self.persist_paper_positions().await;
-                Ok(())
+                Ok(true)
             }
             Mode::Live => {
                 if !*self.live_recovery_ready.lock().await {
                     tracing::warn!("live order skipped: authenticated recovery lock is active");
-                    return Ok(());
+                    return Ok(false);
                 }
                 let Some(clob) = self.clob.clone() else {
                     tracing::error!(
                         "live mode but no CLOB client (missing api keys / private key)"
                     );
-                    return Ok(());
+                    return Ok(false);
                 };
                 let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
                 let (limit_price, shares) = if prefer_maker {
@@ -3284,7 +3434,7 @@ impl Pipeline {
                             best_ask = micro.best_ask,
                             "live maker order skipped: invalid visible book"
                         );
-                        return Ok(());
+                        return Ok(false);
                     };
                     let Some(shares) = shares_from_budget(position, price, min_order_size) else {
                         tracing::warn!(
@@ -3293,13 +3443,13 @@ impl Pipeline {
                             position,
                             "live order skipped: below configured minimum order size"
                         );
-                        return Ok(());
+                        return Ok(false);
                     };
                     (price, shares)
                 } else {
                     let Some(quote) = taker_quote else {
                         tracing::warn!("live taker order skipped: visible L2 quote unavailable");
-                        return Ok(());
+                        return Ok(false);
                     };
                     let limit_price = ceil_buy_price_to_tick(quote.worst_price, market_tick);
                     if limit_price * quote.shares > position + 1e-8 {
@@ -3309,7 +3459,7 @@ impl Pipeline {
                             position,
                             "live taker order skipped: FOK worst-case cost exceeds risk budget"
                         );
-                        return Ok(());
+                        return Ok(false);
                     }
                     (limit_price, quote.shares)
                 };
@@ -3395,7 +3545,7 @@ impl Pipeline {
                     .await
                     .insert(contract.market.condition_id.clone())
                 {
-                    return Ok(());
+                    return Ok(false);
                 }
                 {
                     let mut orders = self.order_manager.lock().await;
@@ -3525,10 +3675,21 @@ impl Pipeline {
                             if let Some(reason) = permanent_live_order_reject_reason(truncated) {
                                 self.trip_breaker(reason).await;
                                 self.stop.notify_one();
+                            } else {
+                                // A transient FOK kill (book moved in flight)
+                                // must not burn the window: the band entry
+                                // window may still be open, so allow a retry.
+                                self.traded
+                                    .lock()
+                                    .await
+                                    .remove(&contract.market.condition_id);
                             }
                             tracing::warn!(error = %truncated, "candle.trade.live.rejected");
+                            return Ok(false);
                         } else {
                             *self.live_recovery_ready.lock().await = false;
+                            self.monitor
+                                .record_error("live_submit_ambiguous", truncated, false);
                             tracing::error!(
                                 error = %truncated,
                                 order_id = %short_cid(&expected_order_id),
@@ -3537,7 +3698,7 @@ impl Pipeline {
                         }
                     }
                 }
-                Ok(())
+                Ok(true)
             }
         }
     }
@@ -3865,6 +4026,16 @@ impl Pipeline {
                                     );
                                 }
                             }
+                            // Realization is durable from this point: mark and
+                            // persist BEFORE the breaker-trip check below, so a
+                            // trip/abort between realization and the batched
+                            // removal cannot replay this PnL on the next boot.
+                            entry.pnl_recorded = true;
+                            self.oracle_pending
+                                .lock()
+                                .await
+                                .insert(cid.clone(), entry.clone());
+                            self.persist_oracle_pending().await;
                             if !agreed {
                                 tracing::warn!(
                                     cid = short_cid(&cid),
@@ -3954,8 +4125,21 @@ impl Pipeline {
 
     async fn monitoring_loop(self: Arc<Self>) {
         let mut prev_sources: HashSet<String> = HashSet::new();
+        let mut tick: u64 = 0;
         loop {
             sleep(Duration::from_secs(15)).await;
+            tick += 1;
+            // On-chain balance timeline: best-effort, every ~5 minutes.
+            if tick % 20 == 1 && !self.settings.private_key.is_empty() {
+                if let Ok(reader) = crate::data::wallet::WalletReader::new(
+                    &self.settings.polygon_rpc_url,
+                    &self.settings.private_key,
+                ) {
+                    if let Ok(b) = reader.fetch_balances().await {
+                        self.monitor.record_wallet_snapshot(b.pusd, b.usdc_e, b.pol);
+                    }
+                }
+            }
             let ps = self.price_state.read().await.clone();
             let n_sources = ps.n_live_sources();
             let staleness_ms = if let Some(t) = ps.source_timestamps.values().max() {
