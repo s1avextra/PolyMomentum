@@ -1,0 +1,8 @@
+[Unit]
+Description=PolyMomentum band-canary redeem sweeper (one shot)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/polymomentum/tools/redeem_sweeper.sh
+StandardOutput=journal
+StandardError=journal
