@@ -231,7 +231,14 @@ impl OrderManager {
         };
         order.total_fees += fee;
         order.updated_ts = ts;
-        order.state = if order.filled_size + f64::EPSILON >= order.requested_size {
+        // FOK fills can come back a dust fraction short of the requested
+        // size (venue share rounding, observed live: 5.659083 of 5.66).
+        // Anything within a cent-scale share tolerance is complete;
+        // otherwise the order lingers as partially_filled forever and its
+        // pending entry is reconciled every pass for no reason.
+        const FILL_COMPLETE_TOLERANCE_SHARES: f64 = 0.01;
+        order.state = if order.filled_size + FILL_COMPLETE_TOLERANCE_SHARES >= order.requested_size
+        {
             OrderState::Filled
         } else {
             OrderState::PartiallyFilled

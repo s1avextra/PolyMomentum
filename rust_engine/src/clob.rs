@@ -287,7 +287,11 @@ impl ClobClient {
         self.require_l2_auth()?;
         let path_with_query = path_with_query(path, params);
         let url = format!("{}{}", self.base_url, path_with_query);
-        let headers = self.auth_headers("GET", &path_with_query, "")?;
+        // The venue verifies the L2 HMAC over the BARE endpoint path; query
+        // parameters are not part of the signed message (verified live
+        // 2026-08-25: signing with the query returns 401 "Invalid api key",
+        // bare-path signing returns 200 for the same request).
+        let headers = self.auth_headers("GET", path, "")?;
         let mut req = self.client.get(&url);
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
