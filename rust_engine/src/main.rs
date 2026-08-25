@@ -140,6 +140,17 @@ enum Command {
         #[arg(long)]
         output: String,
     },
+    /// Derive (or create) CLOB L2 API credentials from the PRIVATE_KEY in an
+    /// env file and append POLY_API_* lines to that same file atomically.
+    /// Secret values never reach stdout or logs.
+    DeriveApiCreds {
+        /// Env file holding PRIVATE_KEY=...; POLY_API_* lines are written here.
+        #[arg(long)]
+        env_file: String,
+        /// CLOB base URL.
+        #[arg(long, default_value = "https://clob.polymarket.com")]
+        base_url: String,
+    },
     /// Smoke-test scanner: fetch candle markets, print summary.
     Scan {
         #[arg(long, default_value_t = 2.0)]
@@ -2634,6 +2645,12 @@ async fn main() {
                 "{}",
                 serde_json::to_string_pretty(&manifest).expect("serialize release manifest")
             );
+        }
+        Command::DeriveApiCreds { env_file, base_url } => {
+            if let Err(e) = cmd_derive_api_creds(&env_file, &base_url).await {
+                eprintln!("derive-api-creds failed: {e}");
+                std::process::exit(1);
+            }
         }
         Command::BandPromotionArtifact {
             params,
@@ -6315,6 +6332,96 @@ fn write_json_atomic<T: serde::Serialize>(
     pretty: bool,
 ) -> std::io::Result<()> {
     artifact::write_json_atomic(path, value, pretty).map_err(std::io::Error::other)
+}
+
+/// Derive/create CLOB L2 API creds from PRIVATE_KEY in `env_file` and append
+/// POLY_API_KEY/SECRET/PASSPHRASE to the same file atomically (mode and
+/// ownership preserved). Secrets are never printed.
+async fn cmd_derive_api_creds(env_file: &str, base_url: &str) -> anyhow::Result<()> {
+    use polymomentum_engine::signing;
+
+    let path = std::path::Path::new(env_file);
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read {env_file}"))?;
+    let key_hex = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("PRIVATE_KEY="))
+        .next_back()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .context("no PRIVATE_KEY=... line in the env file")?;
+    let key = signing::parse_private_key(key_hex).context("PRIVATE_KEY does not parse")?;
+    let address = format!("0x{}", hex::encode(signing::address_from_key(&key)));
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let signature = format!(
+        "0x{}",
+        signing::sign_clob_auth(&key, 137, ts, 0).map_err(anyhow::Error::msg)?
+    );
+    let client = reqwest::Client::new();
+    let l1 = |req: reqwest::RequestBuilder| {
+        req.header("POLY_ADDRESS", &address)
+            .header("POLY_SIGNATURE", &signature)
+            .header("POLY_TIMESTAMP", ts.to_string())
+            .header("POLY_NONCE", "0")
+    };
+    let mut resp = l1(client.post(format!("{base_url}/auth/api-key")))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await
+        .unwrap_or(serde_json::Value::Null);
+    if resp.get("apiKey").and_then(|v| v.as_str()).is_none() {
+        resp = l1(client.get(format!("{base_url}/auth/derive-api-key")))
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+    }
+    let get = |k: &str| -> anyhow::Result<String> {
+        resp.get(k)
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .with_context(|| format!("CLOB auth response missing {k}: {resp}"))
+    };
+    let api_key = get("apiKey")?;
+    let secret = get("secret")?;
+    let passphrase = get("passphrase")?;
+
+    // Rewrite the env file: drop stale POLY_API_* lines, append fresh ones.
+    let mut out: String = text
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("POLY_API_KEY=")
+                || t.starts_with("POLY_API_SECRET=")
+                || t.starts_with("POLY_API_PASSPHRASE="))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "POLY_API_KEY={api_key}\nPOLY_API_SECRET={secret}\nPOLY_API_PASSPHRASE={passphrase}\n"
+    ));
+    let meta = std::fs::metadata(path)?;
+    let tmp = path.with_extension("tmp-creds");
+    std::fs::write(&tmp, out)?;
+    std::fs::set_permissions(&tmp, meta.permissions())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid()));
+    }
+    std::fs::rename(&tmp, path)?;
+    println!(
+        "credentials written to {env_file} for {address} (api key {}…)",
+        &api_key[..8.min(api_key.len())]
+    );
+    Ok(())
 }
 
 /// Build the band-family promotion artifact from the fresh-gate verdict and

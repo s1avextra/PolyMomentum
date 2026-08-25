@@ -308,6 +308,48 @@ fn ecdsa_sign(digest: &[u8; 32], key: &SigningKey) -> Result<String, String> {
     Ok(hex::encode(sig_bytes))
 }
 
+/// EIP-712 signature for the CLOB L1 auth handshake (reference:
+/// py-clob-client-v2 signing/eip712.py). Domain is `ClobAuthDomain` v1 with
+/// chainId only (no verifyingContract); the struct is
+/// `ClobAuth(address address,string timestamp,uint256 nonce,string message)`
+/// with the fixed attestation message. Returns the 65-byte r||s||v signature
+/// hex WITHOUT the 0x prefix (callers prepend it for the header).
+pub fn sign_clob_auth(
+    key: &SigningKey,
+    chain_id: u64,
+    timestamp_s: u64,
+    nonce: u64,
+) -> Result<String, String> {
+    let domain_typehash = keccak256(b"EIP712Domain(string name,string version,uint256 chainId)");
+    let mut enc = Vec::with_capacity(32 * 4);
+    enc.extend_from_slice(&domain_typehash);
+    enc.extend_from_slice(&keccak256(b"ClobAuthDomain"));
+    enc.extend_from_slice(&keccak256(b"1"));
+    let mut cid = [0u8; 32];
+    cid[24..].copy_from_slice(&chain_id.to_be_bytes());
+    enc.extend_from_slice(&cid);
+    let domain_sep = keccak256(&enc);
+
+    let struct_typehash =
+        keccak256(b"ClobAuth(address address,string timestamp,uint256 nonce,string message)");
+    let addr = address_from_key(key);
+    let mut sh = Vec::with_capacity(32 * 5);
+    sh.extend_from_slice(&struct_typehash);
+    let mut a32 = [0u8; 32];
+    a32[12..].copy_from_slice(&addr);
+    sh.extend_from_slice(&a32);
+    sh.extend_from_slice(&keccak256(timestamp_s.to_string().as_bytes()));
+    let mut n32 = [0u8; 32];
+    n32[24..].copy_from_slice(&nonce.to_be_bytes());
+    sh.extend_from_slice(&n32);
+    sh.extend_from_slice(&keccak256(
+        b"This message attests that I control the given wallet",
+    ));
+    let struct_hash = keccak256(&sh);
+    let digest = eip712_digest(&domain_sep, &struct_hash);
+    ecdsa_sign(&digest, key)
+}
+
 // ── Utilities ──────────────────────────────────────────────────────
 
 /// Convert a decimal string to a 32-byte big-endian uint256.
