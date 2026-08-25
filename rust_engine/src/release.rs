@@ -1023,6 +1023,7 @@ mod tests {
             ask_floor: 0.55,
             ask_cap: 0.92,
             stake_usd: 5.0,
+            position_pct: 1.0,
         };
         let mut artifact = PromotionArtifact {
             schema_version: 1,

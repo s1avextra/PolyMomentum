@@ -429,6 +429,10 @@ pub const BAND_FAMILY: &str = "signal_favorite_band_official_v1";
 /// contract: `stable_json_hash` of this struct must equal the artifact's
 /// `selected_strategy.params_hash`, so changing anything here invalidates
 /// every existing band promotion artifact (by design).
+/// Venue floor: below ~$5 the 5-share minimum order cannot be met across the
+/// upper band, so the compounding target never sizes under this.
+pub const BAND_MIN_STAKE_USD: f64 = 5.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BandPolicyParams {
@@ -442,7 +446,17 @@ pub struct BandPolicyParams {
     /// Inclusive upper bound; enforced on the FOK worst price, which is
     /// stricter than the replay's average-price bound.
     pub ask_cap: f64,
+    /// Upper cap on the per-trade stake in USD.
     pub stake_usd: f64,
+    /// Fraction of effective bankroll (allocation + realized PnL) staked per
+    /// trade — the compounding knob. Default 1.0 keeps older fixed-stake
+    /// artifacts (stake_usd then binds via the cap).
+    #[serde(default = "default_band_position_pct")]
+    pub position_pct: f64,
+}
+
+fn default_band_position_pct() -> f64 {
+    1.0
 }
 
 impl BandPolicyParams {
@@ -471,7 +485,17 @@ impl BandPolicyParams {
         if !(self.stake_usd >= 1.0) {
             return Err(format!("stake_usd {} below venue minimum", self.stake_usd));
         }
+        if !(self.position_pct > 0.0 && self.position_pct <= 1.0) {
+            return Err(format!("position_pct {} out of (0,1]", self.position_pct));
+        }
         Ok(())
+    }
+
+    /// Compounding per-trade target: a fraction of effective bankroll,
+    /// floored at the venue minimum and capped at stake_usd. Availability,
+    /// exposure, and stress caps still apply on top.
+    pub fn target_stake(&self, effective_bankroll: f64) -> f64 {
+        (effective_bankroll * self.position_pct).clamp(BAND_MIN_STAKE_USD, self.stake_usd)
     }
 
     /// Entry attempts run while elapsed is in [decision, decision+window).
@@ -3029,10 +3053,10 @@ impl Pipeline {
             .risk
             .available_capital_for_exposure(open_exposure)
             .await;
-        let mut estimated_position = (bankroll * self.runtime_strategy.position_pct)
+        let mut estimated_position = band
+            .target_stake(bankroll)
             .min(per_market)
-            .min(available)
-            .min(band.stake_usd);
+            .min(available);
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
             self.risk.initial_bankroll().await.max(1.0),
@@ -4974,7 +4998,27 @@ mod tests {
             ask_floor: 0.55,
             ask_cap: 0.92,
             stake_usd: 5.0,
+            position_pct: 1.0,
         }
+    }
+
+    #[test]
+    fn band_target_stake_compounds_between_floor_and_cap() {
+        let mut p = band_params();
+        p.stake_usd = 25.0;
+        p.position_pct = 0.25;
+        assert_eq!(p.target_stake(20.0), 5.0); // starting equity -> canary size
+        assert_eq!(p.target_stake(10.0), 5.0); // drawdown floors at venue min
+        assert_eq!(p.target_stake(40.0), 10.0); // compounds with realized PnL
+        assert_eq!(p.target_stake(200.0), 25.0); // capped until next review
+        // Legacy fixed-stake artifact (pct defaults to 1.0): cap binds.
+        let legacy: BandPolicyParams =
+            serde_json::from_value(serde_json::to_value(band_params()).unwrap()).unwrap();
+        assert_eq!(legacy.target_stake(20.0), 5.0);
+
+        let mut bad = band_params();
+        bad.position_pct = 0.0;
+        assert!(bad.validate().is_err());
     }
 
     fn band_promotion(params: &BandPolicyParams) -> PromotionArtifact {

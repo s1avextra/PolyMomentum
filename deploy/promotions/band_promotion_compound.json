@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "inventory_model_version": 3,
+  "created_at": "2026-08-25T10:10:23.446624+00:00",
+  "source_report_hash": "c3aa2dc0b20de80e53b9a4c1d39b48f3e4af77cea47201dda0c0de8d1857d92f",
+  "source_label": "fresh_gate_public_v1_20260821",
+  "source_window": "2026-08-19T09:00:00+00:00..2026-08-24T02:00:00+00:00",
+  "selected_strategy": {
+    "name": "signal_favorite_band_official_v1",
+    "version": "1",
+    "params_hash": "c95fc6ab6e4a75394fe1d7b1396d4b06a87d433a352327f6f9109dfbf12a2742",
+    "risk_profile": "stake_usd=25.00;taker_only;hold_to_expiry"
+  },
+  "strategy_params": {
+    "ask_cap": 0.92,
+    "ask_floor": 0.55,
+    "decision_seconds": 240.0,
+    "entry_window_seconds": 30.0,
+    "family": "signal_favorite_band_official_v1",
+    "position_pct": 0.25,
+    "stake_usd": 25.0
+  },
+  "data_manifest_hash": "dde5e45433abbc9f7a072c940d5390b308fed699cd3241171d38a01618fb86f1",
+  "market_count": 222,
+  "trades": 222,
+  "win_rate": 0.9324324324324325,
+  "total_pnl": 746.9468769758236,
+  "avg_pnl": 3.364625571963169,
+  "total_fees": 74.68561617804,
+  "sharpe_like": 0.0,
+  "dominant_zone": "band",
+  "dominant_zone_trade_share": 1.0,
+  "risk_notes": [
+    "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.",
+    "Signal source is the exchange mid (Binance basis per preregistration); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.",
+    "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution."
+  ],
+  "promotion_gate": {
+    "min_trades": 30,
+    "min_losses": 1,
+    "min_zone_count": 2,
+    "min_win_rate": 0.0,
+    "min_wilson_win_rate_lower": 0.0,
+    "min_total_pnl": 0.0,
+    "min_sharpe_like": 0.0,
+    "max_unresolved_fills": 0,
+    "max_failed_fills": 0,
+    "max_passive_failed_fills": 0,
+    "min_fill_rate": 0.0,
+    "max_zone_trade_share": 0.7,
+    "require_complete_data": true
+  }
+}
