@@ -4282,7 +4282,11 @@ fn live_microstructure(
 
 fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
     let age = now_ts - last_update_us as f64 / 1_000_000.0;
-    (age.is_finite() && (0.0..30.0).contains(&age)).then_some(age)
+    // Venue timestamps run slightly ahead of the local clock at times; a
+    // small negative age is clock skew, not staleness (observed live:
+    // -0.4..-0.6s on the most active pair, which silently rejected every
+    // decision-time book). Intake clamps timestamps to now+10s.
+    (age.is_finite() && (-10.0..30.0).contains(&age)).then_some(age.max(0.0))
 }
 
 fn live_market_tick_size(
@@ -4643,7 +4647,10 @@ mod tests {
         let slippage = live_bookwalk_buy_slippage(&token_id, &books, 10.0);
         let runup = live_recent_mid_runup(&token_id, &books, 100.0, 15.0);
         assert!((age.unwrap() - 50.0).abs() < 1e-9);
-        assert_eq!(live_book_age_ms(&token_id, &books, 99.0), None);
+        // Small negative age is venue clock skew, tolerated and clamped to 0.
+        assert_eq!(live_book_age_ms(&token_id, &books, 99.0), Some(0.0));
+        // A far-future timestamp is implausible and still rejected.
+        assert_eq!(live_book_age_ms(&token_id, &books, 85.0), None);
         assert!((slippage.unwrap() - 0.01).abs() < 1e-9);
         assert!((runup.unwrap() - 0.015).abs() < 1e-9);
 
