@@ -8,7 +8,8 @@
 set -uo pipefail
 
 ENV_FILE="${BAND_ENV:-/etc/polymomentum/band-canary.env}"
-set -a; . /etc/polymomentum/env; . "$ENV_FILE"; set +a
+SECRETS_FILE="/etc/polymomentum/band-canary-secrets.env"
+set -a; . /etc/polymomentum/env; . "$ENV_FILE"; [ -f "$SECRETS_FILE" ] && . "$SECRETS_FILE"; set +a
 CAST=/root/.foundry/bin/cast
 RPC="${POLYGON_RPC_URL:?}"
 CTF=0x4D97DCd97eC945f40cF65F87097ACe5EA0476045
