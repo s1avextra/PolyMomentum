@@ -863,6 +863,13 @@ pub struct Pipeline {
     /// (cid, reason) pairs whose detailed band-skip record was already
     /// written this process lifetime (one detail record per window+reason).
     band_detail_logged: Mutex<HashSet<String>>,
+    /// Latest on-chain pUSD reading in micro-USD and its unix-seconds
+    /// timestamp. The wallet is shared with a peer bot, so the balance can
+    /// drop under our stake between cycles; the band path consults this to
+    /// skip gracefully instead of collecting a venue insufficient-balance
+    /// reject (which would trip the breaker as a permanent reason).
+    last_wallet_pusd_micro: std::sync::atomic::AtomicU64,
+    last_wallet_read_s: std::sync::atomic::AtomicU64,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
     resub_notify: Arc<Notify>,
     tracked_markets: Arc<RwLock<Vec<String>>>,
@@ -1209,6 +1216,8 @@ impl Pipeline {
             book_state: new_shared_book(),
             last_btc_stall_log_s: std::sync::atomic::AtomicU64::new(0),
             band_detail_logged: Mutex::new(HashSet::new()),
+            last_wallet_pusd_micro: std::sync::atomic::AtomicU64::new(u64::MAX),
+            last_wallet_read_s: std::sync::atomic::AtomicU64::new(0),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
             resub_notify: new_subscription_notify(),
             tracked_markets: Arc::new(RwLock::new(Vec::new())),
@@ -3032,6 +3041,38 @@ impl Pipeline {
             .await;
             return Ok(false);
         }
+        // Shared-wallet guard: the peer bot can drain pUSD below our stake
+        // between cycles. A recent on-chain reading below stake+fees means
+        // the venue would reject with an insufficient-balance permanent
+        // reason and trip the breaker - skip gracefully instead.
+        {
+            let read_s = self
+                .last_wallet_read_s
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let now_s = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if read_s > 0 && now_s.saturating_sub(read_s) < 900 {
+                let pusd = self
+                    .last_wallet_pusd_micro
+                    .load(std::sync::atomic::Ordering::Relaxed) as f64
+                    / 1_000_000.0;
+                if pusd < estimated_position + 0.6 {
+                    self.band_skip_with_detail(
+                        cid,
+                        "band_wallet_low",
+                        format!(
+                            "pusd={pusd:.2} needed={:.2} read_age_s={}",
+                            estimated_position + 0.6,
+                            now_s.saturating_sub(read_s)
+                        ),
+                    )
+                    .await;
+                    return Ok(false);
+                }
+            }
+        }
 
         let market_tick = live_market_tick_size(
             c.market.minimum_tick_size,
@@ -4137,6 +4178,15 @@ impl Pipeline {
                 ) {
                     if let Ok(b) = reader.fetch_balances().await {
                         self.monitor.record_wallet_snapshot(b.pusd, b.usdc_e, b.pol);
+                        let micro = (b.pusd.max(0.0) * 1_000_000.0).round() as u64;
+                        self.last_wallet_pusd_micro
+                            .store(micro, std::sync::atomic::Ordering::Relaxed);
+                        let now_s = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        self.last_wallet_read_s
+                            .store(now_s, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }
