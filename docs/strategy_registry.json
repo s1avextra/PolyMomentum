@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-24T06:22:24.761122+00:00",
+  "updated_at": "2026-08-25T09:47:24.320914+00:00",
   "entries": [
     {
       "strategy_id": "a_plus5m_tail_early_reentry_20260629",
@@ -800,6 +800,39 @@
           "notes": [
             "Use tail-aware or exposure-reduced variants instead of trying to promote this gate result."
           ]
+        }
+      ]
+    },
+    {
+      "strategy_id": "band_transfer_alts_v1",
+      "version_id": "sv_band_transfer_alts_20260825",
+      "parent_id": "signal_favorite_band_official_v1",
+      "status": "dead_end",
+      "reason": "Frozen band mechanism transferred verbatim (zero tuning) to eth/sol/xrp-updown-5m over 2026-08-09..24 full coverage: point edges -0.004/+0.007/-0.003 on n=793/830/807 - the alt band is priced almost perfectly efficiently (WR ~= BE within 1pt everywhere, both hour-combs, no positive day-cluster). Consistent with the mechanism rationale: the BTC edge rides the trailing-60s TWAP resolution smoothing; without that premium the band carries no edge. Dead end for naive transfer; revisit only if alt candles adopt the TWAP rule.",
+      "artifact_path": null,
+      "metrics_path": null,
+      "evidence_paths": [
+        "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_eth.json",
+        "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_sol.json",
+        "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_xrp.json"
+      ],
+      "notes": [
+        "Transfer-test design: no per-asset tuning, hence no data burned; all 16 days are valid evidence.",
+        "ETH liquidity also thin ($4.5k vs SOL/XRP $110k+)."
+      ],
+      "first_seen_at": "2026-08-25T09:47:24.320914+00:00",
+      "updated_at": "2026-08-25T09:47:24.320914+00:00",
+      "events": [
+        {
+          "at": "2026-08-25T09:47:24.320914+00:00",
+          "status": "dead_end",
+          "reason": "Frozen band mechanism transferred verbatim (zero tuning) to eth/sol/xrp-updown-5m over 2026-08-09..24 full coverage: point edges -0.004/+0.007/-0.003 on n=793/830/807 - the alt band is priced almost perfectly efficiently (WR ~= BE within 1pt everywhere, both hour-combs, no positive day-cluster). Consistent with the mechanism rationale: the BTC edge rides the trailing-60s TWAP resolution smoothing; without that premium the band carries no edge. Dead end for naive transfer; revisit only if alt candles adopt the TWAP rule.",
+          "evidence_paths": [
+            "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_eth.json",
+            "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_sol.json",
+            "deploy/promotions/evidence/strategy_registry/20260825_band_transfer_xrp.json"
+          ],
+          "notes": []
         }
       ]
     }
