@@ -27,6 +27,10 @@ pub struct WalletBalances {
     pub pusd_allowance_neg_risk_exchange: f64,
     pub usdc_e_allowance_onramp: f64,
     pub pol: f64,
+    /// True when these balances belong to a deposit wallet (smart account)
+    /// rather than the signing EOA. A deposit wallet never pays gas itself
+    /// - settlement is relayed - so the POL floor does not apply to it.
+    pub is_deposit_wallet: bool,
 }
 
 impl WalletBalances {
@@ -34,7 +38,7 @@ impl WalletBalances {
         self.pusd >= 1.0
             && self.pusd_allowance_exchange >= 1.0
             && self.pusd_allowance_neg_risk_exchange >= 1.0
-            && self.pol >= 0.01
+            && (self.is_deposit_wallet || self.pol >= 0.01)
     }
 
     pub fn live_ready_detail(&self) -> String {
@@ -49,7 +53,7 @@ impl WalletBalances {
             )
         } else {
             format!(
-                "wallet live_ready no: needs pUSD>=1.00, both CTF Exchange V2 pUSD allowances>=1.00, and POL>=0.01; observed address={} pUSD=${:.2} CTF_V2_allow=${:.2} NegRisk_allow=${:.2} POL={:.4}",
+                "wallet live_ready no: needs pUSD>=1.00, both CTF Exchange V2 pUSD allowances>=1.00, and POL>=0.01 (POL not required for a deposit wallet); observed address={} pUSD=${:.2} CTF_V2_allow=${:.2} NegRisk_allow=${:.2} POL={:.4}",
                 self.address,
                 self.pusd,
                 self.pusd_allowance_exchange,
@@ -81,6 +85,7 @@ pub struct WalletReader {
     rpc_url: String,
     http: Client,
     address: String,
+    is_deposit_wallet: bool,
 }
 
 impl WalletReader {
@@ -102,6 +107,7 @@ impl WalletReader {
                 "POLY_FUNDER must be a 0x-prefixed 20-byte address"
             );
             reader.address = funder.to_ascii_lowercase();
+            reader.is_deposit_wallet = true;
         }
         Ok(reader)
     }
@@ -116,6 +122,7 @@ impl WalletReader {
             rpc_url: rpc_url.into(),
             http,
             address,
+            is_deposit_wallet: false,
         })
     }
 
@@ -190,6 +197,7 @@ impl WalletReader {
             pusd_allowance_neg_risk_exchange,
             usdc_e_allowance_onramp,
             pol,
+            is_deposit_wallet: self.is_deposit_wallet,
         })
     }
 
@@ -264,6 +272,12 @@ mod tests {
         assert!(b.live_ready());
         b.pol = 0.009;
         assert!(!b.live_ready());
+        // A deposit wallet holds no gas by design: settlement is relayed,
+        // so the POL floor must not gate it.
+        b.is_deposit_wallet = true;
+        assert!(b.live_ready());
+        b.pusd = 0.5;
+        assert!(!b.live_ready(), "collateral floor still applies");
         assert!(b.live_ready_detail().contains("live_ready no"));
     }
 }
