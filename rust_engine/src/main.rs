@@ -6578,7 +6578,11 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
             detail: "PRIVATE_KEY not set; cannot verify wallet live_ready".to_string(),
         };
     }
-    match data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key) {
+    match data::wallet::WalletReader::for_funder(
+        &settings.polygon_rpc_url,
+        &settings.private_key,
+        &settings.poly_funder,
+    ) {
         Ok(reader) => match reader.fetch_balances().await {
             Ok(balances) => {
                 let configured_budget = live_configured_order_budget_usd(settings, &balances);

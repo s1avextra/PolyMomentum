@@ -4319,9 +4319,10 @@ impl Pipeline {
             tick += 1;
             // On-chain balance timeline: best-effort, every ~5 minutes.
             if tick % 20 == 1 && !self.settings.private_key.is_empty() {
-                if let Ok(reader) = crate::data::wallet::WalletReader::new(
+                if let Ok(reader) = crate::data::wallet::WalletReader::for_funder(
                     &self.settings.polygon_rpc_url,
                     &self.settings.private_key,
+                    &self.settings.poly_funder,
                 ) {
                     if let Ok(b) = reader.fetch_balances().await {
                         self.monitor.record_wallet_snapshot(b.pusd, b.usdc_e, b.pol);
@@ -4791,9 +4792,12 @@ async fn try_wallet_bankroll(settings: &Settings) -> Option<f64> {
     if settings.private_key.is_empty() {
         return None;
     }
-    let r =
-        crate::data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key)
-            .ok()?;
+    let r = crate::data::wallet::WalletReader::for_funder(
+        &settings.polygon_rpc_url,
+        &settings.private_key,
+        &settings.poly_funder,
+    )
+    .ok()?;
     let b = r.fetch_balances().await.ok()?;
     if b.pusd > 0.0 {
         tracing::info!(

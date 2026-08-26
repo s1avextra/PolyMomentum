@@ -84,6 +84,28 @@ pub struct WalletReader {
 }
 
 impl WalletReader {
+    /// Reader bound to the address that actually holds trading collateral.
+    /// Under the POLY_1271 deposit-wallet flow the maker is the deposit
+    /// wallet, not the signing EOA, so balances and allowances must be read
+    /// there — otherwise a funded EOA masks an empty trading account and the
+    /// venue rejects orders for insufficient balance.
+    pub fn for_funder(
+        rpc_url: impl Into<String>,
+        private_key: &str,
+        funder: &str,
+    ) -> Result<Self> {
+        let mut reader = Self::new(rpc_url, private_key)?;
+        let funder = funder.trim();
+        if !funder.is_empty() {
+            anyhow::ensure!(
+                funder.len() == 42 && funder.starts_with("0x"),
+                "POLY_FUNDER must be a 0x-prefixed 20-byte address"
+            );
+            reader.address = funder.to_ascii_lowercase();
+        }
+        Ok(reader)
+    }
+
     pub fn new(rpc_url: impl Into<String>, private_key: &str) -> Result<Self> {
         let address = address_from_private_key(private_key)?;
         let http = Client::builder()
