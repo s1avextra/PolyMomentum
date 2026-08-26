@@ -1662,6 +1662,33 @@ impl Pipeline {
         Ok(())
     }
 
+    /// True when the PUBLIC data-api shows an executed trade by our maker in
+    /// this market at/after the order's creation. Independent evidence
+    /// channel: the venue purges terminal FOK orders from authenticated REST
+    /// within seconds while its authed /trades indexing can lag past 30s
+    /// (observed live 2026-08-25: fill at :10, still unindexed at :38),
+    /// whereas the public feed showed the fill immediately.
+    async fn public_fill_evidence(&self, market: &str, created_ts: f64) -> Option<bool> {
+        let key = crate::signing::parse_private_key(&self.settings.private_key)?;
+        let maker = format!("0x{}", hex::encode(crate::signing::address_from_key(&key)));
+        let url = format!(
+            "https://data-api.polymarket.com/trades?user={maker}&market={market}&limit=20"
+        );
+        let resp = reqwest::Client::new()
+            .get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?;
+        let rows: serde_json::Value = resp.json().await.ok()?;
+        let cutoff = created_ts - 2.0;
+        Some(rows.as_array()?.iter().any(|t| {
+            t.get("timestamp")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
+                .is_some_and(|ts| ts as f64 >= cutoff)
+        }))
+    }
+
     async fn handle_missing_rest_order(&self, order: &ManagedOrder) -> Result<()> {
         let misses = {
             let mut pending = self.live_pending_positions.lock().await;
@@ -1684,7 +1711,92 @@ impl Pipeline {
             .get(&order.intent.intent_id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing REST order lifecycle disappeared"))?;
+        let is_fok = current.intent.order_type == "market";
         if current.state != OrderState::Submitted || current.filled_size > 1e-9 {
+            if is_fok && current.filled_size > 1e-9 {
+                // In-process fills exist and the venue purged the terminal
+                // FOK from REST: nothing is unaccounted. Terminalize quietly.
+                {
+                    let mut manager = self.order_manager.lock().await;
+                    manager
+                        .cancel(&order.intent.intent_id, nonzero_ts_or_now(0.0))
+                        .map_err(anyhow::Error::msg)?;
+                }
+                self.live_pending_positions
+                    .lock()
+                    .await
+                    .remove(&order.intent.intent_id);
+                self.persist_live_pending_orders().await?;
+                self.monitor.record_order_reconciled(&OrderReconciled {
+                    intent_id: order.intent.intent_id.clone(),
+                    order_id: current
+                        .venue_order_id
+                        .clone()
+                        .unwrap_or_default(),
+                    source: "clob_rest.purged_terminal_fok".to_string(),
+                    venue_state: "purged".to_string(),
+                    filled: current.filled_size,
+                    requested: current.requested_size,
+                    fill_price: current.avg_fill_price,
+                    fee: current.total_fees,
+                    detail: "venue purged filled FOK from REST".to_string(),
+                });
+                return Ok(());
+            }
+            if is_fok {
+                // Acked FOK, no in-process fills, REST purged it. Consult the
+                // independent public feed before любое fail-closed действие.
+                match self
+                    .public_fill_evidence(&order.intent.market_id, order.created_ts)
+                    .await
+                {
+                    Some(true) => {
+                        // The fill happened; authed indexing is lagging. Keep
+                        // waiting - user-ws/REST trades will deliver it.
+                        if let Some(pending) = self
+                            .live_pending_positions
+                            .lock()
+                            .await
+                            .get_mut(&order.intent.intent_id)
+                        {
+                            pending.recovery_misses = 0;
+                        }
+                        tracing::info!(
+                            intent_id = %order.intent.intent_id,
+                            "public feed confirms fill; waiting for authed indexing"
+                        );
+                        return Ok(());
+                    }
+                    Some(false) if age_s >= 120.0 && misses >= 24 => {
+                        // 2+ minutes, no public fill, REST purged: the FOK was
+                        // killed. Resolve as reject and release the window.
+                        {
+                            let mut manager = self.order_manager.lock().await;
+                            manager
+                                .reject(
+                                    &order.intent.intent_id,
+                                    "FOK purged by venue with no public fill evidence",
+                                    nonzero_ts_or_now(0.0),
+                                )
+                                .map_err(anyhow::Error::msg)?;
+                        }
+                        self.live_pending_positions
+                            .lock()
+                            .await
+                            .remove(&order.intent.intent_id);
+                        self.persist_live_pending_orders().await?;
+                        self.traded.lock().await.remove(&order.intent.market_id);
+                        self.monitor.record_order_rejected(
+                            &order.intent.token_id,
+                            "FOK purged; no public fill within 120s",
+                            current.intent.limit_price.unwrap_or(0.0),
+                            current.requested_size,
+                        );
+                        return Ok(());
+                    }
+                    _ => return Ok(()), // keep polling until the age/miss floor
+                }
+            }
             self.trip_breaker("live_rest_order_disappeared").await;
             self.stop.notify_one();
             bail!("acked or partially filled live order returned repeated REST 404");
