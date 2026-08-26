@@ -6665,7 +6665,9 @@ fn live_wallet_covers_budget(balances: &data::wallet::WalletBalances, required_u
     balances.pusd + eps >= required
         && balances.pusd_allowance_exchange + eps >= required
         && balances.pusd_allowance_neg_risk_exchange + eps >= required
-        && balances.pol >= 0.01
+        // A deposit wallet never pays gas itself (settlement is relayed),
+        // so the POL floor applies only to an EOA maker.
+        && (balances.is_deposit_wallet || balances.pol >= 0.01)
 }
 
 fn live_wallet_preflight_detail(
