@@ -151,6 +151,17 @@ enum Command {
         #[arg(long, default_value = "https://clob.polymarket.com")]
         base_url: String,
     },
+    /// Diagnostic: run the ENGINE's own book feed on the live btc-5m window
+    /// and compare its view against the venue's public REST book. Read-only;
+    /// places no orders.
+    BandBookProbe {
+        /// Seconds to run.
+        #[arg(long, default_value_t = 300)]
+        seconds: u64,
+        /// Seconds between comparisons.
+        #[arg(long, default_value_t = 15)]
+        every: u64,
+    },
     /// Smoke-test scanner: fetch candle markets, print summary.
     Scan {
         #[arg(long, default_value_t = 2.0)]
@@ -2649,6 +2660,12 @@ async fn main() {
         Command::DeriveApiCreds { env_file, base_url } => {
             if let Err(e) = cmd_derive_api_creds(&env_file, &base_url).await {
                 eprintln!("derive-api-creds failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::BandBookProbe { seconds, every } => {
+            if let Err(e) = cmd_band_book_probe(&settings, seconds, every).await {
+                eprintln!("band-book-probe failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -6332,6 +6349,93 @@ fn write_json_atomic<T: serde::Serialize>(
     pretty: bool,
 ) -> std::io::Result<()> {
     artifact::write_json_atomic(path, value, pretty).map_err(std::io::Error::other)
+}
+
+/// Run the engine's real book feed against the venue's REST book so book
+/// staleness is measured with the code that actually trades, not a replica.
+async fn cmd_band_book_probe(
+    settings: &config::Settings,
+    seconds: u64,
+    every: u64,
+) -> anyhow::Result<()> {
+    use polymomentum_engine::polymarket_ws::{
+        new_shared_book, new_subscription_notify, polymarket_book_feed,
+    };
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
+    let slugs = live::window::btc_updown_slugs_for_live_horizon(chrono::Utc::now(), 300, 10);
+    let markets = gamma.fetch_markets_by_slugs(&slugs, false).await?;
+    let contracts = data::scanner::scan_candle_markets(&markets, 1.0, 0.0);
+    let tokens: Vec<String> = contracts
+        .iter()
+        .flat_map(|c| [c.up_token_id.clone(), c.down_token_id.clone()])
+        .filter(|t| !t.is_empty())
+        .collect();
+    anyhow::ensure!(!tokens.is_empty(), "no live btc-5m contracts found");
+    println!("probing {} tokens from {} contracts", tokens.len(), contracts.len());
+
+    let books = new_shared_book();
+    let tracked = Arc::new(RwLock::new(tokens.clone()));
+    let notify = new_subscription_notify();
+    {
+        let (b, t, n) = (books.clone(), tracked.clone(), notify.clone());
+        tokio::spawn(async move { polymarket_book_feed(b, t, n).await });
+    }
+
+    let http = reqwest::Client::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_secs(every)).await;
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs_f64();
+        let snapshot = books.read().await.clone();
+        for c in contracts.iter().take(2) {
+            for (side, token) in [("up", &c.up_token_id), ("down", &c.down_token_id)] {
+                let engine = snapshot.get(token);
+                let (best, low, age) = match engine {
+                    Some(b) => (
+                        b.best_ask,
+                        b.asks.first().map(|l| l.price).unwrap_or(0.0),
+                        now_s - b.last_update_us as f64 / 1e6,
+                    ),
+                    None => (0.0, 0.0, -1.0),
+                };
+                let rest: serde_json::Value = http
+                    .get(format!("{}/book?token_id={token}", settings.poly_base_url))
+                    .send()
+                    .await?
+                    .json()
+                    .await
+                    .unwrap_or(serde_json::Value::Null);
+                let rest_best = rest
+                    .get("asks")
+                    .and_then(|a| a.as_array())
+                    .map(|levels| {
+                        levels
+                            .iter()
+                            .filter_map(|l| l.get("price")?.as_str()?.parse::<f64>().ok())
+                            .fold(f64::MAX, f64::min)
+                    })
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.0);
+                let drift = if rest_best > 0.0 && low > 0.0 {
+                    (low - rest_best).abs()
+                } else {
+                    0.0
+                };
+                println!(
+                    "{} {:4} engine_low={low:.3} engine_best_field={best:.3} rest_low={rest_best:.3} age={age:.1}s{}",
+                    &c.end_date[11..19],
+                    side,
+                    if drift > 0.02 { "  <== DRIFT" } else { "" }
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Derive/create CLOB L2 API creds from PRIVATE_KEY in `env_file` and append
