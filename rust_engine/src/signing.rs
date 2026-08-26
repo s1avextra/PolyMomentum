@@ -242,8 +242,12 @@ pub fn sign_order_1271(
     let digest = eip712_digest(&app_domain_sep, &typed_data_sign_hash);
     let inner = ecdsa_sign(&digest, key)?;
 
+    // No 0x prefix here: callers add it when serializing, exactly as for
+    // the plain EOA path (`ecdsa_sign` also returns bare hex). Emitting it
+    // here produced "0x0x…" on the wire and the venue rejected the order
+    // with "invalid TypedDataSign signature: signature too short".
     let signature = format!(
-        "0x{inner}{}{}{}{:04x}",
+        "{inner}{}{}{}{:04x}",
         hex::encode(app_domain_sep),
         hex::encode(contents_hash),
         hex::encode(ORDER_TYPE_STRING),
@@ -589,7 +593,8 @@ mod tests {
         )
         .unwrap();
         let signed = sign_order_1271(&order, &key, false).unwrap();
-        let sig = signed.signature.strip_prefix("0x").unwrap();
+        let sig = signed.signature.as_str();
+        assert!(!sig.starts_with("0x"), "callers add the 0x prefix");
         // inner sig (65B) + domain sep (32B) + contents hash (32B) +
         // type string (186B) + uint16 length = 317 bytes.
         assert_eq!(sig.len(), 2 * (65 + 32 + 32 + 186 + 2));

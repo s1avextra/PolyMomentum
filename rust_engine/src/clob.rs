@@ -282,7 +282,9 @@ impl ClobClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+            // Keep enough of the venue's message to diagnose signature and
+            // payload errors, which are truncated to uselessness at 100.
+            return Err(format!("HTTP {}: {}", status, &body[..400.min(body.len())]));
         }
         serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
     }
@@ -307,7 +309,9 @@ impl ClobClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+            // Keep enough of the venue's message to diagnose signature and
+            // payload errors, which are truncated to uselessness at 100.
+            return Err(format!("HTTP {}: {}", status, &body[..400.min(body.len())]));
         }
         serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
     }
@@ -332,7 +336,9 @@ impl ClobClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(format!("HTTP {}: {}", status, &body[..100.min(body.len())]));
+            // Keep enough of the venue's message to diagnose signature and
+            // payload errors, which are truncated to uselessness at 100.
+            return Err(format!("HTTP {}: {}", status, &body[..400.min(body.len())]));
         }
         serde_json::from_str(&body).map_err(|e| format!("Parse error: {e}: {body}"))
     }
