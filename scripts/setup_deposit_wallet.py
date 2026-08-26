@@ -56,16 +56,40 @@ def main() -> None:
     )
     clob = ClobClient(host=CLOB, chain_id=CHAIN_ID, key=pk, creds=creds)
 
+    def creds_fields(obj):
+        if isinstance(obj, dict):
+            return (
+                obj.get("apiKey") or obj.get("api_key"),
+                obj.get("secret") or obj.get("api_secret"),
+                obj.get("passphrase") or obj.get("api_passphrase"),
+            )
+        return (
+            getattr(obj, "api_key", None) or getattr(obj, "apiKey", None),
+            getattr(obj, "api_secret", None) or getattr(obj, "secret", None),
+            getattr(obj, "api_passphrase", None) or getattr(obj, "passphrase", None),
+        )
+
     print("step 1: builder api creds")
+    bkey = bsec = bpass = None
     try:
-        builder = clob.create_builder_api_key()
+        bkey, bsec, bpass = creds_fields(clob.create_builder_api_key())
     except Exception as exc:
-        print("  create failed (may already exist):", str(exc)[:120])
-        builder = clob.derive_builder_api_key()
-    bkey = builder["apiKey"] if isinstance(builder, dict) else builder.api_key
-    bsec = builder["secret"] if isinstance(builder, dict) else builder.api_secret
-    bpass = builder["passphrase"] if isinstance(builder, dict) else builder.api_passphrase
-    print("  builder key:", bkey[:8], "…")
+        print("  create failed:", str(exc)[:160])
+    if not bkey:
+        # An existing builder key cannot be re-read with its secret, so a
+        # stale one must be revoked before a fresh create can succeed.
+        try:
+            existing = clob.get_builder_api_keys()
+            print("  existing builder keys:", str(existing)[:160])
+            for item in (existing if isinstance(existing, list) else existing.get("apiKeys", [])):
+                kid = item if isinstance(item, str) else (item.get("apiKey") or item.get("api_key"))
+                if kid:
+                    print("  revoking stale builder key", kid[:8], "…")
+                    clob.revoke_builder_api_key(kid)
+            bkey, bsec, bpass = creds_fields(clob.create_builder_api_key())
+        except Exception as exc:
+            raise SystemExit(f"could not obtain builder creds: {str(exc)[:200]}")
+    print("  builder key:", str(bkey)[:8], "…")
 
     relay = RelayClient(
         RELAYER,
@@ -101,9 +125,7 @@ def main() -> None:
     resp = relay.execute_deposit_wallet_batch(
         calls=approvals,
         wallet_address=wallet,
-        nonce=str(relay.get_deposit_wallet_nonce(wallet))
-        if hasattr(relay, "get_deposit_wallet_nonce")
-        else "0",
+        nonce=str(relay.get_nonce(wallet, "DEPOSIT_WALLET")),
         deadline=str(int(time.time()) + 300),
     )
     print("  batch submitted:", getattr(resp, "transaction_id", resp))
