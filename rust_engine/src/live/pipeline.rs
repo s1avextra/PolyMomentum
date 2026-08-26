@@ -1670,8 +1670,17 @@ impl Pipeline {
     /// (observed live 2026-08-25: fill at :10, still unindexed at :38),
     /// whereas the public feed showed the fill immediately.
     async fn public_fill_evidence(&self, market: &str, created_ts: f64) -> Option<bool> {
-        let key = crate::signing::parse_private_key(&self.settings.private_key)?;
-        let maker = format!("0x{}", hex::encode(crate::signing::address_from_key(&key)));
+        // The public feed indexes trades under the MAKER address, which is
+        // the deposit wallet in the 1271 flow - not the signing EOA. Using
+        // the EOA here made every filled order look unfilled and the
+        // runtime discarded real positions as killed FOKs (observed live
+        // 2026-08-26 10:11: "FOK purged; no public fill within 120s").
+        let maker = if self.settings.poly_funder.trim().is_empty() {
+            let key = crate::signing::parse_private_key(&self.settings.private_key)?;
+            format!("0x{}", hex::encode(crate::signing::address_from_key(&key)))
+        } else {
+            self.settings.poly_funder.trim().to_ascii_lowercase()
+        };
         let url = format!(
             "https://data-api.polymarket.com/trades?user={maker}&market={market}&limit=20"
         );
@@ -1768,6 +1777,8 @@ impl Pipeline {
                         );
                         return Ok(());
                     }
+                    // Only a POSITIVE "no fill" answer may retire the order;
+                    // an unavailable evidence channel keeps it pending.
                     Some(false) if age_s >= 120.0 && misses >= 24 => {
                         // 2+ minutes, no public fill, REST purged: the FOK was
                         // killed. Resolve as reject and release the window.
@@ -3254,6 +3265,37 @@ impl Pipeline {
             return Ok(false);
         };
 
+        // Both sides must be fresh and coherent. A binary pair's asks sum
+        // to roughly 1 plus two spreads; a far larger sum means at least one
+        // side is stale (live incident 2026-08-26: our 0.71/0.40 while the
+        // venue had 0.415/0.545 - the stale side made the underdog look like
+        // the favourite and the entry landed outside the band).
+        {
+            let complement = if direction == "up" {
+                &c.down_token_id
+            } else {
+                &c.up_token_id
+            };
+            let other = books
+                .get(complement)
+                .filter(|b| live_book_age_seconds(now_ts, b.last_update_us).is_some())
+                .map(|b| b.best_ask)
+                .unwrap_or(0.0);
+            let pair_sum = quote.vwap + other;
+            if other <= 0.0 || !(0.90..=1.10).contains(&pair_sum) {
+                self.band_skip_with_detail(
+                    cid,
+                    "band_pair_incoherent",
+                    format!(
+                        "side={:.4} complement={other:.4} sum={pair_sum:.4} dir={direction}",
+                        quote.vwap
+                    ),
+                )
+                .await;
+                return Ok(false);
+            }
+        }
+
         if !band.quote_clears_band(quote.vwap, quote.worst_price) {
             let bound = if quote.vwap <= band.ask_floor { "low" } else { "high" };
             self.band_skip_with_detail(
@@ -3639,6 +3681,47 @@ impl Pipeline {
                         tracing::warn!("live taker order skipped: visible L2 quote unavailable");
                         return Ok(false);
                     };
+                    // Re-read the book immediately before signing. At the
+                    // 240s decision the favourite reprices within seconds
+                    // (measured 2026-08-26: 0.52 -> 0.64 -> 0.97 across one
+                    // window), so a quote taken even a second earlier can be
+                    // stale. Live incident: quoted 0.71, executed 0.47 -
+                    // an entry below the band floor, outside the validated
+                    // mechanism, which lost. Fail closed on any drift that
+                    // would move the entry off the decision price or out of
+                    // the band.
+                    if let Some(band) = self.runtime_strategy.band.as_ref() {
+                        let books_now = self.book_state.read().await;
+                        let now_s = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0);
+                        let fresh = books_now
+                            .get(token_id)
+                            .and_then(|b| live_book_age_seconds(now_s, b.last_update_us).map(|_| b));
+                        let Some(book_now) = fresh else {
+                            tracing::warn!("live taker order skipped: book went stale before submit");
+                            self.monitor
+                                .record_signal_skip(&contract.market.condition_id, "band_book_stale_presubmit");
+                            return Ok(false);
+                        };
+                        let ask_now = book_now.best_ask;
+                        drop(books_now);
+                        let drift = (ask_now - quote.vwap).abs();
+                        if !band.quote_clears_band(ask_now, ask_now) || drift > 2.0 * market_tick {
+                            tracing::warn!(
+                                quoted = quote.vwap,
+                                ask_now,
+                                drift,
+                                "live taker order skipped: price moved off the decision quote"
+                            );
+                            self.monitor.record_signal_skip(
+                                &contract.market.condition_id,
+                                "band_price_moved_presubmit",
+                            );
+                            return Ok(false);
+                        }
+                    }
                     let limit_price = ceil_buy_price_to_tick(quote.worst_price, market_tick);
                     if limit_price * quote.shares > position + 1e-8 {
                         tracing::warn!(
