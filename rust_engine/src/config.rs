@@ -81,6 +81,8 @@ impl fmt::Display for VenueMode {
 #[allow(dead_code)]
 pub struct Settings {
     pub poly_api_key: String,
+    /// Deposit wallet address used as the order maker (POLY_1271 flow).
+    pub poly_funder: String,
     pub poly_api_secret: String,
     pub poly_api_passphrase: String,
     pub poly_base_url: String,
@@ -224,6 +226,7 @@ impl Settings {
 
         Self {
             poly_api_key: env_str("POLY_API_KEY", ""),
+            poly_funder: env_str("POLY_FUNDER", ""),
             poly_api_secret: env_str("POLY_API_SECRET", ""),
             poly_api_passphrase: env_str("POLY_API_PASSPHRASE", ""),
             poly_base_url: env_str("POLY_BASE_URL", "https://clob.polymarket.com"),

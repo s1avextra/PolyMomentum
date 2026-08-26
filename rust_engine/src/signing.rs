@@ -56,6 +56,10 @@ pub fn build_order(
     // limit orders: the venue requires whole-cent maker amounts on market
     // buys and floors (not rounds) the price.
     market_order: bool,
+    // Deposit wallet (POLY_1271 flow). When set, it becomes BOTH maker and
+    // signer and the order carries signature type 3; the EOA key only
+    // produces the inner ECDSA signature. None keeps the plain EOA flow.
+    funder: Option<&str>,
 ) -> Result<Order, String> {
     if token_id.is_empty() || !token_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("token_id must be a non-empty decimal uint256".to_string());
@@ -76,8 +80,16 @@ pub fn build_order(
         return Err("side must be BUY or SELL".to_string());
     }
 
-    let maker = address_from_key(signing_key);
-    let signer = maker;
+    let (maker, signer, signature_type) = match funder {
+        Some(wallet) => {
+            let addr = hex_to_address(wallet)?;
+            (addr, addr, 3u8)
+        }
+        None => {
+            let addr = address_from_key(signing_key);
+            (addr, addr, 0u8)
+        }
+    };
 
     // Amount quantization mirrors the reference client's ROUNDING_CONFIG:
     // price decimals follow the tick (0.01→2, 0.001→3, ...), sizes carry at
@@ -164,7 +176,7 @@ pub fn build_order(
         maker_amount,
         taker_amount,
         side: side_num,
-        signature_type: 0, // EOA
+        signature_type,
         timestamp_ms: now,
         metadata: [0u8; 32],
         builder: [0u8; 32],
@@ -176,6 +188,67 @@ pub fn sign_order(order: &Order, key: &SigningKey, neg_risk: bool) -> Result<Sig
     let digest = order_digest(order, neg_risk)?;
     let signature = ecdsa_sign(&digest, key)?;
 
+    Ok(SignedOrder {
+        order: order.clone(),
+        signature,
+    })
+}
+
+/// ERC-1271 order signature for a Polymarket deposit wallet (signature type
+/// 3). Mirrors py-clob-client-v2's `_build_poly_1271_order_signature`: the
+/// order struct is wrapped in Solady's `TypedDataSign` envelope bound to the
+/// deposit wallet's own domain, the EOA signs that digest, and the wire
+/// signature carries the envelope material the wallet needs to verify.
+///
+/// Caller contract: `order.maker` and `order.signer` are BOTH the deposit
+/// wallet address; `key` is the owning EOA's key.
+pub fn sign_order_1271(
+    order: &Order,
+    key: &SigningKey,
+    neg_risk: bool,
+) -> Result<SignedOrder, String> {
+    if order.signature_type != 3 {
+        return Err("sign_order_1271 requires signature type 3".to_string());
+    }
+    if order.maker != order.signer {
+        return Err("POLY_1271 orders must have maker == signer (the deposit wallet)".to_string());
+    }
+    let exchange = if neg_risk {
+        NEG_RISK_EXCHANGE_ADDRESS
+    } else {
+        EXCHANGE_ADDRESS
+    };
+    let app_domain_sep = eip712_domain_separator(exchange)?;
+    let contents_hash = order_struct_hash(order)?;
+
+    let mut solady_type = Vec::new();
+    solady_type.extend_from_slice(SOLADY_TYPE_PREFIX);
+    solady_type.extend_from_slice(ORDER_TYPE_STRING);
+    let solady_type_hash = keccak256(&solady_type);
+
+    let mut chain_id_bytes = [0u8; 32];
+    chain_id_bytes[24..32].copy_from_slice(&CHAIN_ID.to_be_bytes());
+
+    let mut encoded = Vec::with_capacity(224);
+    encoded.extend_from_slice(&solady_type_hash);
+    encoded.extend_from_slice(&contents_hash);
+    encoded.extend_from_slice(&keccak256(b"DepositWallet"));
+    encoded.extend_from_slice(&keccak256(b"1"));
+    encoded.extend_from_slice(&chain_id_bytes);
+    encoded.extend_from_slice(&address_padded(&order.signer));
+    encoded.extend_from_slice(&[0u8; 32]); // deposit wallet domain salt
+    let typed_data_sign_hash = keccak256(&encoded);
+
+    let digest = eip712_digest(&app_domain_sep, &typed_data_sign_hash);
+    let inner = ecdsa_sign(&digest, key)?;
+
+    let signature = format!(
+        "0x{inner}{}{}{}{:04x}",
+        hex::encode(app_domain_sep),
+        hex::encode(contents_hash),
+        hex::encode(ORDER_TYPE_STRING),
+        ORDER_TYPE_STRING.len()
+    );
     Ok(SignedOrder {
         order: order.clone(),
         signature,
@@ -237,11 +310,14 @@ fn eip712_domain_separator(verifying_contract: &str) -> Result<[u8; 32], String>
     Ok(keccak256(&encoded))
 }
 
+/// Canonical EIP-712 type strings. The Order string is also embedded
+/// verbatim in ERC-1271 wire signatures, so it must stay byte-identical.
+const ORDER_TYPE_STRING: &[u8] = b"Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)";
+const SOLADY_TYPE_PREFIX: &[u8] = b"TypedDataSign(Order contents,string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)";
+
 /// EIP-712 type hash for the Order struct.
 fn order_type_hash() -> [u8; 32] {
-    keccak256(
-        b"Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)",
-    )
+    keccak256(ORDER_TYPE_STRING)
 }
 
 /// Hash the order struct fields per EIP-712 encoding rules.
@@ -255,8 +331,8 @@ fn order_struct_hash(order: &Order) -> Result<[u8; 32], String> {
     if order.side > 1 {
         return Err("signed order side must be 0 (BUY) or 1 (SELL)".to_string());
     }
-    if order.signature_type != 0 {
-        return Err("only EOA signature type 0 is supported".to_string());
+    if !matches!(order.signature_type, 0 | 3) {
+        return Err("signature type must be 0 (EOA) or 3 (POLY_1271)".to_string());
     }
 
     let type_hash = order_type_hash();
@@ -478,6 +554,51 @@ pub fn hmac_sign_request(
 
 #[cfg(test)]
 mod tests {
+    /// Cross-checked against the reference implementation
+    /// (py-clob-client-v2 `_build_poly_1271_order_signature`) via an
+    /// independent Python computation of the same fixture, 2026-08-26.
+    #[test]
+    fn poly_1271_envelope_matches_reference_vector() {
+        use super::*;
+        let wallet = hex_to_address("1a581Bf1995AB04Cc116E4FFDb3B385F8a1D4bDf").unwrap();
+        let order = Order {
+            salt: 12345,
+            maker: wallet,
+            signer: wallet,
+            token_id: "777".to_string(),
+            maker_amount: 5_000_000,
+            taker_amount: 5_434_782,
+            side: 0,
+            signature_type: 3,
+            timestamp_ms: 1_787_000_000_000,
+            metadata: [0u8; 32],
+            builder: [0u8; 32],
+        };
+        assert_eq!(
+            hex::encode(order_struct_hash(&order).unwrap()),
+            "7a8cabce1de326d9764015f976e8bfcd0418e03c913aeff45af4e5a24e958b20"
+        );
+        assert_eq!(
+            hex::encode(eip712_domain_separator(EXCHANGE_ADDRESS).unwrap()),
+            "3264e159346253e26a64e00b69032db0e7d32f94628de3e6eecb50304d7af3d2"
+        );
+        assert_eq!(ORDER_TYPE_STRING.len(), 186);
+
+        let key = parse_private_key(
+            "0x1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        let signed = sign_order_1271(&order, &key, false).unwrap();
+        let sig = signed.signature.strip_prefix("0x").unwrap();
+        // inner sig (65B) + domain sep (32B) + contents hash (32B) +
+        // type string (186B) + uint16 length = 317 bytes.
+        assert_eq!(sig.len(), 2 * (65 + 32 + 32 + 186 + 2));
+        assert!(sig[130..].starts_with(
+            "3264e159346253e26a64e00b69032db0e7d32f94628de3e6eecb50304d7af3d2"
+        ));
+        assert!(sig.ends_with("00ba"));
+    }
+
     use super::*;
 
     #[test]
@@ -610,14 +731,14 @@ mod tests {
         assert!(decimal_to_u256(uint256_overflow).is_err());
         assert!(hex_to_address("not-an-address").is_err());
         assert!(hmac_sign_request("not base64!", "1", "GET", "/", "").is_err());
-        assert!(build_order(&key, "123", 0.5, 1.0, "buy", 0.01, true).is_err());
-        assert!(build_order(&key, "0", 0.5, 1.0, "BUY", 0.01, true).is_err());
-        assert!(build_order(&key, "123", f64::NAN, 1.0, "BUY", 0.01, true).is_err());
-        assert!(build_order(&key, "123", 0.5, 0.001, "BUY", 0.01, true).is_err());
-        assert!(build_order(&key, "123", 0.5, f64::MAX, "BUY", 0.01, true).is_err());
-        assert!(build_order(&key, uint256_overflow, 0.5, 1.0, "BUY", 0.01, true).is_err());
+        assert!(build_order(&key, "123", 0.5, 1.0, "buy", 0.01, true, None).is_err());
+        assert!(build_order(&key, "0", 0.5, 1.0, "BUY", 0.01, true, None).is_err());
+        assert!(build_order(&key, "123", f64::NAN, 1.0, "BUY", 0.01, true, None).is_err());
+        assert!(build_order(&key, "123", 0.5, 0.001, "BUY", 0.01, true, None).is_err());
+        assert!(build_order(&key, "123", 0.5, f64::MAX, "BUY", 0.01, true, None).is_err());
+        assert!(build_order(&key, uint256_overflow, 0.5, 1.0, "BUY", 0.01, true, None).is_err());
 
-        let valid = build_order(&key, "123", 0.5, 2.0, "BUY", 0.01, true).unwrap();
+        let valid = build_order(&key, "123", 0.5, 2.0, "BUY", 0.01, true, None).unwrap();
         assert_eq!(valid.side, 0);
         assert_eq!(valid.maker_amount, 1_000_000);
         assert_eq!(valid.taker_amount, 2_000_000);
@@ -625,14 +746,14 @@ mod tests {
         // Market BUY maker amounts must be whole cents even when
         // price*size lands off-cent (the venue's live reject 2026-08-25:
         // "maker amount supports a max accuracy of 2 decimals").
-        let fok = build_order(&key, "123", 0.71, 7.04, "BUY", 0.01, true).unwrap();
+        let fok = build_order(&key, "123", 0.71, 7.04, "BUY", 0.01, true, None).unwrap();
         assert_eq!(fok.maker_amount % 10_000, 0, "maker must be whole cents");
         assert_eq!(fok.maker_amount, 4_990_000); // floor(0.71*7.04=4.9984, 2dp)
         assert_eq!(fok.taker_amount % 100, 0, "shares max 4 decimals at tick 0.01");
         assert_eq!(fok.taker_amount, 7_028_100); // floor(4.99/0.71, 4dp)
 
         // Limit BUY keeps 2dp shares and derives maker at amount precision.
-        let gtc = build_order(&key, "123", 0.71, 7.046, "BUY", 0.01, false).unwrap();
+        let gtc = build_order(&key, "123", 0.71, 7.046, "BUY", 0.01, false, None).unwrap();
         assert_eq!(gtc.taker_amount, 7_040_000); // floor(7.046, 2dp)
         assert_eq!(gtc.maker_amount, 4_998_400); // 7.04*0.71 at 4dp
 

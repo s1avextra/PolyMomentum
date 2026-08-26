@@ -32,6 +32,9 @@ pub struct ClobClient {
     api_passphrase: String,
     signing_key: Option<SigningKey>,
     maker_address: String,
+    /// Deposit wallet used as order maker under the POLY_1271 flow. Empty =
+    /// plain EOA maker (only possible for grandfathered addresses).
+    funder: String,
     /// Track order latencies for monitoring
     pub latencies: Vec<u64>,
     /// Pre-warmed: have we sent a test request to prime the connection?
@@ -180,6 +183,7 @@ impl ClobClient {
             api_passphrase: api_passphrase.to_string(),
             signing_key: None,
             maker_address: String::new(),
+            funder: String::new(),
             latencies: Vec::with_capacity(1000),
             warmed: false,
         })
@@ -493,10 +497,24 @@ impl ClobClient {
         // Build and sign the CLOB V2 order. Fees are protocol/operator-set at
         // match time in V2 and are not part of the signed EIP-712 struct.
         let market_order = matches!(order_type, "FOK" | "FAK");
-        let order = signing::build_order(key, token_id, price, size, side, tick_size, market_order)
+        let funder = (!self.funder.is_empty()).then_some(self.funder.as_str());
+        let order = signing::build_order(
+            key,
+            token_id,
+            price,
+            size,
+            side,
+            tick_size,
+            market_order,
+            funder,
+        )
             .map_err(|error| format!("Build order: {error}"))?;
-        let signed = signing::sign_order(&order, key, neg_risk)
-            .map_err(|error| format!("Sign order: {error}"))?;
+        let signed = if order.signature_type == 3 {
+            signing::sign_order_1271(&order, key, neg_risk)
+        } else {
+            signing::sign_order(&order, key, neg_risk)
+        }
+        .map_err(|error| format!("Sign order: {error}"))?;
         let expected_order_id = signing::order_hash(&signed.order, neg_risk)
             .map_err(|error| format!("Hash order: {error}"))?;
 
@@ -739,13 +757,11 @@ pub fn create_shared_client(
     api_key: &str,
     api_secret: &str,
     api_passphrase: &str,
+    funder: &str,
 ) -> Result<SharedClobClient, String> {
-    Ok(Arc::new(RwLock::new(ClobClient::new(
-        base_url,
-        api_key,
-        api_secret,
-        api_passphrase,
-    )?)))
+    let mut client = ClobClient::new(base_url, api_key, api_secret, api_passphrase)?;
+    client.funder = funder.trim().to_string();
+    Ok(Arc::new(RwLock::new(client)))
 }
 
 #[cfg(test)]

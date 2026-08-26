@@ -1196,6 +1196,7 @@ impl Pipeline {
                 &settings.poly_api_key,
                 &settings.poly_api_secret,
                 &settings.poly_api_passphrase,
+                &settings.poly_funder,
             )
             .map_err(anyhow::Error::msg)?;
             client
