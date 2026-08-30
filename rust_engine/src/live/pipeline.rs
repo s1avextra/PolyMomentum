@@ -1330,6 +1330,18 @@ impl Pipeline {
                 polymarket_book_feed(bs, tt, nt).await;
             });
         }
+        // REST snapshot reconciliation for the active window's pair. The ws
+        // mirror is delta-maintained, and a single missed delta corrupts the
+        // ladder invisibly (freshness checks pass because later deltas keep
+        // stamping the token). Re-anchoring on the venue's authoritative
+        // /book bounds staleness by construction: at most one refresh
+        // interval, whatever happens to the delta stream.
+        {
+            let p = self.clone();
+            tokio::spawn(async move {
+                p.book_snapshot_reconciliation_loop().await;
+            });
+        }
         if matches!(self.mode, Mode::Live) && self.settings.live_reconciliation_ready {
             let auth = UserChannelAuth::new(
                 self.settings.poly_api_key.clone(),
@@ -1669,6 +1681,72 @@ impl Pipeline {
     /// within seconds while its authed /trades indexing can lag past 30s
     /// (observed live 2026-08-25: fill at :10, still unindexed at :38),
     /// whereas the public feed showed the fill immediately.
+    /// Every few seconds, re-anchor the active btc-updown window's two books
+    /// on the venue's REST `/book`. Logs when the mirror had diverged so gap
+    /// frequency becomes measurable instead of invisible.
+    async fn book_snapshot_reconciliation_loop(&self) {
+        const REFRESH: Duration = Duration::from_secs(4);
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_millis(2500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        loop {
+            tokio::time::sleep(REFRESH).await;
+            let now_s = nonzero_ts_or_now(0.0);
+            let pair: Option<(String, String, String)> = {
+                self.contracts
+                    .read()
+                    .await
+                    .iter()
+                    .filter_map(|c| {
+                        let end_ts = parse_end(&c.end_date).ok()?.timestamp() as f64;
+                        let remaining = end_ts - now_s;
+                        (0.0..=300.0).contains(&remaining).then(|| {
+                            (
+                                c.market.condition_id.clone(),
+                                c.up_token_id.clone(),
+                                c.down_token_id.clone(),
+                            )
+                        })
+                    })
+                    .next()
+            };
+            let Some((cid, up, down)) = pair else { continue };
+            for token in [up, down] {
+                if token.is_empty() {
+                    continue;
+                }
+                let url = format!(
+                    "{}/book?token_id={token}",
+                    self.settings.poly_base_url
+                );
+                let body: Option<serde_json::Value> = match client.get(&url).send().await {
+                    Ok(resp) => resp.json().await.ok(),
+                    Err(_) => None,
+                };
+                let Some(body) = body else { continue };
+                if let Some((prev_ask, rest_ask)) =
+                    crate::polymarket_ws::overwrite_book_from_rest(&self.book_state, &body)
+                        .await
+                {
+                    if prev_ask > 0.0 && rest_ask > 0.0 && (prev_ask - rest_ask).abs() > 0.02 {
+                        tracing::warn!(
+                            token = %short_cid(&token),
+                            prev_ask,
+                            rest_ask,
+                            "ws book had diverged from venue REST; ladder re-anchored"
+                        );
+                        self.monitor
+                            .record_signal_skip(&cid, "book_resync_divergence");
+                    }
+                }
+            }
+        }
+    }
+
     async fn public_fill_evidence(&self, market: &str, created_ts: f64) -> Option<bool> {
         self.public_fill_details(market, "", created_ts)
             .await

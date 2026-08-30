@@ -276,6 +276,70 @@ fn apply_price_change(state: &mut TokenBookState, changes: &[ChangeEntry]) {
 ///
 /// `tracked_tokens` is read on each (re)connect; mutate it from outside and
 /// call `resubscribe.notify_one()` to force a reconnect with the new set.
+/// Wholesale-replace one token's ladder from the venue's REST `/book`
+/// response, bypassing the per-token monotonicity guard.
+///
+/// The guard is what let a corrupted ladder stay live: a delta gap under an
+/// update storm (2026-08-26: the mirror held asks the venue had cancelled a
+/// minute earlier and missed the real 0.47-0.55 ladder) leaves
+/// `last_update_us` fresh - later deltas at other prices keep stamping it -
+/// while the levels are wrong, so no timestamp check can detect the state.
+/// The REST body is the venue's authoritative current book; replacing with it
+/// heals any gap. `last_update_us` takes the snapshot's own venue timestamp,
+/// so deltas newer than the snapshot keep applying on top.
+///
+/// Returns (previous_best_ask, new_best_ask) for divergence accounting.
+pub async fn overwrite_book_from_rest(
+    book_state: &SharedBookState,
+    body: &serde_json::Value,
+) -> Option<(f64, f64)> {
+    let asset_id = body.get("asset_id")?.as_str()?.to_string();
+    let to_levels = |key: &str| -> Option<Vec<RawLevel>> {
+        Some(
+            body.get(key)?
+                .as_array()?
+                .iter()
+                .filter_map(|l| {
+                    Some(RawLevel {
+                        price: l.get("price")?.as_str()?.to_string(),
+                        size: l.get("size")?.as_str()?.to_string(),
+                    })
+                })
+                .collect(),
+        )
+    };
+    let bids = parse_levels(&to_levels("bids"), true);
+    let asks = parse_levels(&to_levels("asks"), false);
+    let timestamp_us = body
+        .get("timestamp")
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .or_else(|| v.as_u64())
+        })
+        .and_then(|ms| ms.checked_mul(1_000))
+        .map(clamp_timestamp_us_to_local)?;
+    let best_bid = bids.first().map(|l| l.price).unwrap_or(0.0);
+    let best_ask = asks.first().map(|l| l.price).unwrap_or(0.0);
+    let mut map = book_state.write().await;
+    let state = map.entry(asset_id).or_default();
+    let previous_best_ask = state.best_ask;
+    state.best_bid = best_bid;
+    state.best_ask = best_ask;
+    state.mid = if best_bid > 0.0 && best_ask > 0.0 {
+        (best_bid + best_ask) / 2.0
+    } else if best_bid > 0.0 {
+        best_bid
+    } else {
+        best_ask
+    };
+    state.bids = bids;
+    state.asks = asks;
+    state.last_update_us = timestamp_us;
+    record_mid_history(state, timestamp_us);
+    Some((previous_best_ask, best_ask))
+}
+
 pub async fn polymarket_book_feed(
     book_state: SharedBookState,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
