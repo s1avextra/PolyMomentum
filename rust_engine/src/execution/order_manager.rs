@@ -215,7 +215,13 @@ impl OrderManager {
         if remaining_size <= f64::EPSILON {
             return Err("order already fully filled".to_string());
         }
-        if fill_size - remaining_size > 1e-9 {
+        // A spend-denominated market FOK legitimately fills MORE shares
+        // than requested when the venue prices better than the worst-case
+        // limit (live 2026-08-26: ordered 7.04 @ 0.71 cap, matched 10.617
+        // @ 0.47 for the same spend). Rejecting that fill would strand the
+        // real position outside accounting, so overfill is allowed for
+        // market orders only; resting orders keep the strict check.
+        if fill_size - remaining_size > 1e-9 && order.intent.order_type != "market" {
             return Err(format!(
                 "fill_size {} exceeds remaining_size {}",
                 fill_size, remaining_size
@@ -499,12 +505,35 @@ mod tests {
         assert!(err.contains("submitted"));
 
         manager.ack(&id, Some("paper-1".to_string()), 1.3).unwrap();
-        let err = manager.fill(&id, 11.0, 0.5, 0.0, 1.35).unwrap_err();
-        assert!(err.contains("exceeds remaining_size"));
-
-        manager.fill(&id, 10.0, 0.5, 0.0, 1.4).unwrap();
+        // A market (FOK) order may overfill: a price-improved fill delivers
+        // more shares than the worst-case request for the same spend.
+        let over = manager.fill(&id, 11.0, 0.5, 0.0, 1.35).unwrap();
+        assert_eq!(over.state, OrderState::Filled);
+        assert!((over.filled_size - 11.0).abs() < 1e-9);
         let err = manager.fill(&id, 1.0, 0.5, 0.0, 1.5).unwrap_err();
         assert!(err.contains("filled"));
+
+        // Resting (limit) orders keep the strict overfill rejection.
+        let strategy = StrategySpec::new("test", "1", "hash", "risk");
+        let signal = Signal {
+            market_id: "0xabc".to_string(),
+            token_id: "tok".to_string(),
+            direction: "up".to_string(),
+            fair_price: 0.6,
+            edge: 0.1,
+            confidence: 0.7,
+            diagnostics: serde_json::json!({}),
+        };
+        let limit = OrderIntent::deterministic(
+            strategy, &signal, "buy", "limit", Some(0.5), 10.0, "test", "2",
+        );
+        let lid = limit.intent_id.clone();
+        manager.create_intent(limit, 2.0).unwrap();
+        manager.risk_accept(&lid, 2.1).unwrap();
+        manager.submit(&lid, Some("paper-2".to_string()), 2.2).unwrap();
+        manager.ack(&lid, Some("paper-2".to_string()), 2.3).unwrap();
+        let err = manager.fill(&lid, 11.0, 0.5, 0.0, 2.4).unwrap_err();
+        assert!(err.contains("exceeds remaining_size"));
     }
 
     #[test]

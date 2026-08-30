@@ -594,7 +594,7 @@ impl ClobClient {
                 let body = resp.text().await.unwrap_or_default();
 
                 if !status.is_success() {
-                    let message = format!("HTTP {}: {}", status, &body[..100.min(body.len())]);
+                    let message = format!("HTTP {}: {}", status, &body[..400.min(body.len())]);
                     return if status.is_client_error()
                         && status != reqwest::StatusCode::REQUEST_TIMEOUT
                         && status != reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -682,7 +682,7 @@ impl ClobClient {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 if !status.is_success() {
-                    let message = format!("HTTP {}: {}", status, &body[..100.min(body.len())]);
+                    let message = format!("HTTP {}: {}", status, &body[..400.min(body.len())]);
                     return if status.is_client_error()
                         && status != reqwest::StatusCode::REQUEST_TIMEOUT
                         && status != reqwest::StatusCode::TOO_MANY_REQUESTS

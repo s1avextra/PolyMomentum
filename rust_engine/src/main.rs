@@ -6738,6 +6738,10 @@ fn live_configured_order_budget_usd(
     }
 
     let mut position = bankroll * settings.candle_position_pct.max(0.0);
+    // The band runtime clamps its stake UP to the venue-minimum stake, so
+    // preflight must validate that number, not the raw percentage - at
+    // $19 bankroll the raw 25% is $4.75 while the first order spends $5.
+    position = position.max(live::pipeline::BAND_MIN_STAKE_USD);
     if settings.max_position_per_market_usd > 0.0 {
         position = position.min(settings.max_position_per_market_usd);
     }
@@ -10774,7 +10778,7 @@ async fn cmd_wallet(s: &config::Settings, json: bool) {
         eprintln!("PRIVATE_KEY not set");
         std::process::exit(1);
     }
-    match data::wallet::WalletReader::new(&s.polygon_rpc_url, &s.private_key) {
+    match data::wallet::WalletReader::for_funder(&s.polygon_rpc_url, &s.private_key, &s.poly_funder) {
         Ok(reader) => match reader.fetch_balances().await {
             Ok(b) => {
                 if json {
@@ -11736,7 +11740,11 @@ async fn telegram_wallet_text(settings: &config::Settings) -> String {
         return "Wallet\nPRIVATE_KEY not set".to_string();
     }
     let reader =
-        match data::wallet::WalletReader::new(&settings.polygon_rpc_url, &settings.private_key) {
+        match data::wallet::WalletReader::for_funder(
+        &settings.polygon_rpc_url,
+        &settings.private_key,
+        &settings.poly_funder,
+    ) {
             Ok(reader) => reader,
             Err(e) => return format!("Wallet\ninit failed: {e}"),
         };

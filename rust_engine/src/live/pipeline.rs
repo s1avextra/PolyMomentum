@@ -1670,6 +1670,20 @@ impl Pipeline {
     /// (observed live 2026-08-25: fill at :10, still unindexed at :38),
     /// whereas the public feed showed the fill immediately.
     async fn public_fill_evidence(&self, market: &str, created_ts: f64) -> Option<bool> {
+        self.public_fill_details(market, "", created_ts)
+            .await
+            .map(|d| d.is_some())
+    }
+
+    /// Aggregated public-data-api trade rows matching our order: same maker,
+    /// same market, BUY side, at/after order creation; token filter optional.
+    /// Outer None = channel unavailable; Some(None) = positively no fill.
+    async fn public_fill_details(
+        &self,
+        market: &str,
+        token_id: &str,
+        created_ts: f64,
+    ) -> Option<Option<PublicFillDetails>> {
         // The public feed indexes trades under the MAKER address, which is
         // the deposit wallet in the 1271 flow - not the signing EOA. Using
         // the EOA here made every filled order look unfilled and the
@@ -1692,10 +1706,42 @@ impl Pipeline {
             .ok()?;
         let rows: serde_json::Value = resp.json().await.ok()?;
         let cutoff = created_ts - 2.0;
-        Some(rows.as_array()?.iter().any(|t| {
-            t.get("timestamp")
+        let mut size_sum = 0.0f64;
+        let mut notional = 0.0f64;
+        let mut latest_ts = 0.0f64;
+        for t in rows.as_array()? {
+            let ts = t
+                .get("timestamp")
                 .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
-                .is_some_and(|ts| ts as f64 >= cutoff)
+                .map(|v| v as f64);
+            let Some(ts) = ts.filter(|ts| *ts >= cutoff) else {
+                continue;
+            };
+            if !token_id.is_empty()
+                && t.get("asset").and_then(|v| v.as_str()) != Some(token_id)
+            {
+                continue;
+            }
+            if t.get("side").and_then(|v| v.as_str()) != Some("BUY") {
+                continue;
+            }
+            let price = t.get("price").and_then(json_number);
+            let size = t.get("size").and_then(json_number);
+            if let (Some(price), Some(size)) = (price, size) {
+                if price > 0.0 && size > 0.0 {
+                    size_sum += size;
+                    notional += price * size;
+                    latest_ts = latest_ts.max(ts);
+                }
+            }
+        }
+        if size_sum <= 0.0 {
+            return Some(None);
+        }
+        Some(Some(PublicFillDetails {
+            size: size_sum,
+            price: notional / size_sum,
+            ts: latest_ts,
         }))
     }
 
@@ -1757,29 +1803,105 @@ impl Pipeline {
                 // Acked FOK, no in-process fills, REST purged it. Consult the
                 // independent public feed before любое fail-closed действие.
                 match self
-                    .public_fill_evidence(&order.intent.market_id, order.created_ts)
+                    .public_fill_details(
+                        &order.intent.market_id,
+                        &order.intent.token_id,
+                        order.created_ts,
+                    )
                     .await
                 {
-                    Some(true) => {
-                        // The fill happened; authed indexing is lagging. Keep
-                        // waiting - user-ws/REST trades will deliver it.
-                        if let Some(pending) = self
+                    Some(Some(details)) => {
+                        // The fill happened; authed indexing is lagging.
+                        // Give it 90s, then book the position from the
+                        // public record itself - a real fill must never
+                        // wait forever on a channel that may simply not
+                        // cover this maker (observed: the lost -$5.18
+                        // position existed only in public data).
+                        if age_s < 90.0 {
+                            if let Some(pending) = self
+                                .live_pending_positions
+                                .lock()
+                                .await
+                                .get_mut(&order.intent.intent_id)
+                            {
+                                pending.recovery_misses = 0;
+                            }
+                            tracing::info!(
+                                intent_id = %order.intent.intent_id,
+                                "public feed confirms fill; waiting for authed indexing"
+                            );
+                            return Ok(());
+                        }
+                        let ts = nonzero_ts_or_now(0.0);
+                        let fee = self
                             .live_pending_positions
                             .lock()
                             .await
-                            .get_mut(&order.intent.intent_id)
-                        {
-                            pending.recovery_misses = 0;
-                        }
-                        tracing::info!(
-                            intent_id = %order.intent.intent_id,
-                            "public feed confirms fill; waiting for authed indexing"
-                        );
+                            .get(&order.intent.intent_id)
+                            .and_then(|pending| pending.fill_fee(details.size, details.price))
+                            .unwrap_or(0.0);
+                        let booked = {
+                            let mut orders = self.order_manager.lock().await;
+                            orders
+                                .fill(
+                                    &order.intent.intent_id,
+                                    details.size,
+                                    details.price,
+                                    fee,
+                                    ts,
+                                )
+                                .map(|o| o.clone())
+                        };
+                        let booked = match booked {
+                            Ok(o) => o,
+                            Err(error) => {
+                                tracing::error!(
+                                    intent_id = %order.intent.intent_id,
+                                    %error,
+                                    "public-evidence fill booking failed"
+                                );
+                                return Ok(());
+                            }
+                        };
+                        self.monitor.record_order_reconciled(&OrderReconciled {
+                            intent_id: order.intent.intent_id.clone(),
+                            order_id: booked
+                                .venue_order_id
+                                .clone()
+                                .unwrap_or_default(),
+                            source: "public_data_api.trade".to_string(),
+                            venue_state: "MINED".to_string(),
+                            filled: booked.filled_size,
+                            requested: booked.requested_size,
+                            fill_price: details.price,
+                            fee,
+                            detail: format!(
+                                "booked from public evidence after authed indexing lag; venue_ts={:.0}",
+                                details.ts
+                            ),
+                        });
+                        self.monitor.record_order_filled(&OrderFilled {
+                            intent_id: order.intent.intent_id.clone(),
+                            order_id: booked.venue_order_id.clone().unwrap_or_default(),
+                            filled: details.size,
+                            requested: booked.requested_size,
+                            fill_pct: booked.fill_pct(),
+                            fill_price: details.price,
+                            cost: details.size * details.price,
+                            limit_price: booked.intent.limit_price.unwrap_or(details.price),
+                            slippage: 0.0,
+                            slippage_bps: 0.0,
+                            fill_time_s: (ts - booked.created_ts).max(0.0),
+                            fee,
+                            n_trades: 1,
+                        });
+                        self.record_live_fill_position(&booked, ts, details.size, details.price)
+                            .await?;
                         return Ok(());
                     }
                     // Only a POSITIVE "no fill" answer may retire the order;
                     // an unavailable evidence channel keeps it pending.
-                    Some(false) if age_s >= 120.0 && misses >= 24 => {
+                    Some(None) if age_s >= 120.0 && misses >= 24 => {
                         // 2+ minutes, no public fill, REST purged: the FOK was
                         // killed. Resolve as reject and release the window.
                         {
@@ -3691,29 +3813,40 @@ impl Pipeline {
                     // would move the entry off the decision price or out of
                     // the band.
                     if let Some(band) = self.runtime_strategy.band.as_ref() {
-                        let books_now = self.book_state.read().await;
-                        let now_s = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs_f64())
-                            .unwrap_or(0.0);
-                        let fresh = books_now
-                            .get(token_id)
-                            .and_then(|b| live_book_age_seconds(now_s, b.last_update_us).map(|_| b));
-                        let Some(book_now) = fresh else {
-                            tracing::warn!("live taker order skipped: book went stale before submit");
-                            self.monitor
-                                .record_signal_skip(&contract.market.condition_id, "band_book_stale_presubmit");
-                            return Ok(false);
+                        // The venue's public REST book is the arbiter, not our
+                        // ws mirror: a delta gap under an update storm leaves
+                        // the mirror internally fresh but wrong (2026-08-26
+                        // incident: mirror said 0.71 while the venue traded
+                        // 0.47-0.56 for 10+ seconds, and the FOK - a spend
+                        // with no lower price bound - filled below the band
+                        // floor and lost). One 50ms GET per attempt is free at
+                        // our one-order-per-window cadence. Fail closed on any
+                        // fetch error: no authoritative price, no order.
+                        let ask_now = match venue_rest_best_ask(
+                            &self.settings.poly_base_url,
+                            token_id,
+                        )
+                        .await
+                        {
+                            Some(ask) if ask > 0.0 => ask,
+                            _ => {
+                                tracing::warn!(
+                                    "live taker order skipped: venue REST book unavailable"
+                                );
+                                self.monitor.record_signal_skip(
+                                    &contract.market.condition_id,
+                                    "band_rest_book_unavailable",
+                                );
+                                return Ok(false);
+                            }
                         };
-                        let ask_now = book_now.best_ask;
-                        drop(books_now);
                         let drift = (ask_now - quote.vwap).abs();
                         if !band.quote_clears_band(ask_now, ask_now) || drift > 2.0 * market_tick {
                             tracing::warn!(
                                 quoted = quote.vwap,
                                 ask_now,
                                 drift,
-                                "live taker order skipped: price moved off the decision quote"
+                                "live taker order skipped: venue REST book disagrees with decision quote"
                             );
                             self.monitor.record_signal_skip(
                                 &contract.market.condition_id,
@@ -4752,6 +4885,33 @@ fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
     // -0.4..-0.6s on the most active pair, which silently rejected every
     // decision-time book). Intake clamps timestamps to now+10s.
     (age.is_finite() && (-10.0..30.0).contains(&age)).then_some(age.max(0.0))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PublicFillDetails {
+    size: f64,
+    price: f64,
+    ts: f64,
+}
+
+/// Best ask from the venue's public REST book. Authoritative pre-submit
+/// price check for the band path; short timeout so a venue hiccup costs one
+/// retry cycle, not the whole entry window.
+async fn venue_rest_best_ask(base_url: &str, token_id: &str) -> Option<f64> {
+    let url = format!("{base_url}/book?token_id={token_id}");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+        .ok()?;
+    let body: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
+    body.get("asks")?
+        .as_array()?
+        .iter()
+        .filter_map(|level| level.get("price")?.as_str()?.parse::<f64>().ok())
+        .filter(|price| price.is_finite() && *price > 0.0)
+        .fold(None, |low: Option<f64>, price| {
+            Some(low.map_or(price, |l| l.min(price)))
+        })
 }
 
 fn live_market_tick_size(

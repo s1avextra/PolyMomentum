@@ -161,12 +161,16 @@ pub fn build_order(
 
     let side_num = if side == "BUY" { 0u8 } else { 1u8 };
 
-    // Salt: timestamp_seconds * random(0..1)
+    // Salt: uniform in [0, epoch_ms), matching the reference client's
+    // generate_order_salt(). The venue's decoders are strict about this
+    // field (a string salt and, on the 1271 path, salts above int64 max
+    // both drew "Invalid order payload"); bounding by epoch-ms (< 2^41)
+    // keeps every salt safe for int64 and float64 parsers.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| format!("system clock is before Unix epoch: {error}"))?
         .as_millis();
-    let salt = now.wrapping_mul(rand::random::<u64>() as u128) % (1u128 << 64);
+    let salt = (rand::random::<u64>() as u128) % now.max(1);
 
     Ok(Order {
         salt,
