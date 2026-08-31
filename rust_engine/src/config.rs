@@ -86,6 +86,8 @@ pub struct Settings {
     pub poly_api_secret: String,
     pub poly_api_passphrase: String,
     pub poly_base_url: String,
+    /// Venue status page summary endpoint; empty disables the incident gate.
+    pub poly_status_url: String,
     pub poly_gamma_url: String,
 
     pub venue: VenueMode,
@@ -230,6 +232,10 @@ impl Settings {
             poly_api_secret: env_str("POLY_API_SECRET", ""),
             poly_api_passphrase: env_str("POLY_API_PASSPHRASE", ""),
             poly_base_url: env_str("POLY_BASE_URL", "https://clob.polymarket.com"),
+            poly_status_url: env_str(
+                "POLY_STATUS_URL",
+                "https://status.polymarket.com/api/v2/summary.json",
+            ),
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
 
             venue,

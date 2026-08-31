@@ -896,6 +896,10 @@ pub struct Pipeline {
     last_wallet_read_s: std::sync::atomic::AtomicU64,
     tracked_tokens: Arc<RwLock<Vec<String>>>,
     resub_notify: Arc<Notify>,
+    /// Set while the venue's own status page reports an active incident.
+    /// Gates NEW entries only; exits, reconciliation and settlement never
+    /// depend on it.
+    venue_incident: Arc<std::sync::atomic::AtomicBool>,
     tracked_markets: Arc<RwLock<Vec<String>>>,
     user_resub_notify: Arc<Notify>,
     reconciled_trade_ids: Mutex<HashSet<String>>,
@@ -1249,6 +1253,7 @@ impl Pipeline {
             last_wallet_read_s: std::sync::atomic::AtomicU64::new(0),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
             resub_notify: new_subscription_notify(),
+            venue_incident: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tracked_markets: Arc::new(RwLock::new(Vec::new())),
             user_resub_notify: new_subscription_notify(),
             reconciled_trade_ids: Mutex::new(reconciled_trade_ids),
@@ -1340,6 +1345,20 @@ impl Pipeline {
             let p = self.clone();
             tokio::spawn(async move {
                 p.book_snapshot_reconciliation_loop().await;
+            });
+        }
+        // Venue incident gate: both live losses to date clustered around
+        // venue-side events (post-maintenance backend mix, "delayed open
+        // order read responses"). A half-working venue produces data that
+        // passes local checks while behaving abnormally, so while the
+        // venue's own status page reports an active incident we stop
+        // OPENING positions. Fail-open on fetch errors - the status page
+        // being unreachable is not evidence the venue is broken, and the
+        // book/arbiter guards keep carrying data quality.
+        if !self.settings.poly_status_url.trim().is_empty() {
+            let p = self.clone();
+            tokio::spawn(async move {
+                p.venue_status_loop().await;
             });
         }
         if matches!(self.mode, Mode::Live) && self.settings.live_reconciliation_ready {
@@ -1681,6 +1700,89 @@ impl Pipeline {
     /// within seconds while its authed /trades indexing can lag past 30s
     /// (observed live 2026-08-25: fill at :10, still unindexed at :38),
     /// whereas the public feed showed the fill immediately.
+    /// Poll the venue status page and raise/lower the incident flag.
+    async fn venue_status_loop(&self) {
+        let url = self.settings.poly_status_url.trim().to_string();
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        loop {
+            let verdict: Option<(bool, String)> = async {
+                let body: serde_json::Value = client
+                    .get(&url)
+                    .header("User-Agent", "polymomentum/1.0")
+                    .send()
+                    .await
+                    .ok()?
+                    .json()
+                    .await
+                    .ok()?;
+                let incidents = body.get("activeIncidents").and_then(|v| v.as_array());
+                let names: Vec<String> = incidents
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|i| {
+                                let impact =
+                                    i.get("impact").and_then(|v| v.as_str()).unwrap_or("");
+                                let resolved = i
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .is_some_and(|st| st.eq_ignore_ascii_case("RESOLVED"));
+                                (!resolved
+                                    && matches!(
+                                        impact,
+                                        "MAJOROUTAGE" | "PARTIALOUTAGE" | "DEGRADEDPERFORMANCE"
+                                    ))
+                                .then(|| {
+                                    i.get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unnamed")
+                                        .to_string()
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((!names.is_empty(), names.join("; ")))
+            }
+            .await;
+            if let Some((degraded, names)) = verdict {
+                let was = self
+                    .venue_incident
+                    .swap(degraded, std::sync::atomic::Ordering::Relaxed);
+                if degraded != was {
+                    if degraded {
+                        tracing::warn!(incidents = %names, "venue status page reports an active incident; new entries suspended");
+                        self.monitor.record_error("venue_incident_gate", &names, true);
+                        if self.alerter.enabled() {
+                            let _ = self
+                                .alerter
+                                .send(
+                                    "warn",
+                                    "Venue incident: entries suspended",
+                                    &names,
+                                )
+                                .await;
+                        }
+                    } else {
+                        tracing::info!("venue status page clear; entries resume");
+                        if self.alerter.enabled() {
+                            let _ = self
+                                .alerter
+                                .send("info", "Venue incident cleared", "entries resume")
+                                .await;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }
+
     /// Every few seconds, re-anchor the active btc-updown window's two books
     /// on the venue's REST `/book`. Logs when the mirror had diverged so gap
     /// frequency becomes measurable instead of invisible.
@@ -3294,6 +3396,18 @@ impl Pipeline {
             return Ok(false);
         }
         if !band.in_entry_window(minutes_elapsed * 60.0) {
+            return Ok(false);
+        }
+        if self
+            .venue_incident
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.band_skip_with_detail(
+                &c.market.condition_id,
+                "venue_incident",
+                "venue status page reports an active incident; entries suspended".to_string(),
+            )
+            .await;
             return Ok(false);
         }
 
