@@ -6351,89 +6351,158 @@ fn write_json_atomic<T: serde::Serialize>(
     artifact::write_json_atomic(path, value, pretty).map_err(std::io::Error::other)
 }
 
-/// Run the engine's real book feed against the venue's REST book so book
-/// staleness is measured with the code that actually trades, not a replica.
+/// Measure ws-mirror divergence exactly the way the live reconciliation
+/// loop will see it: every `every` seconds compare the engine's raw mirror
+/// against the venue REST book for the ACTIVE btc-updown window, then heal
+/// the mirror from that same snapshot so each sample measures divergence
+/// accumulated over one interval. Read-only; places no orders; rolls to the
+/// next window automatically.
 async fn cmd_band_book_probe(
     settings: &config::Settings,
     seconds: u64,
     every: u64,
 ) -> anyhow::Result<()> {
     use polymomentum_engine::polymarket_ws::{
-        new_shared_book, new_subscription_notify, polymarket_book_feed,
+        new_shared_book, new_subscription_notify, overwrite_book_from_rest, polymarket_book_feed,
     };
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
     let gamma = data::gamma::GammaClient::new(&settings.poly_gamma_url);
-    let slugs = live::window::btc_updown_slugs_for_live_horizon(chrono::Utc::now(), 300, 10);
-    let markets = gamma.fetch_markets_by_slugs(&slugs, false).await?;
-    let contracts = data::scanner::scan_candle_markets(&markets, 1.0, 0.0);
-    let tokens: Vec<String> = contracts
-        .iter()
-        .flat_map(|c| [c.up_token_id.clone(), c.down_token_id.clone()])
-        .filter(|t| !t.is_empty())
-        .collect();
-    anyhow::ensure!(!tokens.is_empty(), "no live btc-5m contracts found");
-    println!("probing {} tokens from {} contracts", tokens.len(), contracts.len());
-
     let books = new_shared_book();
-    let tracked = Arc::new(RwLock::new(tokens.clone()));
+    let tracked: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(Vec::new()));
     let notify = new_subscription_notify();
     {
         let (b, t, n) = (books.clone(), tracked.clone(), notify.clone());
         tokio::spawn(async move { polymarket_book_feed(b, t, n).await });
     }
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2500))
+        .build()?;
 
-    let http = reqwest::Client::new();
+    let parse_end = |s: &str| -> Option<f64> {
+        let normalized = s.replace('Z', "+00:00");
+        chrono::DateTime::parse_from_rfc3339(&normalized)
+            .ok()
+            .map(|d| d.timestamp() as f64)
+    };
+    let now_unix = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    };
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut pair: Option<(String, String, String, f64)> = None; // cid, up, down, end_ts
+    let mut samples = 0u64;
+    let mut divergent = 0u64;
+    let mut max_drift = 0.0f64;
+    let mut drift_hist: Vec<(f64, f64, String)> = Vec::new(); // (elapsed, drift, side)
+
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(every)).await;
-        let now_s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs_f64();
-        let snapshot = books.read().await.clone();
-        for c in contracts.iter().take(2) {
-            for (side, token) in [("up", &c.up_token_id), ("down", &c.down_token_id)] {
-                let engine = snapshot.get(token);
-                let (best, low, age) = match engine {
+        let now_s = now_unix();
+        if pair.as_ref().map(|p| p.3 - now_s <= 2.0).unwrap_or(true) {
+            let slugs =
+                live::window::btc_updown_slugs_for_live_horizon(chrono::Utc::now(), 300, 10);
+            let markets = match gamma.fetch_markets_by_slugs(&slugs, false).await {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let contracts = data::scanner::scan_candle_markets(&markets, 1.0, 0.0);
+            pair = contracts.iter().find_map(|c| {
+                let end_ts = parse_end(&c.end_date)?;
+                let remaining = end_ts - now_s;
+                ((5.0..=300.0).contains(&remaining)
+                    && !c.up_token_id.is_empty()
+                    && !c.down_token_id.is_empty())
+                .then(|| {
+                    (
+                        c.market.condition_id.clone(),
+                        c.up_token_id.clone(),
+                        c.down_token_id.clone(),
+                        end_ts,
+                    )
+                })
+            });
+            if let Some((cid, up, down, end_ts)) = &pair {
+                *tracked.write().await = vec![up.clone(), down.clone()];
+                notify.notify_one();
+                println!(
+                    "--- window {} ends_in={:.0}s",
+                    &cid[..16.min(cid.len())],
+                    end_ts - now_s
+                );
+                continue; // give the fresh subscription a beat to snapshot
+            }
+            continue;
+        }
+        let Some((_cid, up, down, end_ts)) = pair.clone() else {
+            continue;
+        };
+        let elapsed = 300.0 - (end_ts - now_s);
+        for (side, token) in [("up", &up), ("down", &down)] {
+            let (mirror_low, age) = {
+                let map = books.read().await;
+                match map.get(token) {
                     Some(b) => (
-                        b.best_ask,
                         b.asks.first().map(|l| l.price).unwrap_or(0.0),
                         now_s - b.last_update_us as f64 / 1e6,
                     ),
-                    None => (0.0, 0.0, -1.0),
-                };
-                let rest: serde_json::Value = http
-                    .get(format!("{}/book?token_id={token}", settings.poly_base_url))
-                    .send()
-                    .await?
-                    .json()
-                    .await
-                    .unwrap_or(serde_json::Value::Null);
-                let rest_best = rest
-                    .get("asks")
-                    .and_then(|a| a.as_array())
-                    .map(|levels| {
-                        levels
-                            .iter()
-                            .filter_map(|l| l.get("price")?.as_str()?.parse::<f64>().ok())
-                            .fold(f64::MAX, f64::min)
-                    })
-                    .filter(|v| v.is_finite())
-                    .unwrap_or(0.0);
-                let drift = if rest_best > 0.0 && low > 0.0 {
-                    (low - rest_best).abs()
-                } else {
-                    0.0
-                };
-                println!(
-                    "{} {:4} engine_low={low:.3} engine_best_field={best:.3} rest_low={rest_best:.3} age={age:.1}s{}",
-                    &c.end_date[11..19],
-                    side,
-                    if drift > 0.02 { "  <== DRIFT" } else { "" }
-                );
+                    None => (0.0, -1.0),
+                }
+            };
+            let url = format!("{}/book?token_id={token}", settings.poly_base_url);
+            let body: Option<serde_json::Value> = match http.get(&url).send().await {
+                Ok(r) => r.json().await.ok(),
+                Err(_) => None,
+            };
+            let Some(body) = body else { continue };
+            let rest_low = body
+                .get("asks")
+                .and_then(|a| a.as_array())
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|l| l.get("price")?.as_str()?.parse::<f64>().ok())
+                        .fold(f64::MAX, f64::min)
+                })
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0);
+            let comparable = mirror_low > 0.0 && rest_low > 0.0;
+            let drift = if comparable {
+                (mirror_low - rest_low).abs()
+            } else {
+                0.0
+            };
+            if comparable {
+                samples += 1;
+                if drift > 0.02 {
+                    divergent += 1;
+                    drift_hist.push((elapsed, drift, side.to_string()));
+                }
+                max_drift = max_drift.max(drift);
             }
+            let flag = if drift > 0.02 { "  <== DIVERGED" } else { "" };
+            println!(
+                "t+{elapsed:5.0}s {side:4} mirror={mirror_low:.3} rest={rest_low:.3} age={age:5.1}s{flag}"
+            );
+            // Heal exactly like the live reconciliation loop, so the next
+            // sample measures divergence accumulated over one interval.
+            overwrite_book_from_rest(&books, &body).await;
         }
+    }
+    println!(
+        "SUMMARY samples={samples} divergent={divergent} rate={:.2}% max_drift={max_drift:.3}",
+        if samples > 0 {
+            divergent as f64 / samples as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+    for (elapsed, drift, side) in &drift_hist {
+        println!("DIVERGENCE t+{elapsed:.0}s side={side} drift={drift:.3}");
     }
     Ok(())
 }
