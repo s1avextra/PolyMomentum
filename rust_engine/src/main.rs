@@ -6466,10 +6466,14 @@ async fn cmd_band_book_probe(
                     levels
                         .iter()
                         .filter_map(|l| l.get("price")?.as_str()?.parse::<f64>().ok())
-                        .fold(f64::MAX, f64::min)
+                        .filter(|p| p.is_finite() && *p > 0.0)
+                        .fold(None::<f64>, |low, p| Some(low.map_or(p, |l| l.min(p))))
                 })
-                .filter(|v| v.is_finite())
+                .flatten()
                 .unwrap_or(0.0);
+            // A mirror holding asks the venue does not have (or vice versa)
+            // is the incident class itself - count it, capped for stats.
+            let one_sided = (mirror_low > 0.0) != (rest_low > 0.0);
             let comparable = mirror_low > 0.0 && rest_low > 0.0;
             let drift = if comparable {
                 (mirror_low - rest_low).abs()
@@ -6483,8 +6487,16 @@ async fn cmd_band_book_probe(
                     drift_hist.push((elapsed, drift, side.to_string()));
                 }
                 max_drift = max_drift.max(drift);
+            } else if one_sided {
+                samples += 1;
+                divergent += 1;
+                drift_hist.push((elapsed, 0.99, format!("{side}(one-sided)")));
             }
-            let flag = if drift > 0.02 { "  <== DIVERGED" } else { "" };
+            let flag = if drift > 0.02 || one_sided {
+                "  <== DIVERGED"
+            } else {
+                ""
+            };
             println!(
                 "t+{elapsed:5.0}s {side:4} mirror={mirror_low:.3} rest={rest_low:.3} age={age:5.1}s{flag}"
             );
