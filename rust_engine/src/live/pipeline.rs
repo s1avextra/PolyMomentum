@@ -4299,29 +4299,58 @@ impl Pipeline {
         }
     }
 
+    /// Sums open exposure counting each contract ONCE across the three
+    /// lifecycle maps. A trade moves pending-order -> position -> oracle
+    /// pending, and the handoffs hold awaits between insert and remove, so
+    /// a per-cycle breaker check can land while a trade sits in TWO maps.
+    /// Live incident 2026-08-31 13:09: a $7.91 fill counted twice pushed
+    /// stressed_pnl negative for ~3ms and false-tripped
+    /// "open_exposure_stress" mid-win-streak, halting the bot for 4 hours.
     async fn open_position_exposure(&self) -> f64 {
-        let paper_exposure: f64 = self
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut total = 0.0f64;
+        for (cid, exposure) in self
             .paper_positions
             .lock()
             .await
-            .values()
-            .map(paper_position_exposure)
-            .sum();
-        let pending_resolution_exposure: f64 = self
+            .iter()
+            .map(|(cid, p)| (cid.clone(), paper_position_exposure(p)))
+            .collect::<Vec<_>>()
+        {
+            if seen.insert(cid) {
+                total += exposure;
+            }
+        }
+        for (cid, exposure) in self
             .oracle_pending
             .lock()
             .await
-            .values()
-            .map(pending_resolution_exposure)
-            .sum();
-        let pending_order_exposure: f64 = self
+            .iter()
+            .map(|(cid, e)| (cid.clone(), pending_resolution_exposure(e)))
+            .collect::<Vec<_>>()
+        {
+            if seen.insert(cid) {
+                total += exposure;
+            }
+        }
+        for (cid, exposure) in self
             .live_pending_positions
             .lock()
             .await
             .values()
-            .map(|pending| paper_position_exposure(&pending.position))
-            .sum();
-        paper_exposure + pending_resolution_exposure + pending_order_exposure
+            .map(|pending| {
+                (
+                    pending.position.contract_id.clone(),
+                    paper_position_exposure(&pending.position),
+                )
+            })
+            .collect::<Vec<_>>()
+        {
+            if seen.insert(cid) {
+                total += exposure;
+            }
+        }
+        total
     }
 
     async fn paper_resolution_loop(self: Arc<Self>) {
