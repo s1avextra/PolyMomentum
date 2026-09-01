@@ -18,13 +18,15 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
+import statistics
 import sys
 import time
 import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from adaptation_persistence_study import http_json, load_opens, taker_fee, wilson_lo  # noqa: E402
+from adaptation_persistence_study import http_json, load_opens, taker_fee  # noqa: E402
 
 GAMMA = "https://gamma-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
@@ -36,12 +38,43 @@ FRESH_START_TS = 1_787_130_000  # 2026-08-19T09:00:00Z, per the amendment
 SETTLE_BUFFER_S = 7200
 SUPPORT_MIN = 110
 WILSON_MARGIN = 0.02
+ALPHA = 0.05
+CANDIDATE = "signal_favorite_band_official_v1"
 
+LEDGER = Path("logs/strategy-research/trial_ledger.jsonl")
 CACHE_DIR = Path("logs/strategy-research/fresh-gate-public/cache")
 OUTCOME_DIR = Path("logs/strategy-research/fresh-gate-public/outcomes")
 MARKER = Path("logs/strategy-research/fresh_gate_public_v1.CONSUMED")
 ARTIFACT = Path("logs/strategy-research/20260821_fresh_gate_public_v1.json")
 ZIP_DIR = Path("data/binance_1s_twap_era")
+
+
+def wilson_lo(w: int, n: int, z: float = 1.96) -> float:
+    if n == 0:
+        return 0.0
+    p = w / n
+    den = 1 + z * z / n
+    c = p + z * z / (2 * n)
+    r = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
+    return max(0.0, (c - r) / den)
+
+
+def family_k(candidate: str, fresh_range: list[int]) -> int:
+    """1 + distinct prior fresh_gate candidates in the ledger whose fresh_range
+    overlaps this run's (Sidak family size for the multiple-looks correction)."""
+    others: set[str] = set()
+    if LEDGER.exists():
+        for line in LEDGER.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cand = rec.get("candidate")
+            rng = rec.get("fresh_range") or []
+            if (rec.get("stage") == "fresh_gate" and cand and cand != candidate
+                    and len(rng) == 2 and rng[0] <= fresh_range[1] and fresh_range[0] <= rng[1]):
+                others.add(cand)
+    return 1 + len(others)
 
 
 def fetch_opens_rest(start_ts: int, end_ts: int, pause_s: float) -> dict[int, float]:
@@ -231,11 +264,20 @@ def consume(pause_s: float) -> None:
     n = len(outcomes_read)
     w = sum(r["won"] for r in outcomes_read)
     be = sum(r["signal_entry"] + taker_fee(r["signal_entry"]) for r in outcomes_read) / n if n else 0.0
-    wl = wilson_lo(w, n)
+    fresh_range = [FRESH_START_TS, max(r["window_start"] for r in sel)]
+    k = family_k(CANDIDATE, fresh_range)
+    alpha_k = 1 - (1 - ALPHA) ** (1 / k)
+    # Two-sided z (K=1 reproduces the pre-correction 1.959964), Sidak-adjusted.
+    z = statistics.NormalDist().inv_cdf(1 - alpha_k / 2)
+    wl = wilson_lo(w, n, z)
     wilson_edge = wl - be
     point_edge = w / n - be if n else 0.0
     if unresolved > 0:
         verdict_str = "READ_INCOMPLETE"  # infrastructure gap, not a result: rerun --consume
+    elif n >= 50 and w / n > 0.97:
+        # A machine-generated candidate this good is more likely a leak than an
+        # edge; a human must audit the data path before any promotion.
+        verdict_str = "IMPLAUSIBLE_MANUAL_AUDIT"
     elif n >= SUPPORT_MIN and wilson_edge > WILSON_MARGIN and point_edge > 0:
         verdict_str = "PASS"
     else:
@@ -243,26 +285,45 @@ def consume(pause_s: float) -> None:
     verdict = {
         "schema_version": 1,
         "registration": "fresh_gate_public_v1_20260821",
-        "candidate": "signal_favorite_band_official_v1",
+        "candidate": CANDIDATE,
         "amendment": "docs/signal_favorite_band_official_v1_gate_amendment_2026-08-21.md",
-        "fresh_range": [FRESH_START_TS, max(r["window_start"] for r in sel)],
+        "fresh_range": fresh_range,
         "support": n,
         "unresolved_excluded": unresolved,
         "wins": w,
         "win_rate": round(w / n, 4) if n else None,
         "avg_break_even": round(be, 4),
         "point_edge": round(point_edge, 4),
+        "family_k": k,
+        "wilson_z": round(z, 6),
         "wilson_lo": round(wl, 4),
         "wilson_edge": round(wilson_edge, 4),
         "gate": f"wilson_edge > +{WILSON_MARGIN} AND point_edge > 0 AND n >= {SUPPORT_MIN}",
         "verdict": verdict_str,
         "rows": outcomes_read,
     }
+    if verdict_str == "IMPLAUSIBLE_MANUAL_AUDIT":
+        verdict["tripwire"] = "win_rate>0.97@n>=50"
     tmp = ARTIFACT.with_suffix(".tmp")
     with open(tmp, "w") as f:
         json.dump(verdict, f, indent=1)
         f.write("\n")
     tmp.rename(ARTIFACT)
+    LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    with open(LEDGER, "a") as f:
+        f.write(json.dumps({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source": "fresh_gate_public_v1",
+            "candidate": CANDIDATE,
+            "stage": "fresh_gate",
+            "fresh_range": fresh_range,
+            "n": n,
+            "wins": w,
+            "win_rate": verdict["win_rate"],
+            "avg_break_even": verdict["avg_break_even"],
+            "wilson_z": verdict["wilson_z"],
+            "verdict": verdict_str,
+        }) + "\n")
     print(json.dumps({k: verdict[k] for k in
                       ["support", "unresolved_excluded", "wins", "win_rate",
                        "avg_break_even", "point_edge", "wilson_edge", "verdict"]}, indent=1))

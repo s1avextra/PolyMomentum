@@ -2,6 +2,7 @@ pub mod allocation_lock;
 pub mod btc_history;
 pub mod distill;
 pub mod eval_cache;
+pub mod evalue;
 pub mod experiment;
 pub mod fill_model;
 pub mod harness;
