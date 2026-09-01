@@ -879,6 +879,8 @@ pub struct Pipeline {
     live_loss_ledger_prior: f64,
     breaker_tripped: Mutex<bool>,
     breaker_trip_reason: Mutex<Option<String>>,
+    /// Unix seconds of the last "halted" heartbeat log (rate limiter).
+    halted_log_s: std::sync::atomic::AtomicU64,
     breaker_tripped_at_s: Mutex<Option<i64>>,
     price_state: Arc<RwLock<PriceState>>,
     book_state: SharedBookState,
@@ -1244,6 +1246,7 @@ impl Pipeline {
             live_loss_ledger_prior,
             breaker_tripped: Mutex::new(breaker_tripped),
             breaker_trip_reason: Mutex::new(breaker_trip_reason),
+            halted_log_s: std::sync::atomic::AtomicU64::new(0),
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
@@ -2675,6 +2678,31 @@ impl Pipeline {
             if *self.breaker_tripped.lock().await {
                 if self.maybe_rearm_paper_breaker().await {
                     continue;
+                }
+                // A tripped breaker parks the cycle loop while the process
+                // stays alive (oracle settlement continues) - which looked
+                // exactly like a healthy service from outside (observed
+                // live 2026-08-31: 8 hours "active" with zero cycles).
+                // A halt must be LOUD: heartbeat the halted state into the
+                // journal and session every 5 minutes.
+                let now_s = nonzero_ts_or_now(0.0);
+                let last = self
+                    .halted_log_s
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if now_s as u64 >= last + 300 {
+                    self.halted_log_s
+                        .store(now_s as u64, std::sync::atomic::Ordering::Relaxed);
+                    let reason = self
+                        .breaker_trip_reason
+                        .lock()
+                        .await
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    tracing::warn!(
+                        %reason,
+                        "candle.halted breaker tripped; cycle loop parked (operator action required)"
+                    );
+                    self.monitor.record_error("breaker_halted", &reason, true);
                 }
                 sleep(Duration::from_secs(1)).await;
                 continue;
@@ -5057,8 +5085,35 @@ impl Pipeline {
         bankroll: f64,
     ) -> Option<&'static str> {
         if let Some(reason) = bs.should_trip(&self.breaker_cfg, open_exposure, bankroll) {
+            // The fraction-of-bankroll stress rule contradicts the band
+            // sizing contract by construction: sizing MUST stake the venue
+            // minimum ($5), while 30% of an actualized sub-$16.7 bankroll is
+            // less than that - so after any drawdown every single entry
+            // "over-stresses" and halts the bot (death loop observed live
+            // 2026-09-01 02:19: one $5.00 position, bankroll ~$13.8, trip).
+            // A brake and the sizing it polices must agree: for the band the
+            // stress rule becomes an ANOMALY bound - exposure is tripworthy
+            // only if it exceeds what sizing could legitimately commit
+            // (~one stake), which still catches double-entry bugs.
+            if reason == "open_exposure_stress" {
+                if let Some(band) = self.runtime_strategy.band.as_ref() {
+                    if band_exposure_within_contract(
+                        band,
+                        bs.realized_pnl,
+                        bankroll,
+                        open_exposure,
+                    ) {
+                        return self.cumulative_loss_trip(bs, bankroll);
+                    }
+                    return Some("band_exposure_anomaly");
+                }
+            }
             return Some(reason);
         }
+        self.cumulative_loss_trip(bs, bankroll)
+    }
+
+    fn cumulative_loss_trip(&self, bs: &BreakerState, bankroll: f64) -> Option<&'static str> {
         if self.mode == Mode::Live {
             let cap_pct = self.settings.candle_live_max_cumulative_loss_pct;
             if cap_pct > 0.0
@@ -5142,6 +5197,20 @@ fn live_microstructure(
         })
         .collect();
     BookMicrostructure::from_levels_with_top(book.best_bid, book.best_ask, &bids, &asks, 3)
+}
+
+/// True when open exposure is within what the band sizing contract could
+/// legitimately commit: one target stake (venue-min floored) plus headroom
+/// for fees. Exposure beyond that indicates a double-entry style bug and
+/// remains tripworthy.
+fn band_exposure_within_contract(
+    band: &BandPolicyParams,
+    realized_pnl: f64,
+    bankroll: f64,
+    open_exposure: f64,
+) -> bool {
+    let equity = (bankroll + realized_pnl).max(1.0);
+    open_exposure <= band.target_stake(equity) * 1.5 + 1.0
 }
 
 fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
@@ -5626,6 +5695,32 @@ mod tests {
             stake_usd: 5.0,
             position_pct: 1.0,
         }
+    }
+
+    #[test]
+    fn band_stress_override_death_loop_regression() {
+        // Live 2026-09-01 02:19: bankroll actualized to ~$13.8 after a loss,
+        // a single venue-minimum $5.00 entry exceeded 30% of bankroll and
+        // open_exposure_stress halted the bot on EVERY entry. The sizing
+        // contract makes that exposure legitimate; only exposure beyond
+        // ~one stake indicates an actual bug.
+        let band = BandPolicyParams {
+            family: BAND_FAMILY.to_string(),
+            decision_seconds: 240.0,
+            entry_window_seconds: 30.0,
+            ask_floor: 0.55,
+            ask_cap: 0.92,
+            stake_usd: 25.0,
+            position_pct: 0.25,
+        };
+        // one $5 position on a drawn-down bankroll: legitimate
+        assert!(band_exposure_within_contract(&band, 0.0, 13.8, 5.0));
+        // fee dust on top: still legitimate
+        assert!(band_exposure_within_contract(&band, 0.0, 13.8, 5.2));
+        // two concurrent stakes (double-entry bug): anomaly
+        assert!(!band_exposure_within_contract(&band, 0.0, 13.8, 10.0));
+        // compounded equity raises the legitimate bound with the stake
+        assert!(band_exposure_within_contract(&band, 12.3, 19.0, 7.9));
     }
 
     #[test]
