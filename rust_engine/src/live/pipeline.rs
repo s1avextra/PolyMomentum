@@ -881,6 +881,8 @@ pub struct Pipeline {
     breaker_trip_reason: Mutex<Option<String>>,
     /// Unix seconds of the last "halted" heartbeat log (rate limiter).
     halted_log_s: std::sync::atomic::AtomicU64,
+    /// Ring of recent trades for the operator bot (/trades).
+    trade_log: Mutex<std::collections::VecDeque<TradeLogRecord>>,
     breaker_tripped_at_s: Mutex<Option<i64>>,
     price_state: Arc<RwLock<PriceState>>,
     book_state: SharedBookState,
@@ -1028,7 +1030,12 @@ impl Pipeline {
                 "restored unresolved live orders; new trading locked pending REST recovery"
             );
         }
-        if risk.actualizes_on_open().await
+        // An explicit operator /stop must survive process restarts - the
+        // actualization reset below would otherwise re-arm trading on every
+        // bounce, defeating the operator's standing instruction.
+        let operator_stop_held = breaker_trip_reason.as_deref() == Some("operator_stop");
+        if !operator_stop_held
+            && risk.actualizes_on_open().await
             && (breaker_state.wins > 0
                 || breaker_state.losses > 0
                 || breaker_state.realized_pnl.abs() > 1e-9
@@ -1247,6 +1254,7 @@ impl Pipeline {
             breaker_tripped: Mutex::new(breaker_tripped),
             breaker_trip_reason: Mutex::new(breaker_trip_reason),
             halted_log_s: std::sync::atomic::AtomicU64::new(0),
+            trade_log: Mutex::new(std::collections::VecDeque::new()),
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
@@ -1315,15 +1323,8 @@ impl Pipeline {
             strategy_hash = %self.runtime_strategy.strategy_spec.params_hash,
             "candle.start"
         );
-        if self.alerter.enabled() {
-            let _ = self
-                .alerter
-                .send(
-                    "info",
-                    "PolyMomentum Rust starting",
-                    &format!("mode={}", self.mode.as_str()),
-                )
-                .await;
+        {
+            // Startup is not a money event: no operator push, log only.
         }
 
         // Spawn exchange feeds (BTC: binance/bybit/okx; ETH+SOL: alts; Deribit IV)
@@ -1362,6 +1363,15 @@ impl Pipeline {
             let p = self.clone();
             tokio::spawn(async move {
                 p.venue_status_loop().await;
+            });
+        }
+        // Operator bot: minimal telegram command surface (/status /trades
+        // /balance /stop /start) served from inside the live process, so it
+        // sees real state and /start can un-park the actual breaker.
+        if matches!(self.mode, Mode::Live) {
+            let p = self.clone();
+            tokio::spawn(async move {
+                p.operator_bot_loop().await;
             });
         }
         if matches!(self.mode, Mode::Live) && self.settings.live_reconciliation_ready {
@@ -1465,16 +1475,14 @@ impl Pipeline {
         }
         if self.alerter.enabled() {
             let bs = self.breaker.lock().await;
-            let _ = self
-                .alerter
-                .send(
-                    "warning",
-                    "PolyMomentum Rust stopped",
-                    &format!(
-                        "wins={} losses={} pnl=${:.2}",
-                        bs.wins, bs.losses, bs.realized_pnl
-                    ),
-                )
+            self.alerter
+                .notify(&format!(
+                    "\u{25a0} stopped \u{00b7} session {}-{} \u{00b7} {}{:.2}",
+                    bs.wins,
+                    bs.losses,
+                    if bs.realized_pnl >= 0.0 { "+$" } else { "-$" },
+                    bs.realized_pnl.abs()
+                ))
                 .await;
         }
         Ok(())
@@ -1762,21 +1770,15 @@ impl Pipeline {
                         tracing::warn!(incidents = %names, "venue status page reports an active incident; new entries suspended");
                         self.monitor.record_error("venue_incident_gate", &names, true);
                         if self.alerter.enabled() {
-                            let _ = self
-                                .alerter
-                                .send(
-                                    "warn",
-                                    "Venue incident: entries suspended",
-                                    &names,
-                                )
+                            self.alerter
+                                .notify(&format!("\u{23f8} venue incident \u{00b7} {names} \u{00b7} entries suspended"))
                                 .await;
                         }
                     } else {
                         tracing::info!("venue status page clear; entries resume");
                         if self.alerter.enabled() {
-                            let _ = self
-                                .alerter
-                                .send("info", "Venue incident cleared", "entries resume")
+                            self.alerter
+                                .notify("\u{25b6} venue clear \u{00b7} entries resume")
                                 .await;
                         }
                     }
@@ -2434,6 +2436,30 @@ impl Pipeline {
             fee = position.fee,
             "live fill attached to resolution lifecycle"
         );
+        {
+            let mut log = self.trade_log.lock().await;
+            log.push_back(TradeLogRecord {
+                ts,
+                cid: position.contract_id.clone(),
+                price: fill_price,
+                size: fill_size,
+                cost: fill_size * fill_price,
+                outcome: None,
+            });
+            while log.len() > 30 {
+                log.pop_front();
+            }
+        }
+        if self.alerter.enabled() {
+            self.alerter
+                .notify(&format!(
+                    "\u{25b6} BUY {:.2} @ {:.2} \u{00b7} ${:.2}",
+                    fill_size,
+                    fill_price,
+                    fill_size * fill_price
+                ))
+                .await;
+        }
         Ok(())
     }
 
@@ -4710,6 +4736,31 @@ impl Pipeline {
                                     won = final_won,
                                     "candle.oracle.realized"
                                 );
+                                {
+                                    let mut log = self.trade_log.lock().await;
+                                    if let Some(rec) = log
+                                        .iter_mut()
+                                        .rev()
+                                        .find(|r| r.cid == cid && r.outcome.is_none())
+                                    {
+                                        rec.outcome = Some((final_won, final_pnl));
+                                    }
+                                }
+                                if self.alerter.enabled() {
+                                    let bs = *self.breaker.lock().await;
+                                    let equity =
+                                        self.risk.initial_bankroll().await + bs.realized_pnl;
+                                    self.alerter
+                                        .notify(&format!(
+                                            "{} {}{:.2} \u{00b7} equity ${equity:.2} \u{00b7} session {}-{}",
+                                            if final_won { "\u{2705}" } else { "\u{274c}" },
+                                            if final_pnl >= 0.0 { "+$" } else { "-$" },
+                                            final_pnl.abs(),
+                                            bs.wins,
+                                            bs.losses
+                                        ))
+                                        .await;
+                                }
                                 if !agreed {
                                     self.monitor.record_oracle_correction(
                                         &cid,
@@ -4932,17 +4983,17 @@ impl Pipeline {
             stressed_pnl = metrics.stressed_pnl,
             "candle.circuit_breaker.tripped"
         );
-        let _ = self
-            .alerter
-            .send(
-                "critical",
-                "PolyMomentum circuit breaker",
-                &format!(
-                    "reason={reason} wins={} losses={} pnl=${:.2}",
-                    bs.wins, bs.losses, bs.realized_pnl
-                ),
-            )
-            .await;
+        if reason != "operator_stop" {
+            self.alerter
+                .notify(&format!(
+                    "\u{26d4} HALTED \u{00b7} {reason} \u{00b7} session {}-{} {}{:.2} \u{00b7} /start to resume",
+                    bs.wins,
+                    bs.losses,
+                    if bs.realized_pnl >= 0.0 { "+$" } else { "-$" },
+                    bs.realized_pnl.abs()
+                ))
+                .await;
+        }
     }
 
     async fn maybe_rearm_paper_breaker(&self) -> bool {
@@ -5011,6 +5062,218 @@ impl Pipeline {
             0.0,
             0.0,
         );
+    }
+
+    async fn operator_status_text(&self) -> String {
+        let bs = *self.breaker.lock().await;
+        let tripped = *self.breaker_tripped.lock().await;
+        let reason = self
+            .breaker_trip_reason
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_default();
+        let bankroll = self.risk.initial_bankroll().await;
+        let equity = bankroll + bs.realized_pnl;
+        let cumulative = self.live_loss_ledger_prior + bs.realized_pnl;
+        let stop_at = -self.settings.candle_live_max_cumulative_loss_pct * bankroll.max(1.0);
+        let venue = self
+            .venue_incident
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let state = if self.kill_switch_active() {
+            "\u{26d4} kill switch".to_string()
+        } else if tripped {
+            format!("\u{23f9} halted ({reason})")
+        } else if venue {
+            "\u{23f8} waiting out venue incident".to_string()
+        } else {
+            "\u{25b6} trading".to_string()
+        };
+        let wallet_micro = self
+            .last_wallet_pusd_micro
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let position = {
+            let positions = self.paper_positions.lock().await;
+            positions
+                .values()
+                .next()
+                .map(|p| format!("{:.2} @ {:.2} (${:.2})", p.size, p.entry_price, p.size * p.entry_price))
+        };
+        let awaiting = self.oracle_pending.lock().await.len();
+        let mut out = format!(
+            "{state}\nwallet ${:.2} \u{00b7} equity ${equity:.2}\nsession {}-{} {}{:.2}\nledger {}{:.2} (stop at {stop_at:.2}) \u{00b7} loss streak {}",
+            wallet_micro as f64 / 1e6,
+            bs.wins,
+            bs.losses,
+            if bs.realized_pnl >= 0.0 { "+$" } else { "-$" },
+            bs.realized_pnl.abs(),
+            if cumulative >= 0.0 { "+$" } else { "-$" },
+            cumulative.abs(),
+            bs.consecutive_losses,
+        );
+        match position {
+            Some(p) => out.push_str(&format!("\nposition {p}")),
+            None => out.push_str("\nno open position"),
+        }
+        if awaiting > 0 {
+            out.push_str(&format!(" \u{00b7} awaiting oracle: {awaiting}"));
+        }
+        out
+    }
+
+    async fn operator_trades_text(&self) -> String {
+        let log = self.trade_log.lock().await;
+        if log.is_empty() {
+            return "no trades this session".to_string();
+        }
+        let mut out = String::new();
+        for r in log.iter().rev().take(10) {
+            let t = chrono::DateTime::from_timestamp(r.ts as i64, 0)
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default();
+            let outcome = match r.outcome {
+                Some((true, pnl)) => format!("\u{2705} +${pnl:.2}"),
+                Some((false, pnl)) => format!("\u{274c} -${:.2}", pnl.abs()),
+                None => "\u{23f3} open".to_string(),
+            };
+            out.push_str(&format!(
+                "{t} \u{00b7} {:.2} @ {:.2} \u{00b7} {outcome}\n",
+                r.size, r.price
+            ));
+        }
+        out.trim_end().to_string()
+    }
+
+    async fn operator_balance_text(&self) -> String {
+        let bs = *self.breaker.lock().await;
+        let equity = self.risk.initial_bankroll().await + bs.realized_pnl;
+        match crate::data::wallet::WalletReader::for_funder(
+            &self.settings.polygon_rpc_url,
+            &self.settings.private_key,
+            &self.settings.poly_funder,
+        ) {
+            Ok(reader) => match reader.fetch_balances().await {
+                Ok(b) => format!(
+                    "on-chain ${:.2} \u{00b7} equity ${equity:.2}\nledger {}{:.2}",
+                    b.pusd,
+                    if self.live_loss_ledger_prior + bs.realized_pnl >= 0.0 { "+$" } else { "-$" },
+                    (self.live_loss_ledger_prior + bs.realized_pnl).abs()
+                ),
+                Err(e) => format!("on-chain read failed: {e:#}"),
+            },
+            Err(e) => format!("wallet reader unavailable: {e:#}"),
+        }
+    }
+
+    /// Operator /stop: park trading in place. Positions keep settling, the
+    /// process stays alive (so /start still works), and the parked state
+    /// survives restarts. The kill-switch file remains the out-of-band hard
+    /// stop for when telegram itself is unavailable.
+    async fn operator_stop(&self) {
+        self.trip_breaker("operator_stop").await;
+    }
+
+    /// Operator /start: clear a parked/tripped breaker in-memory AND in the
+    /// persisted meta - the sqlite-only clearing we did by hand never
+    /// affected the running process.
+    async fn operator_rearm(&self) {
+        *self.breaker_tripped.lock().await = false;
+        *self.breaker.lock().await = BreakerState::default();
+        *self.breaker_trip_reason.lock().await = None;
+        for key in [
+            "candle_breaker_tripped",
+            "candle_breaker_state",
+            "candle_breaker_reason",
+            "candle_breaker_tripped_at",
+        ] {
+            let _ = self.risk.delete_meta(key).await;
+        }
+        tracing::warn!("operator re-armed trading via telegram");
+        self.monitor
+            .record_error("operator_rearm", "trading re-armed via telegram", true);
+    }
+
+    async fn operator_bot_loop(&self) {
+        let Some(client) = crate::monitoring::telegram::TelegramClient::from_env() else {
+            return;
+        };
+        let _ = client.set_operator_commands().await;
+        let mut offset: Option<i64> = None;
+        loop {
+            let updates = match client.get_updates(offset, 25).await {
+                Ok(u) => u,
+                Err(e) => {
+                    // A second consumer (legacy monitor) causes conflicts;
+                    // back off rather than fight it.
+                    tracing::debug!(error = %e, "telegram getUpdates failed");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+            for update in updates {
+                if let Some(id) = update.get("update_id").and_then(|v| v.as_i64()) {
+                    offset = Some(id + 1);
+                }
+                let (chat_id, command, callback_id) =
+                    if let Some(cb) = update.get("callback_query") {
+                        (
+                            cb.pointer("/message/chat/id").and_then(|v| v.as_i64()),
+                            cb.get("data").and_then(|v| v.as_str()).unwrap_or(""),
+                            cb.get("id").and_then(|v| v.as_str()),
+                        )
+                    } else if let Some(msg) = update.get("message") {
+                        (
+                            msg.pointer("/chat/id").and_then(|v| v.as_i64()),
+                            msg.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+                            None,
+                        )
+                    } else {
+                        (None, "", None)
+                    };
+                let authorized = chat_id.is_some_and(|id| client.is_allowed_chat(id));
+                if let Some(cb_id) = callback_id {
+                    let _ = client.answer_callback_query(cb_id, "").await;
+                }
+                if !authorized || command.is_empty() {
+                    continue;
+                }
+                let command = command.split('@').next().unwrap_or(command).trim();
+                let halted = *self.breaker_tripped.lock().await || self.kill_switch_active();
+                let keyboard = crate::monitoring::telegram::minimal_keyboard(halted);
+                let reply = match command {
+                    "/status" | "pm:status" => self.operator_status_text().await,
+                    "/trades" | "pm:trades" => self.operator_trades_text().await,
+                    "/balance" | "pm:wallet" => self.operator_balance_text().await,
+                    "/stop" | "pm:stop" | "pm:terminate" => {
+                        self.operator_stop().await;
+                        "\u{23f9} halted \u{00b7} open positions settle normally \u{00b7} /start to resume"
+                            .to_string()
+                    }
+                    "/start" | "pm:start" => {
+                        if self.kill_switch_active() {
+                            format!(
+                                "kill switch file is present ({}); remove it on the host first",
+                                self.settings.kill_switch_path
+                            )
+                        } else {
+                            self.operator_rearm().await;
+                            "\u{25b6} trading re-armed".to_string()
+                        }
+                    }
+                    _ => continue,
+                };
+                let halted_after =
+                    *self.breaker_tripped.lock().await || self.kill_switch_active();
+                let keyboard = if halted_after != halted {
+                    crate::monitoring::telegram::minimal_keyboard(halted_after)
+                } else {
+                    keyboard
+                };
+                if let Err(e) = client.send_message(&reply, Some(keyboard)).await {
+                    tracing::warn!(error = %e, "telegram reply failed");
+                }
+            }
+        }
     }
 
     fn kill_switch_active(&self) -> bool {
@@ -5220,6 +5483,16 @@ fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
     // -0.4..-0.6s on the most active pair, which silently rejected every
     // decision-time book). Intake clamps timestamps to now+10s.
     (age.is_finite() && (-10.0..30.0).contains(&age)).then_some(age.max(0.0))
+}
+
+#[derive(Debug, Clone)]
+struct TradeLogRecord {
+    ts: f64,
+    cid: String,
+    price: f64,
+    size: f64,
+    cost: f64,
+    outcome: Option<(bool, f64)>, // (won, pnl) once settled
 }
 
 #[derive(Debug, Clone, Copy)]

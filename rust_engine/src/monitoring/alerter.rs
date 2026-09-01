@@ -58,6 +58,20 @@ impl Alerter {
         self.webhook.is_some() || self.telegram.is_some()
     }
 
+    /// Minimal operator notification: bare text, no severity prefix, no
+    /// legacy keyboard. This is the only send the live loop should use -
+    /// pushes are reserved for money and trading-state changes.
+    pub async fn notify(&self, text: &str) {
+        if let Some(url) = self.webhook.clone() {
+            let _ = self.send_webhook(&url, "info", text, "").await;
+        }
+        if let Some(telegram) = &self.telegram {
+            if let Err(e) = telegram.send_message(text, None).await {
+                tracing::warn!(error = %e, "telegram notify failed");
+            }
+        }
+    }
+
     pub async fn send(&self, severity: &str, title: &str, body: &str) -> Result<()> {
         if let Some(url) = self.webhook.clone() {
             self.send_webhook(&url, severity, title, body).await?;

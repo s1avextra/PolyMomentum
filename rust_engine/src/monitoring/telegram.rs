@@ -79,12 +79,11 @@ impl TelegramClient {
             "setMyCommands",
             json!({
                 "commands": [
-                    {"command": "status", "description": "Current paper/live health"},
-                    {"command": "stale", "description": "Strategy freshness verdict"},
-                    {"command": "preflight", "description": "Read-only paper preflight"},
-                    {"command": "wallet", "description": "Wallet live-readiness snapshot"},
-                    {"command": "terminate", "description": "Confirm-gated stop for PolyMomentum only"},
-                    {"command": "help", "description": "Show safe commands"}
+                    {"command": "status", "description": "Wallet, position, limits, trading state"},
+                    {"command": "trades", "description": "Recent trades"},
+                    {"command": "balance", "description": "On-chain balance and equity"},
+                    {"command": "stop", "description": "Halt trading (positions settle normally)"},
+                    {"command": "start", "description": "Resume trading"}
                 ]
             }),
         )
@@ -201,6 +200,25 @@ impl TelegramClient {
         }
         Ok(parsed.get("result").cloned().unwrap_or(Value::Null))
     }
+}
+
+/// Two-row minimal keyboard: information on top, the one state-changing
+/// action (whichever direction applies right now) below.
+pub fn minimal_keyboard(halted: bool) -> Value {
+    let action = if halted {
+        json!({"text": "\u{25b6} Start", "callback_data": "pm:start"})
+    } else {
+        json!({"text": "\u{23f9} Stop", "callback_data": "pm:stop"})
+    };
+    json!({
+        "inline_keyboard": [
+            [
+                {"text": "Status", "callback_data": "pm:status"},
+                {"text": "Trades", "callback_data": "pm:trades"}
+            ],
+            [action]
+        ]
+    })
 }
 
 pub fn operator_keyboard() -> Value {
