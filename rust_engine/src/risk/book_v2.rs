@@ -20,6 +20,10 @@ use rusqlite::{params, Connection};
 use tokio::sync::Mutex;
 
 pub const BAND_VENUE_MIN_STAKE: f64 = 5.0;
+/// Sub-book that emulates the Kelly-lower sizing policy on the SAME trades
+/// with its own compounding equity, so the operator can compare both curves
+/// before switching.
+pub const KELLY_SIM_STRATEGY: &str = "band_kelly_sim";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostingKind {
@@ -157,6 +161,34 @@ impl BookV2 {
             )
             .context("sum open cost")?;
         Ok(v)
+    }
+
+    /// Equity of one strategy's sub-book (postings filtered by strategy).
+    pub async fn equity_for(&self, strategy_id: &str) -> Result<f64> {
+        let db = self.db.lock().await;
+        let v: f64 = db
+            .query_row(
+                "SELECT COALESCE(SUM(amount_usd), 0.0) FROM v2_postings
+                 WHERE strategy_id = ?1",
+                params![strategy_id],
+                |r| r.get(0),
+            )
+            .context("sum strategy postings")?;
+        Ok(v)
+    }
+
+    /// Filled qty for a cid within one strategy's sub-book (None = no fill).
+    pub async fn fill_qty(&self, strategy_id: &str, cid: &str) -> Result<Option<f64>> {
+        let db = self.db.lock().await;
+        let v: Option<f64> = db
+            .query_row(
+                "SELECT SUM(qty) FROM v2_postings
+                 WHERE strategy_id = ?1 AND cid = ?2 AND kind = 'fill'",
+                params![strategy_id, cid],
+                |r| r.get(0),
+            )
+            .context("fill qty")?;
+        Ok(v.filter(|q| *q > 0.0))
     }
 
     pub async fn is_empty(&self) -> Result<bool> {

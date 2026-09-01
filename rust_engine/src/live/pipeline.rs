@@ -1393,6 +1393,22 @@ impl Pipeline {
                     .await;
                 tracing::info!(v1_equity, "book_v2 shadow initialized from v1");
             }
+            // Kelly-sim sub-book: same opening balance, own compounding.
+            let bs = *self.breaker.lock().await;
+            let v1_equity = self.risk.initial_bankroll().await + bs.realized_pnl;
+            let _ = book
+                .post(
+                    nonzero_ts_or_now(0.0),
+                    crate::risk::book_v2::PostingKind::Import,
+                    crate::risk::book_v2::KELLY_SIM_STRATEGY,
+                    "",
+                    v1_equity,
+                    0.0,
+                    0.0,
+                    "kelly-sim opening balance",
+                    "import_sim",
+                )
+                .await;
         }
 
         // Spawn exchange feeds (BTC: binance/bybit/okx; ETH+SOL: alts; Deribit IV)
@@ -2532,6 +2548,46 @@ impl Pipeline {
                     &format!("{}::fill", order.intent.intent_id),
                 )
                 .await;
+            // Parallel sizing emulation: what the Kelly-lower policy would
+            // have staked on THIS fill, compounding on its own sub-book
+            // equity (skips price buckets it refuses). Lets the operator
+            // watch both equity curves before switching policies.
+            if let Some(band) = self.runtime_strategy.band.as_ref() {
+                let sim = crate::risk::book_v2::KELLY_SIM_STRATEGY;
+                let sim_equity = book.equity_for(sim).await.unwrap_or(0.0);
+                match crate::risk::book_v2::kelly_lo_stake(
+                    fill_price,
+                    sim_equity,
+                    band.stake_usd,
+                ) {
+                    Some(stake) if fill_size * fill_price > 0.0 => {
+                        let scale = stake / (fill_size * fill_price);
+                        let _ = book
+                            .post(
+                                ts,
+                                crate::risk::book_v2::PostingKind::Fill,
+                                sim,
+                                &position.contract_id,
+                                -(stake + position.fee * scale),
+                                stake / fill_price,
+                                fill_price,
+                                "",
+                                &format!("{}::simfill", order.intent.intent_id),
+                            )
+                            .await;
+                    }
+                    _ => {
+                        self.monitor.record_v2_shadow(
+                            "sim_skip",
+                            serde_json::json!({
+                                "cid": short_cid(&position.contract_id),
+                                "price": fill_price,
+                                "sim_equity": sim_equity,
+                            }),
+                        );
+                    }
+                }
+            }
         }
         if self.alerter.enabled() {
             self.alerter
@@ -4868,6 +4924,25 @@ impl Pipeline {
                                             &format!("{cid}::settle"),
                                         )
                                         .await;
+                                    let sim = crate::risk::book_v2::KELLY_SIM_STRATEGY;
+                                    if let Ok(Some(sim_qty)) = book.fill_qty(sim, &cid).await
+                                    {
+                                        let sim_payout =
+                                            if final_won { sim_qty } else { 0.0 };
+                                        let _ = book
+                                            .post(
+                                                nonzero_ts_or_now(0.0),
+                                                crate::risk::book_v2::PostingKind::Settlement,
+                                                sim,
+                                                &cid,
+                                                sim_payout,
+                                                sim_qty,
+                                                0.0,
+                                                if final_won { "won" } else { "lost" },
+                                                &format!("{cid}::simsettle"),
+                                            )
+                                            .await;
+                                    }
                                 }
                                 if self.alerter.enabled() {
                                     let bs = *self.breaker.lock().await;
@@ -5025,17 +5100,25 @@ impl Pipeline {
                             let bs = *self.breaker.lock().await;
                             let v1_equity =
                                 self.risk.initial_bankroll().await + bs.realized_pnl;
+                            let sim_equity = book
+                                .equity_for(crate::risk::book_v2::KELLY_SIM_STRATEGY)
+                                .await
+                                .unwrap_or(f64::NAN);
+                            let band_equity = book.equity_for("band").await.unwrap_or(f64::NAN);
                             self.monitor.record_v2_shadow(
                                 "reconcile",
                                 serde_json::json!({
                                     "wallet": b.pusd,
                                     "v1_equity": v1_equity,
-                                    "v2_equity": v2_equity,
+                                    "v2_equity": band_equity,
                                     "v2_open_cost": v2_open,
-                                    "v2_minus_wallet": v2_equity - b.pusd,
-                                    "v2_minus_v1": v2_equity - v1_equity,
+                                    "v2_minus_wallet": band_equity - b.pusd,
+                                    "v2_minus_v1": band_equity - v1_equity,
+                                    "kelly_sim_equity": sim_equity,
+                                    "kelly_sim_vs_live": sim_equity - band_equity,
                                 }),
                             );
+                            let _ = v2_equity;
                         }
                     }
                 }
@@ -5255,6 +5338,18 @@ impl Pipeline {
         match position {
             Some(p) => out.push_str(&format!("\nposition {p}")),
             None => out.push_str("\nno open position"),
+        }
+        if let Some(book) = &self.book_v2 {
+            if let (Ok(live), Ok(sim)) = (
+                book.equity_for("band").await,
+                book.equity_for(crate::risk::book_v2::KELLY_SIM_STRATEGY).await,
+            ) {
+                out.push_str(&format!(
+                    "\nkelly-sim ${sim:.2} vs live ${live:.2} ({}{:.2})",
+                    if sim >= live { "+" } else { "-" },
+                    (sim - live).abs()
+                ));
+            }
         }
         if awaiting > 0 {
             out.push_str(&format!(" \u{00b7} awaiting oracle: {awaiting}"));
