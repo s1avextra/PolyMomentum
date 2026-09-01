@@ -38,6 +38,7 @@ DEFAULTS: Dict[str, Any] = {
     "explore_temperature": 0.2,
     "refine_temperature": 0.2,
     "samples_per_burst": 1,
+    "constrained_schema": False,
 }
 
 NEGATIVE_PROMPT_MAX_CHARS = 1200
@@ -495,3 +496,52 @@ def operator_temperature(operator, gen_cfg):
     if operator in ("M1", "M2"):
         return float(gen_cfg.get("refine_temperature", 0.2))
     return float(gen_cfg.get("explore_temperature", 0.2))
+
+
+# --- constrained proposal schema -------------------------------------------
+#
+# The frozen grid's operator/path/threshold co-constraints lived only in
+# prompt text, so ~70-85% of samples died in validation. Encoding them as
+# anyOf branches makes constrained decoding emit VALID combinations by
+# construction. validate_late_proposal stays as defense in depth.
+
+def _rule_branch(operator, paths, thresholds, base):
+    properties = dict(base)
+    properties["operator"] = {"type": "string", "enum": [operator]}
+    properties["path_minutes"] = {"type": "integer", "enum": paths}
+    properties["minimum_two_minute_move_usd"] = {"type": "integer", "enum": thresholds}
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "operator",
+            "path_minutes",
+            "minimum_two_minute_move_usd",
+            "maximum_entry_price",
+            "minimum_decision_buffer_usd",
+            "settlement_sigma_buffer",
+            "minimum_book_pressure",
+            "direction",
+        ],
+        "properties": properties,
+    }
+
+
+def constrained_proposal_schema(legacy_schema):
+    free = {
+        key: dict(value)
+        for key, value in legacy_schema["properties"]["rule"]["properties"].items()
+        if key not in ("operator", "path_minutes", "minimum_two_minute_move_usd")
+    }
+    schema = json.loads(json.dumps(legacy_schema))
+    for field in ("title", "rationale", "expected_failure_mode"):
+        schema["properties"][field]["minLength"] = 1
+    schema["properties"]["rule"] = {
+        "anyOf": [
+            _rule_branch("path_only", [3, 4], [0], free),
+            _rule_branch("move_only", [0], [100, 200], free),
+            _rule_branch("path_and_move", [2, 3, 4], [100, 200], free),
+            _rule_branch("path_or_move", [4], [200], free),
+        ]
+    }
+    return schema

@@ -54,7 +54,8 @@
     "trial_ledger_enabled": true,
     "explore_temperature": 1.0,
     "refine_temperature": 0.7,
-    "samples_per_burst": 6
+    "samples_per_burst": 6,
+    "constrained_schema": true
   },
   "llm": {
     "base_url_env": "POLYMOMENTUM_LLM_BASE_URL",

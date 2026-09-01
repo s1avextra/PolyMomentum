@@ -1497,14 +1497,32 @@ def propose_late_rule(
         survivors: List[Dict[str, Any]] = []
         burst_stats = {"generated": 0, "invalid": 0, "duplicate": 0, "novelty_rejected": 0}
         generated: Dict[str, Any] = {"ok": False, "reason": "no_samples"}
-        for _ in range(burst_n):
+        use_constrained = bool(gen_cfg.get("constrained_schema"))
+        for sample_index in range(burst_n):
+            schema = (
+                factory_generator.constrained_proposal_schema(LATE_PROPOSAL_SCHEMA)
+                if use_constrained
+                else LATE_PROPOSAL_SCHEMA
+            )
+            schema_name = (
+                "late_window_proposal_v2c" if use_constrained else "late_window_proposal_v1"
+            )
             try:
-                generated = client.complete(
-                    system, user, "late_window_proposal_v1", LATE_PROPOSAL_SCHEMA, temperature
-                )
+                generated = client.complete(system, user, schema_name, schema, temperature)
             except ValueError as error:
                 generated = {"ok": False, "reason": "prompt_guard_%s" % error}
                 break
+            if (
+                use_constrained
+                and sample_index == 0
+                and not generated.get("ok")
+            ):
+                # A backend that cannot compile anyOf branches fails the
+                # transport layer immediately; fall back to the legacy
+                # schema for the rest of the burst rather than losing it.
+                use_constrained = False
+                proposal_result["constrained_schema_fallback"] = generated.get("reason")
+                continue
             burst_stats["generated"] += 1
             if not generated.get("ok"):
                 continue
@@ -1532,7 +1550,12 @@ def propose_late_rule(
                     burst_stats["novelty_rejected"] += 1
                     continue
             survivors.append(candidate)
-        proposal_result["burst"] = {**burst_stats, "temperature": temperature, "survivors": len(survivors)}
+        proposal_result["burst"] = {
+            **burst_stats,
+            "temperature": temperature,
+            "survivors": len(survivors),
+            "constrained_schema": use_constrained,
+        }
         proposal_result["generator"] = {key: value for key, value in generated.items() if key != "value"}
         if survivors:
             proposal = survivors[0]
