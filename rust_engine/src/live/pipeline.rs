@@ -448,6 +448,13 @@ pub struct BandPolicyParams {
     pub ask_cap: f64,
     /// Upper cap on the per-trade stake in USD.
     pub stake_usd: f64,
+    /// Minimum |decision price - window open| in USD before an entry may be
+    /// attempted. Margin study 2026-09-01: signal accuracy is 98.6-100% at
+    /// |margin| >= $50 across 700+ fresh windows including chop, and 72-78%
+    /// (below break-even) under $25 - without this floor the band trades
+    /// noise at favorite prices. 0 disables (legacy artifacts).
+    #[serde(default)]
+    pub min_decision_margin_usd: f64,
     /// Fraction of effective bankroll (allocation + realized PnL) staked per
     /// trade — the compounding knob. Default 1.0 keeps older fixed-stake
     /// artifacts (stake_usd then binds via the cap).
@@ -3678,6 +3685,21 @@ impl Pipeline {
             .await;
             return Ok(false);
         }
+        if band.min_decision_margin_usd > 0.0
+            && (btc - open_price).abs() < band.min_decision_margin_usd
+        {
+            self.band_skip_with_detail(
+                cid,
+                "band_margin_below_floor",
+                format!(
+                    "margin={:+.0} floor={:.0} btc={btc:.0} open={open_price:.0}",
+                    btc - open_price,
+                    band.min_decision_margin_usd
+                ),
+            )
+            .await;
+            return Ok(false);
+        }
         let direction = if btc > open_price { "up" } else { "down" };
         let token_id = if direction == "up" {
             &c.up_token_id
@@ -6236,6 +6258,7 @@ mod tests {
             ask_floor: 0.55,
             ask_cap: 0.92,
             stake_usd: 5.0,
+            min_decision_margin_usd: 0.0,
             position_pct: 1.0,
         }
     }
@@ -6288,6 +6311,7 @@ mod tests {
             ask_floor: 0.55,
             ask_cap: 0.92,
             stake_usd: 25.0,
+            min_decision_margin_usd: 0.0,
             position_pct: 0.25,
         };
         // one $5 position on a drawn-down bankroll: legitimate
