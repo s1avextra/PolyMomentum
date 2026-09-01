@@ -44,6 +44,15 @@
     "maximum_load_per_cpu": 1.0,
     "command_timeout_seconds": 900
   },
+  "generator": {
+    "eoh_operators_enabled": true,
+    "negative_prompt_enabled": true,
+    "novelty_gate_enabled": true,
+    "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+    "novelty_max_cosine": 0.97,
+    "kill_feedback_enabled": true,
+    "trial_ledger_enabled": true
+  },
   "llm": {
     "base_url_env": "POLYMOMENTUM_LLM_BASE_URL",
     "default_base_url": "http://127.0.0.1:1234/v1",

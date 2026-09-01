@@ -43,6 +43,15 @@ import urllib.request
 import uuid
 import zipfile
 
+import importlib.util as _importlib_util
+
+_FACTORY_SPEC = _importlib_util.spec_from_file_location(
+    "factory_generator", Path(__file__).resolve().parent / "factory_generator.py"
+)
+assert _FACTORY_SPEC and _FACTORY_SPEC.loader
+factory_generator = _importlib_util.module_from_spec(_FACTORY_SPEC)
+_FACTORY_SPEC.loader.exec_module(factory_generator)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "deploy/strategy-research-loop.json"
@@ -194,7 +203,11 @@ class CycleLock:
 
 
 class Ledger:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, generator_config: Optional[Mapping[str, Any]] = None
+    ) -> None:
+        self.generator_config = generator_config
+        self.state_dir = path.parent
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(str(path), timeout=5)
         self.connection.row_factory = sqlite3.Row
@@ -291,6 +304,26 @@ class Ledger:
                 return True
         return False
 
+    def late_hypotheses(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for row in self.connection.execute(
+            "SELECT fingerprint, status, created_at, proposal_json FROM hypotheses "
+            "WHERE lane = 'late_window_mechanisms' ORDER BY created_at, rowid"
+        ):
+            try:
+                proposal = json.loads(row["proposal_json"])
+            except (TypeError, ValueError):
+                continue
+            rows.append(
+                {
+                    "fingerprint": str(row["fingerprint"]),
+                    "status": str(row["status"]),
+                    "created_at": str(row["created_at"]),
+                    "proposal": proposal,
+                }
+            )
+        return rows
+
     def add_hypothesis(
         self,
         fingerprint: str,
@@ -313,6 +346,9 @@ class Ledger:
             ),
         )
         self.connection.commit()
+        factory_generator.record_kill_feedback(
+            self.generator_config, self.state_dir, status, canonical_json(proposal)
+        )
 
     def enqueue(
         self,
@@ -366,11 +402,22 @@ class Ledger:
         self.connection.commit()
 
     def update_hypothesis_status(self, fingerprint: str, status: str) -> None:
+        previous = self.connection.execute(
+            "SELECT status, proposal_json FROM hypotheses WHERE fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
         self.connection.execute(
             "UPDATE hypotheses SET status = ? WHERE fingerprint = ?",
             (status, fingerprint),
         )
         self.connection.commit()
+        if previous is not None and str(previous["status"]) != status:
+            factory_generator.record_kill_feedback(
+                self.generator_config,
+                self.state_dir,
+                status,
+                previous["proposal_json"],
+            )
 
     def jobs(self, stage: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         if status is None:
@@ -1359,8 +1406,13 @@ def evaluate_late_rule(
 
 
 def propose_late_rule(
-    client: LmStudioClient, ledger: Ledger, snapshot_hash: str
+    client: LmStudioClient,
+    ledger: Ledger,
+    snapshot_hash: str,
+    config: Optional[Mapping[str, Any]] = None,
+    state_dir: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Dict[str, Any]]:
+    gen_cfg = factory_generator.generator_config(config)
     readiness = client.readiness()
     proposal_result: Dict[str, Any] = {"readiness": readiness}
     proposal: Optional[Dict[str, Any]] = None
@@ -1372,6 +1424,7 @@ def propose_late_rule(
         if not ledger.has_late_rule(validated["rule"]):
             proposal_result["fallback"] = "diagnostic_priority"
             return validated, None, proposal_result
+    killed_items: List[Dict[str, Any]] = []
     if readiness["ready"]:
         system = (
             "You propose one bounded causal rule from a public Bitcoin five-minute continuation study. "
@@ -1388,7 +1441,38 @@ def propose_late_rule(
             "The rule predicts the terminal side visible "
             "at the causal decision checkpoint; price and settlement buffers protect the asymmetric payoff."
         )
-        generated = client.complete(system, user, "late_window_proposal_v1", LATE_PROPOSAL_SCHEMA, 0.2)
+        late_rows = ledger.late_hypotheses()
+        extra_sections: List[str] = []
+        if gen_cfg["eoh_operators_enabled"]:
+            parents = factory_generator.eoh_parents(late_rows)
+            operator = factory_generator.select_eoh_operator(len(late_rows), bool(parents))
+            section, parent_fingerprints = factory_generator.eoh_prompt_section(
+                operator, parents
+            )
+            extra_sections.append(section)
+            proposal_result["eoh_operator"] = operator
+            if parent_fingerprints:
+                proposal_result["eoh_parent_fingerprints"] = parent_fingerprints
+        if gen_cfg["negative_prompt_enabled"] or gen_cfg["novelty_gate_enabled"]:
+            registry_raw = (config or {}).get("registry_path")
+            killed_items = factory_generator.killed_negative_items(
+                resolve_repo_path(str(registry_raw)) if registry_raw else None, late_rows
+            )
+        if gen_cfg["negative_prompt_enabled"]:
+            negatives = factory_generator.negative_prompt_text(killed_items)
+            if negatives:
+                extra_sections.append(negatives)
+                proposal_result["negative_prompt_chars"] = len(negatives)
+        if gen_cfg["kill_feedback_enabled"] and state_dir is not None:
+            feedback = factory_generator.kill_feedback_prompt_text(state_dir)
+            if feedback:
+                extra_sections.append(feedback)
+        if extra_sections:
+            user = user + "\n" + "\n".join(extra_sections)
+        try:
+            generated = client.complete(system, user, "late_window_proposal_v1", LATE_PROPOSAL_SCHEMA, 0.2)
+        except ValueError as error:
+            generated = {"ok": False, "reason": "prompt_guard_%s" % error}
         proposal_result["generator"] = {key: value for key, value in generated.items() if key != "value"}
         if generated.get("ok"):
             try:
@@ -1396,6 +1480,25 @@ def propose_late_rule(
                 if ledger.has_late_rule(proposal["rule"]):
                     proposal_result["generator_validation_error"] = "duplicate_executable_rule"
                     proposal = None
+                elif gen_cfg["novelty_gate_enabled"] and state_dir is not None:
+                    novelty = factory_generator.novelty_check(
+                        proposal,
+                        gen_cfg,
+                        client.base_url,
+                        float(client.config["request_timeout_seconds"]),
+                        state_dir,
+                        killed_items,
+                    )
+                    if novelty.get("status") == "rejected":
+                        proposal_result["novelty_rejected"] = {
+                            "sha": novelty["sha"],
+                            "max_cosine": novelty["max_cosine"],
+                            "against": novelty["against"],
+                        }
+                        proposal = None
+                    else:
+                        # accepted, or embedding error recorded fail-open
+                        proposal_result["novelty"] = novelty
             except ValueError as error:
                 proposal_result["generator_validation_error"] = str(error)
         if proposal is not None:
@@ -2377,6 +2480,15 @@ def run_queued_economic_screen(
     else:
         verdict = cached_family_economic_verdict(config, payload["proposal"])
     payload["economic_verdict"] = verdict
+    verdict_metrics = verdict.get("metrics") or {}
+    factory_generator.append_trial_entry(
+        config,
+        str(job["hypothesis_fingerprint"]),
+        "economic_opportunity_screen",
+        str(verdict.get("classification")),
+        n=verdict_metrics.get("fills", verdict_metrics.get("conditions")),
+        wins=verdict_metrics.get("wins"),
+    )
     evidence_path = state_dir / (
         "evidence/economic/%s.json" % job["hypothesis_fingerprint"]
     )
@@ -2778,6 +2890,14 @@ def run_queued_fixed_forward_job(
             if final_passed
             else "rejected_fixed_forward"
         )
+        factory_generator.append_trial_entry(
+            config,
+            fingerprint,
+            "fixed_forward_confirmation",
+            status,
+            n=fills,
+            wins=wins,
+        )
         ledger.update_job(job["job_id"], "completed", payload, status)
         ledger.update_hypothesis_status(fingerprint, status)
         if final_passed and config.get("bounded_vps_shadow", {}).get("enabled", False):
@@ -2973,6 +3093,14 @@ def finalize_historical_exact_job(
         config["exact_replay"]["maximum_windows_per_hypothesis"]
     )
     fingerprint = str(job["hypothesis_fingerprint"])
+    factory_generator.append_trial_entry(
+        config,
+        fingerprint,
+        "exact_l2_replay",
+        str(verdict["classification"]),
+        n=verdict["aggregate"].get("fills_success"),
+        wins=factory_generator.direction_wins(verdict["aggregate"]),
+    )
     if verdict["eligible"]:
         economic_verdict = exact_replay_economic_verdict(
             config,
@@ -2982,6 +3110,15 @@ def finalize_historical_exact_job(
             EXACT_ELIGIBILITY_POLICY_VERSION,
         )
         payload["historical_economic_verdict"] = economic_verdict
+        economic_metrics = economic_verdict.get("metrics") or {}
+        factory_generator.append_trial_entry(
+            config,
+            fingerprint,
+            "economic_opportunity_screen",
+            str(economic_verdict.get("classification")),
+            n=economic_metrics.get("fills"),
+            wins=economic_metrics.get("wins"),
+        )
         if not economic_verdict["passed"]:
             ledger.update_hypothesis_status(fingerprint, "rejected_exact_economics")
         elif payload.get("fresh_candidate_windows"):
@@ -3387,6 +3524,14 @@ def run_queued_fresh_holdout_job(
         "holdout_insufficient_support"
         if verdict["classification"] == "insufficient_support"
         else "rejected_fresh_holdout"
+    )
+    factory_generator.append_trial_entry(
+        config,
+        fingerprint,
+        "fresh_resolved_holdout",
+        status,
+        n=verdict["aggregate"].get("fills_success"),
+        wins=factory_generator.direction_wins(verdict["aggregate"]),
     )
     ledger.update_hypothesis_status(fingerprint, status)
     ledger.update_job(job["job_id"], "completed", payload, "frozen fresh holdout complete")
@@ -4101,7 +4246,9 @@ def run_late_window_lane(
         return {"status": "blocked", "reason": "missing_public_snapshot"}
     snapshot_hash = sha256_file(snapshot)
     client = LmStudioClient(config["llm"], state_dir)
-    proposal, review, provenance = propose_late_rule(client, ledger, snapshot_hash)
+    proposal, review, provenance = propose_late_rule(
+        client, ledger, snapshot_hash, config, state_dir
+    )
     fingerprint = stable_hash(
         {
             "lane": "late_window_mechanisms",
@@ -4146,6 +4293,14 @@ def run_late_window_lane(
     evidence_path = state_dir / ("evidence/late_window_mechanisms/%s.json" % fingerprint)
     atomic_json(evidence_path, evidence)
     status = "stage_1_survivor" if evidence["stage_1_survivor"] else "rejected_stage_1"
+    factory_generator.append_trial_entry(
+        config,
+        fingerprint,
+        "public_directional_screen",
+        status,
+        n=evidence["overall"]["signals"],
+        wins=evidence["overall"]["wins"],
+    )
     ledger.add_hypothesis(
         fingerprint,
         "late_window_mechanisms",
@@ -4382,7 +4537,7 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
     state_dir = resolve_repo_path(config["state_dir"])
     state_dir.mkdir(parents=True, exist_ok=True)
     with CycleLock(state_dir / "locks/cycle.lock"):
-        ledger = Ledger(state_dir / "research.sqlite3")
+        ledger = Ledger(state_dir / "research.sqlite3", config.get("generator"))
         cycle_id = str(uuid.uuid4())
         result: Dict[str, Any] = {"cycle_id": cycle_id, "started_at": utc_now(), "dry_run": dry_run}
         ledger.begin_cycle(cycle_id, {"dry_run": dry_run, "selected_lane": selected_lane})
