@@ -3695,10 +3695,33 @@ impl Pipeline {
             .risk
             .available_capital_for_exposure(open_exposure)
             .await;
-        let mut estimated_position = band
-            .target_stake(bankroll)
-            .min(per_market)
-            .min(available);
+        let favorite_price = up_price.max(down_price);
+        let target = if self.settings.band_sizing == "kelly_lo" {
+            // Operator-approved 2026-09-01 (docs/risk_book_v2/): half-Kelly
+            // on the Wilson LOWER bound per price bucket; the <=0.70 bucket's
+            // edge CI straddles break-even, so it does not trade. One day of
+            // live A/B: the sim book beat the live book by \$2.87 and dodged
+            // 3 of the 5 streak losses.
+            match crate::risk::book_v2::kelly_lo_stake(
+                favorite_price,
+                bankroll,
+                band.stake_usd,
+            ) {
+                Some(stake) => stake,
+                None => {
+                    self.band_skip_with_detail(
+                        cid,
+                        "kelly_no_edge_bucket",
+                        format!("favorite={favorite_price:.2} equity={bankroll:.2}"),
+                    )
+                    .await;
+                    return Ok(false);
+                }
+            }
+        } else {
+            band.target_stake(bankroll)
+        };
+        let mut estimated_position = target.min(per_market).min(available);
         // RiskBook v2 sizing shadow: log what the Kelly-lower policy would
         // stake here (docs/risk_book_v2/sizing_study_2026-09-01.md). Uses
         // the favorite price as the bucket proxy at evaluation time.

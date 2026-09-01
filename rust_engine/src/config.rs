@@ -88,6 +88,9 @@ pub struct Settings {
     pub poly_base_url: String,
     /// Venue status page summary endpoint; empty disables the incident gate.
     pub poly_status_url: String,
+    /// Band stake policy: "pct" (legacy 25%-clamp) or "kelly_lo"
+    /// (half-Kelly on the per-bucket Wilson lower bound; skips <=0.70).
+    pub band_sizing: String,
     pub poly_gamma_url: String,
 
     pub venue: VenueMode,
@@ -236,6 +239,7 @@ impl Settings {
                 "POLY_STATUS_URL",
                 "https://status.polymarket.com/api/v2/summary.json",
             ),
+            band_sizing: env_str("BAND_SIZING", "pct"),
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
 
             venue,
