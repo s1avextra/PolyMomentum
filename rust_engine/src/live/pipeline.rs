@@ -2664,7 +2664,7 @@ impl Pipeline {
             // Eager breaker check (every cycle)
             {
                 let bs = *self.breaker.lock().await;
-                let open_exposure = self.open_position_exposure().await;
+                let open_exposure = self.breaker_stress_exposure().await;
                 let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
                 if let Some(reason) =
                     self.breaker_trip_reason_for(&bs, open_exposure, breaker_bankroll)
@@ -4299,6 +4299,50 @@ impl Pipeline {
         }
     }
 
+    /// Exposure the breaker's stress projection should count: positions in
+    /// still-open windows plus unreconciled order reservations. Expired
+    /// windows awaiting the oracle are EXCLUDED - they are sunk, cannot be
+    /// exited (hold-to-expiry, market closed), and their outcome is already
+    /// covered by the absolute-dollar stops. Counting them made venue
+    /// resolution lag look like an exposure spike: 2026-08-31 17:59 a 20-min
+    /// oracle delay overlapped two windows and stress-tripped a freshly
+    /// actualized session (peak 0) at 53%, halting the bot for 8 hours.
+    async fn breaker_stress_exposure(&self) -> f64 {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut total = 0.0f64;
+        let now_s = nonzero_ts_or_now(0.0);
+        for (cid, end_time, exposure) in self
+            .paper_positions
+            .lock()
+            .await
+            .iter()
+            .map(|(cid, p)| (cid.clone(), p.end_time, paper_position_exposure(p)))
+            .collect::<Vec<_>>()
+        {
+            if now_s < end_time && seen.insert(cid) {
+                total += exposure;
+            }
+        }
+        for (cid, exposure) in self
+            .live_pending_positions
+            .lock()
+            .await
+            .values()
+            .map(|pending| {
+                (
+                    pending.position.contract_id.clone(),
+                    paper_position_exposure(&pending.position),
+                )
+            })
+            .collect::<Vec<_>>()
+        {
+            if seen.insert(cid) {
+                total += exposure;
+            }
+        }
+        total
+    }
+
     /// Sums open exposure counting each contract ONCE across the three
     /// lifecycle maps. A trade moves pending-order -> position -> oracle
     /// pending, and the handoffs hold awaits between insert and remove, so
@@ -4504,7 +4548,7 @@ impl Pipeline {
 
                 // Post-resolution breaker check
                 let bs = *self.breaker.lock().await;
-                let open_exp = self.open_position_exposure().await;
+                let open_exp = self.breaker_stress_exposure().await;
                 let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
                 if let Some(reason) =
                     self.breaker_trip_reason_for(&bs, open_exp, breaker_bankroll)
@@ -4693,9 +4737,10 @@ impl Pipeline {
                             );
                         }
                         let bs = *self.breaker.lock().await;
-                        let open_exposure = (self.open_position_exposure().await
-                            - pending_resolution_exposure(&entry))
-                        .max(0.0);
+                        // Oracle-pending exposure is excluded from the stress
+                        // measure, so the just-resolved entry needs no manual
+                        // subtraction here.
+                        let open_exposure = self.breaker_stress_exposure().await;
                         let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
                         if let Some(reason) =
                             self.breaker_trip_reason_for(&bs, open_exposure, breaker_bankroll)
