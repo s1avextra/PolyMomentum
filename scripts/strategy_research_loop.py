@@ -595,6 +595,12 @@ class LmStudioClient:
     ) -> Dict[str, Any]:
         if any(token in (system + " " + user).lower() for token in ("pnl", "wallet", "secret", "private_key")):
             raise ValueError("private or outcome-bearing LLM prompt rejected")
+        if self.config.get("disable_reasoning"):
+            # A sampler must not think: reasoning tokens burn the output
+            # budget before the JSON starts. reasoning_effort covers
+            # gpt-oss-style models; the /no_think prefix covers the Qwen
+            # family; models without a reasoning mode ignore both.
+            system = "/no_think " + system
         payload = {
             "model": self.model,
             "messages": [
@@ -608,6 +614,10 @@ class LmStudioClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
         }
+        if self.config.get("disable_reasoning"):
+            payload["reasoning_effort"] = "low"
+        if isinstance(self.config.get("extra_body"), dict):
+            payload.update(self.config["extra_body"])
         body = canonical_json(payload).encode("utf-8")
         request = urllib.request.Request(
             self.base_url + "/chat/completions",

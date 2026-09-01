@@ -65,7 +65,8 @@
     "request_timeout_seconds": 60,
     "maximum_output_tokens": 1400,
     "maximum_concurrency": 1,
-    "prompt_policy": "public_aggregate_only"
+    "prompt_policy": "public_aggregate_only",
+    "disable_reasoning": true
   },
   "exact_replay": {
     "enabled": true,
