@@ -21,7 +21,10 @@ EnvironmentFile=-/etc/polymomentum/band-canary-secrets.env
 # Credentials live in their own file so config redeploys of
 # band-canary.env can never clobber them (incident 2026-08-25 10:10).
 EnvironmentFile=/etc/polymomentum/band-canary-secrets.env
-ExecStart=/opt/polymomentum/tools/polymomentum-engine-band-v1 live --mode live --i-understand-live --promotion-artifact /opt/polymomentum/promotions/band_promotion_compound.json
+# The promotion artifact comes from POLYMOMENTUM_PROMOTION_ARTIFACT in
+# band-canary.env - a command-line pin here silently overrode the env and
+# started the wrong strategy version (2026-09-01).
+ExecStart=/opt/polymomentum/tools/polymomentum-engine-band-v1 live --mode live --i-understand-live
 ExecStop=/bin/kill -SIGTERM $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM

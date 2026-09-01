@@ -433,6 +433,10 @@ pub const BAND_FAMILY: &str = "signal_favorite_band_official_v1";
 /// upper band, so the compounding target never sizes under this.
 pub const BAND_MIN_STAKE_USD: f64 = 5.0;
 
+fn serde_f64_is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BandPolicyParams {
@@ -453,7 +457,10 @@ pub struct BandPolicyParams {
     /// |margin| >= $50 across 700+ fresh windows including chop, and 72-78%
     /// (below break-even) under $25 - without this floor the band trades
     /// noise at favorite prices. 0 disables (legacy artifacts).
-    #[serde(default)]
+    /// skip_serializing_if keeps the canonical serialization - and thus the
+    /// params hash - of zero-floor legacy artifacts byte-identical, so
+    /// rollback to an older artifact never fails the release hash check.
+    #[serde(default, skip_serializing_if = "serde_f64_is_zero")]
     pub min_decision_margin_usd: f64,
     /// Fraction of effective bankroll (allocation + realized PnL) staked per
     /// trade — the compounding knob. Default 1.0 keeps older fixed-stake
