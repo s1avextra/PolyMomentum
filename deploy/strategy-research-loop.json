@@ -6,7 +6,7 @@
   "registry_path": "docs/strategy_registry.json",
   "maximum_exact_l2_shortlist": 2,
   "architecture_migration": {
-    "legacy_candidate_generation_enabled": false,
+    "legacy_candidate_generation_enabled": true,
     "legacy_exact_replay_enabled": false,
     "reason": "opportunity_table_v1_migration",
     "opportunity_policy_search": {
