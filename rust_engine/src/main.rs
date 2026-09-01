@@ -405,6 +405,11 @@ enum Command {
     /// cartesian product of confidence × z × edge × ev × {taker, maker} —
     /// runs every cell against the same hours and ranks by PnL.
     HarnessSweep {
+        /// Append one line per evaluated variant to this JSONL trial ledger
+        /// (factory phase 1: losing trials are the null distribution -
+        /// docs/factory_phase1_spine_2026-09-01.md).
+        #[arg(long)]
+        trial_ledger: Option<String>,
         #[arg(long)]
         start: String,
         #[arg(long)]
@@ -2933,6 +2938,7 @@ async fn main() {
             .await;
         }
         Command::HarnessSweep {
+            trial_ledger,
             start,
             end,
             bankroll,
@@ -3016,6 +3022,7 @@ async fn main() {
             };
             cmd_harness_sweep(
                 &settings,
+                trial_ledger.as_deref(),
                 &start,
                 end.as_deref(),
                 bankroll,
@@ -12788,8 +12795,47 @@ fn inclusive_replay_hours(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Append one JSONL row per evaluated variant. Losing trials are never
+/// deleted - they are the null distribution the promotion statistics
+/// deflate against.
+fn append_trial_ledger(
+    path: &str,
+    window_start: &str,
+    window_end: &str,
+    runs: &[backtest::harness::HarnessRun],
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+    for run in runs {
+        let row = serde_json::json!({
+            "ts": ts,
+            "source": "harness_sweep",
+            "candidate": run.variant.name,
+            "params_hash": strategy::spec::stable_json_hash(
+                &serde_json::to_value(&run.variant).unwrap_or(serde_json::Value::Null),
+            ),
+            "stage": "historic_backtest",
+            "window": {"start": window_start, "end": window_end},
+            "n": run.results.n_trades(),
+            "wins": run.results.n_wins(),
+            "win_rate": run.results.win_rate(),
+            "pnl": run.results.total_pnl(),
+        });
+        writeln!(file, "{row}")?;
+    }
+    Ok(())
+}
+
 async fn cmd_harness_sweep(
     settings: &config::Settings,
+    trial_ledger: Option<&str>,
     start: &str,
     end: Option<&str>,
     bankroll: f64,
@@ -13426,6 +13472,16 @@ async fn cmd_harness_sweep(
                     std::process::exit(1);
                 }
                 println!("Experiment report: {path}");
+            }
+            if let Some(ledger_path) = trial_ledger {
+                let (w_start, w_end) = (
+                    cfg.hours.first().map(|h| h.to_rfc3339()).unwrap_or_default(),
+                    cfg.hours.last().map(|h| h.to_rfc3339()).unwrap_or_default(),
+                );
+                if let Err(e) = append_trial_ledger(ledger_path, &w_start, &w_end, &runs) {
+                    eprintln!("trial ledger {ledger_path}: {e}");
+                    std::process::exit(1);
+                }
             }
             if let Some(path) = trades_json {
                 let variants: Vec<_> = runs
