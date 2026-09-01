@@ -1375,40 +1375,51 @@ impl Pipeline {
         }
         if let Some(book) = &self.book_v2 {
             if book.is_empty().await.unwrap_or(false) {
-                let bs = *self.breaker.lock().await;
-                let v1_equity = self.risk.initial_bankroll().await + bs.realized_pnl;
-                let ts = nonzero_ts_or_now(0.0);
-                let _ = book
-                    .post(
-                        ts,
-                        crate::risk::book_v2::PostingKind::Import,
-                        "band",
-                        "",
-                        v1_equity,
-                        0.0,
-                        0.0,
-                        "opening balance imported from v1",
-                        "import_v1",
-                    )
-                    .await;
-                tracing::info!(v1_equity, "book_v2 shadow initialized from v1");
+                // Seed from the WALLET, not from v1: v1's pinned-base equity
+                // is not wallet-anchored (that is the disease v2 cures), and
+                // seeding from it imported the discrepancy into the cure
+                // (observed live 2026-09-01: v2 opened $6.27 under chain).
+                // Both sub-books get the SAME opening balance at the SAME
+                // instant so their curves differ only by policy.
+                let opening = match crate::data::wallet::WalletReader::for_funder(
+                    &self.settings.polygon_rpc_url,
+                    &self.settings.private_key,
+                    &self.settings.poly_funder,
+                ) {
+                    Ok(reader) => reader.fetch_balances().await.ok().map(|b| b.pusd),
+                    Err(_) => None,
+                };
+                if let Some(opening) = opening {
+                    let ts = nonzero_ts_or_now(0.0);
+                    for (strategy, key, note) in [
+                        ("band", "import_wallet", "opening balance = on-chain wallet"),
+                        (
+                            crate::risk::book_v2::KELLY_SIM_STRATEGY,
+                            "import_sim",
+                            "kelly-sim opening balance = on-chain wallet",
+                        ),
+                    ] {
+                        let _ = book
+                            .post(
+                                ts,
+                                crate::risk::book_v2::PostingKind::Import,
+                                strategy,
+                                "",
+                                opening,
+                                0.0,
+                                0.0,
+                                note,
+                                key,
+                            )
+                            .await;
+                    }
+                    tracing::info!(opening, "book_v2 shadow seeded from wallet");
+                } else {
+                    // Trading must not depend on the shadow: seed retries at
+                    // the next start instead of blocking this one.
+                    tracing::warn!("book_v2 seed deferred: wallet unreadable");
+                }
             }
-            // Kelly-sim sub-book: same opening balance, own compounding.
-            let bs = *self.breaker.lock().await;
-            let v1_equity = self.risk.initial_bankroll().await + bs.realized_pnl;
-            let _ = book
-                .post(
-                    nonzero_ts_or_now(0.0),
-                    crate::risk::book_v2::PostingKind::Import,
-                    crate::risk::book_v2::KELLY_SIM_STRATEGY,
-                    "",
-                    v1_equity,
-                    0.0,
-                    0.0,
-                    "kelly-sim opening balance",
-                    "import_sim",
-                )
-                .await;
         }
 
         // Spawn exchange feeds (BTC: binance/bybit/okx; ETH+SOL: alts; Deribit IV)

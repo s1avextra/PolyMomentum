@@ -93,6 +93,9 @@ impl BookV2 {
         note: &str,
         idempotency_key: &str,
     ) -> Result<bool> {
+        // Defensive unit normalization: some call sites carry venue
+        // millisecond timestamps.
+        let ts = if ts > 1.0e11 { ts / 1000.0 } else { ts };
         let db = self.db.lock().await;
         let inserted = db
             .execute(
