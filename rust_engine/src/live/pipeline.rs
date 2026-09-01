@@ -955,7 +955,33 @@ impl Pipeline {
         let alerter = Alerter::from_env();
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
-        let breaker_cfg = BreakerConfig::from_settings(&settings);
+        let breaker_cfg = if runtime_strategy.band.is_some() {
+            // Band stopping policy, reformatted ground-up (2026-09-01).
+            // Trading halts for exactly three families of reasons:
+            //   1. MONEY  - restart-proof cumulative floor
+            //              (live_cumulative_loss: ledger + session <=
+            //              -CANDLE_LIVE_MAX_CUMULATIVE_LOSS_PCT x base) and
+            //              the consecutive-loss streak below;
+            //   2. BUGS   - band_exposure_anomaly (exposure beyond what
+            //              sizing could commit) and the accounting-integrity
+            //              trips (fee/journal/oracle failures);
+            //   3. OPERATOR - kill switch and telegram /stop.
+            // Removed from halting: session_loss_floor (the cumulative
+            // floor already includes the session - profits are risk capital
+            // under compounding), realized_drawdown (peak-relative: could
+            // halt while net POSITIVE), win_rate_low (indirect proxy; the
+            // direct money measures bind first).
+            BreakerConfig {
+                min_trades: u32::MAX,
+                min_win_rate: 0.0,
+                max_drawdown_pct: f64::INFINITY,
+                max_session_loss_pct: 0.0,
+                max_consecutive_losses: settings.candle_breaker_max_consecutive_losses.max(1)
+                    as u32,
+            }
+        } else {
+            BreakerConfig::from_settings(&settings)
+        };
 
         // Restore breaker + paper positions + oracle pending
         let mut breaker_tripped = matches!(
@@ -5968,6 +5994,40 @@ mod tests {
             stake_usd: 5.0,
             position_pct: 1.0,
         }
+    }
+
+    #[test]
+    fn band_stopping_policy_halts_only_on_money_and_streak() {
+        // The ground-up band policy: session floor, peak drawdown, and
+        // win-rate must NEVER halt; only the streak (and, in the pipeline,
+        // the cumulative floor / anomaly / integrity trips) may.
+        let cfg = BreakerConfig {
+            min_trades: u32::MAX,
+            min_win_rate: 0.0,
+            max_drawdown_pct: f64::INFINITY,
+            max_session_loss_pct: 0.0,
+            max_consecutive_losses: 5,
+        };
+        let mut s = BreakerState::default();
+        // A brutal but streak-free session: would have tripped
+        // session_loss_floor (-20 < -0.6*19) and realized_drawdown
+        // (peak 12 -> deep negative is far beyond 30% of peak equity).
+        s.record_resolution(true, 12.0);
+        for _ in 0..4 {
+            s.record_resolution(false, -5.0);
+        }
+        s.record_resolution(true, 0.5);
+        for _ in 0..4 {
+            s.record_resolution(false, -5.0);
+        }
+        assert!(s.realized_pnl < -19.0);
+        assert_eq!(s.should_trip(&cfg, 5.0, 19.0), None);
+        // The streak still halts.
+        s.record_resolution(false, -5.0);
+        assert_eq!(
+            s.should_trip(&cfg, 5.0, 19.0),
+            Some("consecutive_losses")
+        );
     }
 
     #[test]
