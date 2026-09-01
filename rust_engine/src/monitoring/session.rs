@@ -277,6 +277,10 @@ impl SessionMonitor {
         );
     }
 
+    pub fn record_v2_shadow(&self, kind: &str, payload: serde_json::Value) {
+        self.write_event("risk_v2", kind, payload);
+    }
+
     pub fn record_signal_skip(&self, contract_id: &str, reason: &str) {
         let mut c = self.counters.lock().unwrap();
         c.signal_skip_count += 1;

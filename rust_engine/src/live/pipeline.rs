@@ -883,6 +883,10 @@ pub struct Pipeline {
     halted_log_s: std::sync::atomic::AtomicU64,
     /// Ring of recent trades for the operator bot (/trades).
     trade_log: Mutex<std::collections::VecDeque<TradeLogRecord>>,
+    /// RiskBook v2 shadow ledger (event-sourced postings). Observes every
+    /// fill/settlement in parallel with the driving v1 book; never drives
+    /// decisions until the RISK_BOOK cutover.
+    book_v2: Option<crate::risk::book_v2::BookV2>,
     breaker_tripped_at_s: Mutex<Option<i64>>,
     price_state: Arc<RwLock<PriceState>>,
     book_state: SharedBookState,
@@ -1254,6 +1258,22 @@ impl Pipeline {
         }
 
         let live_recovery_ready = live_pending_positions.is_empty();
+        let book_v2 = if matches!(mode, Mode::Live) {
+            let path = std::path::Path::new(&settings.state_db_path)
+                .parent()
+                .map(|d| d.join("book_v2.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("book_v2.db"));
+            match crate::risk::book_v2::BookV2::open(&path) {
+                Ok(book) => Some(book),
+                Err(error) => {
+                    tracing::warn!(%error, "book_v2 shadow unavailable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
 
         let p = Arc::new(Self {
             kill_switch_path: PathBuf::from(&settings.kill_switch_path),
@@ -1281,6 +1301,7 @@ impl Pipeline {
             breaker_trip_reason: Mutex::new(breaker_trip_reason),
             halted_log_s: std::sync::atomic::AtomicU64::new(0),
             trade_log: Mutex::new(std::collections::VecDeque::new()),
+            book_v2,
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
             price_state: Arc::new(RwLock::new(PriceState::new())),
             book_state: new_shared_book(),
@@ -1351,6 +1372,27 @@ impl Pipeline {
         );
         {
             // Startup is not a money event: no operator push, log only.
+        }
+        if let Some(book) = &self.book_v2 {
+            if book.is_empty().await.unwrap_or(false) {
+                let bs = *self.breaker.lock().await;
+                let v1_equity = self.risk.initial_bankroll().await + bs.realized_pnl;
+                let ts = nonzero_ts_or_now(0.0);
+                let _ = book
+                    .post(
+                        ts,
+                        crate::risk::book_v2::PostingKind::Import,
+                        "band",
+                        "",
+                        v1_equity,
+                        0.0,
+                        0.0,
+                        "opening balance imported from v1",
+                        "import_v1",
+                    )
+                    .await;
+                tracing::info!(v1_equity, "book_v2 shadow initialized from v1");
+            }
         }
 
         // Spawn exchange feeds (BTC: binance/bybit/okx; ETH+SOL: alts; Deribit IV)
@@ -2476,6 +2518,21 @@ impl Pipeline {
                 log.pop_front();
             }
         }
+        if let Some(book) = &self.book_v2 {
+            let _ = book
+                .post(
+                    ts,
+                    crate::risk::book_v2::PostingKind::Fill,
+                    "band",
+                    &position.contract_id,
+                    -(fill_size * fill_price + position.fee),
+                    fill_size,
+                    fill_price,
+                    "",
+                    &format!("{}::fill", order.intent.intent_id),
+                )
+                .await;
+        }
         if self.alerter.enabled() {
             self.alerter
                 .notify(&format!(
@@ -3575,6 +3632,26 @@ impl Pipeline {
             .target_stake(bankroll)
             .min(per_market)
             .min(available);
+        // RiskBook v2 sizing shadow: log what the Kelly-lower policy would
+        // stake here (docs/risk_book_v2/sizing_study_2026-09-01.md). Uses
+        // the favorite price as the bucket proxy at evaluation time.
+        {
+            let v2 = crate::risk::book_v2::kelly_lo_stake(
+                up_price.max(down_price),
+                bankroll,
+                band.stake_usd,
+            );
+            self.monitor.record_v2_shadow(
+                "sizing",
+                serde_json::json!({
+                    "cid": short_cid(&c.market.condition_id),
+                    "favorite_price": up_price.max(down_price),
+                    "equity": bankroll,
+                    "v1_stake": estimated_position,
+                    "v2_stake": v2,
+                }),
+            );
+        }
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
             self.risk.initial_bankroll().await.max(1.0),
@@ -4762,15 +4839,35 @@ impl Pipeline {
                                     won = final_won,
                                     "candle.oracle.realized"
                                 );
-                                {
+                                let settled_qty = {
                                     let mut log = self.trade_log.lock().await;
-                                    if let Some(rec) = log
+                                    match log
                                         .iter_mut()
                                         .rev()
                                         .find(|r| r.cid == cid && r.outcome.is_none())
                                     {
-                                        rec.outcome = Some((final_won, final_pnl));
+                                        Some(rec) => {
+                                            rec.outcome = Some((final_won, final_pnl));
+                                            rec.size
+                                        }
+                                        None => 0.0,
                                     }
+                                };
+                                if let Some(book) = &self.book_v2 {
+                                    let payout = if final_won { settled_qty } else { 0.0 };
+                                    let _ = book
+                                        .post(
+                                            nonzero_ts_or_now(0.0),
+                                            crate::risk::book_v2::PostingKind::Settlement,
+                                            "band",
+                                            &cid,
+                                            payout,
+                                            settled_qty,
+                                            0.0,
+                                            if final_won { "won" } else { "lost" },
+                                            &format!("{cid}::settle"),
+                                        )
+                                        .await;
                                 }
                                 if self.alerter.enabled() {
                                     let bs = *self.breaker.lock().await;
@@ -4922,6 +5019,24 @@ impl Pipeline {
                             .unwrap_or(0);
                         self.last_wallet_read_s
                             .store(now_s, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(book) = &self.book_v2 {
+                            let v2_equity = book.equity().await.unwrap_or(f64::NAN);
+                            let v2_open = book.open_cost().await.unwrap_or(f64::NAN);
+                            let bs = *self.breaker.lock().await;
+                            let v1_equity =
+                                self.risk.initial_bankroll().await + bs.realized_pnl;
+                            self.monitor.record_v2_shadow(
+                                "reconcile",
+                                serde_json::json!({
+                                    "wallet": b.pusd,
+                                    "v1_equity": v1_equity,
+                                    "v2_equity": v2_equity,
+                                    "v2_open_cost": v2_open,
+                                    "v2_minus_wallet": v2_equity - b.pusd,
+                                    "v2_minus_v1": v2_equity - v1_equity,
+                                }),
+                            );
+                        }
                     }
                 }
             }
