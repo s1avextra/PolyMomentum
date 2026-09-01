@@ -87,6 +87,9 @@ def main():
     for model in MODELS:
         llm_cfg = dict(config["llm"])
         llm_cfg["default_model"] = model
+        # JIT-loading a 9-26B over LM Link takes minutes; the loop's 60s
+        # request timeout is for an already-loaded model.
+        llm_cfg["request_timeout_seconds"] = 300
         client = loop.LmStudioClient(llm_cfg, state)
         # Warm up (JIT load) before timing anything.
         ready = False

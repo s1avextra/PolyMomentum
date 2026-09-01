@@ -46,7 +46,7 @@ HYPOTHESIS_SCHEMA = {
 def _check_fill(obj):
     return (
         0.0 < obj["ask_floor"] < obj["ask_cap"] <= 1.0
-        and 0 < obj["decision_seconds"] < 300
+        and 0 < obj["decision_seconds"] <= 300
         and len(obj["rationale"]) > 20
     )
 
@@ -100,7 +100,7 @@ def api(base, path, payload=None, timeout=180):
         return json.loads(r.read())
 
 
-def chat(base, model, prompt, schema=None, max_tokens=700):
+def chat(base, model, prompt, schema=None, max_tokens=700, retries=3):
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -109,8 +109,17 @@ def chat(base, model, prompt, schema=None, max_tokens=700):
     }
     if schema:
         payload["response_format"] = {"type": "json_schema", "json_schema": schema}
-    t0 = time.monotonic()
-    resp = api(base, "/v1/chat/completions", payload)
+    last = None
+    for attempt in range(retries):
+        t0 = time.monotonic()
+        try:
+            resp = api(base, "/v1/chat/completions", payload)
+            break
+        except Exception as e:  # JIT model switching yields transient 400s
+            last = e
+            time.sleep(25)
+    else:
+        raise last
     dt = time.monotonic() - t0
     text = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage", {})
@@ -127,6 +136,13 @@ def chat(base, model, prompt, schema=None, max_tokens=700):
 
 def bench_model(base, model, runs):
     out = {"model": model, "speed": {}, "quality": {}, "errors": []}
+
+    # Warm up: force the model to load before anything is scored.
+    try:
+        chat(base, model, "Say OK.", max_tokens=8, retries=5)
+    except Exception as e:
+        out["errors"].append(f"warmup: {e}")
+        return out
 
     # Speed: one long deterministic-ish generation
     try:
