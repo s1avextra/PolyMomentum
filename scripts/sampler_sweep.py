@@ -24,11 +24,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = [
     "openai/gpt-oss-20b",
-    "qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2",
-    "google/gemma-4-12b-qat",
-    "google/gemma-4-26b-a4b",
+    "deepseek-v4-flash-0731",
+    "qwen/qwen3.8-27b",
+    "meta/muse-glimmer",
 ]
-TEMPS = [0.4, 0.8, 1.2]
+TEMPS = [0.8, 1.2]
 EMBED_MODEL = "text-embedding-nomic-embed-text-v1.5"
 
 
@@ -64,6 +64,12 @@ def main():
     args = ap.parse_args()
 
     loop = load_loop()
+    fg_spec = importlib.util.spec_from_file_location(
+        "factory_generator", ROOT / "scripts/factory_generator.py"
+    )
+    fg = importlib.util.module_from_spec(fg_spec)
+    fg_spec.loader.exec_module(fg)
+    schema = fg.constrained_proposal_schema(loop.LATE_PROPOSAL_SCHEMA)
     config = json.loads((ROOT / "deploy/strategy-research-loop.json").read_text())
     base_url = config["llm"].get("default_base_url", "http://127.0.0.1:1234/v1")
     state = Path(args.state_dir)
@@ -94,7 +100,7 @@ def main():
         # Warm up (JIT load) before timing anything.
         ready = False
         for _ in range(6):
-            probe = client.complete(system, "Return any single valid rule.", "late_window_proposal_v1", loop.LATE_PROPOSAL_SCHEMA, 0.0)
+            probe = client.complete(system, "Return any single valid rule.", "late_window_proposal_v2c", schema, 0.0)
             if probe.get("ok"):
                 ready = True
                 break
@@ -106,7 +112,7 @@ def main():
             valid = []
             t0 = time.monotonic()
             for _ in range(args.samples):
-                out = client.complete(system, user, "late_window_proposal_v1", loop.LATE_PROPOSAL_SCHEMA, temp)
+                out = client.complete(system, user, "late_window_proposal_v2c", schema, temp)
                 if not out.get("ok"):
                     continue
                 try:

@@ -52,7 +52,7 @@
     "novelty_max_cosine": 0.97,
     "kill_feedback_enabled": true,
     "trial_ledger_enabled": true,
-    "explore_temperature": 1.0,
+    "explore_temperature": 0.8,
     "refine_temperature": 0.7,
     "samples_per_burst": 6,
     "constrained_schema": true
