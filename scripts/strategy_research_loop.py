@@ -1441,6 +1441,17 @@ def propose_late_rule(
             "The rule predicts the terminal side visible "
             "at the causal decision checkpoint; price and settlement buffers protect the asymmetric payoff."
         )
+        if state_dir is not None:
+            queued = factory_generator.queue_pop(state_dir)
+            if queued and isinstance(queued.get("proposal"), dict):
+                try:
+                    replay = validate_late_proposal(queued["proposal"])
+                    if not ledger.has_late_rule(replay["rule"]):
+                        proposal_result["from_burst_queue"] = True
+                        proposal_result["eoh_operator"] = queued.get("operator")
+                        return replay, None, proposal_result
+                except ValueError:
+                    pass
         late_rows = ledger.late_hypotheses()
         extra_sections: List[str] = []
         if gen_cfg["eoh_operators_enabled"]:
@@ -1469,38 +1480,60 @@ def propose_late_rule(
                 extra_sections.append(feedback)
         if extra_sections:
             user = user + "\n" + "\n".join(extra_sections)
-        try:
-            generated = client.complete(system, user, "late_window_proposal_v1", LATE_PROPOSAL_SCHEMA, 0.2)
-        except ValueError as error:
-            generated = {"ok": False, "reason": "prompt_guard_%s" % error}
-        proposal_result["generator"] = {key: value for key, value in generated.items() if key != "value"}
-        if generated.get("ok"):
+        temperature = factory_generator.operator_temperature(
+            proposal_result.get("eoh_operator"), gen_cfg
+        )
+        burst_n = max(1, int(gen_cfg["samples_per_burst"]))
+        survivors: List[Dict[str, Any]] = []
+        burst_stats = {"generated": 0, "invalid": 0, "duplicate": 0, "novelty_rejected": 0}
+        generated: Dict[str, Any] = {"ok": False, "reason": "no_samples"}
+        for _ in range(burst_n):
             try:
-                proposal = validate_late_proposal(generated["value"])
-                if ledger.has_late_rule(proposal["rule"]):
-                    proposal_result["generator_validation_error"] = "duplicate_executable_rule"
-                    proposal = None
-                elif gen_cfg["novelty_gate_enabled"] and state_dir is not None:
-                    novelty = factory_generator.novelty_check(
-                        proposal,
-                        gen_cfg,
-                        client.base_url,
-                        float(client.config["request_timeout_seconds"]),
-                        state_dir,
-                        killed_items,
-                    )
-                    if novelty.get("status") == "rejected":
-                        proposal_result["novelty_rejected"] = {
-                            "sha": novelty["sha"],
-                            "max_cosine": novelty["max_cosine"],
-                            "against": novelty["against"],
-                        }
-                        proposal = None
-                    else:
-                        # accepted, or embedding error recorded fail-open
-                        proposal_result["novelty"] = novelty
+                generated = client.complete(
+                    system, user, "late_window_proposal_v1", LATE_PROPOSAL_SCHEMA, temperature
+                )
             except ValueError as error:
-                proposal_result["generator_validation_error"] = str(error)
+                generated = {"ok": False, "reason": "prompt_guard_%s" % error}
+                break
+            burst_stats["generated"] += 1
+            if not generated.get("ok"):
+                continue
+            try:
+                candidate = validate_late_proposal(generated["value"])
+            except ValueError:
+                burst_stats["invalid"] += 1
+                continue
+            if ledger.has_late_rule(candidate["rule"]) or any(
+                normalized_late_rule(candidate["rule"]) == normalized_late_rule(seen["rule"])
+                for seen in survivors
+            ):
+                burst_stats["duplicate"] += 1
+                continue
+            if gen_cfg["novelty_gate_enabled"] and state_dir is not None:
+                novelty = factory_generator.novelty_check(
+                    candidate,
+                    gen_cfg,
+                    client.base_url,
+                    float(client.config["request_timeout_seconds"]),
+                    state_dir,
+                    killed_items,
+                )
+                if novelty.get("status") == "rejected":
+                    burst_stats["novelty_rejected"] += 1
+                    continue
+            survivors.append(candidate)
+        proposal_result["burst"] = {**burst_stats, "temperature": temperature, "survivors": len(survivors)}
+        proposal_result["generator"] = {key: value for key, value in generated.items() if key != "value"}
+        if survivors:
+            proposal = survivors[0]
+            if len(survivors) > 1 and state_dir is not None:
+                factory_generator.queue_push(
+                    state_dir,
+                    [
+                        {"proposal": extra, "operator": proposal_result.get("eoh_operator")}
+                        for extra in survivors[1:]
+                    ],
+                )
         if proposal is not None:
             proposal_sha = stable_hash(proposal)
             review_system = (

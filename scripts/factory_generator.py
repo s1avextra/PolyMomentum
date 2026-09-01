@@ -32,6 +32,12 @@ DEFAULTS: Dict[str, Any] = {
     "novelty_max_cosine": 0.97,
     "kill_feedback_enabled": False,
     "trial_ledger_enabled": False,
+    # Sampler-role knobs (2026-09-01): high entropy for exploration
+    # operators, moderate for refinement; burst N samples per generation
+    # so screens - not generation - are the funnel's bottleneck.
+    "explore_temperature": 0.2,
+    "refine_temperature": 0.2,
+    "samples_per_burst": 1,
 }
 
 NEGATIVE_PROMPT_MAX_CHARS = 1200
@@ -449,3 +455,43 @@ def append_trial_entry(
         return True
     except Exception:
         return False
+
+
+# --- sampler burst queue ---------------------------------------------------
+
+def proposal_queue_path(state_dir):
+    return state_dir / "proposal_queue.jsonl"
+
+
+def queue_pop(state_dir):
+    """Pop the oldest queued proposal (burst survivor from a prior cycle)."""
+    path = proposal_queue_path(state_dir)
+    if not path.is_file():
+        return None
+    lines = [line for line in path.read_text().splitlines() if line.strip()]
+    if not lines:
+        return None
+    head, rest = lines[0], lines[1:]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(rest) + ("\n" if rest else ""))
+    tmp.rename(path)
+    try:
+        return json.loads(head)
+    except json.JSONDecodeError:
+        return None
+
+
+def queue_push(state_dir, proposals):
+    if not proposals:
+        return
+    path = proposal_queue_path(state_dir)
+    with path.open("a") as handle:
+        for item in proposals:
+            handle.write(json.dumps(item, sort_keys=True) + "\n")
+
+
+def operator_temperature(operator, gen_cfg):
+    """E1/E2 explore the grid (entropy up); M1/M2 refine parents."""
+    if operator in ("M1", "M2"):
+        return float(gen_cfg.get("refine_temperature", 0.2))
+    return float(gen_cfg.get("explore_temperature", 0.2))

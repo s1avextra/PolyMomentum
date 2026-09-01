@@ -6,7 +6,7 @@
   "registry_path": "docs/strategy_registry.json",
   "maximum_exact_l2_shortlist": 2,
   "architecture_migration": {
-    "legacy_candidate_generation_enabled": true,
+    "legacy_candidate_generation_enabled": false,
     "legacy_exact_replay_enabled": false,
     "reason": "opportunity_table_v1_migration",
     "opportunity_policy_search": {
@@ -51,7 +51,10 @@
     "embedding_model": "text-embedding-nomic-embed-text-v1.5",
     "novelty_max_cosine": 0.97,
     "kill_feedback_enabled": true,
-    "trial_ledger_enabled": true
+    "trial_ledger_enabled": true,
+    "explore_temperature": 1.0,
+    "refine_temperature": 0.7,
+    "samples_per_burst": 6
   },
   "llm": {
     "base_url_env": "POLYMOMENTUM_LLM_BASE_URL",
