@@ -60,6 +60,7 @@ def cosine(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", type=int, default=6)
+    ap.add_argument("--models", default="", help="comma list; default: MODELS constant")
     ap.add_argument("--state-dir", default="/tmp/sampler_sweep_state")
     args = ap.parse_args()
 
@@ -90,7 +91,8 @@ def main():
     )
 
     results = []
-    for model in MODELS:
+    models = [m for m in args.models.split(",") if m] or MODELS
+    for model in models:
         llm_cfg = dict(config["llm"])
         llm_cfg["default_model"] = model
         # JIT-loading a 9-26B over LM Link takes minutes; the loop's 60s
