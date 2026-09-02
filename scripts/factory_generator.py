@@ -30,6 +30,10 @@ DEFAULTS: Dict[str, Any] = {
     "novelty_gate_enabled": False,
     "embedding_model": "text-embedding-nomic-embed-text-v1.5",
     "novelty_max_cosine": 0.97,
+    # Enum-grid rules embed at cosine 0.97-0.98 even when every field differs
+    # (measured 2026-09-02), so structured proposals use a field Hamming gate
+    # against killed rules instead; the cosine path stays for free text.
+    "novelty_min_hamming": 2,
     "kill_feedback_enabled": False,
     "trial_ledger_enabled": False,
     # Sampler-role knobs (2026-09-01): high entropy for exploration
@@ -202,6 +206,7 @@ def killed_negative_items(
                 {
                     "kind": "ledger_rule",
                     "rule": compact_rule(row["proposal"]["rule"]),
+                    "rule_fields": dict(row["proposal"]["rule"]),
                     "status": str(row.get("status")),
                 }
             )
@@ -298,6 +303,30 @@ def load_embedding_cache(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
+def structural_novelty(
+    rule: Mapping[str, Any], killed_items: Sequence[Mapping[str, Any]], min_hamming: int
+) -> Dict[str, Any]:
+    """Reject a rule within `min_hamming` field changes of any killed rule."""
+    best: Optional[Mapping[str, Any]] = None
+    best_distance: Optional[int] = None
+    for item in killed_items:
+        fields = item.get("rule_fields")
+        if not isinstance(fields, Mapping):
+            continue
+        keys = set(rule) | set(fields)
+        distance = sum(1 for key in keys if rule.get(key) != fields.get(key))
+        if best_distance is None or distance < best_distance:
+            best_distance, best = distance, item
+    if best is not None and best_distance is not None and best_distance < int(min_hamming):
+        return {
+            "status": "rejected",
+            "gate": "structural",
+            "min_hamming": best_distance,
+            "against": {"rule": best.get("rule"), "status": best.get("status")},
+        }
+    return {"status": "accepted", "gate": "structural", "min_hamming": best_distance}
+
+
 def novelty_check(
     proposal: Mapping[str, Any],
     gen_cfg: Mapping[str, Any],
@@ -306,7 +335,18 @@ def novelty_check(
     state_dir: Path,
     killed_items: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Any]:
-    """Cosine-similarity gate; any failure returns status=error (fail-open)."""
+    """Novelty gate: field Hamming distance for structured rules, cosine
+    similarity for free text; any failure returns status=error (fail-open)."""
+    rule = proposal.get("rule") if isinstance(proposal, Mapping) else None
+    if isinstance(rule, Mapping) and any(
+        isinstance(item.get("rule_fields"), Mapping) for item in killed_items
+    ):
+        return structural_novelty(
+            rule, killed_items, int(gen_cfg.get("novelty_min_hamming", DEFAULTS["novelty_min_hamming"]))
+        )
+    if isinstance(rule, Mapping):
+        # Structured rule, nothing killed yet: nothing to be near.
+        return {"status": "accepted", "gate": "structural", "min_hamming": None}
     try:
         model = str(gen_cfg["embedding_model"])
         threshold = float(gen_cfg["novelty_max_cosine"])

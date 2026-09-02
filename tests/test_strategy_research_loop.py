@@ -3102,6 +3102,36 @@ class StrategyResearchLoopTest(unittest.TestCase):
         self.assertNotIn("fallback", after[-1])
         self.assertEqual(client.calls, 4 * burst_n)
 
+    def test_structural_novelty_gate_replaces_cosine_for_grid_rules(self):
+        killed = [
+            {
+                "kind": "ledger_rule",
+                "rule": "op=path_only path=3m",
+                "rule_fields": {"operator": "path_only", "path_minutes": 3, "direction": "both"},
+                "status": "rejected_stage_1",
+            }
+        ]
+        gen_cfg = dict(loop.factory_generator.DEFAULTS)
+        same = {"rule": {"operator": "path_only", "path_minutes": 3, "direction": "both"}}
+        one_off = {"rule": {"operator": "path_only", "path_minutes": 3, "direction": "up"}}
+        two_off = {"rule": {"operator": "path_only", "path_minutes": 4, "direction": "up"}}
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            with mock.patch.object(loop.factory_generator, "embed_text", side_effect=AssertionError("no embeddings")):
+                verdicts = [
+                    loop.factory_generator.novelty_check(p, gen_cfg, "http://unused", 1.0, state_dir, killed)
+                    for p in (same, one_off, two_off)
+                ]
+                nothing_killed = loop.factory_generator.novelty_check(same, gen_cfg, "http://unused", 1.0, state_dir, [])
+        self.assertEqual([v["status"] for v in verdicts], ["rejected", "rejected", "accepted"])
+        self.assertEqual([v["min_hamming"] for v in verdicts], [0, 1, 2])
+        self.assertEqual(verdicts[0]["against"]["status"], "rejected_stage_1")
+        self.assertEqual(nothing_killed, {"status": "accepted", "gate": "structural", "min_hamming": None})
+        self.assertTrue(all("rule_fields" in item for item in loop.factory_generator.killed_negative_items(
+            None,
+            [{"status": "rejected_stage_1", "created_at": "2026-09-02", "proposal": {"rule": same["rule"]}}],
+        )))
+
     def test_novelty_gate_applies_to_uniform_control_draws(self):
         class IdleClient:
             base_url = "http://127.0.0.1:1234/v1"

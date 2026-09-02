@@ -202,3 +202,13 @@ launchctl bootout gui/$(id -u)/com.polymomentum.strategy-research
 mv ~/Library/LaunchAgents/com.polymomentum.strategy-research.plist \
    ~/Library/LaunchAgents/com.polymomentum.strategy-research.plist.disabled
 ```
+
+## Addendum (2026-09-02 12:10 UTC): structural novelty gate
+
+Distinct enum-grid rules embed at cosine 0.974-0.984 with nomic-embed, above
+the 0.97 `novelty_max_cosine`, so the cosine gate rejected 64 of 64 uniform
+control draws once a handful of rules existed. Structured proposals (any
+proposal carrying a `rule` dict) now use `factory_generator.structural_novelty`:
+rejected when fewer than `generator.novelty_min_hamming` (default 2) fields
+differ from a killed rule (`killed_negative_items` / `band_lane.killed_items`
+carry `rule_fields`). The cosine path remains for free-text proposals.

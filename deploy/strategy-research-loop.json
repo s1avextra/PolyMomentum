@@ -55,7 +55,8 @@
     "explore_temperature": 0.8,
     "refine_temperature": 0.7,
     "samples_per_burst": 6,
-    "constrained_schema": true
+    "constrained_schema": true,
+    "novelty_min_hamming": 2
   },
   "llm": {
     "base_url_env": "POLYMOMENTUM_LLM_BASE_URL",

@@ -942,6 +942,7 @@ def killed_items(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         {
             "kind": "ledger_rule",
             "rule": compact_band_rule(row["proposal"]["rule"]),
+            "rule_fields": normalized_band_rule(row["proposal"]["rule"]),
             "status": str(row["status"]),
         }
         for row in rows
