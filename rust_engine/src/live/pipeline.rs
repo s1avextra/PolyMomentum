@@ -501,8 +501,16 @@ fn serde_f64_is_zero(v: &f64) -> bool {
 pub struct BandPolicyParams {
     pub family: String,
     /// Seconds after window open at which the entry attempt window begins.
+    /// The signal is LATCHED on the first cycle at or after this second
+    /// (`band_latch_decision`, ahead of every cycle gate): direction, or
+    /// no-signal for the whole window, from that one look at btc vs open -
+    /// the point rule the mechanism was validated on. Later cycles never
+    /// re-read the margin, and a first look more than 2 s late is a missed
+    /// decision (no-signal), never a late one
+    /// (docs/risk_book_v2/margin_latch_study_2026-09-03.md).
     pub decision_seconds: f64,
-    /// Patient-entry span: attempts run in [decision, decision+entry_window).
+    /// Patient-entry span: attempts run in [decision, decision+entry_window)
+    /// on the latched side only, waiting for an executable in-band ask.
     pub entry_window_seconds: f64,
     /// Exclusive lower bound on the budget-aware execution VWAP.
     pub ask_floor: f64,
@@ -515,7 +523,8 @@ pub struct BandPolicyParams {
     /// attempted. Margin study 2026-09-01: signal accuracy is 98.6-100% at
     /// |margin| >= $50 across 700+ fresh windows including chop, and 72-78%
     /// (below break-even) under $25 - without this floor the band trades
-    /// noise at favorite prices. 0 disables (legacy artifacts).
+    /// noise at favorite prices. Checked once, at the latch; 0 disables the
+    /// floor (legacy artifacts) but the direction is still latched.
     /// skip_serializing_if keeps the canonical serialization - and thus the
     /// params hash - of zero-floor legacy artifacts byte-identical, so
     /// rollback to an older artifact never fails the release hash check.
@@ -971,6 +980,12 @@ pub struct Pipeline {
     /// (cid, anchor second) pairs already captured as `band_anchor` events;
     /// pruned to the live contract list so it cannot grow unbounded.
     band_anchor_logged: Mutex<HashSet<(String, u32)>>,
+    /// Per-window band decision (`BandLatch`) with the window end (unix s),
+    /// made by `latch_band_decision` on the first cycle inside the entry
+    /// window and never revisited; pruned to windows still open at each new
+    /// latch (never to the contract list: a refresh that transiently omits
+    /// the live market must not re-open a decided window).
+    band_latch: Mutex<HashMap<String, (BandLatch, i64)>>,
     /// Latest on-chain pUSD reading in micro-USD and its unix-seconds
     /// timestamp. The wallet is shared with a peer bot, so the balance can
     /// drop under our stake between cycles; the band path consults this to
@@ -1384,6 +1399,7 @@ impl Pipeline {
             last_btc_stall_log_s: std::sync::atomic::AtomicU64::new(0),
             band_detail_logged: Mutex::new(HashSet::new()),
             band_anchor_logged: Mutex::new(HashSet::new()),
+            band_latch: Mutex::new(HashMap::new()),
             last_wallet_pusd_micro: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_wallet_read_s: std::sync::atomic::AtomicU64::new(0),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
@@ -2975,6 +2991,15 @@ impl Pipeline {
                     continue;
                 }
 
+                // The band's one look at the decision second, ahead of the
+                // asset-price and fresh-book gates below: a gate failing on
+                // the decision cycle must not defer the look to a later,
+                // uncontrolled second (the multiple-looks rule the latch
+                // removes; 2026-09-02 18:14). A decision-feed stall above
+                // that spans the decision second is a missed decision.
+                self.latch_band_decision(c, &ps, now, end, window_minutes, minutes_elapsed)
+                    .await;
+
                 let asset_price = if c.asset == "BTC" {
                     btc
                 } else {
@@ -3003,7 +3028,6 @@ impl Pipeline {
                             &ps,
                             btc,
                             now_ts,
-                            end,
                             window_minutes,
                             minutes_elapsed,
                             minutes_left,
@@ -3766,15 +3790,111 @@ impl Pipeline {
         }
     }
 
+    /// The band's ONE look at the decision second: on the first cycle with
+    /// elapsed inside the entry window, decide the window from the exchange
+    /// mid vs the window open (`band_latch_decision`) and latch it. The
+    /// cycle loop calls this AHEAD of its asset-price and fresh-book gates
+    /// and this never consults the venue-incident flag or the books: a
+    /// window whose decision cycle is blocked by a gate is still decided on
+    /// that cycle (mid 0 latches no-signal), not on whatever later cycle
+    /// first clears it (the 2026-09-02 18:14 loss re-created under a
+    /// gate-deferred latch). Later cycles return at the map lookup; the
+    /// no-signal reason is the window's one signal detail record. The map
+    /// is pruned to windows still open at each new latch, so a contract
+    /// refresh that transiently omits the live market cannot re-open a
+    /// decided window.
+    async fn latch_band_decision(
+        &self,
+        c: &CandleContract,
+        ps: &PriceState,
+        now: DateTime<Utc>,
+        end: DateTime<Utc>,
+        window_minutes: f64,
+        minutes_elapsed: f64,
+    ) {
+        let Some(band) = self.runtime_strategy.band.as_ref() else {
+            return;
+        };
+        if c.asset != "BTC" || (window_minutes - 5.0).abs() > 0.01 {
+            return;
+        }
+        let elapsed_s = minutes_elapsed * 60.0;
+        if !band.in_entry_window(elapsed_s) {
+            return;
+        }
+        let cid = c.market.condition_id.as_str();
+        if self.band_latch.lock().await.contains_key(cid) {
+            return;
+        }
+
+        // The band's signal basis is the EXCHANGE mid on both ends of the
+        // sign comparison - the exact instrument the mechanism was validated
+        // with (Binance 1s opens; 93.2% WR at the fresh gate). The chainlink
+        // point-sample basis was observed live to lag whipsaws by tens of
+        // dollars at the window open, inverting the sign (2026-08-25 09:15
+        // window: chainlink-basis "up" vs Binance-basis+official "down").
+        // The settlement-alignment attestation governs the legacy candle
+        // path only; the band ignores it by design.
+        let btc = ps.mid_price;
+        let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
+        // Window open price via the shared per-window store, on the same
+        // exchange-mid basis so the sign comparison is internally consistent.
+        let open_price = {
+            let mut moms = self.momentum.lock().await;
+            let det = moms.entry(c.asset.clone()).or_insert_with(|| {
+                MomentumDetector::new(
+                    Some(ps.implied_vol),
+                    MomentumConfig {
+                        noise_z_threshold: self.settings.candle_noise_z_threshold,
+                        ..Default::default()
+                    },
+                )
+            });
+            if det.get_open_price(cid).is_none() {
+                if let Some(open_price) = ps.price_near_seconds(&c.asset, open_ts, 2.0) {
+                    det.set_window_open(cid, open_price);
+                }
+            }
+            det.get_open_price(cid)
+        };
+        let latch = band_latch_decision(band, elapsed_s, open_price, btc);
+        {
+            let now_s = now.timestamp();
+            let mut latches = self.band_latch.lock().await;
+            latches.retain(|_, (_, end_s)| *end_s > now_s);
+            latches.insert(cid.to_string(), (latch, end.timestamp()));
+        }
+        if let BandLatch::NoSignal(reason) = latch {
+            let detail = match (reason, open_price) {
+                ("band_decision_missed", _) => format!(
+                    "elapsed_s={elapsed_s:.0} decision_s={:.0} tolerance_s={BAND_DECISION_TOLERANCE_S:.0}",
+                    band.decision_seconds
+                ),
+                ("band_mid_unavailable", _) => String::new(),
+                (_, None) => format!("open_ts={open_ts:.0} basis=exchange_mid tolerance_s=2.0"),
+                (_, Some(open)) if btc == open => format!("btc=open={btc:.2}"),
+                (_, Some(open)) => format!(
+                    "margin={:+.0} floor={:.0} btc={btc:.0} open={open:.0}",
+                    btc - open,
+                    band.min_decision_margin_usd
+                ),
+            };
+            self.band_skip_with_detail(cid, reason, detail).await;
+        }
+    }
+
     /// One evaluation cycle of the frozen band policy for one contract.
     /// Returns Ok(true) iff an order attempt was handed to `execute_trade`
     /// (the caller then marks the window as consumed for this cycle).
     ///
-    /// Entry semantics mirror the promoted replay: attempts run on every
-    /// cycle with elapsed in [decision, decision+entry_window); the first
-    /// cycle whose budget-aware quote clears the band gate places the
-    /// order, and `execute_trade`'s traded-set makes entries one-shot per
-    /// market. The settlement-alignment attestation is not consulted here:
+    /// Entry semantics mirror the promoted replay: the signal (direction,
+    /// or no-signal for the window) was latched by `latch_band_decision`
+    /// from the one look at the decision second and is never re-read;
+    /// attempts then run on every cycle with elapsed in [decision,
+    /// decision+entry_window) on the latched side, and the first cycle
+    /// whose budget-aware quote clears the band gate places the order
+    /// (`execute_trade`'s traded-set makes entries one-shot per market).
+    /// The settlement-alignment attestation is not consulted here:
     /// the band's signal source is the exchange mid (per preregistration)
     /// and its outcomes settle on official resolutions, not on a feed proxy.
     #[allow(clippy::too_many_arguments)]
@@ -3787,7 +3907,6 @@ impl Pipeline {
         ps: &PriceState,
         _decision_feed_btc: f64,
         now_ts: f64,
-        end: DateTime<Utc>,
         window_minutes: f64,
         minutes_elapsed: f64,
         minutes_left: f64,
@@ -3800,6 +3919,21 @@ impl Pipeline {
         if !band.in_entry_window(minutes_elapsed * 60.0) {
             return Ok(false);
         }
+        // The window was decided by `latch_band_decision` ahead of the cycle
+        // gates; this path only consults the latch. A no-signal window is
+        // never re-evaluated, a latched direction is never re-derived from a
+        // later mid, and no latch (the loop never took the look) is fail
+        // closed - the margin is not read here.
+        let latched = self
+            .band_latch
+            .lock()
+            .await
+            .get(cid)
+            .map(|(latch, _)| *latch);
+        let (direction, open_price) = match latched {
+            Some(BandLatch::Signal { direction, open }) => (direction, open),
+            Some(BandLatch::NoSignal(_)) | None => return Ok(false),
+        };
         if self
             .venue_incident
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -3813,14 +3947,9 @@ impl Pipeline {
             return Ok(false);
         }
 
-        // The band's signal basis is the EXCHANGE mid on both ends of the
-        // sign comparison - the exact instrument the mechanism was validated
-        // with (Binance 1s opens; 93.2% WR at the fresh gate). The chainlink
-        // point-sample basis was observed live to lag whipsaws by tens of
-        // dollars at the window open, inverting the sign (2026-08-25 09:15
-        // window: chainlink-basis "up" vs Binance-basis+official "down").
-        // The settlement-alignment attestation governs the legacy candle
-        // path only; the band ignores it by design.
+        // This cycle's exchange mid (the latch's basis; see
+        // `latch_band_decision`) feeds the evaluation record and the entry's
+        // signal fields only - the direction is the latched one.
         let band_px = ps.mid_price;
         if band_px <= 0.0 {
             self.band_skip_with_detail(cid, "band_mid_unavailable", String::new())
@@ -3829,9 +3958,7 @@ impl Pipeline {
         }
         let btc = band_px;
 
-        // Window open price via the shared per-window store, on the same
-        // exchange-mid basis so the sign comparison is internally consistent.
-        let (open_price, vol_fast, vol_slow) = {
+        let (vol_fast, vol_slow) = {
             let mut moms = self.momentum.lock().await;
             let det = moms.entry(c.asset.clone()).or_insert_with(|| {
                 MomentumDetector::new(
@@ -3842,56 +3969,8 @@ impl Pipeline {
                     },
                 )
             });
-            if det.get_open_price(cid).is_none() {
-                let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-                let open_price = ps.price_near_seconds(&c.asset, open_ts, 2.0);
-                if let Some(open_price) = open_price {
-                    det.set_window_open(cid, open_price);
-                }
-            }
-            (
-                det.get_open_price(cid),
-                det.realized_vol(),
-                det.slow_realized_vol(),
-            )
+            (det.realized_vol(), det.slow_realized_vol())
         };
-        let Some(open_price) = open_price else {
-            let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-            self.band_skip_with_detail(
-                cid,
-                "band_open_price_unavailable",
-                format!("open_ts={open_ts:.0} basis=exchange_mid tolerance_s=2.0"),
-            )
-            .await;
-            return Ok(false);
-        };
-        if btc == open_price {
-            // No directional signal this cycle; a later cycle inside the
-            // entry window may still produce one.
-            self.band_skip_with_detail(
-                cid,
-                "band_no_direction",
-                format!("btc=open={btc:.2}"),
-            )
-            .await;
-            return Ok(false);
-        }
-        if band.min_decision_margin_usd > 0.0
-            && (btc - open_price).abs() < band.min_decision_margin_usd
-        {
-            self.band_skip_with_detail(
-                cid,
-                "band_margin_below_floor",
-                format!(
-                    "margin={:+.0} floor={:.0} btc={btc:.0} open={open_price:.0}",
-                    btc - open_price,
-                    band.min_decision_margin_usd
-                ),
-            )
-            .await;
-            return Ok(false);
-        }
-        let direction = if btc > open_price { "up" } else { "down" };
         let token_id = if direction == "up" {
             &c.up_token_id
         } else {
@@ -5998,6 +6077,68 @@ fn due_band_anchors(
         .collect()
 }
 
+/// Per-window band decision, made on the first cycle inside the entry
+/// window and never revisited (`band_latch_decision`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BandLatch {
+    /// The window never trades: the decision cycle came too late, or at
+    /// that cycle the mid or the open was unavailable, btc == open, or
+    /// |margin| was below the floor. Payload: the skip reason, recorded
+    /// once as the window's detail.
+    NoSignal(&'static str),
+    /// Momentum side at the decision second and the window open it was
+    /// measured against; later cycles wait for an in-band ask on this side.
+    Signal { direction: &'static str, open: f64 },
+}
+
+/// Cycles run every ~100 ms and the loop's integer-second elapsed already
+/// rounds up, so a window's first in-window cycle lands within a second of
+/// the decision second. A first look later than this means the loop was not
+/// evaluating across the decision second (decision feed stall, restart, the
+/// window absent from a contract refresh): the decision is MISSED, never
+/// taken late, because a late look samples a second the rule was not
+/// validated on.
+const BAND_DECISION_TOLERANCE_S: f64 = 2.0;
+
+/// The band's ONE look at the decision second. The rule was validated on a
+/// single sample per window, |close(open + decision_s) - open| >= floor,
+/// while re-reading the mid every cycle across the entry window and firing
+/// on the first crossing is a multiple-looks rule with a lower accuracy on
+/// a smaller margin (scripts/margin_latch_study.py; live loss 2026-09-02
+/// 18:14: -15 at the decision cycle, -50 on a flash dip at 247 s, -9 at
+/// 270 s, resolved against). Taken by `latch_band_decision` ahead of every
+/// cycle gate, so a gate failing on the decision cycle latches no-signal
+/// (mid 0 -> `band_mid_unavailable`) rather than deferring the look; a look
+/// later than the tolerance is `band_decision_missed`. With floor 0 (legacy
+/// artifacts) the direction is still fixed at that one look.
+/// docs/risk_book_v2/margin_latch_study_2026-09-03.md.
+fn band_latch_decision(
+    band: &BandPolicyParams,
+    elapsed_s: f64,
+    open: Option<f64>,
+    btc: f64,
+) -> BandLatch {
+    if elapsed_s > band.decision_seconds + BAND_DECISION_TOLERANCE_S {
+        return BandLatch::NoSignal("band_decision_missed");
+    }
+    if btc <= 0.0 {
+        return BandLatch::NoSignal("band_mid_unavailable");
+    }
+    let Some(open) = open else {
+        return BandLatch::NoSignal("band_open_price_unavailable");
+    };
+    if btc == open {
+        return BandLatch::NoSignal("band_no_direction");
+    }
+    if band.min_decision_margin_usd > 0.0 && (btc - open).abs() < band.min_decision_margin_usd {
+        return BandLatch::NoSignal("band_margin_below_floor");
+    }
+    BandLatch::Signal {
+        direction: if btc > open { "up" } else { "down" },
+        open,
+    }
+}
+
 fn round_to(x: f64, places: i32) -> f64 {
     let scale = 10f64.powi(places);
     (x * scale).round() / scale
@@ -6687,6 +6828,369 @@ mod tests {
         let mut bad_end = c.clone();
         bad_end.end_date = "not-a-date".to_string();
         assert!(band_anchor_elapsed(&bad_end, end).is_none());
+    }
+
+    #[test]
+    fn band_latch_decision_is_the_point_rule() {
+        let mut band = band_params();
+        band.min_decision_margin_usd = 50.0;
+        let open = 110_000.0;
+        let signal_up = BandLatch::Signal {
+            direction: "up",
+            open,
+        };
+        let signal_down = BandLatch::Signal {
+            direction: "down",
+            open,
+        };
+        let at = |elapsed_s: f64, open: Option<f64>, btc: f64| {
+            band_latch_decision(&band, elapsed_s, open, btc)
+        };
+
+        // The 2026-09-02 18:14 samples: the decision second says no, the
+        // 247 s flash dip on its own would say DOWN - it is the latch, not
+        // the sample, that keeps the window closed (the async tests below).
+        assert_eq!(
+            at(240.0, Some(open), open - 15.0),
+            BandLatch::NoSignal("band_margin_below_floor")
+        );
+        assert_eq!(at(240.0, Some(open), open - 50.24), signal_down);
+        // A look later than the tolerance is a missed decision, never a
+        // late one; the tolerance itself is inclusive.
+        assert_eq!(
+            at(247.0, Some(open), open - 50.24),
+            BandLatch::NoSignal("band_decision_missed")
+        );
+        assert_eq!(at(242.0, Some(open), open + 60.0), signal_up);
+        assert_eq!(
+            at(242.01, Some(open), open + 60.0),
+            BandLatch::NoSignal("band_decision_missed")
+        );
+        // Remaining no-signal cases, the floor bound, and the legacy floor
+        // 0: the direction is still fixed at the one look.
+        assert_eq!(
+            at(240.0, Some(open), 0.0),
+            BandLatch::NoSignal("band_mid_unavailable")
+        );
+        assert_eq!(
+            at(240.0, None, open),
+            BandLatch::NoSignal("band_open_price_unavailable")
+        );
+        assert_eq!(
+            at(240.0, Some(open), open),
+            BandLatch::NoSignal("band_no_direction")
+        );
+        assert_eq!(
+            at(240.0, Some(open), open + 49.99),
+            BandLatch::NoSignal("band_margin_below_floor")
+        );
+        assert_eq!(at(240.0, Some(open), open + 50.0), signal_up);
+        assert_eq!(
+            band_latch_decision(&band_params(), 240.0, Some(open), open - 0.5),
+            signal_down
+        );
+    }
+
+    /// Paper `Pipeline` on a floor-50 band artifact under `tmp` (state db and
+    /// session log in the temp dir; the log is read back for the detail
+    /// record assertions).
+    async fn band_test_pipeline(tmp: &TempDir) -> (Arc<Pipeline>, BandPolicyParams) {
+        let mut params = band_params();
+        params.min_decision_margin_usd = 50.0;
+        let path = tmp.path().join("band_promotion.json");
+        std::fs::write(&path, serde_json::to_vec(&band_promotion(&params)).unwrap()).unwrap();
+        let mut settings = Settings::from_env();
+        settings.promotion_artifact_path = path.display().to_string();
+        settings.state_db_path = tmp.path().join("state.db").display().to_string();
+        settings.session_log_dir = tmp.path().join("sessions").display().to_string();
+        settings.band_sizing = "pct".to_string();
+        settings.band_anchor_seconds = Vec::new();
+        settings.live_min_order_size_shares = 5.0;
+        let p = Pipeline::new(settings, Mode::Paper).await.unwrap();
+        (p, params)
+    }
+
+    fn band_test_book(best_ask: f64, now_ts: f64) -> crate::polymarket_ws::TokenBookState {
+        crate::polymarket_ws::TokenBookState {
+            best_bid: best_ask - 0.01,
+            best_ask,
+            bids: vec![crate::polymarket_ws::BookLevel {
+                price: best_ask - 0.01,
+                size: 500.0,
+            }],
+            asks: vec![crate::polymarket_ws::BookLevel {
+                price: best_ask,
+                size: 500.0,
+            }],
+            last_update_us: (now_ts * 1e6) as u64,
+            ..Default::default()
+        }
+    }
+
+    fn band_test_books(
+        up_ask: f64,
+        down_ask: f64,
+        now_ts: f64,
+    ) -> HashMap<String, crate::polymarket_ws::TokenBookState> {
+        HashMap::from([
+            ("up".to_string(), band_test_book(up_ask, now_ts)),
+            ("down".to_string(), band_test_book(down_ask, now_ts)),
+        ])
+    }
+
+    /// `band_skip_detail` reasons recorded for `cid`, in session-log order.
+    fn band_skip_details(p: &Pipeline, cid: &str) -> Vec<String> {
+        std::fs::read_to_string(p.monitor.events_path())
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|v| v["type"] == "band_skip_detail" && v["cid"] == short_cid(cid))
+            .map(|v| v["reason"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    async fn band_latch_of(p: &Pipeline, cid: &str) -> Option<BandLatch> {
+        p.band_latch.lock().await.get(cid).map(|(latch, _)| *latch)
+    }
+
+    /// One cycle of the loop's band path for `c` at `now`, in the loop's
+    /// order: the latch step (ahead of the loop's book gate, which this
+    /// harness does not replay - the ordering in `scan_loop` is verified by
+    /// reading), then the evaluation on the cycle's books.
+    async fn band_cycle(
+        p: &Arc<Pipeline>,
+        band: &BandPolicyParams,
+        c: &CandleContract,
+        ps: &PriceState,
+        now: DateTime<Utc>,
+        books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    ) -> bool {
+        let end = parse_end(&c.end_date).unwrap();
+        let minutes_left = (end - now).num_seconds() as f64 / 60.0;
+        let minutes_elapsed = 5.0 - minutes_left;
+        p.latch_band_decision(c, ps, now, end, 5.0, minutes_elapsed)
+            .await;
+        let (up, down) = pick_book_prices(c, books, now.timestamp() as f64).unwrap();
+        p.evaluate_band_opportunity(
+            band,
+            c,
+            &c.market.condition_id,
+            books,
+            ps,
+            ps.mid_price,
+            now.timestamp() as f64,
+            5.0,
+            minutes_elapsed,
+            minutes_left,
+            up,
+            down,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn band_window_ending(cid: &str, end: DateTime<Utc>) -> CandleContract {
+        band_anchor_contract(cid, &end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    }
+
+    #[tokio::test]
+    async fn band_latch_taken_at_decision_second_ahead_of_gates() {
+        // Live 2026-09-02 18:14 UTC: margin -15 at the decision cycle
+        // (band_margin_below_floor), a composite-feed flash dip to -50.24
+        // at 247 s bought DOWN at 0.91, the price reverted (-9 at 270 s)
+        // and the window resolved UP. The decision is one look per window,
+        // taken on the decision cycle even when an entry gate is closed.
+        let tmp = TempDir::new().unwrap();
+        let (p, band) = band_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let t0 = Utc::now();
+        let cid = "0xlatch-incident";
+        let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+        p.momentum
+            .lock()
+            .await
+            .get_mut("BTC")
+            .unwrap()
+            .set_window_open(cid, open);
+        let mut ps = PriceState::new();
+
+        // 240 s, venue incident flagged: the latch is taken regardless.
+        p.venue_incident
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        ps.mid_price = open - 15.0;
+        let books = band_test_books(0.10, 0.91, t0.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t0, &books).await);
+        assert_eq!(
+            band_latch_of(&p, cid).await,
+            Some(BandLatch::NoSignal("band_margin_below_floor"))
+        );
+        assert_eq!(band_skip_details(&p, cid), vec!["band_margin_below_floor"]);
+
+        // 247 s, incident cleared, the flash dip, a fresh in-band DOWN ask:
+        // the latch is consulted, not the margin. No trade, no new detail.
+        p.venue_incident
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let t1 = t0 + chrono::Duration::seconds(7);
+        ps.mid_price = open - 50.24;
+        let books = band_test_books(0.10, 0.91, t1.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t1, &books).await);
+        assert_eq!(
+            band_latch_of(&p, cid).await,
+            Some(BandLatch::NoSignal("band_margin_below_floor"))
+        );
+        assert!(p.traded.lock().await.is_empty());
+        assert!(p.paper_positions.lock().await.is_empty());
+        assert_eq!(band_skip_details(&p, cid), vec!["band_margin_below_floor"]);
+
+        // Mid unavailable on the decision cycle latches no-signal; the
+        // dip seven seconds later cannot re-open the window.
+        let cid = "0xlatch-mid0";
+        let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+        p.momentum
+            .lock()
+            .await
+            .get_mut("BTC")
+            .unwrap()
+            .set_window_open(cid, open);
+        ps.mid_price = 0.0;
+        let books = band_test_books(0.10, 0.91, t0.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t0, &books).await);
+        assert_eq!(
+            band_latch_of(&p, cid).await,
+            Some(BandLatch::NoSignal("band_mid_unavailable"))
+        );
+        ps.mid_price = open - 50.24;
+        let books = band_test_books(0.10, 0.91, t1.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t1, &books).await);
+        assert_eq!(
+            band_latch_of(&p, cid).await,
+            Some(BandLatch::NoSignal("band_mid_unavailable"))
+        );
+        assert_eq!(band_skip_details(&p, cid), vec!["band_mid_unavailable"]);
+
+        // A first look at 247 s (loop not running across 240 s) is a
+        // missed decision, not a late one: no trade on the dip.
+        let cid = "0xlatch-missed";
+        let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+        p.momentum
+            .lock()
+            .await
+            .get_mut("BTC")
+            .unwrap()
+            .set_window_open(cid, open);
+        assert!(!band_cycle(&p, &band, &c, &ps, t1, &books).await);
+        assert_eq!(
+            band_latch_of(&p, cid).await,
+            Some(BandLatch::NoSignal("band_decision_missed"))
+        );
+        assert_eq!(band_skip_details(&p, cid), vec!["band_decision_missed"]);
+
+        // The evaluation never decides on its own: with no latch it is
+        // fail closed even on a clean signal and an in-band ask.
+        let cid = "0xlatch-none";
+        let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+        ps.mid_price = open + 60.0;
+        let books = band_test_books(0.90, 0.11, t0.timestamp() as f64);
+        let (up, down) = pick_book_prices(&c, &books, t0.timestamp() as f64).unwrap();
+        let traded = p
+            .evaluate_band_opportunity(
+                &band,
+                &c,
+                cid,
+                &books,
+                &ps,
+                ps.mid_price,
+                t0.timestamp() as f64,
+                5.0,
+                4.0,
+                1.0,
+                up,
+                down,
+            )
+            .await
+            .unwrap();
+        assert!(!traded);
+        assert_eq!(band_latch_of(&p, cid).await, None);
+        assert!(band_skip_details(&p, cid).is_empty());
+        assert!(p.traded.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn band_latch_signal_keeps_side_and_waits_for_in_band_ask() {
+        let tmp = TempDir::new().unwrap();
+        let (p, band) = band_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let t0 = Utc::now();
+        let cid = "0xlatch-up";
+        let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+        p.momentum
+            .lock()
+            .await
+            .get_mut("BTC")
+            .unwrap()
+            .set_window_open(cid, open);
+        let mut ps = PriceState::new();
+        let signal_up = Some(BandLatch::Signal {
+            direction: "up",
+            open,
+        });
+
+        // 240 s: UP by 60, but the UP ask is above the cap - wait.
+        ps.mid_price = open + 60.0;
+        let books = band_test_books(0.94, 0.07, t0.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t0, &books).await);
+        assert_eq!(band_latch_of(&p, cid).await, signal_up);
+        assert_eq!(band_skip_details(&p, cid), vec!["band_price_out_of_range"]);
+
+        // 250 s: the mid is now BELOW the open. The side stays UP (and the
+        // latched open), and the band gate still governs the entry.
+        let t1 = t0 + chrono::Duration::seconds(10);
+        ps.mid_price = open - 60.0;
+        let books = band_test_books(0.94, 0.07, t1.timestamp() as f64);
+        assert!(!band_cycle(&p, &band, &c, &ps, t1, &books).await);
+        assert_eq!(band_latch_of(&p, cid).await, signal_up);
+        assert!(p.traded.lock().await.is_empty());
+
+        // 255 s: an in-band UP ask - the patient entry fires on the
+        // latched side, not on this cycle's (DOWN) sign.
+        let t2 = t0 + chrono::Duration::seconds(15);
+        let books = band_test_books(0.90, 0.11, t2.timestamp() as f64);
+        assert!(band_cycle(&p, &band, &c, &ps, t2, &books).await);
+        assert!(p.traded.lock().await.contains(cid));
+        let positions = p.paper_positions.lock().await;
+        let pp = positions.get(cid).unwrap();
+        assert_eq!(pp.direction, "up");
+        assert_eq!(pp.open_btc, open);
+    }
+
+    #[tokio::test]
+    async fn band_latch_pruned_to_open_windows() {
+        let tmp = TempDir::new().unwrap();
+        let (p, band) = band_test_pipeline(&tmp).await;
+        let t0 = Utc::now();
+        let mut ps = PriceState::new();
+        ps.mid_price = 110_000.0;
+        let books = |now: DateTime<Utc>| band_test_books(0.50, 0.52, now.timestamp() as f64);
+        // Open unavailable: every window latches no-signal; only the map
+        // membership matters here.
+        let a = band_window_ending("0xprune-a", t0 + chrono::Duration::seconds(60));
+        assert!(!band_cycle(&p, &band, &a, &ps, t0, &books(t0)).await);
+        let t1 = t0 + chrono::Duration::seconds(30);
+        let b = band_window_ending("0xprune-b", t1 + chrono::Duration::seconds(60));
+        assert!(!band_cycle(&p, &band, &b, &ps, t1, &books(t1)).await);
+        assert_eq!(p.band_latch.lock().await.len(), 2);
+
+        // A new latch after window a has ended prunes a and keeps b: the
+        // prune keys on the window end, never on the contract list, so a
+        // refresh that omits a live market cannot re-open its window.
+        let t2 = t0 + chrono::Duration::seconds(61);
+        let c = band_window_ending("0xprune-c", t2 + chrono::Duration::seconds(60));
+        assert!(!band_cycle(&p, &band, &c, &ps, t2, &books(t2)).await);
+        let keys: HashSet<String> = p.band_latch.lock().await.keys().cloned().collect();
+        assert_eq!(
+            keys,
+            HashSet::from(["0xprune-b".to_string(), "0xprune-c".to_string()])
+        );
     }
 
     fn band_promotion(params: &BandPolicyParams) -> PromotionArtifact {
