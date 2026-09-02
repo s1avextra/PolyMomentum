@@ -33,7 +33,7 @@ LIVE_RULE = {
     "favorite_price_floor": 0.55,
     "favorite_price_cap": 0.92,
 }
-BASE_WS = 1787788800  # 2026-08-25T00:00Z, the default start_ts
+BASE_WS = 1787788800  # 2026-08-25T00:00Z, the fixture epoch
 GATES = {"minimum_signals": 100, "minimum_recent_signals": 20, "minimum_entries": 50}
 
 
@@ -79,6 +79,8 @@ class StubClient:
 
 def band_config(**lane_overrides):
     config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+    # Fixtures are built from BASE_WS; the deployed start_ts may move earlier.
+    config["lanes"]["band_mechanisms"]["start_ts"] = BASE_WS
     config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
     config["lanes"]["band_mechanisms"].update(lane_overrides)
     return config
@@ -757,7 +759,7 @@ class BandLaneTest(unittest.TestCase):
         block = deploy["lanes"]["band_mechanisms"]
         self.assertFalse(block["enabled"])
         self.assertEqual(block["minimum_interval_seconds"], 900)
-        self.assertEqual(block["start_ts"], 1787788800)
+        self.assertEqual(block["start_ts"], 1787097600)
         self.assertEqual(block["maximum_new_windows_per_cycle"], 400)
         self.assertEqual(block["gates"], GATES)
         overlay_path = ROOT / "logs/strategy-research/loop-config.local.json"

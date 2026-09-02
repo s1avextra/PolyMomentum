@@ -186,7 +186,7 @@
     "band_mechanisms": {
       "enabled": false,
       "minimum_interval_seconds": 900,
-      "start_ts": 1787788800,
+      "start_ts": 1787097600,
       "maximum_new_windows_per_cycle": 400,
       "gates": {
         "minimum_signals": 100,
