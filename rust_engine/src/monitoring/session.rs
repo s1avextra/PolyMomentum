@@ -281,6 +281,12 @@ impl SessionMonitor {
         self.write_event("risk_v2", kind, payload);
     }
 
+    /// Money-free challenger capture: what the venue offered at a fixed
+    /// second of a window (`cid` already shortened by the caller).
+    pub fn record_band_anchor(&self, payload: serde_json::Value) {
+        self.write_event("signal", "band_anchor", payload);
+    }
+
     pub fn record_signal_skip(&self, contract_id: &str, reason: &str) {
         let mut c = self.counters.lock().unwrap();
         c.signal_skip_count += 1;

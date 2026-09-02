@@ -108,5 +108,77 @@ class EvidenceAccrualTest(unittest.TestCase):
             accrual.EProcess([0.0] * 3, 0)
 
 
+LAMBDAS = [(index + 1) * accrual.LAMBDA_STEP for index in range(accrual.LAMBDA_COUNT)]
+
+
+def run_signed(values):
+    process = accrual.EProcess()
+    for value in values:
+        process.update_signed(value)
+    return process
+
+
+class SignedUpdateTest(unittest.TestCase):
+    """Reference vectors for update_signed, shared with the Rust side
+    (relative error <= 1e-9 against the closed-form mixture)."""
+
+    def assert_matches(self, process, expected):
+        self.assertLess(abs(process.e_value() - expected) / expected, 1e-9)
+
+    def test_positive_drift_promotes(self):
+        process = run_signed([0.2] * 30)
+        expected = sum((1.0 + 0.2 * lambda_) ** 30 for lambda_ in LAMBDAS) / accrual.LAMBDA_COUNT
+        self.assert_matches(process, expected)
+        self.assertEqual(process.n, 30)
+        self.assertGreaterEqual(process.e_value(), accrual.PROMOTE_E)
+        self.assertEqual(process.verdict(), "promote")
+
+    def test_negative_drift_kills(self):
+        process = run_signed([-0.5] * 20)
+        expected = (
+            sum(max(1.0 - 0.5 * lambda_, accrual.FACTOR_FLOOR) ** 20 for lambda_ in LAMBDAS)
+            / accrual.LAMBDA_COUNT
+        )
+        self.assert_matches(process, expected)
+        self.assertEqual(process.n, 20)
+        self.assertLessEqual(process.e_value(), accrual.FUTILITY_E)
+        self.assertEqual(process.verdict(), "kill")
+
+    def test_alternating_unit_pairs(self):
+        # (1 + lambda)(1 - lambda) per pair; the lambda = 1 pair is floored at
+        # 1e-12 * 2 in the process and 0 in the formula, far below 1e-9 relative.
+        process = run_signed([1.0, -1.0] * 10)
+        expected = sum((1.0 - lambda_ ** 2) ** 10 for lambda_ in LAMBDAS) / accrual.LAMBDA_COUNT
+        self.assert_matches(process, expected)
+        self.assertEqual(process.n, 20)
+        self.assertLess(process.e_value(), 1.0)
+        self.assertEqual(process.verdict(), "continue")
+
+    def test_out_of_range_d_is_clipped(self):
+        self.assertEqual(run_signed([3.0] * 5).e_value(), run_signed([1.0] * 5).e_value())
+        self.assertEqual(run_signed([-3.0] * 5).e_value(), run_signed([-1.0] * 5).e_value())
+        self.assertEqual(run_signed([3.0, -3.0]).n, 2)
+        process = accrual.EProcess()
+        with self.assertRaises(ValueError):
+            process.update_signed(math.nan)
+        self.assertEqual(process.n, 0)
+        self.assertEqual(process.e_value(), 1.0)
+
+    def test_verdict_thresholds_unchanged(self):
+        self.assertEqual(accrual.PROMOTE_E, 20.0)
+        self.assertEqual(accrual.FUTILITY_E, 0.1)
+        self.assertEqual(accrual.EProcess([math.log(20.001)] * accrual.LAMBDA_COUNT, 1).verdict(), "promote")
+        self.assertEqual(accrual.EProcess([math.log(19.999)] * accrual.LAMBDA_COUNT, 1).verdict(), "continue")
+        self.assertEqual(accrual.EProcess([math.log(0.0999)] * accrual.LAMBDA_COUNT, 1).verdict(), "kill")
+        self.assertEqual(accrual.EProcess([math.log(0.1001)] * accrual.LAMBDA_COUNT, 1).verdict(), "continue")
+        # update and update_signed share one wealth vector.
+        mixed = accrual.EProcess()
+        mixed.update(0.85, True)
+        mixed.update_signed(0.15)
+        expected = sum((1.0 + 0.15 * lambda_) ** 2 for lambda_ in LAMBDAS) / accrual.LAMBDA_COUNT
+        self.assertLess(abs(mixed.e_value() - expected) / expected, 1e-9)
+        self.assertEqual(mixed.n, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

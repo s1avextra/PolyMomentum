@@ -14,6 +14,17 @@ E_lambda is a supermartingale and Ville's inequality gives
 P(sup_t E >= 1/alpha) <= alpha at ANY stopping time.  The discrete mixture
 over the lambda grid (mean of the per-lambda wealths) avoids tuning lambda
 and inherits the same guarantee.
+
+`update_signed(d)` is the paired form used by scripts/band_shadow_race.py:
+d is a per-window score difference (challenger minus champion) clipped to
+[-1, 1] and each factor is max(1 + lambda * d, 1e-12).  Under the null
+E[clip(d)] <= 0 every factor has expectation <= 1, so the same
+supermartingale argument applies (Waudby-Smith & Ramdas betting; Choe &
+Ramdas sequential forecaster comparison).  That null equals E[d] <= 0 only
+when |d| <= 1 almost surely: the clip is a guard, not a transform, and a
+caller whose raw differences exceed 1 must divide them by a fixed constant
+(band_shadow_race.py does) rather than rely on it.  A NaN d raises on both
+sides: a bug, never evidence.
 """
 
 from __future__ import annotations
@@ -58,6 +69,20 @@ class EProcess:
         for index in range(LAMBDA_COUNT):
             lambda_ = (index + 1) * LAMBDA_STEP
             factor = max(1.0 + lambda_ * (x - break_even), FACTOR_FLOOR)
+            self.log_wealth[index] += math.log(factor)
+        self.n += 1
+
+    def update_signed(self, d: float) -> None:
+        """Paired step on a score difference d, clipped to [-1, 1] (see the
+        module docstring for the null and why callers pre-scale).  Mirrors
+        the Rust update_signed, NaN rejection included."""
+        d = float(d)
+        if math.isnan(d):
+            raise ValueError("d is NaN")
+        d = max(-1.0, min(1.0, d))
+        for index in range(LAMBDA_COUNT):
+            lambda_ = (index + 1) * LAMBDA_STEP
+            factor = max(1.0 + lambda_ * d, FACTOR_FLOOR)
             self.log_wealth[index] += math.log(factor)
         self.n += 1
 

@@ -212,3 +212,198 @@ proposal carrying a `rule` dict) now use `factory_generator.structural_novelty`:
 rejected when fewer than `generator.novelty_min_hamming` (default 2) fields
 differ from a killed rule (`killed_negative_items` / `band_lane.killed_items`
 carry `rule_fields`). The cosine path remains for free-text proposals.
+
+## Addendum: shadow race
+
+Challengers run "in parallel" with the champion without money: the canary
+records what the venue actually offered at fixed decision seconds, and the
+race scores champion and challenger rules offline on those same windows.
+
+### `band_anchor` records
+
+The live band engine (`rust_engine` with a band strategy, i.e.
+`deploy/band-canary.env`; a legacy candle deployment never captures, since
+its shared open cache is on the chainlink basis and the anchor margin would
+mix bases) appends one `band_anchor` record per btc-updown-5m window and
+anchor second to its session log (`SESSION_LOG_DIR`, `session_*.jsonl`;
+anchor seconds from `BAND_ANCHOR_SECONDS`, default `180,210,240,270`, the
+band grid). The write is side-effect free for trading (no order, no
+state), costs microseconds and swallows its own errors. Shape:
+
+```
+{"type":"band_anchor","ts":...,"cid":"<16 hex>","anchor_s":210,"elapsed_s":210.31,
+ "btc":...,"open":...,"margin":...,"direction":"up"|"down"|null,
+ "stake_usd":...|null,"quote_budget_usd":...,
+ "up":{"best_ask":..,"book_age_s":..,"vwap":..,"worst":..,"shares":..},"down":{...},
+ "pair_sum":...}
+```
+
+`margin` is the exchange mid minus the window open at the anchor. The
+window start is `ts - elapsed_s` rounded to the 300 s grid. Anchors are
+written only once the window is open (the contract list runs up to an hour
+ahead; a `0` anchor is the first cycle after the open).
+
+- `stake_usd` is the live sizing target for this cycle (`kelly_lo_stake` or
+  `target_stake` per `BAND_SIZING`), null exactly when the champion could
+  not trade this cycle for reasons that are not the rule's: no fresh best
+  ask on both sides (`pick_book_prices`, the `fresh_outcome_book_unavailable`
+  skip; `book_age_s` / `best_ask` are then null on the stale side) or the
+  sizing policy declining the bucket (kelly_lo's <= 0.70 favorite, the
+  `kelly_no_edge_bucket` skip). The scorer treats null as "no trade" for
+  every rule, champion and challengers alike.
+- `quote_budget_usd` is what `up` / `down` were sized at: `stake_usd`, or
+  the frozen `target_stake` when `stake_usd` is null, so the venue's offer
+  is still recorded. `up` / `down` are the budget-aware FOK quotes (`vwap`,
+  `worst`, `shares`), null when the book cannot fill that budget.
+- The budget is the sizing target BEFORE the per-market, available-capital
+  and stress caps `evaluate_band_opportunity` applies. When a cap binds the
+  live champion quotes a smaller budget (or skips with `band_no_capital`)
+  and the anchor does not show it: the race is a rule-vs-rule comparison on
+  a common budget, not a replica of the live ledger, and capital-cap skips
+  are not reproducible from anchors (cross-reference `band_skip_detail` or
+  the `risk_v2` sizing shadow for that).
+
+### Race CLI: `scripts/band_shadow_race.py`
+
+```
+uv run python scripts/band_shadow_race.py --pull \
+    --challengers '{"margin_floor_usd":50,"margin_floor_sigma":0,"decision_second":210,"direction":"both","favorite_price_floor":0.55,"favorite_price_cap":0.92}' \
+    <band-lane fingerprint> --json
+```
+
+- `--sessions-dir` (default `logs/band-canary-mirror/sessions`); `--pull`
+  runs `rsync -az vps:/opt/polymomentum/logs/band-canary/sessions/
+  logs/band-canary-mirror/sessions/` (read-only on the VPS).
+- `--champion` (default the live band rule: floor $50, sigma 0, 240 s,
+  both, ask (0.55, 0.92]) and `--challengers` take JSON band rules or
+  band-lane fingerprints (`hypotheses.proposal_json` in
+  `logs/strategy-research/research.sqlite3`, read-only). The champion is
+  replayed exactly like every challenger, on the anchor quote at the
+  pre-cap budget: the engine's fresh-book, sizing-policy and
+  pair-coherence gates are replayed, its capital, wallet and breaker gates
+  are not, so the champion row need not match the canary's order log (the
+  markdown footer says so).
+- Outcomes come from band_lane's Gamma cache
+  (`logs/strategy-research/margin_study_cache/gamma_outcomes.json`); missing
+  windows are fetched through `band_lane`'s fetcher with the same 15-minute
+  eligibility and recorded as final null after two hours, like
+  `BandCache.refresh`. The file is shared with the research loop's band
+  lane, so the race re-reads it before saving and adds only its own
+  fetches (neither writer loses the other's). The sigma floor uses band_lane's sigma (population
+  stdev of |Binance margin| over the 12 preceding windows) on the Binance
+  1s closes from the same cache.
+- Per window and rule: the anchor at the rule's `decision_second`. The
+  engine's cycle gates first, for every rule (they are not the rule's):
+  `book_age_s` and `best_ask` non-null on both sides, `stake_usd` non-null.
+  Then direction from the anchor margin sign (skip when null, below
+  `margin_floor_usd` or below `margin_floor_sigma * sigma`); the direction
+  must be allowed; the momentum side's VWAP plus the complement's best ask
+  must lie in [0.90, 1.10] (the engine's `band_pair_incoherent` skip, the
+  2026-08-26 frozen-book incident: a fresh best ask on both sides does not
+  imply a coherent pair); the momentum side's quote must clear the band
+  exactly as `BandPolicyParams::quote_clears_band` does (`vwap > floor`
+  and FOK `worst <= cap`). No executable quote, incoherent pair or out of
+  band: the rule does not trade (score 0). Score when it trades, net per 1 USD staked with the fee
+  model of `band_lane.break_even` (`taker_fee` from
+  `scripts/adaptation_persistence_study.py`, 0.072 p (1 - p) per share):
+  win `1/(vwap + fee) - 1`, i.e. `(1/vwap - 1)` minus the fee per USD;
+  loss `-1`.
+- Output: per rule windows seen, trades, wins, net per USD and total net at
+  the anchor's stake (the same trade set: null-stake windows are not
+  trades); per challenger the paired n (windows with both anchors where at
+  least one rule traded), mean d (after the divisor below), d > 0 / d < 0
+  counts, overlap (both traded the same side), clipped count (0 by
+  construction; anything else is printed as a validity warning), e-value
+  and verdict.
+  Markdown to stdout; `--json` also writes
+  `logs/strategy-research/band_race/<utc>.json` and appends a trial-ledger
+  row (stage `champion_challenger_race`, candidate = challenger
+  fingerprint, n = paired windows, wins = windows with d > 0) via
+  `factory_generator.append_trial_entry` with
+  `deploy/strategy-research-loop.json`.
+
+### Paired e-process and its null
+
+`EProcess.update_signed(d)` (identical in `scripts/evidence_accrual.py` and
+`rust_engine/src/backtest/evalue.rs`, reference vectors asserted on both
+sides at relative error 1e-9; both reject a NaN d as an error, a bug,
+never evidence): d clipped to [-1, 1], each lambda's factor
+`max(1 + lambda_j d, 1e-12)` on the existing grid lambda_j = (j + 1) 0.05,
+mixture = mean of the per-lambda wealths. Under the null "E[clip(d)] <= 0"
+every factor has expectation <= 1, so the wealth is a supermartingale and
+Ville's inequality bounds P(e ever >= 1/alpha) by alpha at any stopping
+time (Waudby-Smith & Ramdas betting; Choe & Ramdas sequential forecaster
+comparison). Verdict: `promote` at e >= K/alpha for the K challengers of
+the run (Bonferroni: each challenger's e-process is bounded by Ville at
+level alpha/K, so the union bound keeps the family-wise false-promote rate
+of the run at alpha; 20 for one challenger at the default 0.05, 40 for
+two), `kill` at e <= 0.1 (futility, not a type-I bound), else `continue`.
+The family is the run's challengers only: a challenger raced against the
+same champion history in a separate run is not counted, so race the whole
+set in one run, or count every challenger ever raced against this
+champion history and lower `--alpha` accordingly.
+
+The clip is a guard, not a transform: E[clip(d)] <= 0 equals the null the
+race documents, E[d] <= 0 (the challenger is no better than the champion
+per USD per window), only when |d| <= 1 almost surely. Clipping the raw
+score difference is NOT merely conservative: a win pays 1/break_even(vwap)
+- 1 (0.08 at 0.92 .. 0.76 at 0.55) and a loss -1, so every disagreement
+window has |d| > 1, and a tighter-band challenger that wins small (0.85)
+and loses big against a champion at 0.60 can have E[d] < 0 while
+E[clip(d)] > 0 (champion winning 42-50% of disagreements): the clipped test
+would promote a challenger that loses money per USD. The race therefore
+divides d by a constant fixed for the race, the largest
+1/break_even(favorite_price_floor) among the rules (1.761 at the 0.55
+floor), which preserves the sign of E[d] and keeps |d| <= 1 so the clamp
+never fires; the report prints the divisor, and a clipped count above 0
+is a validity warning (the e-value then tests E[clip(d)] <= 0).
+
+Post-fill book bias: the capture runs before the cycle's traded-set skip
+on purpose (a window the champion entered at 240 s still yields its 270 s
+anchor), so a later-second anchor in a window the champion traded quotes
+the book after the champion's own FOK fill lifted that side's asks. The
+champion's own anchor was walked over the undepleted book, so a
+later-second same-side challenger is scored on equal-or-worse VWAPs in
+exactly the windows where the champion traded: a one-sided bias against
+such challengers of roughly the canary's own market impact (stake-sized,
+small). The paired test cannot see it; the anchor carries no
+champion-traded flag, so affected pairs are not counted in the report.
+
+### Operational sequence
+
+1. Ship the anchor build to the canary (operator step; the money path is
+   unchanged). The canary runs the pinned binary
+   `/opt/polymomentum/tools/polymomentum-engine-band-v1`
+   (`deploy/polymomentum-band-canary.service`), NOT the
+   `/opt/polymomentum/polymomentum-engine` that `deploy/deploy.sh`
+   installs, so:
+   - build the release binary off the VPS (CI `linux-release` artifact or
+     a dev box); if it must be built on the VPS, `nice -n 10 cargo build
+     --release --locked -j 1 --bin polymomentum-engine` and never
+     concurrently with a peer bot's build (CLAUDE.md rules 3 and 5);
+   - copy it to `/opt/polymomentum/tools/polymomentum-engine-band-v1` and
+     sync `deploy/band-canary.env` to `/etc/polymomentum/band-canary.env`
+     (`BAND_ANCHOR_SECONDS` defaults to `180,210,240,270` in the binary,
+     so the env sync only matters if the operator changes the anchors);
+   - `systemctl restart polymomentum-band-canary` between windows, with
+     no open band position;
+   - verify after one full window, before starting the accrual clock:
+     `grep -c '"type":"band_anchor"' <newest session_*.jsonl under
+     /opt/polymomentum/logs/band-canary/sessions/>` must be > 0 (one per
+     anchor second per BTC 5m window). Zero means the old binary is still
+     running; `scripts/band_shadow_race.py` would only report "no
+     band_anchor records" after the wait.
+2. Wait N days while `band_anchor` records accumulate (about 288 windows a
+   day per anchor second).
+3. `--pull` and run the race against the live rule, every challenger in
+   one run; re-run as windows resolve. The e-process is anytime-valid, so
+   peeking is free.
+4. Only a `promote` verdict on paired windows (fresh, official outcomes,
+   executable quotes at the anchor) earns a promotion artifact for the
+   challenger; that artifact still goes through the usual operator review.
+   `kill` retires the challenger; `continue` keeps waiting.
+
+Tests: `tests/test_evidence_accrual.py` (`SignedUpdateTest`),
+`tests/test_band_shadow_race.py` (synthetic anchors, injected outcomes and
+closes, no network; `--pull` is mocked and asserted absent on the default
+path).

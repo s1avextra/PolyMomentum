@@ -488,6 +488,9 @@ pub const BAND_FAMILY: &str = "signal_favorite_band_official_v1";
 /// Venue floor: below ~$5 the 5-share minimum order cannot be met across the
 /// upper band, so the compounding target never sizes under this.
 pub const BAND_MIN_STAKE_USD: f64 = 5.0;
+/// Capture span after each anchor second: the first cycle inside
+/// [anchor, anchor + span) records the anchor, later cycles never re-record.
+const BAND_ANCHOR_SPAN_S: f64 = 4.0;
 
 fn serde_f64_is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -965,6 +968,9 @@ pub struct Pipeline {
     /// (cid, reason) pairs whose detailed band-skip record was already
     /// written this process lifetime (one detail record per window+reason).
     band_detail_logged: Mutex<HashSet<String>>,
+    /// (cid, anchor second) pairs already captured as `band_anchor` events;
+    /// pruned to the live contract list so it cannot grow unbounded.
+    band_anchor_logged: Mutex<HashSet<(String, u32)>>,
     /// Latest on-chain pUSD reading in micro-USD and its unix-seconds
     /// timestamp. The wallet is shared with a peer bot, so the balance can
     /// drop under our stake between cycles; the band path consults this to
@@ -1377,6 +1383,7 @@ impl Pipeline {
             book_state: new_shared_book(),
             last_btc_stall_log_s: std::sync::atomic::AtomicU64::new(0),
             band_detail_logged: Mutex::new(HashSet::new()),
+            band_anchor_logged: Mutex::new(HashSet::new()),
             last_wallet_pusd_micro: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_wallet_read_s: std::sync::atomic::AtomicU64::new(0),
             tracked_tokens: Arc::new(RwLock::new(Vec::new())),
@@ -2939,6 +2946,11 @@ impl Pipeline {
 
             for c in contracts.iter() {
                 let cid = c.market.condition_id.clone();
+                // Money-free challenger capture. Deliberately ahead of the
+                // traded skip: a window the champion entered at 240s still
+                // yields its 270s anchor. Observation only.
+                self.capture_band_anchors(c, &contracts, &books, &ps, now, now_ts)
+                    .await;
                 if traded_set.contains(&cid) {
                     continue;
                 }
@@ -3610,6 +3622,147 @@ impl Pipeline {
         if logged.insert(key) {
             drop(logged);
             self.monitor.record_band_skip_detail(cid, reason, &detail);
+        }
+    }
+
+    /// Records one `band_anchor` event per (window, anchor second): the
+    /// exchange-mid signal basis, the window open on the same basis, the
+    /// live sizing target and the budget-aware quote on both sides, so
+    /// challenger rules can be scored offline against the champion on the
+    /// quotes that actually existed. Reads the cycle's own book/price
+    /// snapshot only: never orders, never mutates risk or breaker state,
+    /// and every lookup degrades to null rather than failing.
+    ///
+    /// `stake_usd` is null exactly when this cycle's champion could not
+    /// trade for reasons that are not the rule's: no fresh best ask on both
+    /// sides (`pick_book_prices`, the `fresh_outcome_book_unavailable` skip)
+    /// or the live sizing policy declining the bucket (kelly_lo, the
+    /// `kelly_no_edge_bucket` skip); the offline scorer treats null as "no
+    /// trade" for every rule. The quote budget is the sizing target BEFORE
+    /// the per-market / available-capital / stress caps
+    /// `evaluate_band_opportunity` applies, so the anchor is a rule-vs-rule
+    /// comparison on a common budget, not a replica of the live champion:
+    /// a capital-bound window (`band_no_capital`, or a smaller live quote)
+    /// is not reproducible from the record.
+    ///
+    /// Band engine only: the legacy candle path seeds the shared per-asset
+    /// open cache from the chainlink settlement reference, and an anchor
+    /// margin of exchange mid minus chainlink open is the cross-basis sign
+    /// inversion the band avoids by design (2026-08-25 09:15 window).
+    async fn capture_band_anchors(
+        &self,
+        c: &CandleContract,
+        contracts: &[CandleContract],
+        books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+        ps: &PriceState,
+        now: DateTime<Utc>,
+        now_ts: f64,
+    ) {
+        let anchors = &self.settings.band_anchor_seconds;
+        if anchors.is_empty() || self.runtime_strategy.band.is_none() {
+            return;
+        }
+        let Some((elapsed_s, open_ts)) = band_anchor_elapsed(c, now) else {
+            return;
+        };
+        let cid = c.market.condition_id.as_str();
+        let due = {
+            let mut seen = self.band_anchor_logged.lock().await;
+            let due = due_band_anchors(&mut seen, anchors, cid, elapsed_s);
+            if !due.is_empty() {
+                seen.retain(|(k, _)| contracts.iter().any(|c| c.market.condition_id == *k));
+            }
+            due
+        };
+        if due.is_empty() {
+            return;
+        }
+
+        let btc = ps.mid_price;
+        // Same open lookup as evaluate_band_opportunity (the cached
+        // per-window open, else the exchange-mid tick nearest the open),
+        // read-only so the capture never seeds the champion's cache.
+        let open = {
+            let cached = self
+                .momentum
+                .lock()
+                .await
+                .get(&c.asset)
+                .and_then(|det| det.get_open_price(cid));
+            cached.or_else(|| ps.price_near_seconds(&c.asset, open_ts, 2.0))
+        };
+        let margin = open.filter(|_| btc > 0.0).map(|open| btc - open);
+        let direction = margin.and_then(|m| {
+            if m > 0.0 {
+                Some("up")
+            } else if m < 0.0 {
+                Some("down")
+            } else {
+                None
+            }
+        });
+
+        // Live sizing target, exactly as evaluate_band_opportunity sizes
+        // (favorite from both fresh asks); the quote budget falls back to
+        // the frozen target so a no-edge Kelly bucket still yields a quote.
+        let band = self.runtime_strategy.band.as_ref();
+        let bankroll = self.risk.effective_bankroll().await;
+        let stake = band.and_then(|band| {
+            let (up, down) = pick_book_prices(c, books, now_ts)?;
+            if self.settings.band_sizing == "kelly_lo" {
+                crate::risk::book_v2::kelly_lo_stake(up.max(down), bankroll, band.stake_usd)
+            } else {
+                Some(band.target_stake(bankroll))
+            }
+        });
+        let quote_budget = stake.or_else(|| band.map(|band| band.target_stake(bankroll)));
+        let market_tick = live_market_tick_size(
+            c.market.minimum_tick_size,
+            [&c.up_token_id, &c.down_token_id],
+            books,
+        );
+        let side = |token_id: &str| {
+            let book = books.get(token_id);
+            let quote = quote_budget.and_then(|budget| {
+                live_buy_book_quote(
+                    token_id,
+                    books,
+                    budget,
+                    self.settings.live_min_order_size_shares,
+                    market_tick,
+                )
+            });
+            json!({
+                "best_ask": book.map(|b| b.best_ask).filter(|a| *a > 0.0).map(|a| round_to(a, 4)),
+                "book_age_s": book
+                    .and_then(|b| live_book_age_seconds(now_ts, b.last_update_us))
+                    .map(|a| round_to(a, 4)),
+                "vwap": quote.as_ref().map(|q| round_to(q.vwap, 4)),
+                "worst": quote.as_ref().map(|q| round_to(q.worst_price, 4)),
+                "shares": quote.as_ref().map(|q| round_to(q.shares, 4)),
+            })
+        };
+        let up = side(&c.up_token_id);
+        let down = side(&c.down_token_id);
+        let pair_sum = match (up["best_ask"].as_f64(), down["best_ask"].as_f64()) {
+            (Some(a), Some(b)) => Some(round_to(a + b, 4)),
+            _ => None,
+        };
+        for anchor in due {
+            self.monitor.record_band_anchor(json!({
+                "cid": short_cid(cid),
+                "anchor_s": anchor,
+                "elapsed_s": round_to(elapsed_s, 2),
+                "btc": (btc > 0.0).then(|| round_to(btc, 4)),
+                "open": open.map(|o| round_to(o, 4)),
+                "margin": margin.map(|m| round_to(m, 4)),
+                "direction": direction,
+                "stake_usd": stake.map(|s| round_to(s, 4)),
+                "quote_budget_usd": quote_budget.map(|b| round_to(b, 4)),
+                "up": up.clone(),
+                "down": down.clone(),
+                "pair_sum": pair_sum,
+            }));
         }
     }
 
@@ -5806,6 +5959,50 @@ fn band_exposure_within_contract(
     open_exposure <= band.target_stake(equity) * 1.5 + 1.0
 }
 
+/// Anchor gating for one contract: BTC 5-minute windows only, and only once
+/// the window is open (the contract list runs up to an hour ahead, and a
+/// not-yet-open window must not satisfy a `0` anchor). Returns the seconds
+/// elapsed since the window open (the cycle loop's own arithmetic) and the
+/// open timestamp.
+fn band_anchor_elapsed(c: &CandleContract, now: DateTime<Utc>) -> Option<(f64, f64)> {
+    if c.asset != "BTC" {
+        return None;
+    }
+    let end = parse_end(&c.end_date).ok()?;
+    let window_minutes = estimate_window_minutes(&c.window_description);
+    if (window_minutes - 5.0).abs() > 0.01 {
+        return None;
+    }
+    let minutes_left = (end - now).num_seconds() as f64 / 60.0;
+    if minutes_left > window_minutes {
+        return None;
+    }
+    let elapsed_s = (window_minutes - minutes_left) * 60.0;
+    Some((elapsed_s, end.timestamp() as f64 - window_minutes * 60.0))
+}
+
+/// Anchors due for `cid` at `elapsed_s` that were not captured yet, marked
+/// captured on return. The cycle loop calls this BEFORE its traded-set
+/// skip, so the traded state is never consulted here.
+fn due_band_anchors(
+    seen: &mut HashSet<(String, u32)>,
+    anchors: &[f64],
+    cid: &str,
+    elapsed_s: f64,
+) -> Vec<u32> {
+    anchors
+        .iter()
+        .filter(|&&a| elapsed_s >= a && elapsed_s < a + BAND_ANCHOR_SPAN_S)
+        .map(|&a| a as u32)
+        .filter(|&a| seen.insert((cid.to_string(), a)))
+        .collect()
+}
+
+fn round_to(x: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (x * scale).round() / scale
+}
+
 fn live_book_age_seconds(now_ts: f64, last_update_us: u64) -> Option<f64> {
     let age = now_ts - last_update_us as f64 / 1_000_000.0;
     // Venue timestamps run slightly ahead of the local clock at times; a
@@ -6379,6 +6576,117 @@ mod tests {
         let mut bad = band_params();
         bad.position_pct = 0.0;
         assert!(bad.validate().is_err());
+    }
+
+    fn band_anchor_contract(cid: &str, end_date: &str) -> CandleContract {
+        CandleContract {
+            market: crate::data::models::Market {
+                condition_id: cid.to_string(),
+                ..Default::default()
+            },
+            up_token_id: "up".to_string(),
+            down_token_id: "down".to_string(),
+            up_price: 0.5,
+            down_price: 0.5,
+            end_date: end_date.to_string(),
+            hours_left: 0.0,
+            volume: 0.0,
+            liquidity: 0.0,
+            window_description: "Bitcoin Up or Down - April 4, 3:45AM-3:50AM ET".to_string(),
+            asset: "BTC".to_string(),
+        }
+    }
+
+    #[test]
+    fn band_anchor_recorded_once_per_cid_and_anchor() {
+        let anchors = [180.0, 210.0, 240.0, 270.0];
+        let mut seen = HashSet::new();
+        // First cycle inside the [240, 244) span records the anchor.
+        assert_eq!(
+            due_band_anchors(&mut seen, &anchors, "cid-a", 240.0),
+            vec![240]
+        );
+        // Later cycles in the same span, or after it, never re-record.
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 241.5).is_empty());
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 243.99).is_empty());
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 250.0).is_empty());
+        // A missed span is not back-filled; the next anchor is independent.
+        assert_eq!(
+            due_band_anchors(&mut seen, &anchors, "cid-a", 270.0),
+            vec![270]
+        );
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 272.0).is_empty());
+        // Another window has its own (cid, anchor) keys.
+        assert_eq!(
+            due_band_anchors(&mut seen, &anchors, "cid-b", 241.0),
+            vec![240]
+        );
+        // Span bounds: inclusive start, exclusive end; empty list disables.
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-c", 239.99).is_empty());
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-c", 244.0).is_empty());
+        assert!(due_band_anchors(&mut seen, &[], "cid-d", 240.0).is_empty());
+        assert_eq!(seen.len(), 3);
+    }
+
+    #[test]
+    fn band_anchor_traded_window_still_gets_later_anchors() {
+        let cid = "0xabc".to_string();
+        let end = parse_end("2026-09-02T10:05:00Z").unwrap();
+        let c = band_anchor_contract(&cid, "2026-09-02T10:05:00Z");
+        let anchors = [240.0, 270.0];
+        let mut seen = HashSet::new();
+        let mut traded_set: HashSet<String> = HashSet::new();
+
+        // 240s: champion decision second.
+        let (elapsed_s, open_ts) =
+            band_anchor_elapsed(&c, end - chrono::Duration::seconds(60)).unwrap();
+        assert_eq!(elapsed_s, 240.0);
+        assert_eq!(open_ts, end.timestamp() as f64 - 300.0);
+        assert_eq!(
+            due_band_anchors(&mut seen, &anchors, &cid, elapsed_s),
+            vec![240]
+        );
+
+        // The champion fills and the loop adds the cid to `traded`. The
+        // anchor capture runs BEFORE the traded-set skip and keys on
+        // (cid, anchor), so the 270s anchor is still captured.
+        traded_set.insert(cid.clone());
+        let (elapsed_s, _) = band_anchor_elapsed(&c, end - chrono::Duration::seconds(29)).unwrap();
+        assert_eq!(elapsed_s, 271.0);
+        assert!(traded_set.contains(&cid));
+        assert_eq!(
+            due_band_anchors(&mut seen, &anchors, &cid, elapsed_s),
+            vec![270]
+        );
+
+        // A window that has not opened yet is not anchored, even for a `0`
+        // anchor: the contract list runs up to an hour ahead.
+        assert!(band_anchor_elapsed(&c, end - chrono::Duration::seconds(301)).is_none());
+        assert!(band_anchor_elapsed(&c, end - chrono::Duration::minutes(50)).is_none());
+        // (due_band_anchors alone would fire a `0` anchor at elapsed 0.)
+        assert_eq!(
+            due_band_anchors(&mut HashSet::new(), &[0.0, 240.0], "future", 0.0),
+            vec![0]
+        );
+        let (elapsed_s, _) = band_anchor_elapsed(&c, end - chrono::Duration::seconds(300)).unwrap();
+        assert_eq!(elapsed_s, 0.0);
+        let (elapsed_s, _) = band_anchor_elapsed(&c, end - chrono::Duration::seconds(299)).unwrap();
+        assert!((elapsed_s - 1.0).abs() < 1e-9);
+        assert_eq!(
+            due_band_anchors(&mut HashSet::new(), &[0.0, 240.0], &cid, elapsed_s),
+            vec![0]
+        );
+
+        // Only BTC 5-minute windows are anchored.
+        let mut eth = c.clone();
+        eth.asset = "ETH".to_string();
+        assert!(band_anchor_elapsed(&eth, end - chrono::Duration::seconds(60)).is_none());
+        let mut m15 = c.clone();
+        m15.window_description = "Bitcoin Up or Down - April 4, 3:45AM-4:00AM ET".to_string();
+        assert!(band_anchor_elapsed(&m15, end - chrono::Duration::seconds(60)).is_none());
+        let mut bad_end = c.clone();
+        bad_end.end_date = "not-a-date".to_string();
+        assert!(band_anchor_elapsed(&bad_end, end).is_none());
     }
 
     fn band_promotion(params: &BandPolicyParams) -> PromotionArtifact {

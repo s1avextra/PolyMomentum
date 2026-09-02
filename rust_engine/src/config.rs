@@ -12,6 +12,9 @@ use serde::Serialize;
 pub const DEFAULT_SIMULATED_BANKROLL_USD: f64 = 100.0;
 pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_GB: f64 = 10.0;
 pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_PCT: f64 = 15.0;
+/// Seconds into a 5m window at which the live engine records what the venue
+/// offered (`BAND_ANCHOR_SECONDS`); empty disables the capture.
+pub const DEFAULT_BAND_ANCHOR_SECONDS: &str = "180,210,240,270";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +94,9 @@ pub struct Settings {
     /// Band stake policy: "pct" (legacy 25%-clamp) or "kelly_lo"
     /// (half-Kelly on the per-bucket Wilson lower bound; skips <=0.70).
     pub band_sizing: String,
+    /// Money-free challenger capture: window seconds at which a
+    /// `band_anchor` event records the live quote; empty disables.
+    pub band_anchor_seconds: Vec<f64>,
     pub poly_gamma_url: String,
 
     pub venue: VenueMode,
@@ -211,6 +217,31 @@ fn env_bool(key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+/// Comma-separated non-negative seconds; blank disables. `None` when any
+/// entry fails to parse.
+fn parse_band_anchor_seconds(raw: &str) -> Option<Vec<f64>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(Vec::new());
+    }
+    raw.split(',')
+        .map(|s| {
+            s.trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        })
+        .collect()
+}
+
+fn band_anchor_seconds_from_env() -> Vec<f64> {
+    let raw = env_str("BAND_ANCHOR_SECONDS", DEFAULT_BAND_ANCHOR_SECONDS);
+    parse_band_anchor_seconds(&raw).unwrap_or_else(|| {
+        tracing::warn!(raw = %raw, "invalid BAND_ANCHOR_SECONDS; using default");
+        parse_band_anchor_seconds(DEFAULT_BAND_ANCHOR_SECONDS).unwrap_or_default()
+    })
+}
+
 impl Settings {
     pub fn from_env() -> Self {
         // Try to load .env if it exists (best-effort, no hard dep on dotenv)
@@ -240,6 +271,7 @@ impl Settings {
                 "https://status.polymarket.com/api/v2/summary.json",
             ),
             band_sizing: env_str("BAND_SIZING", "pct"),
+            band_anchor_seconds: band_anchor_seconds_from_env(),
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
 
             venue,
@@ -454,6 +486,29 @@ mod tests {
         let mut s = Settings::from_env();
         s.bankroll_usd = 0.0;
         assert_eq!(s.simulated_bankroll_usd(), DEFAULT_SIMULATED_BANKROLL_USD);
+    }
+
+    #[test]
+    fn band_anchor_seconds_default_empty_and_garbage() {
+        assert_eq!(
+            parse_band_anchor_seconds(DEFAULT_BAND_ANCHOR_SECONDS),
+            Some(vec![180.0, 210.0, 240.0, 270.0])
+        );
+        assert_eq!(parse_band_anchor_seconds(""), Some(Vec::new()));
+        assert_eq!(parse_band_anchor_seconds("  "), Some(Vec::new()));
+        assert_eq!(
+            parse_band_anchor_seconds(" 240 , 270 "),
+            Some(vec![240.0, 270.0])
+        );
+        assert_eq!(parse_band_anchor_seconds("abc"), None);
+        assert_eq!(parse_band_anchor_seconds("240,,270"), None);
+        assert_eq!(parse_band_anchor_seconds("-5"), None);
+        assert_eq!(parse_band_anchor_seconds("nan"), None);
+        // Garbage in the environment falls back to the default, no panic.
+        env::set_var("BAND_ANCHOR_SECONDS", "garbage");
+        let parsed = band_anchor_seconds_from_env();
+        env::remove_var("BAND_ANCHOR_SECONDS");
+        assert_eq!(parsed, vec![180.0, 210.0, 240.0, 270.0]);
     }
 
     #[test]

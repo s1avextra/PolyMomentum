@@ -57,6 +57,32 @@ impl EProcess {
         Ok(())
     }
 
+    /// Paired-comparison update: `d` is a per-window score difference
+    /// (challenger minus champion), clipped to [-1, 1]. Each lambda's
+    /// factor is `max(1 + lambda * d, 1e-12)`; under the null
+    /// `E[clip(d)] <= 0` every factor has expectation <= 1, so the wealth
+    /// stays a supermartingale and the same Ville bound applies
+    /// (Waudby-Smith & Ramdas betting; Choe & Ramdas sequential forecaster
+    /// comparison). That null equals `E[d] <= 0` only when `|d| <= 1`
+    /// almost surely: the clamp is a guard, not a transform, and a caller
+    /// whose raw differences exceed 1 must rescale them by a fixed constant
+    /// (scripts/band_shadow_race.py does) rather than rely on it. A NaN `d`
+    /// is an error, never evidence. Mirrored exactly by
+    /// scripts/evidence_accrual.py, NaN rejection included.
+    pub fn update_signed(&mut self, d: f64) -> Result<(), String> {
+        if d.is_nan() {
+            return Err("d is NaN".to_string());
+        }
+        let d = d.clamp(-1.0, 1.0);
+        for (j, lw) in self.log_wealth.iter_mut().enumerate() {
+            let lambda = (j + 1) as f64 * LAMBDA_STEP;
+            let factor = (1.0 + lambda * d).max(FACTOR_FLOOR);
+            *lw += factor.ln();
+        }
+        self.n += 1;
+        Ok(())
+    }
+
     /// Current mixture e-value: mean over the lambda grid of exp(log-wealth).
     pub fn e_value(&self) -> f64 {
         let max = self
@@ -182,5 +208,130 @@ mod tests {
         }
         assert_eq!(a.e_value(), b.e_value());
         assert_eq!(a.n(), b.n());
+    }
+
+    // ── update_signed reference vectors (mirrored by the Python side) ──
+
+    fn lambda_grid() -> impl Iterator<Item = f64> {
+        (1..=LAMBDA_COUNT).map(|j| j as f64 * LAMBDA_STEP)
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() / expected <= 1e-9,
+            "actual {actual} expected {expected}"
+        );
+    }
+
+    #[test]
+    fn signed_reference_positive_drift() {
+        let mut ep = EProcess::new();
+        for _ in 0..30 {
+            ep.update_signed(0.2).unwrap();
+        }
+        let expected =
+            lambda_grid().map(|l| (1.0 + 0.2 * l).powi(30)).sum::<f64>() / LAMBDA_COUNT as f64;
+        assert_close(ep.e_value(), expected);
+        assert_eq!(ep.n(), 30);
+        // ~51.9: clears PROMOTE_E.
+        assert_eq!(ep.verdict(), EVerdict::Promote);
+    }
+
+    #[test]
+    fn signed_reference_negative_drift() {
+        let mut ep = EProcess::new();
+        for _ in 0..20 {
+            ep.update_signed(-0.5).unwrap();
+        }
+        let expected = lambda_grid()
+            .map(|l| (1.0 - 0.5 * l).max(FACTOR_FLOOR).powi(20))
+            .sum::<f64>()
+            / LAMBDA_COUNT as f64;
+        assert_close(ep.e_value(), expected);
+        assert_eq!(ep.n(), 20);
+        // ~0.072: below FUTILITY_E.
+        assert_eq!(ep.verdict(), EVerdict::Kill);
+    }
+
+    #[test]
+    fn signed_reference_alternating_pairs() {
+        let mut ep = EProcess::new();
+        for _ in 0..10 {
+            ep.update_signed(1.0).unwrap();
+            ep.update_signed(-1.0).unwrap();
+        }
+        // (1+l)(1-l) = 1-l^2 per pair; the lambda=1 clamp term (2e-12)^10
+        // is far below the 1e-9 tolerance.
+        let expected =
+            lambda_grid().map(|l| (1.0 - l * l).powi(10)).sum::<f64>() / LAMBDA_COUNT as f64;
+        assert_close(ep.e_value(), expected);
+        assert_eq!(ep.n(), 20);
+        // ~0.245: neither threshold.
+        assert_eq!(ep.verdict(), EVerdict::Continue);
+    }
+
+    #[test]
+    fn signed_clips_to_unit_interval() {
+        let mut big = EProcess::new();
+        let mut unit = EProcess::new();
+        big.update_signed(3.0).unwrap();
+        unit.update_signed(1.0).unwrap();
+        assert_eq!(big.e_value(), unit.e_value());
+        let expected = lambda_grid().map(|l| 1.0 + l).sum::<f64>() / LAMBDA_COUNT as f64;
+        assert_close(big.e_value(), expected);
+
+        let mut big = EProcess::new();
+        let mut unit = EProcess::new();
+        big.update_signed(-3.0).unwrap();
+        unit.update_signed(-1.0).unwrap();
+        assert_eq!(big.e_value(), unit.e_value());
+        let expected = lambda_grid()
+            .map(|l| (1.0 - l).max(FACTOR_FLOOR))
+            .sum::<f64>()
+            / LAMBDA_COUNT as f64;
+        assert_close(big.e_value(), expected);
+    }
+
+    #[test]
+    fn signed_rejects_nan() {
+        // Same policy as the Python mirror: a NaN d is an error and leaves
+        // the process untouched (f64::max would otherwise swallow the NaN
+        // into FACTOR_FLOOR and force a silent Kill).
+        let mut ep = EProcess::new();
+        for _ in 0..30 {
+            ep.update_signed(0.2).unwrap();
+        }
+        let before = ep.e_value();
+        assert!(ep.update_signed(f64::NAN).is_err());
+        assert_eq!(ep.e_value(), before);
+        assert_eq!(ep.n(), 30);
+        assert_eq!(ep.verdict(), EVerdict::Promote);
+        let mut fresh = EProcess::new();
+        assert!(fresh.update_signed(f64::NAN).is_err());
+        assert_eq!(fresh.n(), 0);
+        assert_eq!(fresh.e_value(), 1.0);
+        // Infinite d clamps like any out-of-range value on both sides.
+        let mut inf = EProcess::new();
+        inf.update_signed(f64::INFINITY).unwrap();
+        let mut unit = EProcess::new();
+        unit.update_signed(1.0).unwrap();
+        assert_eq!(inf.e_value(), unit.e_value());
+    }
+
+    #[test]
+    fn signed_verdict_thresholds_unchanged() {
+        assert_eq!(PROMOTE_E, 20.0);
+        assert_eq!(FUTILITY_E, 0.1);
+        let mut ep = EProcess::new();
+        assert_eq!(ep.verdict(), EVerdict::Continue);
+        while ep.e_value() < PROMOTE_E {
+            ep.update_signed(0.2).unwrap();
+        }
+        assert_eq!(ep.verdict(), EVerdict::Promote);
+        let mut ep = EProcess::new();
+        while ep.e_value() > FUTILITY_E {
+            ep.update_signed(-0.5).unwrap();
+        }
+        assert_eq!(ep.verdict(), EVerdict::Kill);
     }
 }
