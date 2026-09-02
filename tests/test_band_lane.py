@@ -709,6 +709,54 @@ class BandLaneTest(unittest.TestCase):
         )
         self.assertEqual(client.calls, 0)
 
+    def test_support_only_rejection_is_rescreened_when_the_cache_grows(self):
+        config = band_config(
+            enabled=True,
+            maximum_new_windows_per_cycle=1000,
+            minimum_interval_seconds=0,
+            gates={"minimum_signals": 10, "minimum_recent_signals": 20, "minimum_entries": 100},
+        )
+        client = StubClient()
+        early_ts = BASE_WS + 60 * 300 + 1199  # 60 eligible windows: support fails
+        late_ts = BASE_WS + 130 * 300 + 1199  # 130 eligible windows: support clears
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            cache = self.stub_cache(directory)
+            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            try:
+                first = band.run_band_lane(config, ledger, state_dir, False, client, cache, early_ts)
+                fingerprint = first["fingerprint"]
+                status_first = ledger.hypothesis(fingerprint)["status"]
+                second = band.run_band_lane(config, ledger, state_dir, False, client, cache, late_ts)
+                status_second = ledger.hypothesis(fingerprint)["status"]
+                accrual = ledger.accrual(fingerprint)
+                evidence = json.loads(Path(first["artifact"]).read_text())
+                third = band.run_band_lane(config, ledger, state_dir, False, client, cache, late_ts)
+            finally:
+                ledger.close()
+            trial_rows = [json.loads(line) for line in (state_dir / "trial_ledger.jsonl").read_text().splitlines()]
+        self.assertEqual(first["status"], "rejected_entry_economics")
+        self.assertFalse(first["stage_2"]["gates"]["support"])
+        self.assertEqual(status_first, "rejected_entry_economics")
+        # The next caught-up cycle re-scores it before proposing anything new.
+        self.assertEqual(second["rescreen"], {"rescreened": 1, "promoted": 1, "still_rejected": 0})
+        self.assertEqual(status_second, "stage_2_survivor")
+        self.assertEqual((accrual["n"], accrual["last_window_start"]), (0, BASE_WS + 129 * 300))
+        self.assertEqual(evidence["stage_2"]["entries"], 130)
+        self.assertEqual(evidence["previous_window_count"], 60)
+        self.assertEqual(second["fingerprint"], band.band_fingerprint(dict(zip(band.BAND_GRID, band.BAND_PRIORS[1]))))
+        # Nothing left to re-screen once the cache has not grown.
+        self.assertEqual(third["rescreen"], {"rescreened": 0, "promoted": 0, "still_rejected": 0})
+        self.assertEqual(
+            [(row["stage"], row["verdict"], row["n"]) for row in trial_rows if row["candidate"] == fingerprint],
+            [
+                ("band_signal_screen", "stage_1_survivor", 60),
+                ("band_entry_economics", "rejected_entry_economics", 60),
+                ("band_entry_economics", "stage_2_survivor", 130),
+            ],
+        )
+
     def test_run_cycle_band_lane_disabled_returns_disabled(self):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         self.assertFalse(config["lanes"]["band_mechanisms"]["enabled"])

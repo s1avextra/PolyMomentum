@@ -784,6 +784,78 @@ def accrue_band_hypotheses(
     return summary
 
 
+def rescreen_support_rejections(
+    config: Mapping[str, Any],
+    ledger: Any,
+    windows: Sequence[Mapping[str, Any]],
+    prints: Mapping[Tuple[int, int], Mapping[str, Any]],
+    now_ts: int,
+    limit: int = 3,
+) -> Dict[str, int]:
+    """Re-score rules rejected ONLY for stage-2 support once the cache grew.
+
+    A support rejection is a statement about the data seen, not about the
+    rule; the live band rule itself fell to it on 8.5 days. Bounded per cycle
+    so a long backlog cannot starve the proposer."""
+    lane = (config.get("lanes") or {}).get(LANE) or {}
+    summary = {"rescreened": 0, "promoted": 0, "still_rejected": 0}
+    for hypothesis in ledger.lane_hypotheses(LANE):
+        if summary["rescreened"] >= limit:
+            break
+        if hypothesis["status"] != "rejected_entry_economics":
+            continue
+        record = ledger.hypothesis(hypothesis["fingerprint"])
+        if not record or not record.get("evidence_path"):
+            continue
+        evidence_path = Path(str(record["evidence_path"]))
+        try:
+            evidence = json.loads(evidence_path.read_text())
+        except (OSError, ValueError):
+            continue
+        gates = ((evidence.get("stage_2") or {}).get("gates") or {})
+        if gates.get("support", True) or int(evidence.get("window_count", 0)) >= len(windows):
+            continue
+        rule = normalized_band_rule(hypothesis["proposal"]["rule"])
+        fresh = evaluate_band_rule(windows, prints, rule, lane["gates"], now_ts)
+        fresh.update(
+            {
+                "fingerprint": hypothesis["fingerprint"],
+                "proposal": evidence.get("proposal", hypothesis["proposal"]),
+                "llm": evidence.get("llm"),
+                "rescreened_at": _utc_now(),
+                "previous_window_count": int(evidence.get("window_count", 0)),
+            }
+        )
+        _atomic_write(evidence_path, json.dumps(fresh, indent=2, sort_keys=True) + "\n")
+        stage_1 = fresh["stage_1"]
+        stage_2 = fresh["stage_2"]
+        if not stage_1["survivor"]:
+            status = "rejected_signal_screen"
+        elif stage_2["survivor"]:
+            status = "stage_2_survivor"
+        else:
+            status = "rejected_entry_economics"
+        if stage_2 is not None:
+            factory_generator.append_trial_entry(
+                config,
+                hypothesis["fingerprint"],
+                "band_entry_economics",
+                status,
+                n=stage_2["entries"],
+                wins=stage_2["wins"],
+            )
+        summary["rescreened"] += 1
+        if status == "stage_2_survivor":
+            ledger.update_hypothesis_status(hypothesis["fingerprint"], status)
+            ledger.accrue(hypothesis["fingerprint"], LANE, [], fresh["last_window_start"])
+            summary["promoted"] += 1
+        else:
+            if status != hypothesis["status"]:
+                ledger.update_hypothesis_status(hypothesis["fingerprint"], status)
+            summary["still_rejected"] += 1
+    return summary
+
+
 # --- proposer ----------------------------------------------------------------
 
 
@@ -1083,6 +1155,7 @@ def run_band_lane(
         # for reasons of data lag, not edge; propose once caught up.
         result["status"] = "fetching"
         return result
+    result["rescreen"] = rescreen_support_rejections(config, ledger, windows, prints, now_ts)
     proposal, provenance = propose_band_rule(client, ledger, config, state_dir, windows)
     fingerprint = band_fingerprint(proposal["rule"])
     if ledger.has_hypothesis(fingerprint):
