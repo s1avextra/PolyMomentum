@@ -169,7 +169,7 @@
       ]
     },
     "late_window_mechanisms": {
-      "minimum_interval_seconds": 1800,
+      "minimum_interval_seconds": 900,
       "public_snapshot": "deploy/promotions/evidence/strategy_registry/source_snapshots/20260722_late_window_article_family_signals.jsonl.gz",
       "base_variant": "deploy/promotions/evidence/strategy_registry/20260722_late_window_path_3m_move100_exact_l2_variant.json",
       "stage_1_gates": {

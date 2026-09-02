@@ -17,5 +17,5 @@ while true; do
             >> logs/strategy-research/runner.log 2>&1
     fi
     tick=$((tick + 1))
-    sleep 600
+    sleep 450
 done
