@@ -5034,6 +5034,10 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                     "blocked",
                     "duplicate",
                     "rejected_stage_1",
+                    # A fresh survivor's economic screen is cheap and deterministic;
+                    # running it now keeps the next lane turn free to propose instead
+                    # of spending it on queued_replay_priority.
+                    "stage_1_survivor",
                     "queued_replay_priority",
                     "paused_architecture_migration",
                 ):

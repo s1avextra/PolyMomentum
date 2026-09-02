@@ -2846,6 +2846,34 @@ class StrategyResearchLoopTest(unittest.TestCase):
         self.assertNotIn("fresh_public_accrual", dry)
         self.assertEqual(dry["lane_result"]["status"], "dry_run")
 
+    def test_stage_1_survivor_drains_its_economic_screen_in_the_same_cycle(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(directory, [], [])
+            ledger.close()
+            refreshed = {
+                "status": "current",
+                "path": str(snapshot),
+                "sha256": loop.sha256_file(snapshot),
+            }
+            with mock.patch.object(
+                loop, "resource_status", return_value={"passed": True, "checks": {}}
+            ), mock.patch.object(
+                loop, "run_registry_audit", return_value={"status": "completed"}
+            ), mock.patch.object(
+                loop, "refresh_public_snapshot", return_value=refreshed
+            ), mock.patch.object(
+                loop, "run_fresh_public_accrual", return_value={"evaluated": 0}
+            ), mock.patch.object(
+                loop, "run_late_window_lane", return_value={"status": "stage_1_survivor"}
+            ), mock.patch.object(
+                loop, "run_queued_economic_screen", return_value={"status": "empty"}
+            ) as screen:
+                live = loop.run_cycle(config, False, "late_window_mechanisms")
+        screen.assert_called_once()
+        self.assertEqual(live["economic_screen_job"], {"status": "empty"})
+
     def test_uniform_late_proposal_always_validates_and_replays(self):
         enums = loop.LATE_PROPOSAL_SCHEMA["properties"]["rule"]["properties"]
         rng = loop.random.Random(7)
