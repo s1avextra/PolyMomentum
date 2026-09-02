@@ -80,6 +80,7 @@ KILL_STATUS_STAGES = {
     "rejected_fresh_holdout": "fresh_resolved_holdout",
     "holdout_insufficient_support": "fresh_resolved_holdout",
     "rejected_fixed_forward": "fixed_forward_confirmation",
+    "killed_futility": "fresh_public_accrual",
 }
 
 # LmStudioClient.complete rejects prompts containing these tokens; injected
@@ -150,7 +151,10 @@ def eoh_parents(
     late_rows: Sequence[Mapping[str, Any]], limit: int = 3
 ) -> List[Mapping[str, Any]]:
     eligible = [
-        row for row in late_rows if not str(row.get("status", "")).startswith("rejected")
+        row
+        for row in late_rows
+        if not str(row.get("status", "")).startswith("rejected")
+        and str(row.get("status")) not in KILL_STATUS_STAGES
     ]
     recent = sorted(eligible, key=lambda row: str(row.get("created_at", "")), reverse=True)
     recent.sort(
@@ -186,7 +190,9 @@ def killed_negative_items(
     """Compact killed-rule descriptors: ledger rejects first, then registry."""
     items: List[Dict[str, Any]] = []
     ledger_rejects = [
-        row for row in late_rows if str(row.get("status", "")).startswith("rejected")
+        row
+        for row in late_rows
+        if str(row.get("status", "")).startswith(("rejected", "killed"))
     ]
     for row in sorted(
         ledger_rejects, key=lambda row: str(row.get("created_at", "")), reverse=True
@@ -460,13 +466,13 @@ def append_trial_entry(
 
 # --- sampler burst queue ---------------------------------------------------
 
-def proposal_queue_path(state_dir):
-    return state_dir / "proposal_queue.jsonl"
+def proposal_queue_path(state_dir, filename="proposal_queue.jsonl"):
+    return state_dir / filename
 
 
-def queue_pop(state_dir):
+def queue_pop(state_dir, filename="proposal_queue.jsonl"):
     """Pop the oldest queued proposal (burst survivor from a prior cycle)."""
-    path = proposal_queue_path(state_dir)
+    path = proposal_queue_path(state_dir, filename)
     if not path.is_file():
         return None
     lines = [line for line in path.read_text().splitlines() if line.strip()]
@@ -482,13 +488,28 @@ def queue_pop(state_dir):
         return None
 
 
-def queue_push(state_dir, proposals):
+def queue_push(state_dir, proposals, filename="proposal_queue.jsonl"):
     if not proposals:
         return
-    path = proposal_queue_path(state_dir)
+    path = proposal_queue_path(state_dir, filename)
     with path.open("a") as handle:
         for item in proposals:
             handle.write(json.dumps(item, sort_keys=True) + "\n")
+
+
+def next_sampler_model(llm_config, ledger, lane):
+    """Round-robin over llm.sampler_models, one model per burst; the cursor is
+    ledger meta keyed per lane so it survives cycles and every lane rotates
+    through the whole roster (a shared cursor pins each lane to one model
+    whenever the lanes burst at the same cadence).  None when the ensemble is
+    not configured, so the client default model is used."""
+    models = llm_config.get("sampler_models") or []
+    if not models:
+        return None
+    key = "sampler_model_index.%s" % lane
+    cursor = int(ledger.meta(key, "0") or 0)
+    ledger.set_meta(key, str(cursor + 1))
+    return str(models[cursor % len(models)])
 
 
 def operator_temperature(operator, gen_cfg):

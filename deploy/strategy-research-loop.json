@@ -67,7 +67,9 @@
     "maximum_output_tokens": 1400,
     "maximum_concurrency": 1,
     "prompt_policy": "public_aggregate_only",
-    "disable_reasoning": true
+    "disable_reasoning": true,
+    "sampler_models": [],
+    "reviewer_model": null
   },
   "exact_replay": {
     "enabled": true,
@@ -179,6 +181,17 @@
         "minimum_wilson_lower": 0.5,
         "minimum_fresh_signals": 5,
         "maximum_fresh_windows": 8
+      }
+    },
+    "band_mechanisms": {
+      "enabled": false,
+      "minimum_interval_seconds": 900,
+      "start_ts": 1787788800,
+      "maximum_new_windows_per_cycle": 400,
+      "gates": {
+        "minimum_signals": 100,
+        "minimum_recent_signals": 20,
+        "minimum_entries": 50
       }
     }
   }

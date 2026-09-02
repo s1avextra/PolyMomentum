@@ -628,6 +628,7 @@ class StrategyResearchLoopTest(unittest.TestCase):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
+            config["state_dir"] = str(state_dir)
             variant = state_dir / "variant.json"
             variant.write_text(
                 json.dumps({"max_per_market_usd": 5.0, "position_pct": 0.05})
@@ -1365,6 +1366,7 @@ class StrategyResearchLoopTest(unittest.TestCase):
         config["architecture_migration"]["legacy_exact_replay_enabled"] = True
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
+            config["state_dir"] = str(state_dir)
             ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
                 fingerprint = "historical-support-impossible"
@@ -1779,6 +1781,7 @@ class StrategyResearchLoopTest(unittest.TestCase):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
+            config["state_dir"] = str(state_dir)
             variant = state_dir / "variant.json"
             variant.write_text(json.dumps([{"max_per_market_usd": 10.0}]))
             ledger = loop.Ledger(state_dir / "research.sqlite3")
@@ -2157,11 +2160,23 @@ class StrategyResearchLoopTest(unittest.TestCase):
             finally:
                 ledger.close()
         self.assertIsNone(review)
+        self.assertEqual(loop.DIAGNOSTIC_PROPOSAL_PREFIX, 6)
         self.assertEqual(provenance["fallback"], "diagnostic_priority")
+        self.assertEqual(provenance["proposal_source"], "diagnostic")
         self.assertEqual(
             proposal["rule"], proposals[loop.DIAGNOSTIC_PROPOSAL_PREFIX - 1]["rule"]
         )
-        self.assertEqual(proposal["rule"]["maximum_entry_price"], 1.0)
+        # The sixth fallback rule: the 3m up continuation at the payoff-derived cap.
+        self.assertEqual(
+            (
+                proposal["rule"]["operator"],
+                proposal["rule"]["path_minutes"],
+                proposal["rule"]["minimum_two_minute_move_usd"],
+                proposal["rule"]["maximum_entry_price"],
+                proposal["rule"]["direction"],
+            ),
+            ("path_and_move", 3, 100, loop.LATE_PAYOFF_DERIVED_ENTRY_CAP, "up"),
+        )
 
     def test_config_is_fail_closed(self):
         config = json.loads((ROOT / "deploy/strategy-research-loop.json").read_text())
@@ -2194,6 +2209,10 @@ class StrategyResearchLoopTest(unittest.TestCase):
                 "enforce_minimum_signal_to_attempt_rate"
             ]
         )
+        # 2026-09-02 factory upgrade: enabled only in the gitignored overlay.
+        self.assertFalse(config["lanes"]["band_mechanisms"]["enabled"])
+        self.assertEqual(config["llm"]["sampler_models"], [])
+        self.assertIsNone(config["llm"]["reviewer_model"])
         config["mode"] = "live"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as handle:
             json.dump(config, handle)
@@ -2318,6 +2337,1112 @@ class StrategyResearchLoopTest(unittest.TestCase):
         )
         self.assertEqual(result["valid_reports"], 2)
         self.assertEqual(result["distinct_windows"], 1)
+
+    def economic_screen_job_payload(self, proposal, source_kind="cached_family_top_of_book"):
+        return {
+            "source_kind": source_kind,
+            "proposal": proposal,
+            "variant": None,
+            "candidate_replay_windows": [],
+            "fresh_candidate_windows": [],
+            "fresh_previously_measured_exclusion": {},
+        }
+
+    def saturate_exact_shortlist(self, config, ledger):
+        for index in range(int(config["maximum_exact_l2_shortlist"])):
+            ledger.enqueue(
+                "late_window_mechanisms",
+                "exact-%d" % index,
+                "exact_l2_replay",
+                {},
+                "queued",
+                status="queued",
+            )
+
+    PASSING_CACHED_VERDICT = {
+        "passed": True,
+        "classification": "passed",
+        "metrics": {"conditions": 12, "wins": 10},
+    }
+
+    def test_saturated_shortlist_defers_passing_screen_without_side_effects(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                proposal = self.valid_proposal()
+                ledger.add_hypothesis(
+                    "screen-candidate",
+                    "late_window_mechanisms",
+                    proposal,
+                    None,
+                    "stage_1_survivor",
+                    None,
+                )
+                ledger.enqueue(
+                    "late_window_mechanisms",
+                    "screen-candidate",
+                    "economic_opportunity_screen",
+                    self.economic_screen_job_payload(proposal),
+                    "queued",
+                    status="queued",
+                )
+                self.saturate_exact_shortlist(config, ledger)
+                with mock.patch.object(
+                    loop, "cached_family_economic_verdict", return_value=self.PASSING_CACHED_VERDICT
+                ) as verdict:
+                    results = [
+                        loop.run_queued_economic_screen(config, ledger, state_dir, False)
+                        for _ in range(2)
+                    ]
+                    queued = ledger.jobs("economic_opportunity_screen", "queued")
+                    status = ledger.hypothesis("screen-candidate")["status"]
+                    side_effects = (
+                        (state_dir / "trial_ledger.jsonl").exists()
+                        or (state_dir / "evidence/economic/screen-candidate.json").exists()
+                    )
+                    # Once the shortlist frees the deferred candidate is logged once.
+                    for job in ledger.jobs("exact_l2_replay", "queued"):
+                        ledger.update_job(job["job_id"], "blocked", {}, "freed")
+                    released = loop.run_queued_economic_screen(config, ledger, state_dir, False)
+                exact_queued = [
+                    job["hypothesis_fingerprint"] for job in ledger.jobs("exact_l2_replay", "queued")
+                ]
+                released_status = ledger.hypothesis("screen-candidate")["status"]
+            finally:
+                ledger.close()
+            trial_rows = (state_dir / "trial_ledger.jsonl").read_text().splitlines()
+        self.assertEqual(verdict.call_count, 3)
+        self.assertEqual([item["status"] for item in results], ["shortlist_saturated"] * 2)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(status, "stage_1_survivor")
+        self.assertFalse(side_effects)
+        self.assertEqual(released["status"], "economic_screen_passed")
+        self.assertEqual(released_status, "eligible_for_exact_l2")
+        self.assertEqual(exact_queued, ["screen-candidate"])
+        self.assertEqual(len(trial_rows), 1)
+
+    def test_saturated_shortlist_still_rejects_head_and_reaches_fresh_job(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        rejected = {
+            "passed": False,
+            "classification": "rejected",
+            "metrics": {"conditions": 12, "wins": 3},
+        }
+        fresh_passing = {
+            "passed": True,
+            "classification": "passed",
+            "metrics": {"fills": 6, "wins": 5},
+        }
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                proposal = self.valid_proposal()
+                for fingerprint, status, source_kind in (
+                    ("head-candidate", "stage_1_survivor", "cached_family_top_of_book"),
+                    (
+                        "fresh-candidate",
+                        "historical_eligible_awaiting_fresh_data",
+                        "fresh_exact_replay",
+                    ),
+                ):
+                    ledger.add_hypothesis(
+                        fingerprint, "late_window_mechanisms", proposal, None, status, None
+                    )
+                    ledger.enqueue(
+                        "late_window_mechanisms",
+                        fingerprint,
+                        "economic_opportunity_screen",
+                        self.economic_screen_job_payload(proposal, source_kind),
+                        "queued",
+                        status="queued",
+                    )
+                self.saturate_exact_shortlist(config, ledger)
+                with mock.patch.object(
+                    loop, "cached_family_economic_verdict", return_value=rejected
+                ), mock.patch.object(
+                    loop, "exact_fresh_economic_verdict", return_value=fresh_passing
+                ):
+                    results = [
+                        loop.run_queued_economic_screen(config, ledger, state_dir, False)
+                        for _ in range(3)
+                    ]
+                head_status = ledger.hypothesis("head-candidate")["status"]
+                exact_queued = len(ledger.jobs("exact_l2_replay", "queued"))
+                economic_queued = len(ledger.jobs("economic_opportunity_screen", "queued"))
+            finally:
+                ledger.close()
+        self.assertEqual(
+            [item["status"] for item in results],
+            ["rejected_economic_screen", "economic_screen_passed", "empty"],
+        )
+        self.assertEqual(head_status, "rejected_economic_screen")
+        self.assertEqual((exact_queued, economic_queued), (2, 0))
+
+    def test_cycle_reaches_exact_dispatcher_while_shortlist_is_saturated(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = str(state_dir)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                proposal = self.valid_proposal()
+                ledger.add_hypothesis(
+                    "screen-candidate",
+                    "late_window_mechanisms",
+                    proposal,
+                    None,
+                    "stage_1_survivor",
+                    None,
+                )
+                ledger.enqueue(
+                    "late_window_mechanisms",
+                    "screen-candidate",
+                    "economic_opportunity_screen",
+                    self.economic_screen_job_payload(proposal),
+                    "queued",
+                    status="queued",
+                )
+                self.saturate_exact_shortlist(config, ledger)
+            finally:
+                ledger.close()
+            seed = ROOT / config["lanes"]["late_window_mechanisms"]["public_snapshot"]
+            with mock.patch.object(
+                loop, "resource_status", return_value={"passed": True, "checks": {}}
+            ), mock.patch.object(
+                loop, "run_registry_audit", return_value={"status": "completed"}
+            ), mock.patch.object(
+                loop,
+                "refresh_public_snapshot",
+                return_value={
+                    "status": "fallback_seed",
+                    "path": str(seed),
+                    "sha256": loop.sha256_file(seed),
+                },
+            ), mock.patch.object(loop, "run_late_window_lane") as lane, mock.patch.object(
+                loop, "cached_family_economic_verdict", return_value=self.PASSING_CACHED_VERDICT
+            ), mock.patch.object(
+                loop, "run_queued_exact_job", return_value={"status": "processed"}
+            ) as exact:
+                result = loop.run_cycle(config, False, "late_window_mechanisms")
+        lane.assert_not_called()
+        exact.assert_called_once()
+        self.assertEqual(result["lane_result"]["status"], "queued_replay_priority")
+        self.assertEqual(result["economic_screen_job"]["status"], "shortlist_saturated")
+        self.assertEqual(result["fixed_forward_job"]["status"], "empty")
+        self.assertEqual(result["fresh_holdout_job"]["status"], "empty")
+        self.assertEqual(result["exact_job"]["status"], "processed")
+
+    def test_evidence_accrual_is_idempotent_on_replay(self):
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            ledger = loop.Ledger(Path(directory) / "research.sqlite3")
+            try:
+                outcomes = [(300, 0.6, True), (600, 0.6, True), (900, 0.6, False)]
+                first = ledger.accrue("accrual", "late_window_mechanisms", outcomes, 0)
+                replay = ledger.accrue("accrual", "late_window_mechanisms", outcomes, 0)
+                extended = ledger.accrue(
+                    "accrual",
+                    "late_window_mechanisms",
+                    [(1500, 0.6, True), (900, 0.6, True), (1200, 0.6, True)],
+                    0,
+                )
+                row = ledger.accrual("accrual")
+                seeded = ledger.accrue("seeded", "late_window_mechanisms", outcomes, 600)
+                seeded_row = ledger.accrual("seeded")
+            finally:
+                ledger.close()
+        self.assertEqual((first["n"], first["wins"], first["applied"]), (3, 2, 3))
+        self.assertEqual((replay["n"], replay["wins"], replay["applied"]), (3, 2, 0))
+        self.assertEqual(replay["e_value"], first["e_value"])
+        self.assertEqual((extended["n"], extended["wins"], extended["applied"]), (5, 4, 2))
+        self.assertEqual(row["last_window_start"], 1500)
+        self.assertEqual(row["verdict"], extended["verdict"])
+        restored = loop.evidence_accrual.EProcess.from_json(row["state_json"])
+        self.assertEqual(restored.e_value(), extended["e_value"])
+        self.assertEqual((seeded["n"], seeded["applied"]), (1, 1))
+        self.assertEqual(seeded_row["last_window_start"], 900)
+
+    def accrual_window(self, window_start, direction, won):
+        base = 70_000.0
+        moment = loop.dt.datetime.fromtimestamp(window_start, tz=loop.dt.timezone.utc)
+        return {
+            "window_start": window_start,
+            "utc_day": moment.date().isoformat(),
+            "utc_hour": moment.hour,
+            "chronological_window": "fresh_holdout",
+            "p0": base,
+            "p60": base + direction * 60,
+            "p120": base + direction * 220,
+            "p180": base + direction * 280,
+            "p240": base + direction * 300,
+            "terminal": base + direction * (320 if won else -20),
+        }
+
+    def accrual_fixture(self, directory, hypotheses, windows):
+        """Public snapshot plus a stage-1 artifact whose newest hour is CUT_HOUR."""
+        state_dir = Path(directory)
+        snapshot = state_dir / "snapshot.jsonl.gz"
+        loop.atomic_gzip_jsonl(snapshot, windows)
+        ledger = loop.Ledger(state_dir / "research.sqlite3")
+        for fingerprint, status, direction in hypotheses:
+            proposal = self.valid_proposal()
+            proposal["rule"]["direction"] = direction
+            evidence_path = state_dir / ("evidence/%s.json" % fingerprint)
+            loop.atomic_json(
+                evidence_path,
+                {
+                    "candidate_replay_windows": [
+                        {"start": self.CUT_HOUR, "end": self.CUT_HOUR}
+                    ],
+                    "fresh_candidate_windows": [],
+                },
+            )
+            ledger.add_hypothesis(
+                fingerprint, "late_window_mechanisms", proposal, None, status, evidence_path
+            )
+        return snapshot, ledger
+
+    CUT_HOUR = "2026-08-01T12:00:00Z"
+    CUT_EPOCH = 1785585600
+
+    def test_fresh_public_accrual_excludes_windows_at_or_before_screen_cut(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        windows = [
+            self.accrual_window(self.CUT_EPOCH + index * 300, 1, True) for index in range(12)
+        ] + [
+            self.accrual_window(self.CUT_EPOCH + 3600 + index * 300, 1, True)
+            for index in range(6)
+        ]
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(
+                directory, [("accrual-cut", "stage_1_survivor", "both")], windows
+            )
+            # A legacy artifact without bucket lists has no safe cut: skipped.
+            legacy_evidence = Path(directory) / "evidence/accrual-legacy.json"
+            loop.atomic_json(legacy_evidence, {"overall": {"signals": 40, "wins": 40}})
+            try:
+                ledger.add_hypothesis(
+                    "accrual-legacy",
+                    "late_window_mechanisms",
+                    self.valid_proposal(),
+                    None,
+                    "stage_1_survivor",
+                    legacy_evidence,
+                )
+                first = loop.run_fresh_public_accrual(config, ledger, snapshot)
+                replay = loop.run_fresh_public_accrual(config, ledger, snapshot)
+                row = ledger.accrual("accrual-cut")
+                status = ledger.hypothesis("accrual-cut")["status"]
+                legacy = ledger.accrual("accrual-legacy")
+                legacy_status = ledger.hypothesis("accrual-legacy")["status"]
+            finally:
+                ledger.close()
+            trial_rows = [
+                json.loads(line)
+                for line in (Path(directory) / "trial_ledger.jsonl").read_text().splitlines()
+            ]
+        expected = {"evaluated": 1, "promoted": 0, "killed": 0, "accruing": 1, "skipped": 1}
+        self.assertEqual(first, expected)
+        self.assertEqual(replay, expected)
+        self.assertIsNone(legacy)
+        self.assertEqual(legacy_status, "stage_1_survivor")
+        self.assertEqual((row["n"], row["wins"], row["verdict"]), (6, 6, "continue"))
+        self.assertEqual(row["last_window_start"], self.CUT_EPOCH + 3600 + 5 * 300)
+        self.assertEqual(status, "stage_1_survivor")
+        self.assertEqual(len(trial_rows), 1)
+        self.assertEqual(
+            (trial_rows[0]["stage"], trial_rows[0]["verdict"], trial_rows[0]["n"]),
+            ("fresh_public_accrual", "continue", 6),
+        )
+
+    def test_fresh_public_accrual_promotes_and_kills_by_e_value(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        # Up windows win for the up rule; the down rule fires on the down
+        # path windows and loses because the terminal closes above the open.
+        windows = [
+            self.accrual_window(self.CUT_EPOCH + 3600 + index * 300, 1, True)
+            for index in range(50)
+        ] + [
+            self.accrual_window(self.CUT_EPOCH + 3600 + (50 + index) * 300, -1, False)
+            for index in range(10)
+        ]
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(
+                directory,
+                [
+                    ("accrual-promote", "eligible_for_exact_l2", "up"),
+                    ("accrual-kill", "blocked_architecture_migration", "down"),
+                    ("accrual-untouched", "rejected_stage_1", "both"),
+                ],
+                windows,
+            )
+            try:
+                summary = loop.run_fresh_public_accrual(config, ledger, snapshot)
+                statuses = {
+                    fingerprint: ledger.hypothesis(fingerprint)["status"]
+                    for fingerprint in ("accrual-promote", "accrual-kill", "accrual-untouched")
+                }
+                promote = ledger.accrual("accrual-promote")
+                kill = ledger.accrual("accrual-kill")
+                untouched = ledger.accrual("accrual-untouched")
+            finally:
+                ledger.close()
+        self.assertEqual(
+            summary, {"evaluated": 2, "promoted": 1, "killed": 1, "accruing": 0, "skipped": 0}
+        )
+        # A promote verdict is informational (the null is the worst-case public
+        # break-even, not the executable one): the pipeline stage stays.
+        self.assertEqual(
+            statuses,
+            {
+                "accrual-promote": "eligible_for_exact_l2",
+                "accrual-kill": "killed_futility",
+                "accrual-untouched": "rejected_stage_1",
+            },
+        )
+        self.assertEqual((promote["n"], promote["wins"], promote["verdict"]), (50, 50, "promote"))
+        self.assertGreaterEqual(promote["e_value"], loop.evidence_accrual.PROMOTE_E)
+        self.assertEqual((kill["n"], kill["wins"], kill["verdict"]), (10, 0, "kill"))
+        self.assertLessEqual(kill["e_value"], loop.evidence_accrual.FUTILITY_E)
+        self.assertIsNone(untouched)
+
+    def test_fresh_public_accrual_keeps_pipeline_status_and_skips_unscorable_rules(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        # Every window is at or before the cut: zero evidence for every rule.
+        windows = [self.accrual_window(self.CUT_EPOCH + index * 300, 1, True) for index in range(3)]
+        unscorable = {
+            "accrual-sigma": ("settlement_sigma_buffer", 0.1),
+            "accrual-pressure": ("minimum_book_pressure", 0.15),
+        }
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(
+                directory,
+                [
+                    ("accrual-exact", "eligible_for_exact_l2", "both"),
+                    ("accrual-holdout", "eligible_for_fresh_holdout", "both"),
+                    ("accrual-terminal", "holdout_insufficient_support", "both"),
+                ],
+                windows,
+            )
+            try:
+                for fingerprint, (field, value) in unscorable.items():
+                    proposal = self.valid_proposal()
+                    proposal["rule"][field] = value
+                    ledger.add_hypothesis(
+                        fingerprint,
+                        "late_window_mechanisms",
+                        proposal,
+                        None,
+                        "stage_1_survivor",
+                        Path(directory) / "evidence/accrual-exact.json",
+                    )
+                summary = loop.run_fresh_public_accrual(config, ledger, snapshot)
+                statuses = {
+                    row["fingerprint"]: row["status"] for row in ledger.late_hypotheses()
+                }
+                accruals = {
+                    fingerprint: ledger.accrual(fingerprint)
+                    for fingerprint in list(unscorable) + ["accrual-terminal"]
+                }
+                zero_evidence = [
+                    (ledger.accrual(fingerprint)["n"], ledger.accrual(fingerprint)["e_value"])
+                    for fingerprint in ("accrual-exact", "accrual-holdout")
+                ]
+            finally:
+                ledger.close()
+            trial_ledger_exists = (Path(directory) / "trial_ledger.jsonl").exists()
+        self.assertEqual(
+            summary, {"evaluated": 2, "promoted": 0, "killed": 0, "accruing": 2, "skipped": 2}
+        )
+        self.assertEqual(
+            statuses,
+            {
+                "accrual-exact": "eligible_for_exact_l2",
+                "accrual-holdout": "eligible_for_fresh_holdout",
+                "accrual-terminal": "holdout_insufficient_support",
+                "accrual-sigma": "stage_1_survivor",
+                "accrual-pressure": "stage_1_survivor",
+            },
+        )
+        self.assertEqual(accruals, {fingerprint: None for fingerprint in accruals})
+        self.assertEqual(zero_evidence, [(0, 1.0), (0, 1.0)])
+        self.assertFalse(trial_ledger_exists)
+
+    def test_eoh_parents_skip_terminal_kills_and_killed_futility_feeds_kill_feedback(self):
+        generator = loop.factory_generator
+        rows = [
+            {
+                "fingerprint": fingerprint,
+                "status": status,
+                "created_at": created_at,
+                "proposal": self.valid_proposal(),
+            }
+            for fingerprint, status, created_at in (
+                ("killed", "killed_futility", "2026-09-05T00:00:00Z"),
+                ("insufficient", "holdout_insufficient_support", "2026-09-04T00:00:00Z"),
+                ("survivor", "stage_1_survivor", "2026-09-03T00:00:00Z"),
+                ("exact", "eligible_for_exact_l2", "2026-09-02T00:00:00Z"),
+                ("rejected", "rejected_stage_1", "2026-09-01T00:00:00Z"),
+            )
+        ]
+        parents = [row["fingerprint"] for row in generator.eoh_parents(rows)]
+        negatives = [item["status"] for item in generator.killed_negative_items(None, rows)]
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            recorded = generator.record_kill_feedback(
+                {"kill_feedback_enabled": True},
+                Path(directory),
+                "killed_futility",
+                json.dumps(self.valid_proposal()),
+            )
+            feedback = [
+                json.loads(line)
+                for line in (Path(directory) / "kill_feedback.jsonl").read_text().splitlines()
+            ]
+        self.assertEqual(parents, ["exact", "survivor"])
+        # A futility kill joins the ledger rejects in the negative prompt.
+        self.assertEqual(negatives, ["killed_futility", "rejected_stage_1"])
+        self.assertTrue(recorded)
+        self.assertEqual(
+            [(entry["stage"], entry["reason"]) for entry in feedback],
+            [("fresh_public_accrual", "killed_futility")],
+        )
+
+    def test_cycle_accrues_fresh_public_evidence_after_reconciliation(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        windows = [self.accrual_window(self.CUT_EPOCH + 3600, 1, True)]
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(directory, [], windows)
+            ledger.close()
+            refreshed = {
+                "status": "current",
+                "path": str(snapshot),
+                "sha256": loop.sha256_file(snapshot),
+            }
+            with mock.patch.object(
+                loop, "resource_status", return_value={"passed": True, "checks": {}}
+            ), mock.patch.object(
+                loop, "run_registry_audit", return_value={"status": "completed"}
+            ), mock.patch.object(
+                loop, "refresh_public_snapshot", return_value=refreshed
+            ), mock.patch.object(
+                loop, "run_late_window_lane", return_value={"status": "dry_run"}
+            ), mock.patch.object(
+                loop, "run_fresh_public_accrual", return_value={"evaluated": 0}
+            ) as accrual:
+                live = loop.run_cycle(config, False, "late_window_mechanisms")
+                dry = loop.run_cycle(config, True, "late_window_mechanisms")
+        accrual.assert_called_once()
+        self.assertEqual(accrual.call_args.args[2], snapshot)
+        self.assertEqual(live["fresh_public_accrual"], {"evaluated": 0})
+        self.assertTrue(dry["dry_run"])
+        self.assertNotIn("fresh_public_accrual", dry)
+        self.assertEqual(dry["lane_result"]["status"], "dry_run")
+
+    def test_uniform_late_proposal_always_validates_and_replays(self):
+        enums = loop.LATE_PROPOSAL_SCHEMA["properties"]["rule"]["properties"]
+        rng = loop.random.Random(7)
+        proposals = [loop.uniform_late_proposal(rng) for _ in range(1000)]
+        for proposal in proposals:
+            self.assertEqual(loop.validate_late_proposal(proposal), proposal)
+            self.assertEqual(loop.normalized_late_rule(proposal["rule"]), proposal["rule"])
+            for field, value in proposal["rule"].items():
+                self.assertIn(value, enums[field]["enum"])
+        rules = [loop.canonical_json(proposal["rule"]) for proposal in proposals]
+        # 7128 executable grid points: a uniform draw rarely repeats in 1000 tries.
+        self.assertGreater(len(set(rules)), 850)
+        self.assertEqual(
+            {proposal["rule"]["operator"] for proposal in proposals}, loop.LATE_OPERATORS
+        )
+        replay = loop.random.Random(7)
+        self.assertEqual(
+            [loop.canonical_json(loop.uniform_late_proposal(replay)["rule"]) for _ in rules],
+            rules,
+        )
+
+    def test_late_lane_alternates_llm_and_uniform_control_after_prefix(self):
+        class BurstClient:
+            """Hands out distinct grid rules; the reviewer call is unavailable."""
+
+            def __init__(self, ready=True):
+                self.ready = ready
+                self.calls = 0
+                self.rules = iter(list(loop.fallback_late_proposals())[40:])
+
+            def readiness(self):
+                return {"ready": self.ready}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                self.calls += 1
+                if schema_name == "late_window_review_v1":
+                    return {"ok": False, "reason": "reviewer_offline"}
+                return {"ok": True, "value": next(self.rules)}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        fallbacks = list(loop.fallback_late_proposals())
+        client = BurstClient()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                sources = []
+                rules = []
+                for _ in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX + 6):
+                    proposal, review, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                    self.assertEqual(loop.validate_late_proposal(proposal), proposal)
+                    self.assertIsNone(review)
+                    self.assertIn(provenance["proposal_source"], loop.LATE_PROPOSAL_SOURCES)
+                    sources.append(provenance["proposal_source"])
+                    rules.append(proposal["rule"])
+                    ledger.add_hypothesis(
+                        "late-%d" % len(rules),
+                        "late_window_mechanisms",
+                        proposal,
+                        review,
+                        "rejected_stage_1",
+                        None,
+                        source=provenance["proposal_source"],
+                    )
+                stored = [row["source"] for row in ledger.late_hypotheses()]
+                queue = (state_dir / "proposal_queue.jsonl").read_text().splitlines()
+                offline, _, offline_provenance = loop.propose_late_rule(
+                    BurstClient(ready=False), ledger, "snapshot", config, state_dir
+                )
+            finally:
+                ledger.close()
+        # After the prefix the arm with fewer entries goes next (LLM on ties), so
+        # queued burst survivors interleave one-for-one with uniform controls.
+        self.assertEqual(
+            sources,
+            ["diagnostic"] * loop.DIAGNOSTIC_PROPOSAL_PREFIX
+            + ["llm", "uniform_control", "burst_queue", "uniform_control", "burst_queue", "uniform_control"],
+        )
+        self.assertEqual(stored, sources)
+        self.assertEqual(
+            rules[: loop.DIAGNOSTIC_PROPOSAL_PREFIX],
+            [item["rule"] for item in fallbacks[: loop.DIAGNOSTIC_PROPOSAL_PREFIX]],
+        )
+        self.assertEqual(
+            len({loop.canonical_json(loop.normalized_late_rule(rule)) for rule in rules}),
+            len(rules),
+        )
+        # One burst (samples_per_burst + the reviewer call); the extra survivors
+        # are queued and replayed on later LLM turns instead of sampling again.
+        self.assertEqual(client.calls, config["generator"]["samples_per_burst"] + 1)
+        self.assertEqual(len(queue), config["generator"]["samples_per_burst"] - 3)
+        # A not-ready model on an LLM turn degrades to the deterministic grid.
+        self.assertNotIn("turn", offline_provenance)
+        self.assertEqual(offline_provenance["proposal_source"], "fallback_grid")
+        self.assertEqual(offline_provenance["fallback"], "deterministic_finite_grid")
+        self.assertEqual(offline["rule"], fallbacks[loop.DIAGNOSTIC_PROPOSAL_PREFIX]["rule"])
+
+    def test_reviewer_reject_is_advisory_and_stays_in_llm_arm(self):
+        class RejectingClient:
+            """Hands out distinct grid rules; the reviewer rejects every one."""
+
+            def __init__(self):
+                self.review_calls = 0
+                self.rules = iter(list(loop.fallback_late_proposals())[40:])
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                if schema_name == "late_window_review_v1":
+                    self.review_calls += 1
+                    sha = user.split("\n", 1)[0].split("=", 1)[1]
+                    return {
+                        "ok": True,
+                        "value": {"proposal_sha256": sha, "verdict": "reject", "reason": "test"},
+                    }
+                return {"ok": True, "value": next(self.rules)}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        config["generator"]["samples_per_burst"] = 1  # nothing queued: every LLM turn bursts
+        fallbacks = list(loop.fallback_late_proposals())
+        client = RejectingClient()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                turns = []
+                llm_rules = []
+                for index in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX + 4):
+                    proposal, review, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                    turns.append(
+                        (
+                            provenance.get("turn"),
+                            provenance["proposal_source"],
+                            review["verdict"] if review else None,
+                        )
+                    )
+                    if provenance["proposal_source"] == "llm":
+                        llm_rules.append(proposal["rule"])
+                        self.assertNotIn("fallback", provenance)
+                    ledger.add_hypothesis(
+                        "late-%d" % index,
+                        "late_window_mechanisms",
+                        proposal,
+                        review,
+                        "rejected_stage_1",
+                        None,
+                        source=provenance["proposal_source"],
+                    )
+            finally:
+                ledger.close()
+        # A rejected LLM sample is still the evaluated proposal (source llm, the
+        # verdict travels with it), so the LLM arm's denominator keeps it and
+        # the control arm takes the next turn.
+        self.assertEqual(
+            turns[loop.DIAGNOSTIC_PROPOSAL_PREFIX :],
+            [
+                ("llm", "llm", "reject"),
+                ("uniform_control", "uniform_control", None),
+                ("llm", "llm", "reject"),
+                ("uniform_control", "uniform_control", None),
+            ],
+        )
+        self.assertEqual(llm_rules, [fallbacks[40]["rule"], fallbacks[41]["rule"]])
+        self.assertEqual(client.review_calls, 2)
+
+    def test_llm_turn_without_survivor_falls_through_to_uniform_control(self):
+        class InvalidClient:
+            """Ready, but every sample fails validation."""
+
+            def __init__(self):
+                self.calls = 0
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                self.calls += 1
+                return {"ok": True, "value": {"garbage": 1}}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        burst_n = config["generator"]["samples_per_burst"]
+        client = InvalidClient()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                provenances = []
+                for index in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX + 4):
+                    proposal, review, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                    self.assertEqual(loop.validate_late_proposal(proposal), proposal)
+                    self.assertIsNone(review)
+                    provenances.append(provenance)
+                    ledger.add_hypothesis(
+                        "late-%d" % index,
+                        "late_window_mechanisms",
+                        proposal,
+                        review,
+                        "rejected_stage_1",
+                        None,
+                        source=provenance["proposal_source"],
+                    )
+                stored = [row["source"] for row in ledger.late_hypotheses()]
+            finally:
+                ledger.close()
+        after = provenances[loop.DIAGNOSTIC_PROPOSAL_PREFIX :]
+        # A ready model that never validates cannot hold the turn: each of its
+        # turns records the empty burst and lands a control draw, not a grid rule.
+        self.assertEqual([item["turn"] for item in after], ["llm"] * 4)
+        self.assertEqual(stored[loop.DIAGNOSTIC_PROPOSAL_PREFIX :], ["uniform_control"] * 4)
+        self.assertEqual({item["burst"]["survivors"] for item in after}, {0})
+        self.assertEqual({item["burst"]["invalid"] for item in after}, {burst_n})
+        self.assertEqual(after[-1]["control"], {"draws": 1, "duplicate": 0, "novelty_rejected": 0})
+        self.assertNotIn("fallback", after[-1])
+        self.assertEqual(client.calls, 4 * burst_n)
+
+    def test_novelty_gate_applies_to_uniform_control_draws(self):
+        class IdleClient:
+            base_url = "http://127.0.0.1:1234/v1"
+            config = {"request_timeout_seconds": 1}
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, *args, **kwargs):
+                raise AssertionError("a control turn samples nothing")
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        verdicts = iter(["rejected", "accepted"])
+        checked = []
+
+        def novelty_check(candidate, gen_cfg, base_url, timeout, state_dir, killed_items):
+            checked.append((candidate["rule"], killed_items))
+            return {"status": next(verdicts)}
+
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                prefix = list(loop.fallback_late_proposals())[: loop.DIAGNOSTIC_PROPOSAL_PREFIX]
+                for index, fallback in enumerate(prefix):
+                    ledger.add_hypothesis(
+                        "late-%d" % index,
+                        "late_window_mechanisms",
+                        fallback,
+                        None,
+                        "rejected_stage_1",
+                        None,
+                        source="diagnostic",
+                    )
+                # One LLM row ahead: the control arm goes next.
+                ledger.add_hypothesis(
+                    "late-llm",
+                    "late_window_mechanisms",
+                    self.valid_proposal(),
+                    None,
+                    "stage_1_survivor",
+                    None,
+                    source="llm",
+                )
+                rows = len(ledger.late_hypotheses())
+                with mock.patch.object(
+                    loop.factory_generator, "novelty_check", side_effect=novelty_check
+                ):
+                    proposal, review, provenance = loop.propose_late_rule(
+                        IdleClient(), ledger, "snapshot", config, state_dir
+                    )
+            finally:
+                ledger.close()
+        rng = loop.random.Random(rows)
+        draws = [loop.uniform_late_proposal(rng)["rule"] for _ in range(2)]
+        self.assertEqual(provenance["turn"], "uniform_control")
+        self.assertEqual(provenance["proposal_source"], "uniform_control")
+        self.assertIsNone(review)
+        # The first draw sits too close to a killed rule and is skipped exactly
+        # as an LLM sample would be; the killed prefix feeds the gate here too.
+        self.assertEqual([rule for rule, _ in checked], draws)
+        self.assertEqual(proposal["rule"], draws[1])
+        self.assertEqual(provenance["control"], {"draws": 2, "duplicate": 0, "novelty_rejected": 1})
+        self.assertEqual(
+            sum(1 for item in checked[0][1] if item["kind"] == "ledger_rule"),
+            loop.DIAGNOSTIC_PROPOSAL_PREFIX,
+        )
+
+    def test_late_lane_persists_proposal_source_from_provenance(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["architecture_migration"]["legacy_candidate_generation_enabled"] = True
+        proposal = self.valid_proposal()
+        provenance = {
+            "readiness": {"ready": True},
+            "turn": "uniform_control",
+            "proposal_source": "uniform_control",
+        }
+        evidence = {
+            "stage_1_survivor": False,
+            "overall": {"signals": 0, "wins": 0},
+            "gates": {},
+            "candidate_replay_windows": [],
+            "fresh_candidate_windows": [],
+            "fresh_previously_measured_exclusion": {},
+        }
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            snapshot = state_dir / "snapshot.jsonl.gz"
+            loop.atomic_gzip_jsonl(snapshot, [])
+            config["lanes"]["late_window_mechanisms"]["public_snapshot"] = str(snapshot)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                with mock.patch.object(loop, "LmStudioClient"), mock.patch.object(
+                    loop, "propose_late_rule", return_value=(proposal, None, provenance)
+                ), mock.patch.object(loop, "evaluate_late_rule", return_value=evidence):
+                    result = loop.run_late_window_lane(config, ledger, state_dir, False)
+                row = ledger.hypothesis(result["fingerprint"])
+            finally:
+                ledger.close()
+        self.assertEqual(result["status"], "rejected_stage_1")
+        self.assertEqual(result["proposal_source"], "uniform_control")
+        self.assertIsNone(result["burst"])
+        self.assertEqual(row["source"], "uniform_control")
+
+    def test_sampler_models_round_robin_advances_and_persists(self):
+        class RecordingClient:
+            """Records the model of every call; the reviewer is offline."""
+
+            def __init__(self):
+                self.calls = []
+                self.rules = iter(list(loop.fallback_late_proposals())[40:])
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                self.calls.append((schema_name, model))
+                if schema_name == "late_window_review_v1":
+                    return {"ok": False, "reason": "reviewer_offline"}
+                return {"ok": True, "value": next(self.rules)}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        config["generator"]["samples_per_burst"] = 1  # nothing queued: every LLM turn bursts
+        config["llm"]["sampler_models"] = ["model-a", "model-b"]
+        config["llm"]["reviewer_model"] = "reviewer-x"
+        client = RecordingClient()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                sampler_models = []
+                for index in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX + 5):
+                    proposal, review, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                    sampler_models.append(provenance.get("sampler_model"))
+                    ledger.add_hypothesis(
+                        "late-%d" % index,
+                        "late_window_mechanisms",
+                        proposal,
+                        review,
+                        "rejected_stage_1",
+                        None,
+                        source=provenance["proposal_source"],
+                    )
+            finally:
+                ledger.close()
+            reopened = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                cursor_key = "sampler_model_index.late_window_mechanisms"
+                persisted = reopened.meta(cursor_key)
+                # An empty roster neither picks a model nor moves the cursor.
+                self.assertIsNone(
+                    loop.factory_generator.next_sampler_model(
+                        {"sampler_models": []}, reopened, "late_window_mechanisms"
+                    )
+                )
+                self.assertEqual(reopened.meta(cursor_key), persisted)
+                # The cursor is per lane: another lane starts its own rotation
+                # instead of continuing (and pinning) this one.
+                self.assertEqual(
+                    loop.factory_generator.next_sampler_model(
+                        config["llm"], reopened, "band_mechanisms"
+                    ),
+                    "model-a",
+                )
+                self.assertEqual(reopened.meta(cursor_key), persisted)
+            finally:
+                reopened.close()
+        self.assertEqual(
+            sampler_models,
+            [None] * loop.DIAGNOSTIC_PROPOSAL_PREFIX + ["model-a", None, "model-b", None, "model-a"],
+        )
+        self.assertEqual(
+            client.calls,
+            [
+                ("late_window_proposal_v2c", "model-a"),
+                ("late_window_review_v1", "reviewer-x"),
+                ("late_window_proposal_v2c", "model-b"),
+                ("late_window_review_v1", "reviewer-x"),
+                ("late_window_proposal_v2c", "model-a"),
+                ("late_window_review_v1", "reviewer-x"),
+            ],
+        )
+        self.assertEqual(persisted, "3")
+
+    def test_burst_queue_replays_carry_the_sampler_model(self):
+        class BurstClient:
+            def __init__(self):
+                self.rules = iter(list(loop.fallback_late_proposals())[40:])
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                if schema_name == "late_window_review_v1":
+                    return {"ok": False, "reason": "reviewer_offline"}
+                return {"ok": True, "value": next(self.rules)}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        config["generator"]["samples_per_burst"] = 3
+        config["llm"]["sampler_models"] = ["model-a", "model-b"]
+        client = BurstClient()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                provenances = []
+                for index in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX + 7):
+                    if index == loop.DIAGNOSTIC_PROPOSAL_PREFIX + 1:
+                        queued = [
+                            json.loads(line)
+                            for line in (state_dir / "proposal_queue.jsonl").read_text().splitlines()
+                        ]
+                    proposal, review, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                    provenances.append(provenance)
+                    ledger.add_hypothesis(
+                        "late-%d" % index,
+                        "late_window_mechanisms",
+                        proposal,
+                        review,
+                        "rejected_stage_1",
+                        None,
+                        source=provenance["proposal_source"],
+                    )
+            finally:
+                ledger.close()
+        sampled = provenances[loop.DIAGNOSTIC_PROPOSAL_PREFIX :]
+        self.assertEqual(
+            [item["proposal_source"] for item in sampled],
+            ["llm", "uniform_control", "burst_queue", "uniform_control", "burst_queue", "uniform_control", "llm"],
+        )
+        # Queued survivors keep the model whose burst produced them, so a
+        # replay is attributed like the burst turn; the next burst rotates.
+        self.assertEqual([entry["sampler_model"] for entry in queued], ["model-a", "model-a"])
+        self.assertEqual(
+            [item.get("sampler_model") for item in sampled],
+            ["model-a", None, "model-a", None, "model-a", None, "model-b"],
+        )
+
+    def test_only_a_schema_rejection_falls_back_from_the_constrained_schema(self):
+        class FirstSampleFails:
+            """Sample 0 returns the given failure; later samples succeed."""
+
+            def __init__(self, failure):
+                self.failure = failure
+                self.calls = []
+                self.rules = iter(list(loop.fallback_late_proposals())[40:])
+
+            def readiness(self):
+                return {"ready": True}
+
+            def complete(self, system, user, schema_name, schema, temperature, model=None):
+                self.calls.append(schema_name)
+                if schema_name == "late_window_review_v1":
+                    return {"ok": False, "reason": "reviewer_offline"}
+                if len(self.calls) == 1:
+                    return dict(self.failure)
+                return {"ok": True, "value": next(self.rules)}
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
+        config["generator"]["samples_per_burst"] = 3
+        config["llm"]["sampler_models"] = ["model-a", "model-b"]
+        cases = {
+            "cold_timeout": {"ok": False, "reason": "TimeoutError"},
+            "cold_load": {
+                "ok": False,
+                "reason": "HTTPError",
+                "http_status": 400,
+                "error_body": '{"error":"Failed to load model: LM Link peer_keepalive_timeout"}',
+            },
+            "schema_rejected": {
+                "ok": False,
+                "reason": "HTTPError",
+                "http_status": 400,
+                "error_body": '{"error":"Invalid JSON schema: anyOf is not supported"}',
+            },
+        }
+        results = {}
+        for name, failure in cases.items():
+            client = FirstSampleFails(failure)
+            with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+                state_dir = Path(directory)
+                config["state_dir"] = directory
+                ledger = loop.Ledger(state_dir / "research.sqlite3")
+                try:
+                    for index in range(loop.DIAGNOSTIC_PROPOSAL_PREFIX):
+                        proposal, review, provenance = loop.propose_late_rule(
+                            client, ledger, "snapshot", config, state_dir
+                        )
+                        ledger.add_hypothesis(
+                            "late-%d" % index,
+                            "late_window_mechanisms",
+                            proposal,
+                            review,
+                            "rejected_stage_1",
+                            None,
+                            source=provenance["proposal_source"],
+                        )
+                    _, _, provenance = loop.propose_late_rule(
+                        client, ledger, "snapshot", config, state_dir
+                    )
+                finally:
+                    ledger.close()
+            results[name] = (client.calls, provenance)
+        # A cold sampler (timeout or model-load error) is a transport failure:
+        # the burst keeps the constrained schema and is charged one sample.
+        for name in ("cold_timeout", "cold_load"):
+            calls, provenance = results[name]
+            self.assertEqual(calls, ["late_window_proposal_v2c"] * 3 + ["late_window_review_v1"], name)
+            self.assertNotIn("constrained_schema_fallback", provenance, name)
+            self.assertTrue(provenance["burst"]["constrained_schema"], name)
+            self.assertEqual(
+                (provenance["burst"]["generated"], provenance["burst"]["survivors"]), (3, 2), name
+            )
+            self.assertEqual((provenance["proposal_source"], provenance["sampler_model"]), ("llm", "model-a"))
+        # Only a backend that rejects the schema itself falls back to the legacy one.
+        calls, provenance = results["schema_rejected"]
+        self.assertEqual(
+            calls, ["late_window_proposal_v2c"] + ["late_window_proposal_v1"] * 2 + ["late_window_review_v1"]
+        )
+        self.assertEqual(provenance["constrained_schema_fallback"], "HTTPError")
+        self.assertFalse(provenance["burst"]["constrained_schema"])
+
+    def test_model_override_reaches_request_payload(self):
+        class FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        config["llm"]["reviewer_model"] = "qwen/qwen3.8-27b"
+        envelope = b'{"choices":[{"message":{"content":"{\\"verdict\\":\\"accept\\"}"}}]}'
+        schema = {"type": "object", "properties": {}, "additionalProperties": False}
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            client = loop.LmStudioClient(config["llm"], Path(directory))
+            with mock.patch.object(
+                loop.urllib.request,
+                "urlopen",
+                side_effect=lambda *args, **kwargs: FakeResponse(envelope),
+            ) as opened:
+                sampled = client.complete(
+                    "Public causal rule only.", "Use public checkpoints.", "test_schema", schema, 0.0
+                )
+                reviewed = client.complete(
+                    "Review a public causal rule.",
+                    "proposal=...",
+                    "late_window_review_v1",
+                    schema,
+                    0.0,
+                    model=config["llm"]["reviewer_model"],
+                )
+        payloads = [json.loads(call.args[0].data) for call in opened.call_args_list]
+        self.assertEqual(payloads[0]["model"], client.model)
+        self.assertEqual(payloads[1]["model"], "qwen/qwen3.8-27b")
+        self.assertEqual(sampled["model"], client.model)
+        self.assertEqual(reviewed["model"], "qwen/qwen3.8-27b")
+        self.assertEqual(reviewed["value"], {"verdict": "accept"})
 
 
 if __name__ == "__main__":

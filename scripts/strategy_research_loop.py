@@ -30,6 +30,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import shutil
 import sqlite3
 import subprocess
@@ -51,6 +52,20 @@ _FACTORY_SPEC = _importlib_util.spec_from_file_location(
 assert _FACTORY_SPEC and _FACTORY_SPEC.loader
 factory_generator = _importlib_util.module_from_spec(_FACTORY_SPEC)
 _FACTORY_SPEC.loader.exec_module(factory_generator)
+
+_ACCRUAL_SPEC = _importlib_util.spec_from_file_location(
+    "evidence_accrual", Path(__file__).resolve().parent / "evidence_accrual.py"
+)
+assert _ACCRUAL_SPEC and _ACCRUAL_SPEC.loader
+evidence_accrual = _importlib_util.module_from_spec(_ACCRUAL_SPEC)
+_ACCRUAL_SPEC.loader.exec_module(evidence_accrual)
+
+_BAND_SPEC = _importlib_util.spec_from_file_location(
+    "band_lane", Path(__file__).resolve().parent / "band_lane.py"
+)
+assert _BAND_SPEC and _BAND_SPEC.loader
+band_lane = _importlib_util.module_from_spec(_BAND_SPEC)
+_BAND_SPEC.loader.exec_module(band_lane)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +94,15 @@ PUBLIC_SNAPSHOT_VERSION = "binance_spot_1m_v1"
 LATE_REPLAY_BUCKET_HOURS = 1
 FRESH_SELECTION_GRANULARITY_VERSION = "signal_hour_v1"
 FRESH_GLOBAL_RESERVE_VERSION = "other_jobs_measured_starts_v1"
-DIAGNOSTIC_PROPOSAL_PREFIX = 17
+# The late lane walks fallback_late_proposals() in order until the ledger
+# holds this many late hypotheses; from then on a ready LLM alternates with
+# the uniform control and the grid is only the not-ready fallback.
+DIAGNOSTIC_PROPOSAL_PREFIX = 6
+LATE_PROPOSAL_SOURCES = ("diagnostic", "llm", "uniform_control", "fallback_grid", "burst_queue")
+# Burst-queue replays are LLM samples too: parity balances the whole LLM arm
+# against the uniform control so one burst cannot starve the control arm.
+LATE_LLM_ARM_SOURCES = ("llm", "burst_queue")
+UNIFORM_LATE_ATTEMPTS = 64
 
 
 def payoff_derived_entry_cap(
@@ -246,8 +269,24 @@ class Ledger:
                 reason TEXT,
                 UNIQUE(hypothesis_fingerprint, stage)
             );
+            CREATE TABLE IF NOT EXISTS evidence_accrual (
+                fingerprint TEXT PRIMARY KEY,
+                lane TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                wins INTEGER NOT NULL,
+                state_json TEXT NOT NULL,
+                last_window_start INTEGER NOT NULL,
+                e_value REAL NOT NULL,
+                verdict TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
+        columns = {
+            str(row["name"]) for row in self.connection.execute("PRAGMA table_info(hypotheses)")
+        }
+        if "source" not in columns:
+            self.connection.execute("ALTER TABLE hypotheses ADD COLUMN source TEXT")
         self.connection.commit()
 
     def close(self) -> None:
@@ -305,10 +344,14 @@ class Ledger:
         return False
 
     def late_hypotheses(self) -> List[Dict[str, Any]]:
+        return self.lane_hypotheses("late_window_mechanisms")
+
+    def lane_hypotheses(self, lane: str) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
         for row in self.connection.execute(
-            "SELECT fingerprint, status, created_at, proposal_json FROM hypotheses "
-            "WHERE lane = 'late_window_mechanisms' ORDER BY created_at, rowid"
+            "SELECT fingerprint, status, created_at, proposal_json, source FROM hypotheses "
+            "WHERE lane = ? ORDER BY created_at, rowid",
+            (lane,),
         ):
             try:
                 proposal = json.loads(row["proposal_json"])
@@ -320,6 +363,7 @@ class Ledger:
                     "status": str(row["status"]),
                     "created_at": str(row["created_at"]),
                     "proposal": proposal,
+                    "source": row["source"],
                 }
             )
         return rows
@@ -332,9 +376,11 @@ class Ledger:
         review: Optional[Mapping[str, Any]],
         status: str,
         evidence_path: Optional[Path],
+        source: Optional[str] = None,
     ) -> None:
         self.connection.execute(
-            "INSERT INTO hypotheses VALUES(?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO hypotheses(fingerprint, lane, created_at, proposal_json, "
+            "review_json, status, evidence_path, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 fingerprint,
                 lane,
@@ -343,6 +389,7 @@ class Ledger:
                 canonical_json(review) if review is not None else None,
                 status,
                 str(evidence_path) if evidence_path else None,
+                source,
             ),
         )
         self.connection.commit()
@@ -457,6 +504,70 @@ class Ledger:
                     if start:
                         starts.add(str(start))
         return starts
+
+    def accrual(self, fingerprint: str) -> Optional[Dict[str, Any]]:
+        row = self.connection.execute(
+            "SELECT * FROM evidence_accrual WHERE fingerprint = ?", (fingerprint,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def accrue(
+        self,
+        fingerprint: str,
+        lane: str,
+        outcomes: Sequence[Tuple[int, float, bool]],
+        seed_last_window_start: int = -1,
+    ) -> Dict[str, Any]:
+        """Fold (window_start, break_even, won) outcomes into the e-process.
+
+        Only outcomes with window_start > last_window_start are applied, in
+        ascending order, so replaying the same outcomes is a no-op.  A first
+        accrual starts its cut at seed_last_window_start.
+        """
+        row = self.accrual(fingerprint)
+        if row is None:
+            process = evidence_accrual.EProcess()
+            wins = 0
+            last_window_start = int(seed_last_window_start)
+        else:
+            process = evidence_accrual.EProcess.from_json(str(row["state_json"]))
+            wins = int(row["wins"])
+            last_window_start = int(row["last_window_start"])
+        applied = 0
+        for window_start, break_even, won in sorted(outcomes, key=lambda item: int(item[0])):
+            if int(window_start) <= last_window_start:
+                continue
+            process.update(float(break_even), bool(won))
+            wins += int(bool(won))
+            last_window_start = int(window_start)
+            applied += 1
+        result = {
+            "n": process.n,
+            "wins": wins,
+            "e_value": process.e_value(),
+            "verdict": process.verdict(),
+            "applied": applied,
+        }
+        self.connection.execute(
+            "INSERT INTO evidence_accrual VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(fingerprint) DO UPDATE SET n = excluded.n, wins = excluded.wins, "
+            "state_json = excluded.state_json, last_window_start = excluded.last_window_start, "
+            "e_value = excluded.e_value, verdict = excluded.verdict, "
+            "updated_at = excluded.updated_at",
+            (
+                fingerprint,
+                lane,
+                process.n,
+                wins,
+                process.to_json(),
+                last_window_start,
+                result["e_value"],
+                result["verdict"],
+                utc_now(),
+            ),
+        )
+        self.connection.commit()
+        return result
 
     def summary(self) -> Dict[str, Any]:
         hypotheses = [
@@ -592,9 +703,11 @@ class LmStudioClient:
         schema_name: str,
         schema: Mapping[str, Any],
         temperature: float,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         if any(token in (system + " " + user).lower() for token in ("pnl", "wallet", "secret", "private_key")):
             raise ValueError("private or outcome-bearing LLM prompt rejected")
+        model = model or self.model
         if self.config.get("disable_reasoning"):
             # A sampler must not think: reasoning tokens burn the output
             # budget before the JSON starts. reasoning_effort covers
@@ -602,7 +715,7 @@ class LmStudioClient:
             # family; models without a reasoning mode ignore both.
             system = "/no_think " + system
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -653,7 +766,7 @@ class LmStudioClient:
         return {
             "ok": True,
             "value": parsed,
-            "model": self.model,
+            "model": model,
             "prompt_sha256": hashlib.sha256((system + "\n" + user).encode()).hexdigest(),
             "response_sha256": stable_hash(parsed),
         }
@@ -798,6 +911,35 @@ def validate_late_proposal(proposal: Mapping[str, Any]) -> Dict[str, Any]:
     validated = dict(proposal)
     validated["rule"] = rule
     return validated
+
+
+def uniform_late_proposal(rng: random.Random) -> Dict[str, Any]:
+    """One rule drawn uniformly from the executable late grid.
+
+    Rejection sampling over the product of the schema enums stays uniform
+    over the operator co-constraints that validate_late_proposal enforces."""
+    grid = {
+        field: spec["enum"]
+        for field, spec in LATE_PROPOSAL_SCHEMA["properties"]["rule"]["properties"].items()
+    }
+    while True:
+        rule = {field: rng.choice(values) for field, values in grid.items()}
+        proposal = {
+            "title": "Uniform control: %s" % factory_generator.compact_rule(rule),
+            "rationale": (
+                "Seeded uniform draw from the executable late grid; "
+                "the control arm for the sampler."
+            ),
+            "expected_failure_mode": (
+                "An unconditioned grid point carries no mechanism and is expected "
+                "to fail the public directional screen."
+            ),
+            "rule": rule,
+        }
+        try:
+            return validate_late_proposal(proposal)
+        except ValueError:
+            continue
 
 
 def fallback_late_proposals() -> Iterable[Dict[str, Any]]:
@@ -1427,15 +1569,41 @@ def propose_late_rule(
     proposal_result: Dict[str, Any] = {"readiness": readiness}
     proposal: Optional[Dict[str, Any]] = None
     review: Optional[Dict[str, Any]] = None
-    for index, fallback in enumerate(fallback_late_proposals()):
-        if index >= DIAGNOSTIC_PROPOSAL_PREFIX:
-            break
-        validated = validate_late_proposal(fallback)
-        if not ledger.has_late_rule(validated["rule"]):
-            proposal_result["fallback"] = "diagnostic_priority"
-            return validated, None, proposal_result
+    late_rows = ledger.late_hypotheses()
+    if len(late_rows) < DIAGNOSTIC_PROPOSAL_PREFIX:
+        for fallback in fallback_late_proposals():
+            validated = validate_late_proposal(fallback)
+            if not ledger.has_late_rule(validated["rule"]):
+                proposal_result["fallback"] = "diagnostic_priority"
+                proposal_result["proposal_source"] = "diagnostic"
+                return validated, None, proposal_result
     killed_items: List[Dict[str, Any]] = []
     if readiness["ready"]:
+        # Strict alternation: the arm with fewer ledger entries goes next, LLM on ties.
+        llm_arm = sum(1 for row in late_rows if row["source"] in LATE_LLM_ARM_SOURCES)
+        control_arm = sum(1 for row in late_rows if row["source"] == "uniform_control")
+        proposal_result["turn"] = "llm" if llm_arm <= control_arm else "uniform_control"
+        if gen_cfg["negative_prompt_enabled"] or gen_cfg["novelty_gate_enabled"]:
+            registry_raw = (config or {}).get("registry_path")
+            killed_items = factory_generator.killed_negative_items(
+                resolve_repo_path(str(registry_raw)) if registry_raw else None, late_rows
+            )
+
+    def novelty_rejected(candidate: Mapping[str, Any]) -> bool:
+        # One gate for both arms: the sampler A/B must not filter the LLM arm only.
+        if not gen_cfg["novelty_gate_enabled"] or state_dir is None:
+            return False
+        novelty = factory_generator.novelty_check(
+            candidate,
+            gen_cfg,
+            client.base_url,
+            float(client.config["request_timeout_seconds"]),
+            state_dir,
+            killed_items,
+        )
+        return novelty.get("status") == "rejected"
+
+    if proposal_result.get("turn") == "llm":
         system = (
             "You propose one bounded causal rule from a public Bitcoin five-minute continuation study. "
             "Return only the strict JSON object. Do not request code, files, commands, private data, outcomes, scores, or economics."
@@ -1458,11 +1626,13 @@ def propose_late_rule(
                     replay = validate_late_proposal(queued["proposal"])
                     if not ledger.has_late_rule(replay["rule"]):
                         proposal_result["from_burst_queue"] = True
+                        proposal_result["proposal_source"] = "burst_queue"
                         proposal_result["eoh_operator"] = queued.get("operator")
+                        if queued.get("sampler_model"):
+                            proposal_result["sampler_model"] = queued["sampler_model"]
                         return replay, None, proposal_result
                 except ValueError:
                     pass
-        late_rows = ledger.late_hypotheses()
         extra_sections: List[str] = []
         if gen_cfg["eoh_operators_enabled"]:
             parents = factory_generator.eoh_parents(late_rows)
@@ -1474,11 +1644,6 @@ def propose_late_rule(
             proposal_result["eoh_operator"] = operator
             if parent_fingerprints:
                 proposal_result["eoh_parent_fingerprints"] = parent_fingerprints
-        if gen_cfg["negative_prompt_enabled"] or gen_cfg["novelty_gate_enabled"]:
-            registry_raw = (config or {}).get("registry_path")
-            killed_items = factory_generator.killed_negative_items(
-                resolve_repo_path(str(registry_raw)) if registry_raw else None, late_rows
-            )
         if gen_cfg["negative_prompt_enabled"]:
             negatives = factory_generator.negative_prompt_text(killed_items)
             if negatives:
@@ -1494,6 +1659,12 @@ def propose_late_rule(
             proposal_result.get("eoh_operator"), gen_cfg
         )
         burst_n = max(1, int(gen_cfg["samples_per_burst"]))
+        llm_cfg = (config or {}).get("llm") or {}
+        sampler_model = factory_generator.next_sampler_model(
+            llm_cfg, ledger, "late_window_mechanisms"
+        )
+        if sampler_model:
+            proposal_result["sampler_model"] = sampler_model
         survivors: List[Dict[str, Any]] = []
         burst_stats = {"generated": 0, "invalid": 0, "duplicate": 0, "novelty_rejected": 0}
         generated: Dict[str, Any] = {"ok": False, "reason": "no_samples"}
@@ -1508,18 +1679,27 @@ def propose_late_rule(
                 "late_window_proposal_v2c" if use_constrained else "late_window_proposal_v1"
             )
             try:
-                generated = client.complete(system, user, schema_name, schema, temperature)
+                generated = client.complete(
+                    system, user, schema_name, schema, temperature, model=sampler_model
+                )
             except ValueError as error:
                 generated = {"ok": False, "reason": "prompt_guard_%s" % error}
                 break
             if (
                 use_constrained
                 and sample_index == 0
-                and not generated.get("ok")
+                and generated.get("reason") == "HTTPError"
+                and 400 <= int(generated.get("http_status") or 0) < 500
+                and any(
+                    token in str(generated.get("error_body", "")).lower()
+                    for token in ("schema", "grammar")
+                )
             ):
-                # A backend that cannot compile anyOf branches fails the
-                # transport layer immediately; fall back to the legacy
-                # schema for the rest of the burst rather than losing it.
+                # A backend that cannot compile anyOf branches rejects the
+                # request outright; fall back to the legacy schema for the
+                # rest of the burst rather than losing it.  A timeout, a
+                # connection error or a model-load failure (a cold sampler)
+                # is not a schema problem and must not degrade the burst.
                 use_constrained = False
                 proposal_result["constrained_schema_fallback"] = generated.get("reason")
                 continue
@@ -1537,18 +1717,9 @@ def propose_late_rule(
             ):
                 burst_stats["duplicate"] += 1
                 continue
-            if gen_cfg["novelty_gate_enabled"] and state_dir is not None:
-                novelty = factory_generator.novelty_check(
-                    candidate,
-                    gen_cfg,
-                    client.base_url,
-                    float(client.config["request_timeout_seconds"]),
-                    state_dir,
-                    killed_items,
-                )
-                if novelty.get("status") == "rejected":
-                    burst_stats["novelty_rejected"] += 1
-                    continue
+            if novelty_rejected(candidate):
+                burst_stats["novelty_rejected"] += 1
+                continue
             survivors.append(candidate)
         proposal_result["burst"] = {
             **burst_stats,
@@ -1559,22 +1730,37 @@ def propose_late_rule(
         proposal_result["generator"] = {key: value for key, value in generated.items() if key != "value"}
         if survivors:
             proposal = survivors[0]
+            proposal_result["proposal_source"] = "llm"
             if len(survivors) > 1 and state_dir is not None:
                 factory_generator.queue_push(
                     state_dir,
                     [
-                        {"proposal": extra, "operator": proposal_result.get("eoh_operator")}
+                        {
+                            "proposal": extra,
+                            "operator": proposal_result.get("eoh_operator"),
+                            "sampler_model": sampler_model,
+                        }
                         for extra in survivors[1:]
                     ],
                 )
         if proposal is not None:
+            # Advisory: the verdict is persisted in review_json and counted by
+            # factory_kpi, never swapped for a grid rule - a reviewer gate on
+            # this arm alone would bias the LLM-versus-uniform verdict.
             proposal_sha = stable_hash(proposal)
             review_system = (
                 "Review a public causal rule for leakage, duplication, and likely execution-price failure. "
                 "Return strict JSON. Do not use or request outcomes, scores, economics, code, commands, or private data."
             )
             review_user = "proposal_sha256=%s\nproposal=%s" % (proposal_sha, canonical_json(proposal))
-            reviewed = client.complete(review_system, review_user, "late_window_review_v1", REVIEW_SCHEMA, 0.0)
+            reviewed = client.complete(
+                review_system,
+                review_user,
+                "late_window_review_v1",
+                REVIEW_SCHEMA,
+                0.0,
+                model=llm_cfg.get("reviewer_model"),
+            )
             proposal_result["reviewer"] = {key: value for key, value in reviewed.items() if key != "value"}
             if reviewed.get("ok") and isinstance(reviewed.get("value"), dict):
                 candidate_review = reviewed["value"]
@@ -1583,15 +1769,31 @@ def propose_late_rule(
                 else:
                     proposal_result["review_hash_mismatch"] = True
 
-    if proposal is None or (review is not None and review.get("verdict") == "reject"):
+    if proposal is None and readiness["ready"]:
+        # The control turn, or an LLM turn whose burst left no survivor: the
+        # draw keeps the control arm advancing (a failing model cannot hold
+        # the turn) and the grid stays the not-ready fallback.
+        rng = random.Random(len(late_rows))
+        control_stats = {"draws": 0, "duplicate": 0, "novelty_rejected": 0}
+        proposal_result["control"] = control_stats
+        for _ in range(UNIFORM_LATE_ATTEMPTS):
+            control = uniform_late_proposal(rng)
+            control_stats["draws"] += 1
+            if ledger.has_late_rule(control["rule"]):
+                control_stats["duplicate"] += 1
+                continue
+            if novelty_rejected(control):
+                control_stats["novelty_rejected"] += 1
+                continue
+            proposal_result["proposal_source"] = "uniform_control"
+            return control, None, proposal_result
+    if proposal is None:
         for fallback in fallback_late_proposals():
             validated = validate_late_proposal(fallback)
             if not ledger.has_late_rule(validated["rule"]):
                 proposal = validated
                 proposal_result["fallback"] = "deterministic_finite_grid"
-                if review is not None and review.get("verdict") == "reject":
-                    proposal_result["llm_rejection_preserved"] = review
-                    review = None
+                proposal_result["proposal_source"] = "fallback_grid"
                 break
     if proposal is None:
         raise RuntimeError("late-window finite grid exhausted for this snapshot")
@@ -2545,6 +2747,14 @@ def run_queued_economic_screen(
         )
     else:
         verdict = cached_family_economic_verdict(config, payload["proposal"])
+        if verdict["passed"] and len(
+            ledger.jobs("exact_l2_replay", "queued")
+        ) >= int(config["maximum_exact_l2_shortlist"]):
+            # A passing candidate waits for the shortlist before anything is
+            # logged or written (the cached verdict is cheap to recompute), so
+            # a saturated cycle leaves no evidence behind while a rejected
+            # head still drains the queue.
+            return {"status": "shortlist_saturated", "job_id": job["job_id"]}
     payload["economic_verdict"] = verdict
     verdict_metrics = verdict.get("metrics") or {}
     factory_generator.append_trial_entry(
@@ -2595,12 +2805,6 @@ def run_queued_economic_screen(
             "verdict": verdict,
         }
     if source_kind != "fresh_exact_replay":
-        active_exact = len(ledger.jobs("exact_l2_replay", "queued"))
-        if active_exact >= int(config["maximum_exact_l2_shortlist"]):
-            ledger.update_job(
-                job["job_id"], "queued", payload, "exact-L2 shortlist is at its fixed maximum"
-            )
-            return {"status": "shortlist_saturated", "job_id": job["job_id"]}
         enqueued = ledger.enqueue(
             str(job["lane"]),
             str(job["hypothesis_fingerprint"]),
@@ -4374,6 +4578,7 @@ def run_late_window_lane(
         review,
         status,
         evidence_path,
+        source=provenance["proposal_source"],
     )
     if evidence["stage_1_survivor"]:
         ledger.enqueue(
@@ -4404,8 +4609,118 @@ def run_late_window_lane(
         "overall": evidence["overall"],
         "gates": evidence["gates"],
         "llm_ready": provenance["readiness"]["ready"],
-        "proposal_source": "fallback" if "fallback" in provenance else "llm",
+        "proposal_source": provenance["proposal_source"],
+        "burst": provenance.get("burst"),
     }
+
+
+# e-process verdict -> summary bucket.  The null is the worst-case break-even
+# (entry cap + taker fee) over every public signal, not the executable
+# strategy's per-fill null, so only a futility kill changes the hypothesis
+# status; a promote verdict stays informational (evidence_accrual.verdict and
+# the trial ledger) and never overwrites the pipeline stage.
+FRESH_PUBLIC_ACCRUAL_BUCKETS = {"continue": "accruing", "promote": "promoted", "kill": "killed"}
+
+
+def taker_fee(price: float) -> float:
+    # Copied from scripts/adaptation_persistence_study.py so the loop does not
+    # import a study script for one line.
+    return 0.072 * price * (1.0 - price)
+
+
+def stage_1_screen_cut(evidence: Mapping[str, Any]) -> Optional[int]:
+    """Last second of the newest signal hour the public screen enumerated.
+
+    Scored replay buckets and the outcome-blind fresh buckets both count as
+    used at proposal time, so accrual starts strictly after them.  Legacy
+    artifacts without bucket lists have no safe cut and return None.
+    """
+    ends = [
+        str(window["end"])
+        for key in ("candidate_replay_windows", "fresh_candidate_windows")
+        for window in evidence.get(key, [])
+    ]
+    if not ends:
+        return None
+    newest = dt.datetime.fromisoformat(max(ends).replace("Z", "+00:00"))
+    return int(newest.timestamp()) + 3600 * LATE_REPLAY_BUCKET_HOURS - 1
+
+
+def run_fresh_public_accrual(
+    config: Mapping[str, Any], ledger: Ledger, snapshot_path: Path
+) -> Dict[str, Any]:
+    """Accrue e-value evidence for live late-lane rules on fresh public windows.
+
+    Only windows strictly newer than both the stage-1 screen's newest hour and
+    the accrual's own cut are scored, so no window is ever counted twice.  The
+    pipeline stage in hypotheses.status is left alone unless the e-process
+    reaches futility.
+    """
+    summary = {"evaluated": 0, "promoted": 0, "killed": 0, "accruing": 0, "skipped": 0}
+    windows: Optional[List[Dict[str, Any]]] = None
+    for hypothesis in ledger.late_hypotheses():
+        if hypothesis["status"] in factory_generator.KILL_STATUS_STAGES:
+            continue
+        fingerprint = hypothesis["fingerprint"]
+        proposal = hypothesis["proposal"]
+        record = ledger.hypothesis(fingerprint) or {}
+        try:
+            cut = stage_1_screen_cut(json.loads(Path(record["evidence_path"]).read_text()))
+        except (KeyError, TypeError, OSError, ValueError):
+            cut = None
+        rule = normalized_late_rule(proposal["rule"])
+        price = float(rule["maximum_entry_price"])
+        break_even = price + taker_fee(price)
+        # The L2-only filters cannot be evaluated from public windows, so those
+        # rules are not scored: the accrual would count signals they never trade.
+        if (
+            cut is None
+            or not 0.0 < break_even < 1.0
+            or float(rule["settlement_sigma_buffer"]) > 0.0
+            or float(rule["minimum_book_pressure"]) > -1.0
+        ):
+            summary["skipped"] += 1
+            continue
+        accrual = ledger.accrual(fingerprint)
+        floor = max(cut, int(accrual["last_window_start"])) if accrual else cut
+        if windows is None:
+            windows = load_public_windows(snapshot_path)
+        outcomes: List[Tuple[int, float, bool]] = []
+        for row in windows:
+            if int(row["window_start"]) <= floor:
+                continue
+            signal = causal_late_signal(row, proposal)
+            if signal is None:
+                continue
+            terminal_direction = sign(float(row["terminal"]) - float(row["p0"]))
+            if terminal_direction == 0:
+                continue
+            outcomes.append(
+                (int(row["window_start"]), break_even, signal["direction"] == terminal_direction)
+            )
+        result = ledger.accrue(fingerprint, "late_window_mechanisms", outcomes, cut)
+        if result["applied"]:
+            factory_generator.append_trial_entry(
+                config,
+                fingerprint,
+                "fresh_public_accrual",
+                result["verdict"],
+                n=result["n"],
+                wins=result["wins"],
+            )
+        if result["verdict"] == "kill":
+            ledger.update_hypothesis_status(fingerprint, "killed_futility")
+        summary["evaluated"] += 1
+        summary[FRESH_PUBLIC_ACCRUAL_BUCKETS[result["verdict"]]] += 1
+    return summary
+
+
+def run_band_lane(
+    config: Mapping[str, Any], ledger: Ledger, state_dir: Path, dry_run: bool
+) -> Dict[str, Any]:
+    return band_lane.run_band_lane(
+        config, ledger, state_dir, dry_run, LmStudioClient(config["llm"], state_dir)
+    )
 
 
 def run_opportunity_policy_search(
@@ -4617,7 +4932,8 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                 .get("opportunity_policy_search", {})
                 .get("enabled", False)
             )
-            if resources["passed"] and not opportunity_mode:
+            band_mode = selected_lane == "band_mechanisms"
+            if resources["passed"] and not opportunity_mode and not band_mode:
                 try:
                     public_snapshot = refresh_public_snapshot(
                         active_config, ledger, state_dir, dry_run
@@ -4664,6 +4980,9 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                     result["recovered_holdout_jobs"] = recover_retryable_holdout_jobs(
                         active_config, ledger
                     )
+                    result["fresh_public_accrual"] = run_fresh_public_accrual(
+                        active_config, ledger, Path(public_snapshot["path"])
+                    )
             if selected_lane:
                 lane = selected_lane
             elif opportunity_mode:
@@ -4674,6 +4993,7 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                 "baseline_evolution",
                 "late_window_mechanisms",
                 "opportunity_policy_search",
+                "band_mechanisms",
             ):
                 raise ValueError("unknown lane: %s" % lane)
             result["lane"] = lane
@@ -4686,6 +5006,10 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                 )
                 if lane == "opportunity_policy_search":
                     result["lane_result"] = run_opportunity_policy_search(
+                        active_config, ledger, state_dir, dry_run
+                    )
+                elif lane == "band_mechanisms":
+                    result["lane_result"] = run_band_lane(
                         active_config, ledger, state_dir, dry_run
                     )
                 elif queued_replay_priority:
@@ -4705,7 +5029,7 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                     )
                     if not dry_run:
                         ledger.set_meta("next_lane", "baseline_evolution")
-                if result["lane_result"].get("status") in (
+                if not band_mode and result["lane_result"].get("status") in (
                     "not_due",
                     "blocked",
                     "duplicate",
@@ -4723,6 +5047,7 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                         "rejected_economic_screen",
                         "rejected_exact_economics",
                         "economic_screen_passed",
+                        "shortlist_saturated",
                     ):
                         result["fixed_forward_job"] = run_queued_fixed_forward_job(
                             active_config,
@@ -4800,6 +5125,7 @@ def main() -> int:
             "baseline_evolution",
             "late_window_mechanisms",
             "opportunity_policy_search",
+            "band_mechanisms",
         ),
     )
     parser.add_argument("--status", action="store_true")
