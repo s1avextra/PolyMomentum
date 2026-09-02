@@ -355,11 +355,13 @@ class BandLaneTest(unittest.TestCase):
             band.uniform_control_rule(4, lambda rule: False),
         )
         self.assertEqual(sources[4], "uniform_control")
-        # LLM turn with no ready model degrades to the fixed grid order.
+        # LLM turn with no ready model degrades to a seeded control draw.
         self.assertEqual(len(lane_rows), 9)
         self.assertEqual(offline_provenance["turn"], "llm")
-        self.assertEqual(offline_provenance["proposal_source"], "fallback_grid")
-        self.assertEqual(offline["rule"], next(rule for rule in band.grid_rules() if rule not in rules))
+        # An LLM turn without a model falls through to the control arm, not the grid.
+        self.assertEqual(offline_provenance["proposal_source"], "uniform_control")
+        self.assertNotIn(offline["rule"], rules)
+        self.assertEqual(band.normalized_band_rule(offline["rule"]), offline["rule"])
 
     def test_burst_queue_replays_carry_the_sampler_model_with_a_lane_cursor(self):
         config = band_config()
@@ -725,6 +727,9 @@ class BandLaneTest(unittest.TestCase):
             cache = self.stub_cache(directory)
             ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
             try:
+                # 70 new windows arrive between the two screens; the production
+                # threshold (~8 h) is patched down so the fixture tape suffices.
+                self.enterContext(mock.patch.object(band, "RESCREEN_MIN_NEW_WINDOWS", 50))
                 first = band.run_band_lane(config, ledger, state_dir, False, client, cache, early_ts)
                 fingerprint = first["fingerprint"]
                 status_first = ledger.hypothesis(fingerprint)["status"]

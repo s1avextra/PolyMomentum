@@ -44,7 +44,15 @@ for pid in $(pgrep -f "bash .*$(basename "$0")"); do
     fi
 done
 tick=0
+# LM Studio on MainPC is reached through an ssh tunnel over Tailscale
+# (127.0.0.1:1235 -> mainpc:1234); LM Link proved to drop models mid-burst.
+ensure_tunnel() {
+    pgrep -f "ssh .*-L 1235:127.0.0.1:1234 mainpc" >/dev/null && return 0
+    ssh -o ExitOnForwardFailure=yes -o ConnectTimeout=8 -f -N -L 1235:127.0.0.1:1234 mainpc \
+        >> "$log" 2>&1 || echo "$(date -u +%FT%TZ) factory-runner: tunnel to mainpc failed" >> "$log"
+}
 while true; do
+    ensure_tunnel
     models=$(python3 -c 'import json, sys
 llm = json.load(open(sys.argv[1]))["llm"]
 seen = []
@@ -53,7 +61,7 @@ for model in [llm.get("default_model")] + list(llm.get("sampler_models") or []) 
         seen.append(model)
 print("\n".join(seen))' "$config" 2>/dev/null)
     for model in $models; do
-        curl -s -m 25 -o /dev/null -X POST http://127.0.0.1:1234/v1/chat/completions \
+        curl -s -m 25 -o /dev/null -X POST http://127.0.0.1:1235/v1/chat/completions \
             -H 'Content-Type: application/json' \
             -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
             || true

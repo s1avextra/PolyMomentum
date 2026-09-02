@@ -95,6 +95,9 @@ BINANCE_PAUSE_S = 0.15
 API_PAUSE_S = 0.12
 UNIFORM_CONTROL_ATTEMPTS = 64
 PARENT_LIMIT = 3
+# A support-only rejection is re-scored only after this many new windows
+# (~8 h) so the trial ledger does not gain a row every 15-minute tick.
+RESCREEN_MIN_NEW_WINDOWS = 96
 
 ACCRUAL_STATUSES = {"stage_2_survivor", "accruing"}
 # e-process verdict -> (hypothesis status, summary bucket)
@@ -813,7 +816,9 @@ def rescreen_support_rejections(
         except (OSError, ValueError):
             continue
         gates = ((evidence.get("stage_2") or {}).get("gates") or {})
-        if gates.get("support", True) or int(evidence.get("window_count", 0)) >= len(windows):
+        if gates.get("support", True):
+            continue
+        if len(windows) - int(evidence.get("window_count", 0)) < RESCREEN_MIN_NEW_WINDOWS:
             continue
         rule = normalized_band_rule(hypothesis["proposal"]["rule"])
         fresh = evaluate_band_rule(windows, prints, rule, lane["gates"], now_ts)
@@ -1079,18 +1084,19 @@ def propose_band_rule(
         if proposal is not None:
             provenance["proposal_source"] = "llm"
             return proposal, provenance
-    else:
-        rule = uniform_control_rule(len(rows), present)
-        if rule is not None:
-            provenance["proposal_source"] = "uniform_control"
-            return (
-                _deterministic_proposal(
-                    rule,
-                    "Uniform control: %s" % compact_band_rule(rule),
-                    "Seeded uniform draw from the band grid; the control arm for the sampler.",
-                ),
-                provenance,
-            )
+    # A control draw needs no model: an LLM turn that produced nothing
+    # (not ready, no survivors) falls through here rather than to the grid.
+    rule = uniform_control_rule(len(rows), present)
+    if rule is not None:
+        provenance["proposal_source"] = "uniform_control"
+        return (
+            _deterministic_proposal(
+                rule,
+                "Uniform control: %s" % compact_band_rule(rule),
+                "Seeded uniform draw from the band grid; the control arm for the sampler.",
+            ),
+            provenance,
+        )
     for rule in grid_rules():
         if not present(rule):
             provenance["proposal_source"] = "fallback_grid"
