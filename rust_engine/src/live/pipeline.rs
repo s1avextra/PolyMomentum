@@ -421,6 +421,62 @@ fn is_rest_not_found(error: &str) -> bool {
     error.starts_with("HTTP 404:") || error.starts_with("HTTP 404 ")
 }
 
+/// Decide from one venue status-page payload whether new entries must be
+/// suspended. `Err` when the body is not JSON (caller keeps the previous
+/// flag - fail-open); `Ok(None)` when the venue looks clear; `Ok(Some(reason))`
+/// when `activeIncidents` carries an unresolved MAJOROUTAGE / PARTIALOUTAGE /
+/// DEGRADEDPERFORMANCE incident or `activeMaintenances` carries an INPROGRESS
+/// maintenance (SCHEDULED / NOTSTARTEDYET do not trip). The reason names the
+/// kind (`incident` / `maintenance`) so the alert tells them apart. Missing or
+/// mis-shaped lists count as clear.
+fn venue_status_verdict(body: &str) -> Result<Option<String>, serde_json::Error> {
+    let body: serde_json::Value = serde_json::from_str(body)?;
+    fn status_is(entry: &serde_json::Value, want: &str) -> bool {
+        entry
+            .get("status")
+            .and_then(|v| v.as_str())
+            .is_some_and(|st| st.eq_ignore_ascii_case(want))
+    }
+    fn active_names(
+        body: &serde_json::Value,
+        key: &str,
+        active: impl Fn(&serde_json::Value) -> bool,
+    ) -> Vec<String> {
+        body.get(key)
+            .and_then(|v| v.as_array())
+            .map(|list| {
+                list.iter()
+                    .filter(|entry| active(entry))
+                    .map(|entry| {
+                        entry
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unnamed")
+                            .to_string()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    let incidents = active_names(&body, "activeIncidents", |i| {
+        let impact = i.get("impact").and_then(|v| v.as_str()).unwrap_or("");
+        !status_is(i, "RESOLVED")
+            && matches!(
+                impact,
+                "MAJOROUTAGE" | "PARTIALOUTAGE" | "DEGRADEDPERFORMANCE"
+            )
+    });
+    let maintenances = active_names(&body, "activeMaintenances", |m| status_is(m, "INPROGRESS"));
+    let mut parts = Vec::new();
+    if !incidents.is_empty() {
+        parts.push(format!("incident \u{00b7} {}", incidents.join("; ")));
+    }
+    if !maintenances.is_empty() {
+        parts.push(format!("maintenance \u{00b7} {}", maintenances.join("; ")));
+    }
+    Ok((!parts.is_empty()).then(|| parts.join(" \u{00b7} ")))
+}
+
 /// Frozen band family: preregistered 2026-08-19, fresh-gate PASS 2026-08-24
 /// (`docs/signal_favorite_band_official_v1_preregistration_2026-08-19.md`).
 pub const BAND_FAMILY: &str = "signal_favorite_band_official_v1";
@@ -1831,56 +1887,31 @@ impl Pipeline {
             Err(_) => return,
         };
         loop {
-            let verdict: Option<(bool, String)> = async {
-                let body: serde_json::Value = client
+            let verdict: Option<Option<String>> = async {
+                let text = client
                     .get(&url)
                     .header("User-Agent", "polymomentum/1.0")
                     .send()
                     .await
                     .ok()?
-                    .json()
+                    .text()
                     .await
                     .ok()?;
-                let incidents = body.get("activeIncidents").and_then(|v| v.as_array());
-                let names: Vec<String> = incidents
-                    .map(|list| {
-                        list.iter()
-                            .filter_map(|i| {
-                                let impact =
-                                    i.get("impact").and_then(|v| v.as_str()).unwrap_or("");
-                                let resolved = i
-                                    .get("status")
-                                    .and_then(|v| v.as_str())
-                                    .is_some_and(|st| st.eq_ignore_ascii_case("RESOLVED"));
-                                (!resolved
-                                    && matches!(
-                                        impact,
-                                        "MAJOROUTAGE" | "PARTIALOUTAGE" | "DEGRADEDPERFORMANCE"
-                                    ))
-                                .then(|| {
-                                    i.get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unnamed")
-                                        .to_string()
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some((!names.is_empty(), names.join("; ")))
+                venue_status_verdict(&text).ok()
             }
             .await;
-            if let Some((degraded, names)) = verdict {
+            if let Some(reason) = verdict {
+                let degraded = reason.is_some();
                 let was = self
                     .venue_incident
                     .swap(degraded, std::sync::atomic::Ordering::Relaxed);
                 if degraded != was {
-                    if degraded {
-                        tracing::warn!(incidents = %names, "venue status page reports an active incident; new entries suspended");
-                        self.monitor.record_error("venue_incident_gate", &names, true);
+                    if let Some(reason) = reason {
+                        tracing::warn!(reason = %reason, "venue status page reports an active incident or maintenance; new entries suspended");
+                        self.monitor.record_error("venue_incident_gate", &reason, true);
                         if self.alerter.enabled() {
                             self.alerter
-                                .notify(&format!("\u{23f8} venue incident \u{00b7} {names} \u{00b7} entries suspended"))
+                                .notify(&format!("\u{23f8} venue {reason} \u{00b7} entries suspended"))
                                 .await;
                         }
                     } else {
@@ -6880,5 +6911,80 @@ mod tests {
         assert!(is_rest_not_found("HTTP 404 Not Found: missing"));
         assert!(!is_rest_not_found("HTTP 500: upstream failed"));
         assert!(!is_rest_not_found("Request failed: timeout"));
+    }
+
+    #[test]
+    fn venue_status_incident_only_suspends() {
+        let body = r#"{"activeIncidents":[{"name":"Delayed order reads","status":"INVESTIGATING","impact":"DEGRADEDPERFORMANCE"}],"activeMaintenances":[]}"#;
+        assert_eq!(
+            venue_status_verdict(body).unwrap().as_deref(),
+            Some("incident \u{00b7} Delayed order reads")
+        );
+        // Resolved or low-impact incidents do not trip.
+        let quiet = r#"{"activeIncidents":[
+            {"name":"Old","status":"RESOLVED","impact":"MAJOROUTAGE"},
+            {"name":"Notice","status":"MONITORING","impact":"OPERATIONAL"}
+        ],"activeMaintenances":[]}"#;
+        assert_eq!(venue_status_verdict(quiet).unwrap(), None);
+    }
+
+    #[test]
+    fn venue_status_maintenance_only_suspends_when_in_progress() {
+        // Live payload shape observed 2026-09-02.
+        let body = r#"{"activeIncidents":[],"activeMaintenances":[{"name":"Scheduled Emergency CLOB maintenance","status":"INPROGRESS","start":"2026-09-02T01:30:00.000Z","duration":150}]}"#;
+        assert_eq!(
+            venue_status_verdict(body).unwrap().as_deref(),
+            Some("maintenance \u{00b7} Scheduled Emergency CLOB maintenance")
+        );
+        for status in ["SCHEDULED", "NOTSTARTEDYET", "COMPLETED"] {
+            let body = format!(
+                r#"{{"activeIncidents":[],"activeMaintenances":[{{"name":"Later","status":"{status}","duration":150}}]}}"#
+            );
+            assert_eq!(venue_status_verdict(&body).unwrap(), None, "{status}");
+        }
+    }
+
+    #[test]
+    fn venue_status_incident_and_maintenance_both_named() {
+        let body = r#"{"activeIncidents":[{"name":"API errors","status":"IDENTIFIED","impact":"PARTIALOUTAGE"}],"activeMaintenances":[{"name":"CLOB maintenance","status":"INPROGRESS"}]}"#;
+        assert_eq!(
+            venue_status_verdict(body).unwrap().as_deref(),
+            Some("incident \u{00b7} API errors \u{00b7} maintenance \u{00b7} CLOB maintenance")
+        );
+    }
+
+    #[test]
+    fn venue_status_clear_when_nothing_active() {
+        assert_eq!(
+            venue_status_verdict(r#"{"activeIncidents":[],"activeMaintenances":[]}"#).unwrap(),
+            None
+        );
+        assert_eq!(
+            venue_status_verdict(r#"{"page":{"name":"Polymarket"}}"#).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn venue_status_malformed_payload_fails_open() {
+        // Not JSON at all (an HTML error page, empty body): no verdict, the
+        // loop keeps whatever flag it had.
+        assert!(venue_status_verdict("<html>502 Bad Gateway</html>").is_err());
+        assert!(venue_status_verdict("").is_err());
+        // JSON of the wrong shape never reads as an outage.
+        for body in [
+            r#"[]"#,
+            r#"{"activeIncidents":"MAJOROUTAGE","activeMaintenances":"INPROGRESS"}"#,
+            r#"{"activeIncidents":[1,"x",null],"activeMaintenances":[{"status":7},{"name":"n"}]}"#,
+        ] {
+            assert_eq!(venue_status_verdict(body).unwrap(), None, "{body}");
+        }
+        // An entry missing its name still trips and is labelled.
+        assert_eq!(
+            venue_status_verdict(r#"{"activeMaintenances":[{"status":"inprogress"}]}"#)
+                .unwrap()
+                .as_deref(),
+            Some("maintenance \u{00b7} unnamed")
+        );
     }
 }
