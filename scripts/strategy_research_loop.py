@@ -1870,6 +1870,19 @@ def compile_late_variant(
     }
 
 
+def public_archive_published(url: str, timeout: int = 15) -> bool:
+    """HEAD probe; only a definite 404 means "not published yet". Any other
+    outcome returns True so the download path reports the real error."""
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout):
+            return True
+    except urllib.error.HTTPError as error:
+        return error.code != 404
+    except Exception:
+        return True
+
+
 def download_atomic(url: str, destination: Path, timeout: int) -> None:
     if destination.is_file():
         return
@@ -2094,6 +2107,16 @@ def refresh_public_snapshot(
     start_day = dt.date.fromisoformat(str(refresh["start_date"]))
     if latest_day < start_day:
         raise ValueError("public refresh latest day precedes start date")
+    # Binance publishes a day's archive some hours after UTC midnight; until
+    # then the newest day 404s. Treat that as extra lag rather than failing
+    # the refresh (which used to drop every cycle onto the July seed).
+    base_url = str(refresh["binance_archive_base_url"]).rstrip("/")
+    for _ in range(2):
+        if latest_day <= start_day or public_archive_published(
+            "%s/BTCUSDT-1m-%s.zip" % (base_url, latest_day.isoformat())
+        ):
+            break
+        latest_day -= dt.timedelta(days=1)
     output = state_dir / "public_snapshots/binance_spot_1m_current.jsonl.gz"
     causal_output = state_dir / "public_snapshots/binance_spot_1m_causal_current.jsonl.gz"
     label_output = state_dir / "public_snapshots/binance_spot_1m_labels_current.jsonl.gz"
@@ -2131,7 +2154,6 @@ def refresh_public_snapshot(
             "latest_day": latest_day.isoformat(),
         }
     data_dir = state_dir / "data/binance-public-1m"
-    base_url = str(refresh["binance_archive_base_url"]).rstrip("/")
     source_rows: List[Dict[str, Any]] = []
     all_windows: List[Dict[str, Any]] = []
     day = start_day
@@ -4939,15 +4961,26 @@ def run_cycle(config: Mapping[str, Any], dry_run: bool, selected_lane: Optional[
                         active_config, ledger, state_dir, dry_run
                     )
                 except Exception as error:
-                    seed = resolve_repo_path(
-                        active_config["lanes"]["late_window_mechanisms"]["public_snapshot"]
-                    )
-                    public_snapshot = {
-                        "status": "fallback_seed",
-                        "path": str(seed),
-                        "sha256": sha256_file(seed),
-                        "error": "%s: %s" % (type(error).__name__, error),
-                    }
+                    current = state_dir / "public_snapshots/binance_spot_1m_current.jsonl.gz"
+                    if current.is_file():
+                        # The last good refreshed snapshot beats the July seed:
+                        # verdicts stay on fresh data across a transient outage.
+                        public_snapshot = {
+                            "status": "fallback_current",
+                            "path": str(current),
+                            "sha256": sha256_file(current),
+                            "error": "%s: %s" % (type(error).__name__, error),
+                        }
+                    else:
+                        seed = resolve_repo_path(
+                            active_config["lanes"]["late_window_mechanisms"]["public_snapshot"]
+                        )
+                        public_snapshot = {
+                            "status": "fallback_seed",
+                            "path": str(seed),
+                            "sha256": sha256_file(seed),
+                            "error": "%s: %s" % (type(error).__name__, error),
+                        }
                 result["public_snapshot"] = public_snapshot
                 active_config["lanes"]["late_window_mechanisms"]["public_snapshot"] = str(
                     public_snapshot["path"]

@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import datetime as dt
 import unittest
 from unittest import mock
 import urllib.error
@@ -2873,6 +2874,68 @@ class StrategyResearchLoopTest(unittest.TestCase):
                 live = loop.run_cycle(config, False, "late_window_mechanisms")
         screen.assert_called_once()
         self.assertEqual(live["economic_screen_job"], {"status": "empty"})
+
+    def test_refresh_steps_back_a_day_when_the_newest_archive_is_unpublished(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            windows = [self.accrual_window(self.CUT_EPOCH + 3600, 1, True)]
+            snapshot, ledger = self.accrual_fixture(directory, [], windows)
+            snapshots = state_dir / "public_snapshots"
+            snapshots.mkdir(parents=True, exist_ok=True)
+            current = snapshots / "binance_spot_1m_current.jsonl.gz"
+            current.write_bytes(snapshot.read_bytes())
+            (snapshots / "binance_spot_1m_current.manifest.json").write_text("{}")
+            lag = int(config["public_refresh"]["resolution_lag_days"])
+            newest = dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=lag)
+            previous = newest - dt.timedelta(days=1)
+            ledger.set_meta("public_snapshot.latest_day", previous.isoformat())
+            probed = []
+
+            def published(url, timeout=15):
+                probed.append(url)
+                return previous.isoformat() in url
+
+            try:
+                with mock.patch.object(loop, "public_archive_published", side_effect=published), mock.patch.object(
+                    loop, "download_atomic", side_effect=AssertionError("must not download")
+                ):
+                    result = loop.refresh_public_snapshot(config, ledger, state_dir, False)
+            finally:
+                ledger.close()
+        self.assertEqual(result["status"], "current")
+        self.assertEqual(result["latest_day"], previous.isoformat())
+        self.assertEqual(len(probed), 2)
+        self.assertIn(newest.isoformat(), probed[0])
+
+    def test_cycle_falls_back_to_the_last_good_snapshot_not_the_seed(self):
+        config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            snapshot, ledger = self.accrual_fixture(directory, [], [])
+            ledger.close()
+            current = state_dir / "public_snapshots/binance_spot_1m_current.jsonl.gz"
+            current.parent.mkdir(parents=True, exist_ok=True)
+            current.write_bytes(snapshot.read_bytes())
+            with mock.patch.object(
+                loop, "resource_status", return_value={"passed": True, "checks": {}}
+            ), mock.patch.object(
+                loop, "run_registry_audit", return_value={"status": "completed"}
+            ), mock.patch.object(
+                loop, "refresh_public_snapshot", side_effect=urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+            ), mock.patch.object(
+                loop, "run_late_window_lane", return_value={"status": "not_due"}
+            ), mock.patch.object(
+                loop, "run_fresh_public_accrual", return_value={"evaluated": 0}
+            ) as accrual:
+                live = loop.run_cycle(config, False, "late_window_mechanisms")
+        self.assertEqual(live["public_snapshot"]["status"], "fallback_current")
+        self.assertEqual(live["public_snapshot"]["path"], str(current))
+        self.assertIn("404", live["public_snapshot"]["error"])
+        accrual.assert_called_once()
+        self.assertEqual(accrual.call_args.args[2], current)
 
     def test_uniform_late_proposal_always_validates_and_replays(self):
         enums = loop.LATE_PROPOSAL_SCHEMA["properties"]["rule"]["properties"]
