@@ -303,6 +303,13 @@ def load_embedding_cache(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
+NOVELTY_BLOCKING_PREFIXES = ("rejected_signal", "rejected_stage_1", "killed")
+
+
+def novelty_blocking_status(status: str) -> bool:
+    return status.startswith(NOVELTY_BLOCKING_PREFIXES)
+
+
 def structural_novelty(
     rule: Mapping[str, Any], killed_items: Sequence[Mapping[str, Any]], min_hamming: int
 ) -> Dict[str, Any]:
@@ -312,6 +319,12 @@ def structural_novelty(
     for item in killed_items:
         fields = item.get("rule_fields")
         if not isinstance(fields, Mapping):
+            continue
+        # Only signal-level kills mark a neighbourhood dead. Support and
+        # economics rejections say "not enough data" or "not executable at
+        # this price"; a one-field neighbour of those is a legitimate refine
+        # (2026-09-03: with all kills counted, 6/6 LLM samples died per burst).
+        if not novelty_blocking_status(str(item.get("status", ""))):
             continue
         keys = set(rule) | set(fields)
         distance = sum(1 for key in keys if rule.get(key) != fields.get(key))

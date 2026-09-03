@@ -3190,6 +3190,13 @@ class StrategyResearchLoopTest(unittest.TestCase):
         self.assertEqual([v["min_hamming"] for v in verdicts], [0, 1, 2])
         self.assertEqual(verdicts[0]["against"]["status"], "rejected_stage_1")
         self.assertEqual(nothing_killed, {"status": "accepted", "gate": "structural", "min_hamming": None})
+        # A support/economics rejection does not mark its neighbourhood dead.
+        support_killed = [dict(killed[0], status="rejected_entry_economics")]
+        with mock.patch.object(loop.factory_generator, "embed_text", side_effect=AssertionError("no embeddings")):
+            lenient = loop.factory_generator.novelty_check(one_off, gen_cfg, "http://unused", 1.0, Path("/tmp"), support_killed)
+        self.assertEqual(lenient["status"], "accepted")
+        self.assertTrue(loop.factory_generator.novelty_blocking_status("killed_futility"))
+        self.assertFalse(loop.factory_generator.novelty_blocking_status("rejected_economic_screen"))
         self.assertTrue(all("rule_fields" in item for item in loop.factory_generator.killed_negative_items(
             None,
             [{"status": "rejected_stage_1", "created_at": "2026-09-02", "proposal": {"rule": same["rule"]}}],
