@@ -21,21 +21,22 @@ loop = kpi.loop
 LANE = "late_window_mechanisms"
 
 
-# Public projections of path_and_move rules (the fields stage 1 reads) and the
-# execution variants stage 1 cannot see: consecutive indices are distinct
-# projections; variants of one index share its projection.
+# Public projections of path_and_move rules (the fields stage 1 read) and the
+# execution variants stage 1 could not see: consecutive indices are distinct
+# projections; variants of one index share its projection.  The enums are
+# the retired late lane's frozen grid, inlined once its code was deleted.
 PROJECTIONS = [
     (path, move, buffer, direction)
     for path in (2, 3, 4)
     for move in (100, 200)
-    for buffer in sorted(loop.LATE_DECISION_BUFFERS_USD)
+    for buffer in (0, 100, 125, 200)
     for direction in ("both", "up", "down")
 ]
 VARIANTS = [
     (cap, sigma, pressure)
-    for cap in sorted(loop.LATE_MAXIMUM_ENTRY_PRICES)
-    for sigma in sorted(loop.LATE_SETTLEMENT_SIGMA_BUFFERS)
-    for pressure in sorted(loop.LATE_MINIMUM_BOOK_PRESSURES)
+    for cap in (0.75, 0.85, 0.90, 0.95, 0.97, 1.0)
+    for sigma in (0.0, 0.1, 0.2)
+    for pressure in (-1.0, -0.15, 0.15)
 ]
 
 

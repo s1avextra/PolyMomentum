@@ -67,6 +67,31 @@ def anchor(ws, anchor_s, margin, up=None, down=None, stake=10.0, late=0.31):
     }
 
 
+def sample(t, worst, c=None, fresh=True):
+    """One ladder sample: the same quote at $5/$25/$100, the complement's
+    best ask coherent with the VWAP unless given."""
+    return {"t": t, "q": [[worst, worst, 26.0, False] for _ in range(3)], "c": round(1.0 - worst, 4) if c is None else c, "age": 0.0, "fresh": fresh}
+
+
+def ladder(ws, anchor_s, margin, samples):
+    """A directional band_ladder record flushed on time (anchor + 31 s)."""
+    return {
+        "type": "band_ladder",
+        "ts": ws + anchor_s + 31.2,
+        "cid": "%016x" % ws,
+        "anchor_s": anchor_s,
+        "basis": "binance",
+        "open": 70000.0,
+        "btc": 70000.0 + margin,
+        "margin": margin,
+        "direction": "up" if margin > 0 else "down",
+        "budgets_usd": [5.0, 25.0, 100.0],
+        "samples": samples,
+        "cycles": len(samples),
+        "max_gap_s": 1.01,
+    }
+
+
 def write_sessions(directory, records, name="session_20260901_000000.jsonl"):
     path = Path(directory) / "sessions" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,16 +151,25 @@ class BandShadowRaceTest(unittest.TestCase):
     def test_load_anchors_groups_by_window_and_anchor_second(self):
         first = [anchor(BASE_WS, 210, 60.0), anchor(BASE_WS, 240, 60.0), anchor(BASE_WS + 300, 240, -70.0, late=0.9)]
         # A restart re-emits the 240 anchor later; the earliest elapsed wins.
-        second = [{**anchor(BASE_WS, 240, 61.0, late=1.5)}, {"type": "band_anchor", "ts": 1.0}]
+        # A ladder record shadows the anchor of its key (placed by the anchor
+        # of its cid); one without an anchor is placed by its flush time.
+        second = [
+            {**anchor(BASE_WS, 240, 61.0, late=1.5)},
+            {"type": "band_anchor", "ts": 1.0},
+            ladder(BASE_WS, 210, 60.0, [sample(0, 0.70)]),
+            ladder(BASE_WS + 600, 240, 55.0, [sample(0, 0.75)]),
+        ]
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             sessions = write_sessions(directory, first)
             write_sessions(directory, second, name="session_20260901_010000.jsonl")
             anchors = race.load_anchors(sessions)
-        self.assertEqual(sorted(anchors), [BASE_WS, BASE_WS + 300])
+        self.assertEqual(sorted(anchors), [BASE_WS, BASE_WS + 300, BASE_WS + 600])
         self.assertEqual(sorted(anchors[BASE_WS]), [210, 240])
         self.assertEqual(anchors[BASE_WS][240]["margin"], 60.0)
         self.assertEqual(anchors[BASE_WS][240]["elapsed_s"], 240.31)
+        self.assertEqual((anchors[BASE_WS][210]["type"], len(anchors[BASE_WS][210]["samples"])), ("band_ladder", 1))
         self.assertEqual(list(anchors[BASE_WS + 300]), [240])
+        self.assertEqual((list(anchors[BASE_WS + 600]), anchors[BASE_WS + 600][240]["type"]), ([240], "band_ladder"))
         self.assertEqual(race.load_anchors(Path(directory) / "missing"), {})
 
     # --- rule application ---------------------------------------------------
@@ -170,6 +204,26 @@ class BandShadowRaceTest(unittest.TestCase):
         self.assertIsNone(with_quote(quote(0.0)))
         self.assertIsNone(with_quote({}))
         self.assertIsNone(race.rule_trade(CHAMPION, {**anchor(BASE_WS, 240, -60.0), "down": None}, None))
+        # A grammar C cell reads ask floor 0.80 (exclusive), direction both, no sigma.
+        cell = {"decision_second": 240, "margin_floor_usd": 50, "favorite_price_cap": 0.92, "patience_s": 0}
+        self.assertIsNone(race.rule_trade(cell, anchor(BASE_WS, 240, 60.0, up=quote(0.80)), None))
+        self.assertIsNotNone(race.rule_trade(cell, anchor(BASE_WS, 240, 60.0, up=quote(0.8001)), None))
+        self.assertIsNotNone(race.rule_trade(cell, anchor(BASE_WS, 240, -60.0, down=quote(0.85)), None))
+        self.assertIsNone(race.rule_trade(cell, anchor(BASE_WS, 240, -60.0, down=quote(0.93)), None))
+        self.assertIsNone(race.rule_trade({**cell, "margin_floor_usd": 75}, anchor(BASE_WS, 240, 60.0, up=quote(0.85)), None))
+
+    def test_rule_trade_scores_ladder_records_at_the_fok_worst_price(self):
+        cell = {"decision_second": 210, "margin_floor_usd": 75, "favorite_price_cap": 0.92, "patience_s": 15}
+        record = ladder(BASE_WS, 210, 80.0, [sample(0, 0.95), sample(3, 0.90), sample(20, 0.85)])
+        trade = race.rule_trade(cell, record, None)
+        # The first sample within the patience whose $25 quote clears the
+        # band, entered at its worst (FOK limit) price at the ladder budget.
+        self.assertEqual((trade["direction"], trade["t"], trade["entry"], trade["worst"], trade["stake_usd"]), ("up", 3, 0.90, 0.90, 25.0))
+        self.assertIsNone(race.rule_trade({**cell, "patience_s": 0}, record, None))
+        self.assertIsNone(race.rule_trade({**cell, "margin_floor_usd": 100}, record, None))
+        # A legacy rule reads its patience as 0 and its own floor.
+        self.assertEqual(race.rule_trade(CHAMPION, ladder(BASE_WS, 240, 60.0, [sample(0, 0.70)]), None)["entry"], 0.70)
+        self.assertIsNone(race.rule_trade(CHAMPION, ladder(BASE_WS, 240, 60.0, [sample(1, 0.70)]), None))
 
     def test_rule_trade_replays_the_engine_cycle_gates(self):
         # pick_book_prices: a fresh best ask on BOTH sides, else the cycle
@@ -285,10 +339,6 @@ class BandShadowRaceTest(unittest.TestCase):
         self.assertEqual(report["windows"], {"anchored": 8, "resolved": 7, "unresolved": 1})
         self.assertAlmostEqual(report["d_scale"], SCALE, places=12)
         self.assertIn("/ %.4f" % SCALE, report["scaling"])
-        text = race.markdown(report)
-        self.assertIn("| challenger | n | mean d |", text)
-        self.assertIn(challenger["fingerprint"][:12], text)
-        self.assertNotIn("WARNING", text)
 
     def test_race_scale_keeps_d_in_unit_interval_and_preserves_sign(self):
         # The widest pair: a win just above the 0.55 floor against a loss.
@@ -372,9 +422,6 @@ class BandShadowRaceTest(unittest.TestCase):
         self.assertAlmostEqual(pair["promote_e"], 2.0 / alpha, places=9)
         self.assertEqual([row["paired"]["verdict"] for row in pair["challengers"]], ["continue", "continue"])
         self.assertAlmostEqual(pair["challengers"][0]["paired"]["e_value"], alone["challengers"][0]["paired"]["e_value"], places=9)
-        text = race.markdown(pair)
-        self.assertIn("promote at e >= %.1f (alpha %s Bonferroni over 2 challengers" % (2.0 / alpha, alpha), text)
-        self.assertIn("champion = the band rule replayed on the anchor quote", text)
         # No challengers at all: the threshold is the plain 1/alpha.
         self.assertAlmostEqual(race.race(anchors, outcomes, {}, CHAMPION, [], 0.05)["promote_e"], 20.0, places=12)
 
@@ -496,11 +543,15 @@ class BandShadowRaceTest(unittest.TestCase):
 
     # --- CLI -------------------------------------------------------------------
 
-    def test_main_reports_and_writes_ledger_without_pull(self):
+    def test_main_prints_the_report_and_writes_the_ledger_only_on_record(self):
         ws = [BASE_WS + index * 300 for index in range(3)]
         records = []
         for window_start in ws:
             records += [anchor(window_start, 210, 60.0, up=quote(0.65)), anchor(window_start, 240, 60.0)]
+        # Ladder records for two of the three windows: the third is raced on
+        # its anchor quote (diagnostic) and dropped from a recorded race.
+        for window_start in ws[:2]:
+            records += [ladder(window_start, 210, 60.0, [sample(0, 0.65)]), ladder(window_start, 240, 60.0, [sample(0, 0.70)])]
         market_calls = mock.Mock(return_value=None)
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             sessions = write_sessions(directory, records)
@@ -514,33 +565,51 @@ class BandShadowRaceTest(unittest.TestCase):
                 "--research-db", str(Path(directory) / "missing.sqlite3"),
             ]
             stdout = io.StringIO()
-            with mock.patch.object(race.subprocess, "run") as run, contextlib.redirect_stdout(stdout):
+            with contextlib.redirect_stdout(stdout):
                 status = race.main(argv, cache=cache, now_ts=ws[-1] + 3000)
-            run.assert_not_called()
             market_calls.assert_not_called()
             reports = sorted((Path(directory) / "band_race").glob("*.json"))
             self.assertEqual(len(reports), 1)
             report = json.loads(reports[0].read_text())
             # A race report is not a look: --json alone writes no ledger row.
             self.assertFalse((Path(directory) / "trial_ledger.jsonl").exists())
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                 race.main([arg for arg in argv if arg != "--json"] + ["--record"], cache=cache, now_ts=ws[-1] + 3000)
-            with contextlib.redirect_stdout(io.StringIO()):
+            recorded_stdout = io.StringIO()
+            with contextlib.redirect_stdout(recorded_stdout):
                 recorded = race.main(argv + ["--record"], cache=cache, now_ts=ws[-1] + 3000)
             ledger = [json.loads(line) for line in (Path(directory) / "trial_ledger.jsonl").read_text().splitlines()]
-        self.assertEqual((status, recorded), (0, 0))
-        text = stdout.getvalue()
-        self.assertIn("| rule | fingerprint | windows |", text)
-        self.assertIn("(champion)", text)
-        self.assertIn("written ", text)
-        self.assertEqual(report["champion"]["trades"], 3)
+            # Without --json nothing is written and the report is still printed
+            # (reports are named to the second, so count files, not runs).
+            written_before = sorted((Path(directory) / "band_race").glob("*.json"))
+            plain = io.StringIO()
+            with contextlib.redirect_stdout(plain):
+                printed_only = race.main([arg for arg in argv if arg != "--json"], cache=cache, now_ts=ws[-1] + 3000)
+            self.assertEqual(sorted((Path(directory) / "band_race").glob("*.json")), written_before)
+            self.assertNotIn("written", json.loads(plain.getvalue()))
+        self.assertEqual((status, recorded, printed_only), (0, 0, 0))
+        printed = json.loads(stdout.getvalue())
+        self.assertEqual(printed["written"], str(reports[0]))
+        self.assertNotIn("written", report)
+        self.assertEqual({key: value for key, value in printed.items() if key != "written"}, report)
+        # Without --record every record races: two ladder rows at the FOK
+        # worst price plus one anchor quote per rule, flagged as diagnostic.
+        self.assertEqual((report["champion"]["trades"], report["champion"]["anchor_quote_trades"]), (3, 1))
+        self.assertEqual((report["challengers"][0]["trades"], report["challengers"][0]["anchor_quote_trades"]), (3, 1))
+        self.assertEqual(report["records"], {"ladder": 4, "anchor": 2})
+        self.assertEqual(report["champion"]["label"], band.compact_band_rule(CHAMPION))
         self.assertEqual(report["challengers"][0]["paired"]["n"], 3)
         self.assertEqual(report["challengers"][0]["paired"]["wins"], 3)
         self.assertEqual(report["outcome_fetch"], {"fetched": 0, "errors": 0})
+        # A look that counts is raced on the ladder rows alone.
+        recorded_report = json.loads(recorded_stdout.getvalue())
+        self.assertEqual(recorded_report["records"], {"ladder": 4, "anchor": 0})
+        self.assertEqual(recorded_report["windows"]["anchored"], 2)
+        self.assertEqual((recorded_report["champion"]["trades"], recorded_report["champion"]["anchor_quote_trades"]), (2, 0))
         self.assertEqual(len(ledger), 1)
         self.assertEqual(ledger[0]["stage"], race.STAGE)
         self.assertEqual(ledger[0]["candidate"], band.band_fingerprint(CHALLENGER_210))
-        self.assertEqual((ledger[0]["n"], ledger[0]["wins"], ledger[0]["verdict"]), (3, 3, "continue"))
+        self.assertEqual((ledger[0]["n"], ledger[0]["wins"], ledger[0]["verdict"]), (2, 2, "continue"))
         self.assertEqual(ledger[0]["source"], "research_loop")
 
     def test_main_sigma_challenger_reads_closes_from_cache(self):
@@ -557,31 +626,40 @@ class BandShadowRaceTest(unittest.TestCase):
             sessions = write_sessions(directory, records)
             cache = stub_cache(directory, {w: "up" for w in ws}, closes=closes)
             stdout = io.StringIO()
-            with mock.patch.object(race.subprocess, "run") as run, contextlib.redirect_stdout(stdout):
+            with contextlib.redirect_stdout(stdout):
                 status = race.main(
                     ["--sessions-dir", str(sessions), "--challengers", json.dumps({**CHAMPION, "margin_floor_sigma": 1.5})],
                     cache=cache,
                     now_ts=newest + 30,
                 )
-            run.assert_not_called()
         self.assertEqual(status, 0)
         self.assertEqual(cache.closes_errors, [])
-        rows = [line for line in stdout.getvalue().splitlines() if "(challenger)" in line]
-        self.assertEqual(len(rows), 1)
-        cells = [cell.strip() for cell in rows[0].split("|")]
-        self.assertEqual((cells[3], cells[4], cells[5]), ("16", "4", "4"))
+        challenger = json.loads(stdout.getvalue())["challengers"][0]
+        self.assertEqual((challenger["windows"], challenger["trades"], challenger["wins"]), (16, 4, 4))
 
-    def test_pull_rsyncs_from_vps_into_the_local_mirror_only(self):
+    def test_main_reports_missing_records_without_touching_the_network(self):
+        anchors_only = [anchor(BASE_WS, 210, 60.0, up=quote(0.65)), anchor(BASE_WS, 240, 60.0)]
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
-            sessions = Path(directory) / "mirror"
-            with mock.patch.object(race.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()):
-                status = race.main(["--pull", "--sessions-dir", str(sessions), "--challengers", json.dumps(CHALLENGER_210)])
-            self.assertTrue(sessions.is_dir())
-        self.assertEqual(status, 1)  # nothing mirrored by the mocked rsync
-        run.assert_called_once_with(["rsync", "-az", race.VPS_SESSIONS, str(sessions) + "/"], check=True)
-        source, destination = run.call_args[0][0][2], run.call_args[0][0][3]
-        self.assertTrue(source.startswith("vps:"))
-        self.assertNotIn(":", destination)
+            cache = stub_cache(directory, {BASE_WS: "up"})
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                status = race.main(["--sessions-dir", str(Path(directory) / "mirror"), "--challengers", json.dumps(CHALLENGER_210)], cache=cache)
+            # Anchor quotes alone are diagnostic: a recorded race refuses them.
+            sessions = write_sessions(directory, anchors_only)
+            refused_stdout = io.StringIO()
+            with contextlib.redirect_stdout(refused_stdout):
+                refused = race.main(
+                    ["--sessions-dir", str(sessions), "--challengers", json.dumps(CHALLENGER_210), "--json", "--record", "--loop-config", str(loop_config(directory))],
+                    cache=cache,
+                    now_ts=BASE_WS + 3000,
+                )
+            self.assertFalse((Path(directory) / "trial_ledger.jsonl").exists())
+            self.assertFalse((Path(directory) / "band_race").exists())
+        self.assertEqual(status, 1)
+        self.assertIn("no band_anchor or band_ladder records", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(refused, 1)
+        self.assertIn("no band_ladder records", json.loads(refused_stdout.getvalue())["error"])
+        self.assertFalse(hasattr(race, "VPS_SESSIONS"))
 
 
 if __name__ == "__main__":

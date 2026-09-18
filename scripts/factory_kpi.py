@@ -48,7 +48,10 @@ BAND_STAGE_2_STAGES = {"band_entry_economics", "band_rescore_paginated"}
 BAND_STAGE_2_PASS_VERDICTS = {"stage_2_survivor", "manual_audit"}
 ACCRUAL_BUCKETS = {"continue": "accruing", "promote": "promote", "kill": "killed"}
 BAND_LANE = "band_mechanisms"
-# The late-lane stage-1 screen (evaluate_late_rule / causal_late_signal) reads
+# The LLM arm of the retired late lane: llm samples plus burst-queue replays
+# (kept so its historic rows still read as one arm).
+LATE_LLM_ARM_SOURCES = ("llm", "burst_queue")
+# The late-lane stage-1 screen (evaluate_late_rule / causal_late_signal) read
 # only these rule fields; the entry cap, sigma buffer and book pressure are
 # execution variants that reproduce the same public verdict.
 LATE_STAGE_1_FIELDS = (
@@ -212,25 +215,19 @@ def stage_1_accuracy(lane: str, evidence_path: Optional[str]) -> Optional[float]
 
 def rule_key(lane: str, proposal: Mapping[str, Any]) -> Optional[str]:
     try:
-        rule = proposal["rule"]
-        if lane == "late_window_mechanisms":
-            rule = loop.normalized_late_rule(rule)
-        return loop.canonical_json(rule)
+        return loop.canonical_json(proposal["rule"])
     except (KeyError, TypeError, ValueError):
         return None
 
 
 def projection_key(lane: str, proposal: Mapping[str, Any]) -> Optional[str]:
     """Stage-1 projection: the late rule restricted to the fields the public
-    screen reads; every field of a band rule reaches its stage 1."""
+    screen read (rows were normalized on insert); every field of a band rule
+    reaches its stage 1."""
     try:
         rule = proposal["rule"]
         if lane == "late_window_mechanisms":
-            rule = {
-                field: value
-                for field, value in loop.normalized_late_rule(rule).items()
-                if field in LATE_STAGE_1_FIELDS
-            }
+            rule = {field: value for field, value in rule.items() if field in LATE_STAGE_1_FIELDS}
         return loop.canonical_json(rule)
     except (KeyError, TypeError, ValueError):
         return None
@@ -293,7 +290,7 @@ def sampler_verdict(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     arm is deduplicated on the full rule, so re-proposing execution-only
     variants of one known survivor must not bank extra survivors."""
     arms = {
-        "llm": [row for row in rows if row["source"] in loop.LATE_LLM_ARM_SOURCES],
+        "llm": [row for row in rows if row["source"] in LATE_LLM_ARM_SOURCES],
         "uniform_control": [row for row in rows if row["source"] == "uniform_control"],
     }
     counts = {}

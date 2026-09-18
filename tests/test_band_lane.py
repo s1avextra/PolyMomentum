@@ -27,6 +27,7 @@ def _load(name, relative):
 band = _load("band_lane", "scripts/band_lane.py")
 loop = _load("strategy_research_loop", "scripts/strategy_research_loop.py")
 
+# The legacy six-field shape of the 412 hypotheses proposed by the LLM-era lane.
 LIVE_RULE = {
     "margin_floor_usd": 50,
     "margin_floor_sigma": 0.0,
@@ -35,6 +36,8 @@ LIVE_RULE = {
     "favorite_price_floor": 0.55,
     "favorite_price_cap": 0.92,
 }
+# Grammar C: the proposer's first cell (registrable, grid order).
+FIRST_CELL = {"decision_second": 180, "margin_floor_usd": 75, "favorite_price_cap": 0.92, "patience_s": 0}
 BASE_WS = 1787788800  # 2026-08-25T00:00Z, the fixture epoch
 GATES = {"minimum_signals": 100, "minimum_recent_signals": 20, "minimum_entries": 50}
 
@@ -62,28 +65,10 @@ def proposal(rule, title="sampled"):
     }
 
 
-class StubClient:
-    """LmStudioClient stand-in: hands out distinct grid rules in order."""
-
-    def __init__(self, ready=True):
-        self.ready = ready
-        self.calls = 0
-        self.rules = iter(band.grid_rules())
-
-    def readiness(self):
-        return {"ready": self.ready}
-
-    def complete(self, system, user, schema_name, schema, temperature, model=None):
-        self.calls += 1
-        self.last_prompt = (system, user, schema_name, schema, temperature)
-        return {"ok": True, "value": proposal(next(self.rules))}
-
-
 def band_config(**lane_overrides):
     config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
     # Fixtures are built from BASE_WS; the deployed start_ts may move earlier.
     config["lanes"]["band_mechanisms"]["start_ts"] = BASE_WS
-    config["generator"]["novelty_gate_enabled"] = False  # embeddings need the network
     config["lanes"]["band_mechanisms"].update(lane_overrides)
     return config
 
@@ -91,20 +76,20 @@ def band_config(**lane_overrides):
 class BandLaneTest(unittest.TestCase):
     # --- grammar -------------------------------------------------------------
 
-    def test_schema_enums_match_grammar_and_validation_is_strict(self):
-        properties = band.BAND_PROPOSAL_SCHEMA["properties"]["rule"]["properties"]
-        self.assertEqual(set(properties), set(band.BAND_GRID))
-        for field, values in band.BAND_GRID.items():
-            self.assertEqual(properties[field]["enum"], list(values))
-        self.assertEqual(
-            band.BAND_PROPOSAL_SCHEMA["properties"]["rule"]["required"], list(band.BAND_GRID)
-        )
-        self.assertFalse(band.BAND_PROPOSAL_SCHEMA["additionalProperties"])
+    def test_grammar_reads_both_shapes_and_validation_is_strict(self):
+        cells = band.grid_v2_rules()
+        self.assertEqual(len(cells), 336)
+        self.assertEqual(sum(1 for rule in cells if band.registrable_v2(rule)), 189)
+        for rule in cells:
+            self.assertEqual(band.normalized_band_rule(rule), rule)
+            self.assertEqual(band.normalized_band_rule_v2(rule), rule)
+        self.assertEqual(band.normalized_band_rule({**FIRST_CELL, "margin_floor_usd": 75.0}), FIRST_CELL)
+        # The legacy grammar stays readable in full.
         combos = list(itertools.product(*band.BAND_GRID.values()))
         self.assertEqual(len(combos), 2880)
         for values in combos:
             rule = dict(zip(band.BAND_GRID, values))
-            self.assertEqual(band.validate_band_proposal(proposal(rule))["rule"], rule)
+            self.assertEqual(band.normalized_band_rule(rule), rule)
         self.assertEqual(band.normalized_band_rule({**LIVE_RULE, "margin_floor_usd": 50.0}), LIVE_RULE)
         for broken in (
             {**LIVE_RULE, "margin_floor_usd": 60},
@@ -116,18 +101,35 @@ class BandLaneTest(unittest.TestCase):
             {**LIVE_RULE, "favorite_price_cap": 0.95},
             {key: value for key, value in LIVE_RULE.items() if key != "direction"},
             {**LIVE_RULE, "extra": 1},
+            {**FIRST_CELL, "favorite_price_cap": 0.93},
+            {**FIRST_CELL, "patience_s": 10},
+            {**FIRST_CELL, "decision_second": 150.5},
+            {**FIRST_CELL, "margin_floor_usd": "75"},
+            {**FIRST_CELL, "direction": "both"},  # a mixed shape is neither grammar
+            {**LIVE_RULE, "patience_s": 0},
         ):
             with self.assertRaises(ValueError):
                 band.normalized_band_rule(broken)
-        with self.assertRaisesRegex(ValueError, "unexpected"):
-            band.validate_band_proposal({**proposal(LIVE_RULE), "command": "x"})
-        with self.assertRaisesRegex(ValueError, "non-empty"):
-            band.validate_band_proposal({**proposal(LIVE_RULE), "title": " "})
-        for values in band.BAND_GRID.values():
-            for value in values:
-                self.assertIn(str(value), band.BAND_SYSTEM_PROMPT)
-        for token in ("pnl", "wallet", "secret", "private_key"):
-            self.assertNotIn(token, band.BAND_SYSTEM_PROMPT.lower())
+        with self.assertRaises(ValueError):
+            band.normalized_band_rule_v2(LIVE_RULE)
+        # rule_params projects either shape onto one parameter set (no validation).
+        self.assertEqual(
+            band.rule_params(FIRST_CELL),
+            {
+                "decision_second": 180,
+                "margin_floor_usd": 75.0,
+                "margin_floor_sigma": 0.0,
+                "direction": "both",
+                "favorite_price_floor": band.BAND_V2_ASK_FLOOR,
+                "favorite_price_cap": 0.92,
+                "patience_s": 0,
+            },
+        )
+        legacy = band.rule_params(LIVE_RULE)
+        self.assertEqual((legacy["favorite_price_floor"], legacy["patience_s"], legacy["direction"]), (0.55, None, "both"))
+        self.assertEqual(band.compact_band_rule(FIRST_CELL), "band t=180s floor=$75 cap=0.92 patience=0s")
+        self.assertEqual(band.compact_band_rule(LIVE_RULE), "band floor=$50 sigma=0.0 t=240s dir=both ask=(0.55,0.92]")
+        self.assertEqual((band.BAND_V2_REGISTRABLE_MIN_FLOOR, band.BAND_V2_REGISTRABLE_MIN_DECISION), (75, 180))
 
     def test_fingerprint_is_stable(self):
         pinned = "a9bfe51acf4aab88162e15f955d95da1a40f6f20760896f086a237338b6b3360"  # band_public_v2: stage-1 break-even gates dropped, tripwire 0.995@100
@@ -142,6 +144,16 @@ class BandLaneTest(unittest.TestCase):
             ),
         )
         self.assertNotEqual(band.band_fingerprint({**LIVE_RULE, "margin_floor_usd": 75}), pinned)
+        # Grammar C cells fingerprint under their own key set: the legacy
+        # rows keep their fingerprints and a cell never collides with one.
+        cell = band.band_fingerprint(FIRST_CELL)
+        self.assertEqual(cell, band.band_fingerprint({**FIRST_CELL, "patience_s": 0.0}))
+        self.assertEqual(
+            cell,
+            loop.stable_hash({"lane": "band_mechanisms", "rule": FIRST_CELL, "evaluator_version": "band_public_v2"}),
+        )
+        self.assertNotEqual(cell, band.band_fingerprint({**FIRST_CELL, "patience_s": 15}))
+        self.assertNotEqual(cell, pinned)
 
     # --- evaluator -----------------------------------------------------------
 
@@ -164,6 +176,10 @@ class BandLaneTest(unittest.TestCase):
         unresolved = band.evaluate_band_rule(windows(30, official=None), {}, LIVE_RULE, GATES, now_ts)
         self.assertEqual(unresolved["stage_1"]["overall"]["signals"], 0)
         self.assertEqual(unresolved["labelled_window_count"], 0)
+        # A grammar C cell reads the same closes: floor 75 fires on an $80 tape only.
+        self.assertEqual(len(band.band_signal_records(unlabelled, FIRST_CELL)), 0)
+        self.assertEqual(len(band.band_signal_records(windows(30, margin=80.0), FIRST_CELL)), 30)
+        self.assertEqual(len(band.band_signal_records(windows(30, margin=-80.0), FIRST_CELL)), 30)
 
     def test_sigma_uses_only_prior_windows(self):
         rows = [window(BASE_WS + index * 300, margin=10.0 if index % 2 else 30.0) for index in range(12)]
@@ -220,6 +236,11 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(below_floor["stage_1"]["overall"]["signals"], 0)
         down_only = band.evaluate_band_rule(windows(120), {}, {**LIVE_RULE, "direction": "down"}, GATES, now_ts)
         self.assertEqual(down_only["stage_1"]["overall"]["signals"], 0)
+        # The evaluator validates a grammar C cell and reports its rule as given.
+        cell = band.evaluate_band_rule(windows(120, margin=80.0), {}, {**FIRST_CELL, "decision_second": 240}, GATES, now_ts)
+        self.assertEqual(cell["rule"], {**FIRST_CELL, "decision_second": 240})
+        self.assertTrue(cell["stage_1"]["survivor"])
+        self.assertAlmostEqual(cell["stage_1"]["break_even_at_cap"], band.break_even(0.92))
 
     def test_stage_2_runs_only_for_survivors(self):
         class RecordingPrints(dict):
@@ -253,6 +274,7 @@ class BandLaneTest(unittest.TestCase):
             (stage_2["out_of_band_prints"], stage_2["windows_without_print"], stage_2["uncached_windows"]),
             (10, 10, 40),
         )
+        self.assertIsNone(stage_2["patience_s"])
         self.assertTrue(stage_2["survivor"] and survivor["survivor"])
         thin = band.evaluate_band_rule(windows(120), prints, LIVE_RULE, {**GATES, "minimum_entries": 61}, now_ts)
         self.assertFalse(thin["stage_2"]["gates"]["support"])
@@ -331,160 +353,65 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(rate, 0.07)
         for price in (0.5, 0.8, 0.92):
             self.assertAlmostEqual(band.taker_fee(price), rate * price * (1.0 - price), places=12)
-            self.assertAlmostEqual(loop.taker_fee(price), rate * price * (1.0 - price), places=12)
         self.assertAlmostEqual(band.break_even(0.92), 0.92 + rate * 0.92 * 0.08, places=12)
 
     # --- proposer ------------------------------------------------------------
 
-    def test_proposer_priors_then_strict_alternation(self):
-        config = band_config()
-        client = StubClient()
+    def test_proposer_enumerates_grammar_c_deterministically_without_duplicates(self):
+        cells = band.proposer_cells()
+        # 336 cells minus the 84 at 150 s, which have no print column.
+        self.assertEqual(len(cells), 252)
+        self.assertEqual(len({band._canonical(cell) for cell in cells}), 252)
+        self.assertTrue(all(cell["decision_second"] in band.BAND_DECISION_SECONDS for cell in cells))
+        self.assertEqual({band._canonical(c) for c in cells}, {band._canonical(c) for c in band.grid_v2_rules() if c["decision_second"] != 150})
+        # Registrable cells first (floor >= 75), then the $50 control cells, each in grid order.
+        self.assertEqual([band.registrable_v2(cell) for cell in cells], [True] * 189 + [False] * 63)
+        self.assertEqual(cells[0], FIRST_CELL)
+        self.assertEqual(cells[1], {**FIRST_CELL, "patience_s": 15})
+        self.assertEqual(cells[3], {**FIRST_CELL, "favorite_price_cap": 0.94})
+        self.assertEqual(cells[189], {**FIRST_CELL, "margin_floor_usd": 50})
+        self.assertEqual(band.proposer_cells(), cells)  # no state, no randomness
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
-            state_dir = Path(directory)
-            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            ledger = loop.Ledger(Path(directory) / "research.sqlite3")
             try:
-                sources = []
-                rules = []
-                for _ in range(9):
-                    proposed, provenance = band.propose_band_rule(client, ledger, config, state_dir, [])
-                    sources.append(provenance["proposal_source"])
-                    rules.append(proposed["rule"])
+                # Legacy and malformed rows are read past, never proposed, never raise.
+                ledger.add_hypothesis(band.band_fingerprint(LIVE_RULE), "band_mechanisms", proposal(LIVE_RULE), None, "rejected_entry_economics", None, source="prior")
+                ledger.add_hypothesis("malformed", "band_mechanisms", {"rule": {"bad": 1}}, None, "rejected_signal_screen", None, source="llm")
+                proposed = []
+                for _ in range(5):
+                    proposed_rule, provenance = band.propose_band_rule(ledger)
+                    proposed.append((proposed_rule, provenance))
                     ledger.add_hypothesis(
-                        band.band_fingerprint(proposed["rule"]),
+                        band.band_fingerprint(proposed_rule["rule"]),
                         "band_mechanisms",
-                        proposed,
+                        proposed_rule,
                         None,
                         "rejected_signal_screen",
                         None,
                         source=provenance["proposal_source"],
                     )
-                    if provenance["proposal_source"] == "llm":
-                        self.assertEqual(client.last_prompt[3], band.BAND_PROPOSAL_SCHEMA)
-                        self.assertEqual(client.last_prompt[4], config["generator"]["explore_temperature"])
-                queue = (state_dir / band.BAND_QUEUE_FILE).read_text().splitlines()
-                stored = [ledger.hypothesis(band.band_fingerprint(rule))["source"] for rule in rules]
-                cold = StubClient(ready=False)
-                offline, offline_provenance = band.propose_band_rule(cold, ledger, config, state_dir, [])
-                lane_rows = ledger.lane_hypotheses("band_mechanisms")
+                # Whatever the outcomes, the next cell is the next cell.
+                next_rule, next_provenance = band.propose_band_rule(ledger)
+                for rule in cells[5:]:
+                    ledger.add_hypothesis(band.band_fingerprint(rule), "band_mechanisms", proposal(rule), None, "rejected_signal_screen", None, source="grid_v2")
+                exhausted = band.propose_band_rule(ledger)
+                sources = {row["source"] for row in ledger.lane_hypotheses("band_mechanisms")}
             finally:
                 ledger.close()
-        expected_priors = [dict(zip(band.BAND_GRID, prior)) for prior in band.BAND_PRIORS]
-        self.assertEqual(rules[:3], expected_priors)
+        self.assertEqual([item["rule"] for item, _ in proposed], cells[:5])
         self.assertEqual(
-            sources,
-            ["prior"] * 3 + ["llm", "uniform_control", "llm", "uniform_control", "llm", "uniform_control"],
+            [provenance for _, provenance in proposed],
+            [{"proposal_source": "grid_v2", "cell_index": index, "registrable": True} for index in range(5)],
         )
-        self.assertEqual(stored, sources)
-        self.assertEqual(len(set(band.band_fingerprint(rule) for rule in rules)), 9)
-        for rule in rules[3:]:
-            self.assertEqual(band.normalized_band_rule(rule), rule)
-        # One burst of samples_per_burst survivors: the first is proposed, the
-        # rest are queued and replayed on later LLM turns before sampling again.
-        self.assertEqual(client.calls, config["generator"]["samples_per_burst"])
-        self.assertEqual(len(queue), config["generator"]["samples_per_burst"] - 3)
-        # Uniform control draws are seeded by the hypothesis count: replayable.
-        self.assertEqual(
-            band.uniform_control_rule(4, lambda rule: False),
-            band.uniform_control_rule(4, lambda rule: False),
-        )
-        self.assertEqual(sources[4], "uniform_control")
-        # LLM turn with no ready model degrades to a seeded control draw.
-        self.assertEqual(len(lane_rows), 9)
-        self.assertEqual(offline_provenance["turn"], "llm")
-        # An LLM turn without a model falls through to the control arm, not the grid.
-        self.assertEqual(offline_provenance["proposal_source"], "uniform_control")
-        self.assertNotIn(offline["rule"], rules)
-        self.assertEqual(band.normalized_band_rule(offline["rule"]), offline["rule"])
-
-    def test_burst_queue_replays_carry_the_sampler_model_with_a_lane_cursor(self):
-        config = band_config()
-        config["generator"]["samples_per_burst"] = 2
-        config["llm"]["sampler_models"] = ["model-a", "model-b"]
-        client = StubClient()
-        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
-            state_dir = Path(directory)
-            ledger = loop.Ledger(state_dir / "research.sqlite3")
-            try:
-                provenances = []
-                for index in range(len(band.BAND_PRIORS) + 6):
-                    if index == len(band.BAND_PRIORS) + 1:
-                        queued = [
-                            json.loads(line)
-                            for line in (state_dir / band.BAND_QUEUE_FILE).read_text().splitlines()
-                        ]
-                    proposed, provenance = band.propose_band_rule(client, ledger, config, state_dir, [])
-                    provenances.append(provenance)
-                    ledger.add_hypothesis(
-                        band.band_fingerprint(proposed["rule"]),
-                        "band_mechanisms",
-                        proposed,
-                        None,
-                        "rejected_signal_screen",
-                        None,
-                        source=provenance["proposal_source"],
-                    )
-                cursors = {
-                    lane: ledger.meta("sampler_model_index.%s" % lane)
-                    for lane in ("band_mechanisms", "late_window_mechanisms")
-                }
-            finally:
-                ledger.close()
-        sampled = provenances[len(band.BAND_PRIORS) :]
-        self.assertEqual([item["proposal_source"] for item in sampled], ["llm", "uniform_control"] * 3)
-        self.assertEqual(
-            [item.get("from_burst_queue", False) for item in sampled],
-            [False, False, True, False, False, False],
-        )
-        # The replay is attributed to the burst's model; the cursor that
-        # rotated to model-b is the band lane's own, not the late lane's.
-        self.assertEqual([entry["sampler_model"] for entry in queued], ["model-a"])
-        self.assertEqual(
-            [item.get("sampler_model") for item in sampled],
-            ["model-a", None, "model-a", None, "model-b", None],
-        )
-        self.assertEqual(cursors, {"band_mechanisms": "2", "late_window_mechanisms": None})
-
-    def test_llm_prompt_carries_public_aggregates_and_negatives(self):
-        config = band_config()
-        client = StubClient()
-        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
-            state_dir = Path(directory)
-            ledger = loop.Ledger(state_dir / "research.sqlite3")
-            try:
-                for index, prior in enumerate(band.BAND_PRIORS):
-                    rule = dict(zip(band.BAND_GRID, prior))
-                    fingerprint = band.band_fingerprint(rule)
-                    evidence_path = state_dir / ("evidence/band_mechanisms/%s.json" % fingerprint)
-                    loop.atomic_json(
-                        evidence_path,
-                        {
-                            "stage_1": {"overall": {"signals": 100, "wins": 90 - index, "accuracy": 0.9, "wilson_lower": 0.8 - index * 0.1}},
-                            "stage_2": {"entries": 50, "mean_net_per_usd": 0.05},
-                        },
-                    )
-                    ledger.add_hypothesis(
-                        fingerprint,
-                        "band_mechanisms",
-                        proposal(rule),
-                        None,
-                        "stage_2_survivor" if index == 0 else "rejected_signal_screen",
-                        evidence_path,
-                        source="prior",
-                    )
-                rows = windows(30, margin=60.0) + windows(0)
-                proposed, provenance = band.propose_band_rule(client, ledger, config, state_dir, rows)
-            finally:
-                ledger.close()
-        self.assertEqual(provenance["proposal_source"], "llm")
-        system, user = client.last_prompt[0], client.last_prompt[1]
-        self.assertEqual(system, band.BAND_SYSTEM_PROMPT)
-        self.assertIn("decision_second=240: 50-75: 100.0% (n=30)", user)
-        self.assertIn("Parent rules ranked", user)
-        self.assertIn("wilson_lower=0.800", user)
-        self.assertIn("KILLED", user)
-        self.assertIn("band floor=$75", user)
-        for token in ("pnl", "wallet", "secret", "private_key"):
-            self.assertNotIn(token, (system + user).lower())
+        self.assertEqual((next_rule["rule"], next_provenance["cell_index"]), (cells[5], 5))
+        self.assertEqual(next_rule["title"], "Grammar C cell 6: %s" % band.compact_band_rule(cells[5]))
+        self.assertIsNone(exhausted)
+        self.assertEqual(sources, {"prior", "llm", "grid_v2"})
+        for item, _ in proposed:
+            self.assertEqual(set(item), {"title", "rationale", "expected_failure_mode", "rule"})
+            self.assertEqual(band.normalized_band_rule(item["rule"]), item["rule"])
+            self.assertNotEqual(band.band_fingerprint(item["rule"]), band.band_fingerprint(LIVE_RULE))
+        self.assertEqual(len({band.band_fingerprint(item["rule"]) for item, _ in proposed}), 5)
 
     # --- ledger --------------------------------------------------------------
 
@@ -532,14 +459,17 @@ class BandLaneTest(unittest.TestCase):
         pipeline tests below patch it out, test_tripwire_* covers it."""
         self.enterContext(mock.patch.object(band, "TRIPWIRE_MINIMUM_N", 10**9))
 
-    def stub_cache(self, directory, failing=(), unresolved=(), missing=(), closes_failing=(), price=0.80):
-        """Network-free BandCache: every window is +60 at every decision second
-        and resolves up; the first BUY of the up token prints at `price`."""
+    def stub_cache(
+        self, directory, failing=(), unresolved=(), missing=(), closes_failing=(), price=0.80, margin=60.0, print_offset=5
+    ):
+        """Network-free BandCache: every window is +`margin` at every decision
+        second and resolves up; the first BUY of the up token prints at
+        `price`, `print_offset` seconds after each decision."""
 
         def fetch_closes(start_ts, end_ts):
             if start_ts - start_ts % band.DAY_S in closes_failing:
                 raise OSError("binance down")
-            return {str(ts): 70000.0 + (60.0 if ts % 300 >= 150 else 0.0) for ts in range(start_ts, end_ts)}
+            return {str(ts): 70000.0 + (margin if ts % 300 >= 150 else 0.0) for ts in range(start_ts, end_ts)}
 
         def fetch_market(ws):
             if ws in failing:
@@ -558,7 +488,7 @@ class BandLaneTest(unittest.TestCase):
             ws = int(condition_id[2:])
             self.assertEqual(window_start, ws)
             trades = [
-                {"side": "BUY", "asset": "up-%d" % ws, "timestamp": ws + d + 5, "price": price}
+                {"side": "BUY", "asset": "up-%d" % ws, "timestamp": ws + d + print_offset, "price": price}
                 for d in band.BAND_DECISION_SECONDS
             ] + [{"side": "SELL", "asset": "up-%d" % ws, "timestamp": ws + 241, "price": 0.5}]
             return {"trades": trades, "coverage": {"oldest_offset_s": 185, "pages": 1, "complete": True}}
@@ -570,6 +500,12 @@ class BandLaneTest(unittest.TestCase):
             fetch_market=fetch_market,
             fetch_trades=fetch_trades,
         )
+
+    def cell_cache(self, directory):
+        """A tape the first grammar C cell trades: $80 margins clear the $75
+        floor, the first print at 0.85 lies inside (0.80, 0.92] and arrives
+        1 s after the decision, within patience 0."""
+        return self.stub_cache(directory, price=0.85, margin=80.0, print_offset=1)
 
     def test_cache_refresh_is_bounded_oldest_first_and_contiguous(self):
         now_ts = BASE_WS + 10 * 300 + 1200
@@ -669,61 +605,51 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(len(second_windows), 303)
         self.assertEqual(second_windows[-1]["window_start"], now_ts - 1200)
 
-    def test_dry_run_proposes_from_cached_windows_without_network(self):
-        config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
-        now_ts = BASE_WS + 130 * 300 + 1199
-        client = StubClient()
-        self.disarm_tripwire()
-
-        def offline(*args):
-            raise AssertionError("network in dry run")
-
+    def test_dry_run_proposes_from_the_ledger_without_network_or_cache(self):
+        config = band_config(enabled=True, minimum_interval_seconds=0)
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
             config["state_dir"] = directory
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
-                screened = band.run_band_lane(config, ledger, state_dir, False, client, self.stub_cache(directory), now_ts)
-                fresh = band.BandCache(
-                    margin_dir=Path(directory) / "margin",
-                    prints_dir=Path(directory) / "prints",
-                    fetch_closes=offline,
-                    fetch_market=offline,
-                    fetch_trades=offline,
-                )
-                with mock.patch.object(band, "propose_band_rule", wraps=band.propose_band_rule) as propose:
-                    dry = band.run_band_lane(config, ledger, state_dir, True, client, fresh, now_ts)
+                ledger.add_hypothesis(band.band_fingerprint(FIRST_CELL), "band_mechanisms", proposal(FIRST_CELL), None, "rejected_signal_screen", None, source="grid_v2")
+                with mock.patch.object(band, "BandCache", side_effect=AssertionError("cache in dry run")):
+                    dry = band.run_band_lane(config, ledger, state_dir, True, None, BASE_WS)
                 lane_rows = ledger.lane_hypotheses("band_mechanisms")
+                disabled = band.run_band_lane(band_config(enabled=False), ledger, state_dir, True, None, BASE_WS)
             finally:
                 ledger.close()
-        self.assertEqual(screened["status"], "stage_2_survivor")
+            self.assertFalse((state_dir / "trial_ledger.jsonl").exists())
         self.assertEqual(dry["status"], "dry_run")
-        self.assertEqual(len(propose.call_args[0][4]), 130)
-        self.assertEqual(len(lane_rows), 1)
+        self.assertEqual(dry["proposal"]["rule"], {**FIRST_CELL, "patience_s": 15})
+        self.assertEqual(dry["provenance"], {"proposal_source": "grid_v2", "cell_index": 1, "registrable": True})
+        self.assertEqual(dry["fingerprint"], band.band_fingerprint(dry["proposal"]["rule"]))
+        self.assertEqual(len(lane_rows), 1)  # a dry run writes nothing
+        self.assertEqual(disabled, {"status": "disabled"})
 
-    def test_run_band_lane_screens_prior_then_accrues(self):
+    def test_run_band_lane_screens_the_first_cell_then_accrues(self):
         config = band_config(enabled=True, maximum_new_windows_per_cycle=5, minimum_interval_seconds=0)
         # Windows 0..129 are eligible (index 130 would need one more second).
         now_ts = BASE_WS + 130 * 300 + 1199
-        client = StubClient()
         self.disarm_tripwire()
+        cells = band.proposer_cells()
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
             config["state_dir"] = directory
-            cache = self.stub_cache(directory)
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            cache = self.cell_cache(directory)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
-                fetching = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts)
+                fetching = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
                 config["lanes"]["band_mechanisms"]["maximum_new_windows_per_cycle"] = 1000
-                screened = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts)
+                screened = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
                 fingerprint = screened["fingerprint"]
                 after_screen = ledger.accrual(fingerprint)
                 status_after_screen = ledger.hypothesis(fingerprint)["status"]
-                accrued = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts + 10 * 300)
+                accrued = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts + 10 * 300)
                 after_accrual = ledger.accrual(fingerprint)
                 status_after_accrual = ledger.hypothesis(fingerprint)["status"]
                 evidence = json.loads(Path(screened["artifact"]).read_text())
-                dry = band.run_band_lane(config, ledger, state_dir, True, client, cache, now_ts + 10 * 300)
+                dry = band.run_band_lane(config, ledger, state_dir, True, cache, now_ts + 10 * 300)
                 lane_rows = ledger.lane_hypotheses("band_mechanisms")
             finally:
                 ledger.close()
@@ -732,13 +658,18 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual((fetching["cache"]["fetched"], fetching["cache"]["remaining"]), (5, 125))
         self.assertEqual(fetching["accrual"]["evaluated"], 0)
         self.assertEqual(screened["status"], "stage_2_survivor")
-        self.assertEqual(screened["proposal_source"], "prior")
-        self.assertEqual(fingerprint, band.band_fingerprint(LIVE_RULE))
+        self.assertEqual((screened["proposal_source"], screened["cell_index"], screened["registrable"]), ("grid_v2", 0, True))
+        self.assertEqual(fingerprint, band.band_fingerprint(FIRST_CELL))
         self.assertEqual(screened["cache"]["remaining"], 0)
         self.assertEqual(screened["stage_1"]["overall"]["signals"], 130)
         self.assertEqual(screened["stage_2"]["entries"], 130)
+        self.assertAlmostEqual(screened["stage_2"]["mean_break_even"], band.break_even(0.85))
         self.assertEqual(evidence["last_window_start"], BASE_WS + 129 * 300)
-        self.assertEqual(evidence["llm"]["proposal_source"], "prior")
+        self.assertEqual(evidence["provenance"], {"proposal_source": "grid_v2", "cell_index": 0, "registrable": True})
+        self.assertEqual(evidence["rule"], FIRST_CELL)
+        self.assertEqual(evidence["stage_2"]["patience_s"], 0)
+        self.assertTrue(evidence["stage_2"]["gates"]["print_lists_complete"])
+        self.assertNotIn("llm", evidence)
         self.assertEqual(status_after_screen, "stage_2_survivor")
         self.assertEqual((after_screen["n"], after_screen["last_window_start"]), (0, BASE_WS + 129 * 300))
         # Ten newer windows resolve: exactly those accrue, at the print break-even;
@@ -758,24 +689,52 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual((after_accrual["n"], after_accrual["wins"]), (10, 10))
         self.assertEqual(after_accrual["last_window_start"], BASE_WS + 139 * 300)
         self.assertEqual(status_after_accrual, "accruing")
-        # The second prior ($75 floor) never fires on a $60 tape: rejected at stage 1.
-        self.assertEqual(accrued["status"], "rejected_signal_screen")
-        self.assertEqual(accrued["fingerprint"], band.band_fingerprint(dict(zip(band.BAND_GRID, band.BAND_PRIORS[1]))))
-        self.assertEqual(accrued["stage_1"]["overall"]["signals"], 0)
-        self.assertIsNone(accrued["stage_2"])
+        # The next cell (patience 15) is screened on the grown cache.
+        self.assertEqual(accrued["status"], "stage_2_survivor")
+        self.assertEqual(accrued["fingerprint"], band.band_fingerprint(cells[1]))
+        self.assertEqual(accrued["cell_index"], 1)
+        self.assertEqual(accrued["stage_1"]["overall"]["signals"], 140)
+        self.assertEqual(accrued["stage_2"]["entries"], 140)
         self.assertEqual(dry["status"], "dry_run")
-        self.assertEqual(dry["proposal"]["rule"], dict(zip(band.BAND_GRID, band.BAND_PRIORS[2])))
+        self.assertEqual(dry["proposal"]["rule"], cells[2])
         self.assertEqual(len(lane_rows), 2)
+        self.assertEqual([row["source"] for row in lane_rows], ["grid_v2", "grid_v2"])
         self.assertEqual(
             [(row["stage"], row["verdict"], row["n"]) for row in trial_rows],
             [
                 ("band_signal_screen", "stage_1_survivor", 130),
                 ("band_entry_economics", "stage_2_survivor", 130),
                 ("fresh_public_accrual", "continue", 10),
-                ("band_signal_screen", "rejected_signal_screen", 0),
+                ("band_signal_screen", "stage_1_survivor", 140),
+                ("band_entry_economics", "stage_2_survivor", 140),
             ],
         )
-        self.assertEqual(client.calls, 0)
+
+    def test_lane_reports_grid_exhausted_and_keeps_accruing(self):
+        config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
+        now_ts = BASE_WS + 130 * 300 + 1199
+        self.disarm_tripwire()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            cache = self.cell_cache(directory)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                screened = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                for rule in band.proposer_cells()[1:]:
+                    ledger.add_hypothesis(band.band_fingerprint(rule), "band_mechanisms", proposal(rule), None, "rejected_signal_screen", None, source="grid_v2")
+                exhausted = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts + 10 * 300)
+                accrual = ledger.accrual(screened["fingerprint"])
+                dry = band.run_band_lane(config, ledger, state_dir, True, cache, now_ts + 10 * 300)
+            finally:
+                ledger.close()
+        self.assertEqual(screened["status"], "stage_2_survivor")
+        self.assertEqual(exhausted["status"], "grid_exhausted")
+        self.assertEqual(exhausted["accrual"]["evaluated"], 1)
+        self.assertEqual((accrual["n"], accrual["wins"]), (10, 10))
+        self.assertEqual(exhausted["rescreen"], {"rescreened": 0, "promoted": 0, "still_rejected": 0})
+        self.assertNotIn("fingerprint", exhausted)
+        self.assertEqual(dry, {"status": "grid_exhausted"})
 
     def test_support_only_rejection_is_rescreened_when_the_cache_grows(self):
         config = band_config(
@@ -784,27 +743,27 @@ class BandLaneTest(unittest.TestCase):
             minimum_interval_seconds=0,
             gates={"minimum_signals": 10, "minimum_recent_signals": 20, "minimum_entries": 100},
         )
-        client = StubClient()
         self.disarm_tripwire()
+        cells = band.proposer_cells()
         early_ts = BASE_WS + 60 * 300 + 1199  # 60 eligible windows: support fails
         late_ts = BASE_WS + 130 * 300 + 1199  # 130 eligible windows: support clears
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
             config["state_dir"] = directory
-            cache = self.stub_cache(directory)
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            cache = self.cell_cache(directory)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
                 # 70 new windows arrive between the two screens; the production
                 # threshold (~8 h) is patched down so the fixture tape suffices.
                 self.enterContext(mock.patch.object(band, "RESCREEN_MIN_NEW_WINDOWS", 50))
-                first = band.run_band_lane(config, ledger, state_dir, False, client, cache, early_ts)
+                first = band.run_band_lane(config, ledger, state_dir, False, cache, early_ts)
                 fingerprint = first["fingerprint"]
                 status_first = ledger.hypothesis(fingerprint)["status"]
-                second = band.run_band_lane(config, ledger, state_dir, False, client, cache, late_ts)
+                second = band.run_band_lane(config, ledger, state_dir, False, cache, late_ts)
                 status_second = ledger.hypothesis(fingerprint)["status"]
                 accrual = ledger.accrual(fingerprint)
                 evidence = json.loads(Path(first["artifact"]).read_text())
-                third = band.run_band_lane(config, ledger, state_dir, False, client, cache, late_ts)
+                third = band.run_band_lane(config, ledger, state_dir, False, cache, late_ts)
             finally:
                 ledger.close()
             trial_rows = [json.loads(line) for line in (state_dir / "trial_ledger.jsonl").read_text().splitlines()]
@@ -817,15 +776,135 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual((accrual["n"], accrual["last_window_start"]), (0, BASE_WS + 129 * 300))
         self.assertEqual(evidence["stage_2"]["entries"], 130)
         self.assertEqual(evidence["previous_window_count"], 60)
-        self.assertEqual(second["fingerprint"], band.band_fingerprint(dict(zip(band.BAND_GRID, band.BAND_PRIORS[1]))))
+        self.assertEqual(evidence["provenance"]["proposal_source"], "grid_v2")
+        self.assertEqual(second["fingerprint"], band.band_fingerprint(cells[1]))
         # Nothing left to re-screen once the cache has not grown.
         self.assertEqual(third["rescreen"], {"rescreened": 0, "promoted": 0, "still_rejected": 0})
+        self.assertEqual(third["fingerprint"], band.band_fingerprint(cells[2]))
         self.assertEqual(
             [(row["stage"], row["verdict"], row["n"]) for row in trial_rows if row["candidate"] == fingerprint],
             [
                 ("band_signal_screen", "stage_1_survivor", 60),
                 ("band_entry_economics", "rejected_entry_economics", 60),
                 ("band_entry_economics", "stage_2_survivor", 130),
+            ],
+        )
+
+    def age_print_row(self, cache, window_start, decision_second):
+        """Write one ok prints row back to writer v1 (no print list, no
+        writer_version): a row --rebuild-prints has not reached or failed
+        on.  Returns the row as it was, for restoring."""
+        path = cache.print_path(window_start, decision_second)
+        row = json.loads(path.read_text())
+        self.assertEqual(row["status"], "ok")
+        aged = {key: value for key, value in row.items() if key != "writer_version"}
+        aged["signal_prints"] = None
+        path.write_text(json.dumps(aged) + "\n")
+        return row
+
+    def test_listless_print_row_defers_the_cell_instead_of_rejecting_it(self):
+        config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
+        now_ts = BASE_WS + 130 * 300 + 1199
+        self.disarm_tripwire()
+        cells = band.proposer_cells()
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            cache = self.cell_cache(directory)
+            cache.refresh(BASE_WS, now_ts, 1000)
+            good_row = self.age_print_row(cache, BASE_WS + 50 * 300, 180)
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                deferred = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                lane_rows_deferred = ledger.lane_hypotheses("band_mechanisms")
+                last_at_deferred = ledger.meta("band_mechanisms.last_at")
+                again = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                # The rebuild reaches the row: the same cell is screened whole.
+                cache.print_path(BASE_WS + 50 * 300, 180).write_text(json.dumps(good_row) + "\n")
+                screened = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                status = ledger.hypothesis(screened["fingerprint"])["status"]
+                lane_rows = ledger.lane_hypotheses("band_mechanisms")
+            finally:
+                ledger.close()
+            evidence_files = sorted((state_dir / "evidence").rglob("*.json")) if (state_dir / "evidence").exists() else []
+            trial_rows = [json.loads(line) for line in (state_dir / "trial_ledger.jsonl").read_text().splitlines()]
+        self.assertEqual(deferred["status"], "awaiting_print_rebuild")
+        self.assertEqual(deferred["fingerprint"], band.band_fingerprint(cells[0]))
+        self.assertEqual((deferred["cell_index"], deferred["registrable"], deferred["windows_without_print_list"]), (0, True, 1))
+        self.assertEqual(deferred["cache"]["remaining"], 0)
+        # A deferral is not a verdict: no hypothesis, no artifact, no trial
+        # row, and the lane stays due so the cell is retried next loop.
+        self.assertEqual(lane_rows_deferred, [])
+        self.assertIsNone(last_at_deferred)
+        self.assertEqual((again["status"], again["fingerprint"]), ("awaiting_print_rebuild", deferred["fingerprint"]))
+        self.assertEqual(screened["status"], "stage_2_survivor")
+        self.assertEqual((screened["fingerprint"], screened["cell_index"]), (deferred["fingerprint"], 0))
+        self.assertEqual(screened["stage_2"]["entries"], 130)
+        self.assertTrue(screened["stage_2"]["gates"]["print_lists_complete"])
+        self.assertEqual(status, "stage_2_survivor")
+        self.assertEqual([row["fingerprint"] for row in lane_rows], [deferred["fingerprint"]])
+        self.assertEqual([path.name for path in evidence_files], ["%s.json" % deferred["fingerprint"]])
+        self.assertEqual(
+            [(row["stage"], row["verdict"], row["n"]) for row in trial_rows],
+            [("band_signal_screen", "stage_1_survivor", 130), ("band_entry_economics", "stage_2_survivor", 130)],
+        )
+
+    def test_print_list_rejection_is_rescreened_once_the_rows_are_rebuilt(self):
+        config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
+        now_ts = BASE_WS + 130 * 300 + 1199
+        self.disarm_tripwire()
+        cells = band.proposer_cells()
+        fingerprint = band.band_fingerprint(cells[0])
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            cache = self.cell_cache(directory)
+            cache.refresh(BASE_WS, now_ts, 1000)
+            good_row = self.age_print_row(cache, BASE_WS + 50 * 300, 180)
+            windows = cache.windows(BASE_WS, now_ts)
+            # A row written while the cache was half-rebuilt (--rescore-all,
+            # or the lane before it deferred): rejected on the print-list gate alone.
+            stale = band.evaluate_band_rule(windows, cache.load_prints(windows), cells[0], config["lanes"]["band_mechanisms"]["gates"], now_ts)
+            stale.update({"fingerprint": fingerprint, "proposal": proposal(cells[0]), "provenance": {"proposal_source": "grid_v2"}})
+            evidence_path = state_dir / ("evidence/band_mechanisms/%s.json" % fingerprint)
+            band._atomic_write(evidence_path, json.dumps(stale, indent=2, sort_keys=True) + "\n")
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                ledger.add_hypothesis(fingerprint, "band_mechanisms", proposal(cells[0]), None, "rejected_entry_economics", evidence_path, source="grid_v2")
+                stalled = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                status_stalled = ledger.hypothesis(fingerprint)["status"]
+                trial_exists_stalled = (state_dir / "trial_ledger.jsonl").exists()
+                cache.print_path(BASE_WS + 50 * 300, 180).write_text(json.dumps(good_row) + "\n")
+                # No new windows since the row was written: the rebuild alone re-opens it.
+                healed = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
+                status_healed = ledger.hypothesis(fingerprint)["status"]
+                accrual = ledger.accrual(fingerprint)
+                evidence = json.loads(evidence_path.read_text())
+            finally:
+                ledger.close()
+            trial_rows = [json.loads(line) for line in (state_dir / "trial_ledger.jsonl").read_text().splitlines()]
+        self.assertEqual(
+            stale["stage_2"]["gates"],
+            {"support": True, "wilson_above_break_even": True, "positive_mean_net": True, "print_lists_complete": False},
+        )
+        # Still listless: the rescreen evaluates but writes nothing, and the
+        # proposer's next cell (same decision second) defers on the same row.
+        self.assertEqual(stalled["rescreen"], {"rescreened": 0, "promoted": 0, "still_rejected": 0})
+        self.assertEqual((stalled["status"], stalled["fingerprint"]), ("awaiting_print_rebuild", band.band_fingerprint(cells[1])))
+        self.assertEqual(status_stalled, "rejected_entry_economics")
+        self.assertFalse(trial_exists_stalled)
+        self.assertEqual(healed["rescreen"], {"rescreened": 1, "promoted": 1, "still_rejected": 0})
+        self.assertEqual(status_healed, "stage_2_survivor")
+        self.assertEqual((accrual["n"], accrual["last_window_start"]), (0, BASE_WS + 129 * 300))
+        self.assertTrue(evidence["stage_2"]["gates"]["print_lists_complete"])
+        self.assertEqual((evidence["stage_2"]["entries"], evidence["previous_window_count"]), (130, 130))
+        self.assertEqual((healed["status"], healed["fingerprint"]), ("stage_2_survivor", band.band_fingerprint(cells[1])))
+        self.assertEqual(
+            [(row["candidate"] == fingerprint, row["stage"], row["verdict"], row["n"]) for row in trial_rows],
+            [
+                (True, "band_entry_economics", "stage_2_survivor", 130),
+                (False, "band_signal_screen", "stage_1_survivor", 130),
+                (False, "band_entry_economics", "stage_2_survivor", 130),
             ],
         )
 
@@ -961,7 +1040,7 @@ class BandLaneTest(unittest.TestCase):
             cache.refresh(BASE_WS, now_ts, budget=1000)
             windows = cache.windows(BASE_WS, now_ts)
             prints = cache.load_prints(windows)
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
                 fingerprints = {}
                 for name, rule, status in seeds:
@@ -1029,6 +1108,9 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(artifacts["live"]["rescore"]["previous_window_count"], 40)
         self.assertEqual(artifacts["live"]["proposal"]["title"], "live")
         self.assertEqual(artifacts["live"]["window_count"], 130)
+        # The LLM-era artifact's provenance (its "llm" block) is carried over.
+        self.assertEqual(artifacts["live"]["provenance"], {"proposal_source": "prior"})
+        self.assertNotIn("llm", artifacts["live"])
         self.assertEqual(backups["narrow"]["window_count"], 40)
         self.assertEqual(backup_again["window_count"], 40)
         self.assertEqual(
@@ -1052,7 +1134,7 @@ class BandLaneTest(unittest.TestCase):
             cache.refresh(BASE_WS, now_ts, budget=1000)
             windows = cache.windows(BASE_WS, now_ts)
             prints = cache.load_prints(windows)
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
                 live = band.band_fingerprint(LIVE_RULE)
                 for fingerprint, rule in ((live, LIVE_RULE), ("malformed", {"bad": 1})):
@@ -1092,7 +1174,7 @@ class BandLaneTest(unittest.TestCase):
             with mock.patch.object(band, "OVERLAY_CONFIG", state_dir / "absent.json"):
                 self.assertEqual(band.config_path(None), band.DEPLOY_CONFIG)
 
-    # --- entry semantics, tripwire, e-BH family, parents ---------------------
+    # --- entry semantics, tripwire, e-BH family ------------------------------
 
     def test_entry_semantics_one_look_versus_patient(self):
         rows = windows(6)
@@ -1144,6 +1226,36 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(evidence["stage_2"]["entry_semantics"], "patient")
         self.assertEqual(band.lane_entry_semantics({}), "one_look")
         self.assertEqual(band.lane_entry_semantics({"entry_semantics": "patient"}), "patient")
+        # A grammar C patience is a horizon on the print offsets
+        # (executable_truth.print_look): prints stamped no later than
+        # patience + 1 s count, so patience 0 reads only the next second.
+        self.assertEqual(band.print_entry_price(first, "up", 0.80, 0.92, "one_look", 0), (None, "no_print"))
+        self.assertEqual(band.print_entry_price(first, "up", 0.80, 0.92, "one_look", 15), (None, "out_of_band"))
+        self.assertEqual(band.print_entry_price(first, "up", 0.80, 0.92, "patient", 15), (0.91, None))
+        self.assertEqual(band.print_entry_price(first, "up", 0.80, 0.90, "patient", 15), (None, "out_of_band"))
+        self.assertEqual(band.print_entry_price(first, "up", 0.80, 0.90, "patient", 30), (0.89, None))
+        second = prints[(starts[1], 240)]
+        self.assertEqual(band.print_entry_price(second, "up", 0.55, 0.92, "one_look", 0), (0.80, None))
+        self.assertEqual(band.print_entry_price(second, "up", 0.80, 0.92, "one_look", 0), (None, "out_of_band"))
+        self.assertEqual(band.print_entry_price(prints[(starts[4], 240)], "up", 0.80, 0.92, "one_look", 0), (None, "no_print_list"))
+        self.assertEqual(band.print_entry_price(prints[(starts[3], 240)], "up", 0.80, 0.92, "one_look", 30), (None, "no_print"))
+        cell = {**FIRST_CELL, "decision_second": 240, "patience_s": 15}
+        cell_scored = band._labelled(rows, band.band_signal_records(rows, cell))
+        self.assertEqual(len(cell_scored), 0)  # $60 margins are below the $75 floor
+        wide = [window(ws, margin=80.0) for ws in starts]
+        cell_scored = band._labelled(wide, band.band_signal_records(wide, cell))
+        economics = band.band_entry_economics(cell_scored, prints, cell, GATES)
+        self.assertEqual((economics["patience_s"], economics["entries"]), (15, 0))
+        self.assertEqual(
+            tuple(economics[key] for key in ("out_of_band_prints", "windows_without_print", "windows_without_print_list", "uncached_windows")),
+            (3, 1, 1, 1),
+        )
+        # A cell needs the print lists whatever the lane semantics: fail closed until rebuilt.
+        self.assertFalse(economics["gates"]["print_lists_complete"])
+        self.assertEqual(band.band_accrual_outcomes(wide, prints, cell, -1), [])
+        patient_cell = band.band_entry_economics(cell_scored, prints, cell, GATES, "patient")
+        self.assertEqual((patient_cell["entries"], patient_cell["wins"]), (1, 1))
+        self.assertAlmostEqual(patient_cell["mean_break_even"], band.break_even(0.91))
 
     def test_patient_semantics_fail_closed_on_rows_without_print_lists(self):
         rows = windows(4)
@@ -1187,6 +1299,7 @@ class BandLaneTest(unittest.TestCase):
         # print after it may be missing, so the row is not scored.
         self.assertEqual(band.print_entry_price(row(200, False), "up", 0.55, 0.92), (None, "uncovered"))
         self.assertEqual(band.print_entry_price(row(200, False), "up", 0.55, 0.92, "patient"), (None, "uncovered"))
+        self.assertEqual(band.print_entry_price(row(200, False), "up", 0.55, 0.92, "one_look", 0), (None, "uncovered"))
         # Reaching the decision second, or read to the tape's end: scored.
         self.assertEqual(band.print_entry_price(row(180, False), "up", 0.55, 0.92), (0.80, None))
         self.assertEqual(band.print_entry_price(row(200, True), "up", 0.55, 0.92), (0.80, None))
@@ -1200,21 +1313,20 @@ class BandLaneTest(unittest.TestCase):
     def test_tripwire_holds_too_good_survivors_as_manual_audit_until_cleared(self):
         config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
         now_ts = BASE_WS + 130 * 300 + 1199
-        client = StubClient()
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
             config["state_dir"] = directory
-            cache = self.stub_cache(directory)  # 130/130 at stage 2: trips
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            cache = self.cell_cache(directory)  # 130/130 at stage 2: trips
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
-                screened = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts)
+                screened = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts)
                 fingerprint = screened["fingerprint"]
                 status_screened = ledger.hypothesis(fingerprint)["status"]
                 seeded = ledger.accrual(fingerprint)
-                held = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts + 10 * 300)
+                held = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts + 10 * 300)
                 status_held = ledger.hypothesis(fingerprint)["status"]
                 config["lanes"]["band_mechanisms"]["audit_cleared"] = [fingerprint]
-                cleared = band.run_band_lane(config, ledger, state_dir, False, client, cache, now_ts + 20 * 300)
+                cleared = band.run_band_lane(config, ledger, state_dir, False, cache, now_ts + 20 * 300)
                 status_cleared = ledger.hypothesis(fingerprint)["status"]
                 accrual = ledger.accrual(fingerprint)
                 evidence = json.loads(Path(screened["artifact"]).read_text())
@@ -1232,7 +1344,10 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual((seeded["n"], seeded["last_window_start"]), (0, BASE_WS + 129 * 300))
         self.assertEqual((held["accrual"]["manual_audit"], held["accrual"]["e_bh"]["candidates"]), (1, 0))
         self.assertEqual(status_held, "manual_audit")
-        self.assertEqual((cleared["accrual"]["manual_audit"], cleared["accrual"]["accruing"]), (0, 1))
+        # The second cell, screened in the held run, trips too and stays held;
+        # only the cleared fingerprint returns to the running.
+        self.assertEqual(held["status"], "manual_audit")
+        self.assertEqual((cleared["accrual"]["manual_audit"], cleared["accrual"]["accruing"]), (1, 1))
         self.assertEqual(cleared["accrual"]["e_bh"]["candidates"], 1)
         self.assertEqual(status_cleared, "accruing")
         self.assertEqual((accrual["n"], accrual["wins"]), (20, 20))
@@ -1282,7 +1397,7 @@ class BandLaneTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             state_dir = Path(directory)
             config["state_dir"] = directory
-            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
             try:
                 fingerprints = self.seed_family(ledger, members)
                 registered = band.accrue_band_hypotheses(config, ledger, [], {})
@@ -1329,28 +1444,6 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(band.campaign_n({"generator": {"campaign_n": 7}, "lanes": {"band_mechanisms": {"campaign_n": 9}}}), 9)
         self.assertIsNone(band.campaign_n({}))
 
-    def test_elite_parents_skip_hamming_1_clones_of_chosen_elites(self):
-        def summary(status, wilson_lower, **fields):
-            rule = {**LIVE_RULE, **fields}
-            return {"rule": band.compact_band_rule(rule), "rule_fields": rule, "status": status, "wilson_lower": wilson_lower}
-
-        top = summary("accruing", 0.95)
-        clone = summary("accruing", 0.94, favorite_price_cap=0.85)  # H1 of top: skipped
-        near = summary("rejected_entry_economics", 0.93, favorite_price_floor=0.60)  # H1 of top: skipped
-        far = summary("rejected_signal_screen", 0.92, favorite_price_floor=0.60, favorite_price_cap=0.85)  # H2
-        beside_far = summary("accruing", 0.91, favorite_price_floor=0.60, favorite_price_cap=0.85, direction="up")
-        other = summary("rejected_entry_economics", 0.90, margin_floor_usd=100, decision_second=180)  # H2 of top, H4 of far
-        unscored = summary("accruing", None, margin_floor_usd=75)
-        chosen = band.elite_parents([unscored, clone, far, near, beside_far, other, top])
-        # A rejected parent fences its neighbours too (a lane with nothing
-        # accruing must not present three clones): beside_far is skipped.
-        self.assertEqual([item["rule"] for item in chosen], [top["rule"], far["rule"], other["rule"]])
-        self.assertEqual(band.rule_hamming(far["rule_fields"], beside_far["rule_fields"]), 1)
-        self.assertEqual(band.rule_hamming(top["rule_fields"], clone["rule_fields"]), 1)
-        self.assertEqual(band.rule_hamming(top["rule_fields"], far["rule_fields"]), 2)
-        self.assertEqual(band.rule_hamming(top["rule_fields"], top["rule_fields"]), 0)
-        self.assertEqual(band.elite_parents([]), [])
-
     def test_run_cycle_band_lane_disabled_returns_disabled(self):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         self.assertFalse(config["lanes"]["band_mechanisms"]["enabled"])
@@ -1358,46 +1451,29 @@ class BandLaneTest(unittest.TestCase):
             config["state_dir"] = directory
             with mock.patch.object(
                 loop, "resource_status", return_value={"passed": True, "checks": {}}
-            ), mock.patch.object(
-                loop, "run_registry_audit", return_value={"status": "completed"}
-            ), mock.patch.object(loop, "refresh_public_snapshot") as refresh, mock.patch.object(
-                loop.band_lane, "BandCache"
-            ) as cache:
+            ), mock.patch.object(loop.band_lane, "BandCache") as cache:
                 result = loop.run_cycle(config, True, "band_mechanisms")
-        refresh.assert_not_called()
         cache.assert_not_called()
         self.assertEqual(result["lane"], "band_mechanisms")
         self.assertEqual(result["lane_result"], {"status": "disabled"})
-        self.assertNotIn("economic_screen_job", result)
-        self.assertNotIn("public_snapshot", result)
+        self.assertEqual(set(result), {"cycle_id", "started_at", "finished_at", "dry_run", "lane", "lane_result", "resources", "ledger"})
 
-    def test_run_cycle_dispatches_band_lane_without_late_lane_chain(self):
+    def test_run_cycle_dispatches_the_band_lane(self):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
             config["state_dir"] = directory
-            ledger = loop.Ledger(Path(directory) / "research.sqlite3")
-            try:
-                ledger.enqueue(
-                    "late_window_mechanisms", "queued", "exact_l2_replay", {}, "queued", status="queued"
-                )
-            finally:
-                ledger.close()
             with mock.patch.object(
                 loop, "resource_status", return_value={"passed": True, "checks": {}}
-            ), mock.patch.object(
-                loop, "run_registry_audit", return_value={"status": "completed"}
-            ), mock.patch.object(loop, "refresh_public_snapshot") as refresh, mock.patch.object(
-                loop, "run_band_lane", return_value={"status": "not_due"}
-            ) as lane, mock.patch.object(loop, "run_queued_economic_screen") as screen:
+            ), mock.patch.object(loop, "run_band_lane", return_value={"status": "not_due"}) as lane:
                 result = loop.run_cycle(config, False, "band_mechanisms")
-        refresh.assert_not_called()
-        lane.assert_called_once()
-        screen.assert_not_called()
+            lane.assert_called_once_with(config, mock.ANY, Path(directory), False)
+            written = json.loads((Path(directory) / "status.json").read_text())
         self.assertEqual(result["lane_result"], {"status": "not_due"})
-        self.assertNotIn("fresh_public_accrual", result)
+        self.assertEqual(written["lane_result"], {"status": "not_due"})
+        self.assertEqual(result["ledger"]["last_cycle"]["status"], "completed")
 
     def test_deploy_config_is_fail_closed_and_overlay_mirrors_it(self):
-        deploy = json.loads((ROOT / "deploy/strategy-research-loop.json").read_text())
+        deploy = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         block = deploy["lanes"]["band_mechanisms"]
         self.assertFalse(block["enabled"])
         self.assertEqual(block["minimum_interval_seconds"], 900)
@@ -1408,12 +1484,19 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(block["campaign_n"], 64)
         self.assertEqual(band.campaign_n(deploy), 64)
         self.assertEqual(block["audit_cleared"], [])
+        self.assertEqual(deploy["resource_policy"]["minimum_free_disk_gib"], 20)
         overlay_path = ROOT / "logs/strategy-research/loop-config.local.json"
         if not overlay_path.is_file():
             self.skipTest("gitignored overlay not present")
-        overlay = json.loads(overlay_path.read_text())["lanes"]["band_mechanisms"]
-        self.assertTrue(overlay["enabled"])
-        self.assertEqual({**overlay, "enabled": False}, block)
+        # The overlay honours the same contract and differs only in the lane
+        # switch and the Phase 0 disk gate (5 GiB).
+        overlay = loop.load_config(overlay_path)
+        self.assertTrue(overlay["lanes"]["band_mechanisms"]["enabled"])
+        self.assertEqual(overlay["resource_policy"]["minimum_free_disk_gib"], 5)
+        expected = json.loads(json.dumps(deploy))
+        expected["lanes"]["band_mechanisms"]["enabled"] = True
+        expected["resource_policy"]["minimum_free_disk_gib"] = 5
+        self.assertEqual(overlay, expected)
 
 
 if __name__ == "__main__":

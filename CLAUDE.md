@@ -76,7 +76,9 @@ the working tree; read them with `git show 0cd8b0d:docs/<path>`.
   suite green.
 - Python: `uv run python -m unittest tests.test_strategy_research_loop tests.test_band_lane
   tests.test_evidence_accrual tests.test_factory_kpi tests.test_band_shadow_race tests.test_executable_truth`
-  (174 OK; the runner never imports `executable_truth.py`, so only this command catches its regressions).
+  (99 OK after the Phase 3 factory cut). The runner runs `executable_truth.py --tick` every 15 min and, having no
+  `set -e`, logs a failing tick only to `logs/strategy-research/executable_truth.log` while `runner.log` and
+  `status.json` look healthy: this command is the pre-merge check, that log the runtime check.
 - Rust: `cd rust_engine && cargo test -p polymomentum-engine` (677 on the WIP tree, 674 at HEAD);
   `cargo clippy --no-deps` real warnings <= 9 and never increasing.
 - Engine deletions only after their replacement runs, one step per change, `git tag pre-basement` first.

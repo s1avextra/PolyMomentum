@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Shadow race: score band rules on the canary's band_anchor records.
+"""Shadow race: score band rules on the engine's band_ladder records (the
+executable truth) and, diagnostically, on its band_anchor quotes.
 
-The live engine writes one ``band_anchor`` record per btc-updown-5m window
-and anchor second into its session log: exchange price, window open,
-decision margin and, for both sides, the budget-aware FOK quote (VWAP, worst
-price, shares) the venue offered at that instant.  Nothing here touches
-money: the champion (by default the live band rule, replayed like every
-challenger on the anchor quote: the engine's capital, wallet and breaker
-gates are not modelled, so its trades need not match the canary's order
-log) and any challenger band rules are replayed offline on the same
-anchors, scored against the official Gamma outcomes and compared with a
-paired anytime-valid e-process (scripts/evidence_accrual.py
-``update_signed``).
+The engine writes one ``band_ladder`` record per btc-updown-5m window and
+anchor second (30 s of 1 s samples of the momentum-side book at $5/$25/$100)
+and one ``band_anchor`` record: exchange price, window open, decision margin
+and, for both sides, the budget-aware FOK quote (VWAP, worst price, shares)
+the venue offered at that instant.  Nothing here touches money: the
+champion (by default the live band rule, replayed like every challenger:
+the engine's capital, wallet and breaker gates are not modelled, so its
+trades need not match the canary's order log) and any challenger band rules
+are replayed offline on the same records, scored against the official
+Gamma outcomes and compared with a paired anytime-valid e-process
+(scripts/evidence_accrual.py ``update_signed``).
 
-Per window and rule: the anchor at the rule's ``decision_second`` (a window
-is paired only when both rules' anchors exist).  The engine's own cycle
+Per window and rule: the record at the rule's ``decision_second`` (a window
+is paired only when both rules' records exist); a ladder record shadows the
+anchor of its key.  On an anchor quote the engine's own cycle
 gates come first and apply to every rule, because they are not the rule's:
 a fresh best ask on BOTH sides (``book_age_s`` / ``best_ask`` null on either
 side is the ``fresh_outcome_book_unavailable`` skip) and a non-null
@@ -43,8 +45,15 @@ Promotion is Bonferroni over the run's K challengers, e >= K / alpha, so the
 family-wise false-promote rate of one run is alpha; challengers raced
 against the same champion history in other runs are the operator's count.
 
-Read-only on the VPS: ``--pull`` only rsyncs the canary's session logs into
-the local mirror.
+Rules are band_lane rules of either shape (grammar C cells or the legacy
+six-field rules; band_lane.rule_params).  A ``band_ladder`` record is scored
+by the ladder model instead of the anchor quote (rule_trade), at the FOK
+worst price.  The anchor quote is an upper bound, not the truth (docs
+section C): ``--record`` races ladder records only, so a trial-ledger look
+is never scored on an anchor quote; without it anchor-quote trades are
+counted per rule as ``anchor_quote_trades``.  Session logs come from
+scripts/pull_vps_sessions.sh (pull-only) or the Mac observer; this script
+never touches the VPS.
 """
 
 from __future__ import annotations
@@ -55,7 +64,6 @@ import importlib.util
 import json
 import sqlite3
 import statistics
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -80,7 +88,6 @@ evidence_accrual = _load("evidence_accrual", "evidence_accrual.py")
 executable_truth = _load("executable_truth", "executable_truth.py")
 
 DEFAULT_SESSIONS_DIR = ROOT / "logs/band-canary-mirror/sessions"
-VPS_SESSIONS = "vps:/opt/polymomentum/logs/band-canary/sessions/"
 DEFAULT_RESEARCH_DB = ROOT / "logs/strategy-research/research.sqlite3"
 DEFAULT_LOOP_CONFIG = ROOT / "deploy/strategy-research-loop.json"
 STAGE = "champion_challenger_race"
@@ -103,29 +110,17 @@ SCALING_NOTE = (
 
 
 def load_anchors(sessions_dir: Path) -> Dict[int, Dict[int, Dict[str, Any]]]:
-    """band_anchor records by window_start (ts - elapsed_s on the 300 s grid)
-    then anchor second; a duplicate keeps the record closest to its anchor."""
-    anchors: Dict[int, Dict[int, Dict[str, Any]]] = {}
-    for path in sorted(Path(sessions_dir).rglob("*.jsonl")):
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(record, Mapping) or record.get("type") != "band_anchor":
-                    continue
-                try:
-                    ts = float(record["ts"])
-                    elapsed = float(record["elapsed_s"])
-                    anchor_s = int(record["anchor_s"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                window_start = int(round((ts - elapsed) / WINDOW_S)) * WINDOW_S
-                current = anchors.setdefault(window_start, {}).get(anchor_s)
-                if current is None or elapsed < float(current["elapsed_s"]):
-                    anchors[window_start][anchor_s] = dict(record)
-    return anchors
+    """band_anchor and band_ladder records by window_start then anchor
+    second (executable_truth.scan_sessions: an anchor at ts - elapsed_s on
+    the 300 s grid, a duplicate keeping the record closest to its second; a
+    ladder placed by the anchor of its cid or its flush time).  A ladder
+    record takes its key whatever anchor shares it: the ladder is the
+    executable truth, the anchor quote an upper bound (docs section C)."""
+    scanned = executable_truth.scan_sessions([Path(sessions_dir)])
+    records: Dict[int, Dict[int, Dict[str, Any]]] = {}
+    for (window_start, anchor_s), record in list(scanned["anchors"].items()) + list(scanned["ladders"].items()):
+        records.setdefault(int(window_start), {})[int(anchor_s)] = dict(record)
+    return records
 
 
 def resolve_rule(text: str, research_db: Path) -> Dict[str, Any]:
@@ -214,27 +209,29 @@ def binance_sigmas(
 def rule_trade(
     rule: Mapping[str, Any], anchor: Mapping[str, Any], sigma: Optional[float]
 ) -> Optional[Dict[str, Any]]:
-    """The trade `rule` takes on one anchor, or None when it does not trade.
+    """The trade `rule` (either band_lane rule shape) takes on one anchor, or
+    None when it does not trade.
 
     A band_ladder record (it carries `samples`) is scored by the ladder
     model (executable_truth.ladder_trade): the first sample within the
     rule's patience_s (0 when absent) whose $25 quote clears the band on a
     fresh, coherent book; the trade's `entry` is the FOK worst price."""
+    params = band_lane.rule_params(rule)
     if "samples" in anchor:
         margin = anchor.get("margin")
         if margin is None or float(margin) == 0.0:
             return None
         direction = "up" if float(margin) > 0 else "down"
-        if rule["direction"] != "both" and direction != rule["direction"]:
+        if params["direction"] != "both" and direction != params["direction"]:
             return None
-        if abs(float(margin)) < float(rule["margin_floor_usd"]):
+        if abs(float(margin)) < params["margin_floor_usd"]:
             return None
-        floor_sigma = float(rule.get("margin_floor_sigma", 0.0))
+        floor_sigma = params["margin_floor_sigma"]
         if floor_sigma > 0 and (sigma is None or abs(float(margin)) < floor_sigma * sigma):
             return None
-        ladder_rule = {"favorite_price_cap": rule["favorite_price_cap"], "patience_s": rule.get("patience_s", 0)}
+        ladder_rule = {"favorite_price_cap": params["favorite_price_cap"], "patience_s": params["patience_s"] or 0}
         trade = executable_truth.ladder_trade(
-            ladder_rule, anchor, direction, executable_truth.LADDER_BUDGET_USD, floor=float(rule["favorite_price_floor"])
+            ladder_rule, anchor, direction, executable_truth.LADDER_BUDGET_USD, floor=params["favorite_price_floor"]
         )
         if trade is None:
             return None
@@ -261,11 +258,11 @@ def rule_trade(
         return None
     margin = float(margin)
     direction = "up" if margin > 0 else "down"
-    if rule["direction"] != "both" and direction != rule["direction"]:
+    if params["direction"] != "both" and direction != params["direction"]:
         return None
-    if abs(margin) < float(rule["margin_floor_usd"]):
+    if abs(margin) < params["margin_floor_usd"]:
         return None
-    floor_sigma = float(rule["margin_floor_sigma"])
+    floor_sigma = params["margin_floor_sigma"]
     if floor_sigma > 0 and (sigma is None or abs(margin) < floor_sigma * sigma):
         return None
     quote = anchor.get(direction) or {}
@@ -279,7 +276,7 @@ def rule_trade(
     if not 0.90 <= vwap + float(complement["best_ask"]) <= 1.10:
         return None
     # BandPolicyParams::quote_clears_band: VWAP above the floor, FOK worst within the cap.
-    if not (vwap > float(rule["favorite_price_floor"]) and worst <= float(rule["favorite_price_cap"])):
+    if not (vwap > params["favorite_price_floor"] and worst <= params["favorite_price_cap"]):
         return None
     return {
         "direction": direction,
@@ -313,7 +310,7 @@ def race(
     # Fixed for the race so d stays linear in the raw score difference: above
     # its floor a rule wins under 1/break_even(floor) - 1 per USD and loses
     # -1, so |challenger - champion| < scale and the e-process clamp is idle.
-    scale = max(1.0 / band_lane.break_even(float(rule["favorite_price_floor"])) for rule in rules)
+    scale = max(1.0 / band_lane.break_even(band_lane.rule_params(rule)["favorite_price_floor"]) for rule in rules)
     resolved = sorted(ws for ws in anchors if outcomes.get(ws) in ("up", "down"))
     trades: List[Dict[int, Dict[str, Any]]] = []
     stats: List[Dict[str, Any]] = []
@@ -342,6 +339,8 @@ def race(
                 "label": band_lane.compact_band_rule(rule),
                 "windows": seen,
                 "trades": len(taken),
+                # Diagnostic trades: scored on the anchor quote, not a ladder row.
+                "anchor_quote_trades": sum(1 for trade in taken.values() if "entry" not in trade),
                 "wins": sum(1 for trade in taken.values() if trade["won"]),
                 "net_per_usd": _mean([trade["score"] for trade in taken.values()]),
                 "net_at_stake": sum(trade["score"] * trade["stake_usd"] for trade in taken.values()),
@@ -401,6 +400,10 @@ def race(
             "resolved": len(resolved),
             "unresolved": len(anchors) - len(resolved),
         },
+        "records": {
+            "ladder": sum(1 for by_second in anchors.values() for record in by_second.values() if "samples" in record),
+            "anchor": sum(1 for by_second in anchors.values() for record in by_second.values() if "samples" not in record),
+        },
         "d_scale": scale,
         "scaling": SCALING_NOTE % scale,
         "champion": stats[0],
@@ -408,86 +411,11 @@ def race(
     }
 
 
-def _number(value: Optional[float], digits: int = 4) -> str:
-    return "-" if value is None else "%.*f" % (digits, value)
-
-
-def markdown(report: Mapping[str, Any]) -> str:
-    lines = [
-        "| rule | fingerprint | windows | trades | wins | net/USD | net@stake |",
-        "|---|---|---:|---:|---:|---:|---:|",
-    ]
-    champion = report["champion"]
-    for role, row in [("champion", champion)] + [("challenger", row) for row in report["challengers"]]:
-        lines.append(
-            "| %s (%s) | %s | %d | %d | %d | %s | %s |"
-            % (
-                row["label"],
-                role,
-                row["fingerprint"][:12],
-                row["windows"],
-                row["trades"],
-                row["wins"],
-                _number(row["net_per_usd"]),
-                _number(row["net_at_stake"], 2),
-            )
-        )
-    lines += [
-        "",
-        "| challenger | n | mean d | d>0 | d<0 | overlap | clipped | e-value | verdict |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
-    ]
-    for row in report["challengers"]:
-        paired = row["paired"]
-        lines.append(
-            "| %s | %d | %s | %d | %d | %d | %d | %s | %s |"
-            % (
-                row["fingerprint"][:12],
-                paired["n"],
-                _number(paired["mean_d"]),
-                paired["wins"],
-                paired["losses"],
-                paired["overlap"],
-                paired["clipped"],
-                _number(paired["e_value"], 3),
-                paired["verdict"],
-            )
-        )
-    windows = report["windows"]
-    lines += [
-        "",
-        "windows: anchored=%d resolved=%d unresolved=%d; promote at e >= %.1f (alpha %s Bonferroni over %d "
-        "challengers in this run; challengers raced against this champion history in other runs are not counted), "
-        "kill at e <= %s"
-        % (
-            windows["anchored"],
-            windows["resolved"],
-            windows["unresolved"],
-            report["promote_e"],
-            report["alpha"],
-            len(report["challengers"]),
-            evidence_accrual.FUTILITY_E,
-        ),
-        report["scaling"],
-        "champion = the band rule replayed on the anchor quote at the pre-cap budget, like every challenger; "
-        "the engine's fresh-book, sizing-policy and pair-coherence gates are replayed, its capital, wallet and "
-        "breaker gates are not, so trades here need not match the canary's order log",
-    ]
-    if any(row["paired"]["clipped"] for row in report["challengers"]):
-        lines.append("WARNING: clipped pairs present; the e-value tests E[clip(d)] <= 0, not E[d] <= 0")
-    return "\n".join(lines)
-
-
 def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Optional[int] = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--sessions-dir", type=Path, default=DEFAULT_SESSIONS_DIR)
-    parser.add_argument(
-        "--pull",
-        action="store_true",
-        help="rsync the canary's session logs from the VPS into --sessions-dir first (never writes to the VPS)",
-    )
     parser.add_argument("--champion", default=json.dumps(LIVE_RULE), help="JSON band rule or band-lane fingerprint")
     parser.add_argument("--challengers", nargs="+", required=True, help="JSON band rules or band-lane fingerprints")
     parser.add_argument("--alpha", type=float, default=0.05)
@@ -499,7 +427,8 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
     parser.add_argument(
         "--record",
         action="store_true",
-        help="with --json: also append one trial-ledger row per challenger (a look that counts)",
+        help="with --json: also append one trial-ledger row per challenger (a look that counts, so the race "
+        "is on band_ladder records only; anchor-quote trades are diagnostic, docs section C)",
     )
     parser.add_argument("--research-db", type=Path, default=DEFAULT_RESEARCH_DB)
     parser.add_argument("--loop-config", type=Path, default=DEFAULT_LOOP_CONFIG)
@@ -508,14 +437,19 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
         parser.error("--alpha must be in (0, 1)")
     if args.record and not args.json:
         parser.error("--record requires --json")
-    if args.pull:
-        args.sessions_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["rsync", "-az", VPS_SESSIONS, str(args.sessions_dir) + "/"], check=True)
     champion = resolve_rule(args.champion, args.research_db)
     challengers = [resolve_rule(text, args.research_db) for text in args.challengers]
     anchors = load_anchors(args.sessions_dir)
+    if args.record:
+        # A look that counts is scored on the executable truth only.
+        anchors = {
+            window_start: {second: record for second, record in by_second.items() if "samples" in record}
+            for window_start, by_second in anchors.items()
+        }
+        anchors = {window_start: by_second for window_start, by_second in anchors.items() if by_second}
     if not anchors:
-        print("no band_anchor records under %s" % args.sessions_dir)
+        kinds = "band_ladder" if args.record else "band_anchor or band_ladder"
+        print(json.dumps({"error": "no %s records under %s" % (kinds, args.sessions_dir)}))
         return 1
     now_ts = int(time.time()) if now_ts is None else int(now_ts)
     cache = cache or band_lane.BandCache()
@@ -523,7 +457,11 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
     outcomes, fetch = resolve_outcomes(cache, window_starts, now_ts)
     sigmas: Dict[int, Dict[int, Optional[float]]] = {}
     sigma_seconds = sorted(
-        {int(rule["decision_second"]) for rule in [champion] + challengers if float(rule["margin_floor_sigma"]) > 0}
+        {
+            int(rule["decision_second"])
+            for rule in [champion] + challengers
+            if band_lane.rule_params(rule)["margin_floor_sigma"] > 0
+        }
     )
     if sigma_seconds:
         cache.load_closes(
@@ -541,7 +479,6 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
             "outcome_fetch": fetch,
         }
     )
-    print(markdown(report))
     if args.json:
         config = json.loads(args.loop_config.read_text())
         state_dir = Path(str(config["state_dir"]))
@@ -550,6 +487,7 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
         path = state_dir / "band_race" / (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        report["written"] = str(path)
         for row in report["challengers"] if args.record else []:
             factory_generator.append_trial_entry(
                 config,
@@ -559,7 +497,7 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
                 n=row["paired"]["n"],
                 wins=row["paired"]["wins"],
             )
-        print("written %s" % path)
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
