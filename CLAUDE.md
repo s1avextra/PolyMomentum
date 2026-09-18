@@ -75,7 +75,8 @@ the working tree; read them with `git show 0cd8b0d:docs/<path>`.
 - The factory runner re-imports `scripts/*.py` every 5 min: every Python step lands importable with the
   suite green.
 - Python: `uv run python -m unittest tests.test_strategy_research_loop tests.test_band_lane
-  tests.test_evidence_accrual tests.test_factory_kpi tests.test_band_shadow_race` (156 OK).
+  tests.test_evidence_accrual tests.test_factory_kpi tests.test_band_shadow_race tests.test_executable_truth`
+  (174 OK; the runner never imports `executable_truth.py`, so only this command catches its regressions).
 - Rust: `cd rust_engine && cargo test -p polymomentum-engine` (677 on the WIP tree, 674 at HEAD);
   `cargo clippy --no-deps` real warnings <= 9 and never increasing.
 - Engine deletions only after their replacement runs, one step per change, `git tag pre-basement` first.
