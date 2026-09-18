@@ -296,6 +296,13 @@ impl SessionMonitor {
         self.write_event("signal", "band_anchor", payload);
     }
 
+    /// Executable-price ladder: the momentum-side book sampled once per
+    /// second for 30 s after an anchor second, quoted at fixed budgets
+    /// (`cid` already shortened by the caller).
+    pub fn record_band_ladder(&self, payload: serde_json::Value) {
+        self.write_event("signal", "band_ladder", payload);
+    }
+
     pub fn record_signal_skip(&self, contract_id: &str, reason: &str) {
         let mut c = self.counters.lock().unwrap();
         c.signal_skip_count += 1;

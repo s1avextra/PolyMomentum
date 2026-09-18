@@ -500,6 +500,10 @@ pub const BAND_MIN_STAKE_USD: f64 = 5.0;
 /// Capture span after each anchor second: the first cycle inside
 /// [anchor, anchor + span) records the anchor, later cycles never re-record.
 const BAND_ANCHOR_SPAN_S: f64 = 4.0;
+/// Executable-price ladder: seconds after each anchor over which the
+/// momentum-side book is sampled once per second (offsets 0..=30); the
+/// record flushes at anchor + span + 1.
+const BAND_LADDER_SPAN_S: f64 = 30.0;
 
 fn serde_f64_is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -1020,6 +1024,10 @@ pub struct Pipeline {
     /// (cid, anchor second) pairs already captured as `band_anchor` events;
     /// pruned to the live contract list so it cannot grow unbounded.
     band_anchor_logged: Mutex<HashSet<(String, u32)>>,
+    /// `band_ladder` records under construction per (cid, anchor second)
+    /// (`sample_band_ladder`); an entry leaves on its flush or when the
+    /// window leaves the contract list, so it cannot grow unbounded.
+    band_ladder: Mutex<HashMap<(String, u32), LadderAcc>>,
     /// Per-window band decision (`BandLatch`) with the window end (unix s),
     /// made by `latch_band_decision` on the first cycle inside the entry
     /// window and never revisited; pruned to windows still open at each new
@@ -1555,6 +1563,7 @@ impl Pipeline {
             last_btc_stall_log_s: std::sync::atomic::AtomicU64::new(0),
             band_detail_logged: Mutex::new(HashSet::new()),
             band_anchor_logged: Mutex::new(HashSet::new()),
+            band_ladder: Mutex::new(HashMap::new()),
             band_latch: Mutex::new(HashMap::new()),
             last_wallet_pusd_micro: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_wallet_read_s: std::sync::atomic::AtomicU64::new(0),
@@ -2967,12 +2976,11 @@ impl Pipeline {
             }
 
             let ps = self.price_state.read().await.clone();
-            let btc = if self.settings.candle_settlement_alignment_ready {
-                ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10))
-                    .unwrap_or(0.0)
-            } else {
-                ps.mid_price
-            };
+            let btc = band_cycle_price(
+                &ps,
+                self.runtime_strategy.band.is_some(),
+                self.settings.candle_settlement_alignment_ready,
+            );
             if btc <= 0.0 {
                 // A dead decision feed halts trading fail-closed, but must be
                 // visible: record once per minute rather than per cycle.
@@ -3085,8 +3093,11 @@ impl Pipeline {
                 let cid = c.market.condition_id.clone();
                 // Money-free challenger capture. Deliberately ahead of the
                 // traded skip: a window the champion entered at 240s still
-                // yields its 270s anchor. Observation only.
+                // yields the rest of its 240s ladder below. Observation only.
                 self.capture_band_anchors(c, &contracts, &books, &ps, now, now_ts)
+                    .await;
+                // Executable-price ladder: same money-free position.
+                self.sample_band_ladder(c, &contracts, &books, &ps, now, now_ts)
                     .await;
                 if traded_set.contains(&cid) {
                     continue;
@@ -3935,6 +3946,162 @@ impl Pipeline {
                 "pair_sum": pair_sum,
             }));
         }
+    }
+
+    /// Executable-price ladder (observation only: no orders, no risk or
+    /// breaker state). For each anchor second `a` of a BTC 5m window, the
+    /// momentum-side book is quoted at every `band_ladder_budgets_usd`
+    /// once per second for `BAND_LADDER_SPAN_S` after `a`
+    /// (`band_ladder_sample`; the first cycle at or past each whole-second
+    /// offset takes that offset's sample, labelled `t` by the offset it was
+    /// taken at: a second no cycle reached stays absent and never shifts
+    /// the later labels) and flushed as one `band_ladder`
+    /// record per (window, anchor) at `a + 31` s, or when the window leaves
+    /// the contract list. Direction and margin come from the anchor's own
+    /// basis (`band_basis_prices` at `open + a`) after the same
+    /// covering-tick wait the anchor capture applies. Called by the cycle
+    /// loop right after `capture_band_anchors`, ahead of the traded skip.
+    async fn sample_band_ladder(
+        &self,
+        c: &CandleContract,
+        contracts: &[CandleContract],
+        books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+        ps: &PriceState,
+        now: DateTime<Utc>,
+        now_ts: f64,
+    ) {
+        let anchors = &self.settings.band_anchor_seconds;
+        let budgets = &self.settings.band_ladder_budgets_usd;
+        if anchors.is_empty() || budgets.is_empty() || self.runtime_strategy.band.is_none() {
+            return;
+        }
+        let mut ladder = self.band_ladder.lock().await;
+        // A window dropped from a contract refresh never reaches its own
+        // flush: record what it has.
+        let gone: Vec<(String, u32)> = ladder
+            .keys()
+            .filter(|(k, _)| !contracts.iter().any(|c| c.market.condition_id == *k))
+            .cloned()
+            .collect();
+        for key in gone {
+            if let Some(acc) = ladder.remove(&key) {
+                self.flush_band_ladder(&key.0, acc);
+            }
+        }
+        let Some((elapsed_s, open_ts)) = band_anchor_elapsed(c, now) else {
+            return;
+        };
+        let cid = c.market.condition_id.as_str();
+        let cycle_ts = now.timestamp_millis() as f64 / 1_000.0;
+        // The composite open (the anchor capture's fallback) is looked up
+        // once per accumulator, never per cycle.
+        let mut composite_open: Option<Option<f64>> = None;
+        let mut market_tick: Option<f64> = None;
+        for &anchor in anchors {
+            if elapsed_s < anchor {
+                continue;
+            }
+            let key = (cid.to_string(), anchor as u32);
+            if elapsed_s >= anchor + BAND_LADDER_SPAN_S + 1.0 {
+                if let Some(acc) = ladder.remove(&key) {
+                    self.flush_band_ladder(cid, acc);
+                }
+                continue;
+            }
+            if !ladder.contains_key(&key) {
+                if binance_sample_pending(ps, open_ts + anchor, anchor, elapsed_s) {
+                    continue;
+                }
+                let composite_open = match composite_open {
+                    Some(open) => open,
+                    None => {
+                        let cached = self
+                            .momentum
+                            .lock()
+                            .await
+                            .get(&c.asset)
+                            .and_then(|det| det.get_open_price(cid));
+                        let open = cached.or_else(|| ps.price_near_seconds(&c.asset, open_ts, 2.0));
+                        composite_open = Some(open);
+                        open
+                    }
+                };
+                let (basis, open, btc) =
+                    band_basis_prices(ps, open_ts, open_ts + anchor, composite_open);
+                let margin = open.filter(|_| btc > 0.0).map(|open| btc - open);
+                let direction = margin.and_then(|m| {
+                    if m > 0.0 {
+                        Some("up")
+                    } else if m < 0.0 {
+                        Some("down")
+                    } else {
+                        None
+                    }
+                });
+                ladder.insert(
+                    key.clone(),
+                    LadderAcc {
+                        anchor_s: anchor as u32,
+                        basis,
+                        open,
+                        btc,
+                        margin,
+                        direction,
+                        samples: Vec::new(),
+                        next_offset: 0,
+                        cycles: 0,
+                        max_gap_s: 0.0,
+                        last_ts: cycle_ts,
+                    },
+                );
+            }
+            let Some(acc) = ladder.get_mut(&key) else {
+                continue;
+            };
+            acc.cycles += 1;
+            acc.max_gap_s = acc.max_gap_s.max(cycle_ts - acc.last_ts);
+            acc.last_ts = cycle_ts;
+            // `elapsed_s` is in [anchor, anchor + 31) here: 0..=30.
+            let offset = (elapsed_s - anchor).floor() as u32;
+            if offset >= acc.next_offset {
+                let tick = *market_tick.get_or_insert_with(|| {
+                    live_market_tick_size(
+                        c.market.minimum_tick_size,
+                        [&c.up_token_id, &c.down_token_id],
+                        books,
+                    )
+                });
+                acc.samples.push(band_ladder_sample(
+                    c,
+                    acc.direction,
+                    books,
+                    budgets,
+                    self.settings.live_min_order_size_shares,
+                    tick,
+                    now_ts,
+                    offset,
+                ));
+                acc.next_offset = offset + 1;
+            }
+        }
+    }
+
+    /// Writes one `band_ladder` session record (`cid` shortened here).
+    fn flush_band_ladder(&self, cid: &str, acc: LadderAcc) {
+        self.monitor.record_band_ladder(json!({
+            "cid": short_cid(cid),
+            "anchor_s": acc.anchor_s,
+            "basis": acc.basis,
+            "open": acc.open.map(|o| round_to(o, 4)),
+            "btc": (acc.btc > 0.0).then(|| round_to(acc.btc, 4)),
+            "margin": acc.margin.map(|m| round_to(m, 4)),
+            "direction": acc.direction,
+            "budgets_usd": self.settings.band_ladder_budgets_usd,
+            "samples": acc.samples,
+            "cycles": acc.cycles,
+            "max_gap_s": round_to(acc.max_gap_s, 4),
+            "host": self.settings.band_host_label,
+        }));
     }
 
     /// The band's ONE look at the decision second: on the first cycle with
@@ -6506,6 +6673,41 @@ fn band_window_elapsed_s(end: DateTime<Utc>, now: DateTime<Utc>, window_minutes:
 /// instant must be no older than this (the ticker runs at 1 Hz).
 const BAND_BASIS_TOLERANCE_S: f64 = 2.0;
 
+/// The cycle gate's Binance liveness bound on the local receipt clock
+/// (`PriceState::source_timestamps`): the 10 s the legacy chainlink gate
+/// and the composite's liveness use. Deliberately not
+/// `BAND_BASIS_TOLERANCE_S`, which is measured against Binance's event
+/// clock: as the gate it left under one second for clock skew plus
+/// delivery latency on a 1 Hz ticker, and the loop's 1 s stall sleep then
+/// phase-locks to the ticker, parking the loop across decision seconds the
+/// at-or-before basis reads would still have served.
+const BAND_CYCLE_STALE_AFTER: Duration = Duration::from_secs(10);
+
+/// The cycle loop's decision price, which also gates the cycle (0 pauses
+/// it as `decision_feed_unavailable`). In band mode it is Binance's newest
+/// tick - the series the latch, the anchors and the ladder read - while one
+/// was received within `BAND_CYCLE_STALE_AFTER`, so the loop ticks on
+/// Binance freshness and never on a chainlink feed the band never
+/// consults. Otherwise the legacy read, verbatim: the fresh
+/// chainlink-settlement price under the alignment flag, else the composite
+/// mid.
+fn band_cycle_price(ps: &PriceState, band_mode: bool, settlement_ready: bool) -> f64 {
+    if band_mode {
+        return ps
+            .source_timestamps
+            .get("binance")
+            .filter(|received| received.elapsed() <= BAND_CYCLE_STALE_AFTER)
+            .and_then(|_| ps.prices.get("binance").copied())
+            .unwrap_or(0.0);
+    }
+    if settlement_ready {
+        ps.fresh_source_price("chainlink_settlement", Duration::from_secs(10))
+            .unwrap_or(0.0)
+    } else {
+        ps.mid_price
+    }
+}
+
 /// The band's margin basis at one instant of a window: Binance's own last
 /// tick at or before the window open and at or before `target_s`
 /// (`PriceState::source_price_at_or_before`, tolerance
@@ -6567,6 +6769,106 @@ fn due_band_anchors(
         .map(|&a| a as u32)
         .filter(|&a| seen.insert((cid.to_string(), a)))
         .collect()
+}
+
+/// One `band_ladder` record under construction (`sample_band_ladder`):
+/// the anchor's basis read plus the per-second samples, cycle count and
+/// the largest gap between two cycles inside the span.
+#[derive(Debug)]
+struct LadderAcc {
+    anchor_s: u32,
+    basis: &'static str,
+    open: Option<f64>,
+    btc: f64,
+    margin: Option<f64>,
+    direction: Option<&'static str>,
+    samples: Vec<serde_json::Value>,
+    next_offset: u32,
+    cycles: u32,
+    max_gap_s: f64,
+    last_ts: f64,
+}
+
+/// One ladder sample at `offset` seconds past the anchor: the momentum
+/// token's book (`direction`; both sides, keyed `up`/`down`, when the
+/// anchor had no direction) quoted at each budget via `live_buy_book_quote`
+/// as `[worst_price, vwap, shares, depth_limited]` - `worst_price` is the
+/// FOK limit, the entry the evaluator prices - or null when no executable
+/// quote exists at that budget (no book, no asks, below the venue
+/// minimum). `c`: the complement's best ask (pair coherence), `age`: the
+/// sampled book's age (`live_book_age_seconds`), `fresh`: both books fresh
+/// with positive asks (`pick_book_prices`). Pure: reads the cycle's book
+/// snapshot only.
+#[allow(clippy::too_many_arguments)]
+fn band_ladder_sample(
+    c: &CandleContract,
+    direction: Option<&str>,
+    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    budgets: &[f64],
+    min_shares: f64,
+    tick: f64,
+    now_ts: f64,
+    offset: u32,
+) -> serde_json::Value {
+    let quotes = |token_id: &str| -> serde_json::Value {
+        budgets
+            .iter()
+            .map(|&budget| {
+                live_buy_book_quote(token_id, books, budget, min_shares, tick).map_or(
+                    serde_json::Value::Null,
+                    |q| {
+                        json!([
+                            round_to(q.worst_price, 4),
+                            round_to(q.vwap, 4),
+                            round_to(q.shares, 4),
+                            q.depth_limited
+                        ])
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+            .into()
+    };
+    let best_ask = |token_id: &str| {
+        books
+            .get(token_id)
+            .map(|b| b.best_ask)
+            .filter(|a| *a > 0.0)
+            .map(|a| round_to(a, 4))
+    };
+    let age = |token_id: &str| {
+        books
+            .get(token_id)
+            .and_then(|b| live_book_age_seconds(now_ts, b.last_update_us))
+            .map(|a| round_to(a, 4))
+    };
+    let (q, complement_ask, book_age) = match direction {
+        Some("up") => (
+            quotes(&c.up_token_id),
+            best_ask(&c.down_token_id),
+            age(&c.up_token_id),
+        ),
+        Some("down") => (
+            quotes(&c.down_token_id),
+            best_ask(&c.up_token_id),
+            age(&c.down_token_id),
+        ),
+        _ => (
+            json!({ "up": quotes(&c.up_token_id), "down": quotes(&c.down_token_id) }),
+            None,
+            match (age(&c.up_token_id), age(&c.down_token_id)) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+        ),
+    };
+    json!({
+        "t": offset,
+        "q": q,
+        "c": complement_ask,
+        "age": book_age,
+        "fresh": pick_book_prices(c, books, now_ts).is_some(),
+    })
 }
 
 /// Per-window band decision, made on the first cycle inside the entry
@@ -8223,6 +8525,329 @@ mod tests {
             text.contains("margin=-15") && text.contains("basis=composite"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn band_cycle_price_gates_on_binance_in_band_mode() {
+        let now_ms = Utc::now().timestamp_millis();
+        // No Binance tick ever: band mode pauses.
+        assert_eq!(band_cycle_price(&PriceState::new(), true, true), 0.0);
+        // Fresh Binance, no chainlink: band mode ticks; the legacy read
+        // under the alignment flag has no price (the old blind spot).
+        let mut ps = PriceState::new();
+        ps.update_at("binance", 110_000.0, now_ms - 500);
+        assert_eq!(band_cycle_price(&ps, true, true), 110_000.0);
+        assert_eq!(band_cycle_price(&ps, false, true), 0.0);
+        // Event time 2.5 s behind the local clock (skew plus delivery
+        // latency past the basis tolerance) but received just now: the
+        // gate is on receipt, so band mode still ticks and the loop never
+        // phase-locks to a 1 Hz ticker it is receiving.
+        let mut ps = PriceState::new();
+        ps.update_at("binance", 110_000.0, now_ms - 2_500);
+        ps.update_reference_at("chainlink_settlement", 109_990.0, now_ms - 500);
+        assert_eq!(band_cycle_price(&ps, true, true), 110_000.0);
+        assert_eq!(band_cycle_price(&ps, false, true), 109_990.0);
+        // Fresh chainlink, the last Binance tick received longer ago than
+        // BAND_CYCLE_STALE_AFTER: band mode pauses; the legacy path reads
+        // chainlink verbatim.
+        ps.source_timestamps.insert(
+            "binance".to_string(),
+            Instant::now()
+                .checked_sub(BAND_CYCLE_STALE_AFTER + Duration::from_secs(1))
+                .unwrap(),
+        );
+        assert_eq!(band_cycle_price(&ps, true, true), 0.0);
+        assert_eq!(band_cycle_price(&ps, false, true), 109_990.0);
+        // Legacy without the flag: the composite mid, whatever Binance did.
+        ps.mid_price = 110_010.0;
+        assert_eq!(band_cycle_price(&ps, false, false), 110_010.0);
+        assert_eq!(band_cycle_price(&ps, true, false), 0.0);
+    }
+
+    /// Paper `Pipeline` with the 240 s anchor and the ladder budgets on
+    /// (`band_test_settings` turns the anchors off).
+    async fn band_ladder_test_pipeline(tmp: &TempDir) -> Arc<Pipeline> {
+        let mut settings = band_test_settings(tmp, &band_params());
+        settings.band_anchor_seconds = vec![240.0];
+        settings.band_ladder_budgets_usd = vec![5.0, 25.0, 100.0];
+        settings.band_host_label = "test".to_string();
+        Pipeline::new(settings, Mode::Paper).await.unwrap()
+    }
+
+    /// The loop's ladder call for `c` at `now` on `books` (the loop's
+    /// whole-second `now_ts`).
+    async fn ladder_cycle(
+        p: &Pipeline,
+        c: &CandleContract,
+        contracts: &[CandleContract],
+        ps: &PriceState,
+        now: DateTime<Utc>,
+        books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
+    ) {
+        p.sample_band_ladder(c, contracts, books, ps, now, now.timestamp() as f64)
+            .await;
+    }
+
+    /// A window whose 240 s decision second was 30 s ago (every instant
+    /// inside the tick clamp window) with the Binance basis final: ticks
+    /// at the open, at the decision instant and the covering tick after it.
+    fn band_ladder_window(cid: &str, open: f64) -> (CandleContract, PriceState) {
+        use chrono::Timelike;
+        let end = Utc::now().with_nanosecond(0).unwrap() + chrono::Duration::seconds(30);
+        let c = band_window_ending(cid, end);
+        let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+        let decision_ms = open_ms + 240_000;
+        let mut ps = PriceState::new();
+        ps.update_at("binance", open, open_ms - 300);
+        ps.update_at("binance", open + 60.0, decision_ms - 300);
+        ps.update_at("binance", open + 61.0, decision_ms + 400);
+        (c, ps)
+    }
+
+    /// `ms` milliseconds past the 240 s anchor of the window ending `end`.
+    fn past_anchor(c: &CandleContract, ms: i64) -> DateTime<Utc> {
+        parse_end(&c.end_date).unwrap() - chrono::Duration::milliseconds(60_000 - ms)
+    }
+
+    #[tokio::test]
+    async fn band_ladder_samples_first_cycle_per_second() {
+        let tmp = TempDir::new().unwrap();
+        let p = band_ladder_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let cid = "0xladder";
+        let (c, ps) = band_ladder_window(cid, open);
+        let contracts = vec![c.clone()];
+
+        // Cycles at a+0.3, a+0.7, a+1.2, a+2.9: the first cycle at or past
+        // each whole second samples; the others only count.
+        for ms in [300, 700, 1_200, 2_900] {
+            let now = past_anchor(&c, ms);
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+        }
+        {
+            let ladder = p.band_ladder.lock().await;
+            let acc = ladder.get(&(cid.to_string(), 240)).unwrap();
+            let offsets: Vec<u64> = acc
+                .samples
+                .iter()
+                .map(|s| s["t"].as_u64().unwrap())
+                .collect();
+            assert_eq!(offsets, vec![0, 1, 2]);
+            assert_eq!(acc.cycles, 4);
+            assert!((acc.max_gap_s - 1.7).abs() < 1e-6, "{}", acc.max_gap_s);
+            assert_eq!(
+                (acc.basis, acc.direction, acc.margin),
+                ("binance", Some("up"), Some(60.0))
+            );
+            // UP book quoted at $5/$25/$100 (0.94 x 500 shares clears all
+            // three), the DOWN ask as the complement, fresh books, age 0.
+            let s0 = &acc.samples[0];
+            assert_eq!(
+                s0["q"],
+                json!([
+                    [0.94, 0.94, 5.31, false],
+                    [0.94, 0.94, 26.59, false],
+                    [0.94, 0.94, 106.38, false]
+                ])
+            );
+            assert_eq!(s0["c"], 0.07);
+            assert_eq!(s0["age"], 0.0);
+            assert_eq!(s0["fresh"], true);
+        }
+        for k in 3..=30 {
+            let now = past_anchor(&c, k * 1_000 + 500);
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+        }
+        assert!(band_records_of(&p, "band_ladder", cid).is_empty());
+
+        // a+31 flushes: one record, 31 samples, offsets 0..=30, the
+        // largest cycle gap; later cycles never re-record the window.
+        for ms in [31_000, 31_500, 40_000] {
+            let now = past_anchor(&c, ms);
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+        }
+        let records = band_records_of(&p, "band_ladder", cid);
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(r["cat"], "signal");
+        assert_eq!(r["anchor_s"], 240);
+        assert_eq!(r["basis"], "binance");
+        assert_eq!(r["open"], open);
+        assert_eq!(r["btc"], open + 60.0);
+        assert_eq!(r["margin"], 60.0);
+        assert_eq!(r["direction"], "up");
+        assert_eq!(r["budgets_usd"], json!([5.0, 25.0, 100.0]));
+        assert_eq!(r["host"], "test");
+        assert_eq!(r["cycles"], 32);
+        assert_eq!(r["max_gap_s"], 1.7);
+        let samples = r["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), 31);
+        for (i, s) in samples.iter().enumerate() {
+            assert_eq!(s["t"], i as u64);
+        }
+        assert!(p.band_ladder.lock().await.is_empty());
+    }
+
+    /// `t` is the whole-second offset the cycle ran at, never a running
+    /// count: a cycle gap over one second leaves the missed seconds absent,
+    /// and an accumulator created late (loop paused, late listing) labels
+    /// its first sample by the offset it was taken at.
+    #[tokio::test]
+    async fn band_ladder_labels_samples_by_true_offset() {
+        let tmp = TempDir::new().unwrap();
+        let p = band_ladder_test_pipeline(&tmp).await;
+        let (gap, ps) = band_ladder_window("0xgap", 110_000.0);
+        let (late, _) = band_ladder_window("0xlate", 110_000.0);
+        let contracts = vec![gap.clone(), late.clone()];
+        let offsets_of = |acc: &LadderAcc| -> Vec<u64> {
+            acc.samples.iter().map(|s| s["t"].as_u64().unwrap()).collect()
+        };
+
+        // Cycles at a+0.3, a+3.5, a+4.5: seconds 1 and 2 are holes and the
+        // a+3.5 book is t=3, not t=1.
+        for ms in [300, 3_500, 4_500] {
+            let now = past_anchor(&gap, ms);
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            ladder_cycle(&p, &gap, &contracts, &ps, now, &books).await;
+        }
+        {
+            let ladder = p.band_ladder.lock().await;
+            let acc = ladder.get(&("0xgap".to_string(), 240)).unwrap();
+            assert_eq!(offsets_of(acc), vec![0, 3, 4]);
+            assert_eq!(acc.cycles, 3);
+            assert!((acc.max_gap_s - 3.2).abs() < 1e-6, "{}", acc.max_gap_s);
+        }
+
+        // First cycle at a+20.0 (the accumulator is created there), the
+        // next at a+21.05: labelled 20 and 21, never 0 and 1.
+        for ms in [20_000, 21_050] {
+            let now = past_anchor(&late, ms);
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            ladder_cycle(&p, &late, &contracts, &ps, now, &books).await;
+        }
+        let ladder = p.band_ladder.lock().await;
+        let acc = ladder.get(&("0xlate".to_string(), 240)).unwrap();
+        assert_eq!(offsets_of(acc), vec![20, 21]);
+        assert_eq!(acc.cycles, 2);
+    }
+
+    #[test]
+    fn band_ladder_null_when_depth_short() {
+        let now_ts = Utc::now().timestamp() as f64;
+        let c = band_anchor_contract("0xdepth", "2026-09-02T10:05:00Z");
+        let budgets = [5.0, 25.0, 100.0];
+        let thin = |size: f64| {
+            let mut books = band_test_books(0.95, 0.06, now_ts);
+            books.get_mut("up").unwrap().asks =
+                vec![crate::polymarket_ws::BookLevel { price: 0.95, size }];
+            books
+        };
+        // Three shares at 0.95, under the 5-share venue minimum: no
+        // executable quote at any budget (null is monotone in the budget:
+        // `live_buy_book_quote` sizes down to the visible depth first).
+        let s = band_ladder_sample(&c, Some("up"), &thin(3.0), &budgets, 5.0, 0.01, now_ts, 7);
+        assert_eq!(s["t"], 7);
+        assert_eq!(s["q"], json!([null, null, null]));
+        assert_eq!(s["c"], 0.06);
+        assert_eq!(s["fresh"], true);
+        // Six shares: $5 clears (5.26 shares); $25 and $100 are capped at
+        // the visible depth and flagged (a smaller FOK, never a bigger one).
+        let s = band_ladder_sample(&c, Some("up"), &thin(6.0), &budgets, 5.0, 0.01, now_ts, 0);
+        assert_eq!(
+            s["q"],
+            json!([
+                [0.95, 0.95, 5.26, false],
+                [0.95, 0.95, 6.0, true],
+                [0.95, 0.95, 6.0, true]
+            ])
+        );
+        // No book on the momentum side: null quotes, no age, not fresh.
+        let mut books = thin(6.0);
+        books.remove("up");
+        let s = band_ladder_sample(&c, Some("up"), &books, &budgets, 5.0, 0.01, now_ts, 0);
+        assert_eq!(s["q"], json!([null, null, null]));
+        assert_eq!(s["age"], serde_json::Value::Null);
+        assert_eq!(s["fresh"], false);
+        // No direction (btc == open): both sides, keyed, no complement.
+        let s = band_ladder_sample(&c, None, &thin(6.0), &budgets, 5.0, 0.01, now_ts, 0);
+        assert_eq!(s["q"]["up"][0], json!([0.95, 0.95, 5.26, false]));
+        assert_eq!(s["q"]["down"][2], json!([0.06, 0.06, 500.0, true]));
+        assert_eq!(s["c"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn band_ladder_flushes_on_contract_removal() {
+        let tmp = TempDir::new().unwrap();
+        let p = band_ladder_test_pipeline(&tmp).await;
+        let cid = "0xgone";
+        let (c, ps) = band_ladder_window(cid, 110_000.0);
+        let now = past_anchor(&c, 300);
+        let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+        ladder_cycle(&p, &c, std::slice::from_ref(&c), &ps, now, &books).await;
+        assert!(band_records_of(&p, "band_ladder", cid).is_empty());
+
+        // The next refresh lists another window only: the partial record
+        // is written as it stands and the accumulator is gone.
+        let other = band_window_ending(
+            "0xother",
+            parse_end(&c.end_date).unwrap() + chrono::Duration::seconds(300),
+        );
+        let now = now + chrono::Duration::milliseconds(400);
+        ladder_cycle(&p, &other, std::slice::from_ref(&other), &ps, now, &books).await;
+        let records = band_records_of(&p, "band_ladder", cid);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["samples"].as_array().unwrap().len(), 1);
+        assert_eq!(records[0]["cycles"], 1);
+        assert_eq!(records[0]["direction"], "up");
+        assert!(p.band_ladder.lock().await.is_empty());
+        // `other` has not opened yet: nothing accumulates for it.
+        assert!(band_records_of(&p, "band_ladder", "0xother").is_empty());
+    }
+
+    #[tokio::test]
+    async fn band_ladder_records_composite_basis_when_binance_missing() {
+        use chrono::Timelike;
+        let tmp = TempDir::new().unwrap();
+        let p = band_ladder_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let cid = "0xcomposite";
+        let end = Utc::now().with_nanosecond(0).unwrap() + chrono::Duration::seconds(30);
+        let c = band_window_ending(cid, end);
+        let contracts = vec![c.clone()];
+        // No Binance series at all: the cached composite open against the
+        // composite mid, on both ends, says DOWN by 60.
+        p.momentum
+            .lock()
+            .await
+            .get_mut("BTC")
+            .unwrap()
+            .set_window_open(cid, open);
+        let mut ps = PriceState::new();
+        ps.mid_price = open - 60.0;
+        for k in 0..=31 {
+            let now = past_anchor(&c, k * 1_000 + 500);
+            let books = band_test_books(0.07, 0.94, now.timestamp() as f64);
+            ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+        }
+        let records = band_records_of(&p, "band_ladder", cid);
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(r["basis"], "composite");
+        assert_eq!(r["open"], open);
+        assert_eq!(r["btc"], open - 60.0);
+        assert_eq!(r["margin"], -60.0);
+        assert_eq!(r["direction"], "down");
+        assert_eq!(r["cycles"], 31);
+        assert_eq!(r["max_gap_s"], 1.0);
+        let samples = r["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), 31);
+        // Sampled on the DOWN book (0.94), the UP ask as the complement.
+        assert_eq!(samples[0]["q"][0], json!([0.94, 0.94, 5.31, false]));
+        assert_eq!(samples[0]["c"], 0.07);
+        assert_eq!(samples[30]["t"], 30);
     }
 
     #[tokio::test]

@@ -14,7 +14,10 @@ pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_GB: f64 = 10.0;
 pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_PCT: f64 = 15.0;
 /// Seconds into a 5m window at which the live engine records what the venue
 /// offered (`BAND_ANCHOR_SECONDS`); empty disables the capture.
-pub const DEFAULT_BAND_ANCHOR_SECONDS: &str = "180,210,240,270";
+pub const DEFAULT_BAND_ANCHOR_SECONDS: &str = "150,180,210,240";
+/// Budgets (USD) the `band_ladder` record quotes the momentum-side book at
+/// (`BAND_LADDER_BUDGETS_USD`); empty disables the ladder.
+pub const DEFAULT_BAND_LADDER_BUDGETS_USD: &str = "5,25,100";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +100,12 @@ pub struct Settings {
     /// Money-free challenger capture: window seconds at which a
     /// `band_anchor` event records the live quote; empty disables.
     pub band_anchor_seconds: Vec<f64>,
+    /// Executable-price ladder: budgets (USD) at which each `band_ladder`
+    /// sample quotes the momentum-side book; empty disables the ladder.
+    pub band_ladder_budgets_usd: Vec<f64>,
+    /// `host` field of the `band_ladder` record (`POLYMOMENTUM_HOST_LABEL`,
+    /// e.g. "vps" / "mac"); empty when unset.
+    pub band_host_label: String,
     /// Which book drives band sizing and the cumulative money floor:
     /// "v1" (BANKROLL_USD pinned + actualized session PnL) or "v2" (the
     /// wallet-anchored postings ledger, docs/risk_book_v2/). Lowercased at
@@ -257,6 +266,14 @@ fn band_anchor_seconds_from_env() -> Vec<f64> {
     })
 }
 
+fn band_ladder_budgets_from_env() -> Vec<f64> {
+    let raw = env_str("BAND_LADDER_BUDGETS_USD", DEFAULT_BAND_LADDER_BUDGETS_USD);
+    parse_band_anchor_seconds(&raw).unwrap_or_else(|| {
+        tracing::warn!(raw = %raw, "invalid BAND_LADDER_BUDGETS_USD; using default");
+        parse_band_anchor_seconds(DEFAULT_BAND_LADDER_BUDGETS_USD).unwrap_or_default()
+    })
+}
+
 impl Settings {
     pub fn from_env() -> Self {
         // Try to load .env if it exists (best-effort, no hard dep on dotenv)
@@ -287,6 +304,8 @@ impl Settings {
             ),
             band_sizing: env_str("BAND_SIZING", "pct"),
             band_anchor_seconds: band_anchor_seconds_from_env(),
+            band_ladder_budgets_usd: band_ladder_budgets_from_env(),
+            band_host_label: env_str("POLYMOMENTUM_HOST_LABEL", ""),
             risk_book: env_str("RISK_BOOK", "v1").trim().to_ascii_lowercase(),
             risk_book_reconcile_tolerance_usd: env_f64("RISK_BOOK_RECONCILE_TOLERANCE_USD", 0.50),
             risk_book_drift_halt_usd: env_f64("RISK_BOOK_DRIFT_HALT_USD", 5.0),
@@ -524,7 +543,11 @@ mod tests {
     fn band_anchor_seconds_default_empty_and_garbage() {
         assert_eq!(
             parse_band_anchor_seconds(DEFAULT_BAND_ANCHOR_SECONDS),
-            Some(vec![180.0, 210.0, 240.0, 270.0])
+            Some(vec![150.0, 180.0, 210.0, 240.0])
+        );
+        assert_eq!(
+            parse_band_anchor_seconds(DEFAULT_BAND_LADDER_BUDGETS_USD),
+            Some(vec![5.0, 25.0, 100.0])
         );
         assert_eq!(parse_band_anchor_seconds(""), Some(Vec::new()));
         assert_eq!(parse_band_anchor_seconds("  "), Some(Vec::new()));
@@ -540,7 +563,11 @@ mod tests {
         env::set_var("BAND_ANCHOR_SECONDS", "garbage");
         let parsed = band_anchor_seconds_from_env();
         env::remove_var("BAND_ANCHOR_SECONDS");
-        assert_eq!(parsed, vec![180.0, 210.0, 240.0, 270.0]);
+        assert_eq!(parsed, vec![150.0, 180.0, 210.0, 240.0]);
+        env::set_var("BAND_LADDER_BUDGETS_USD", "garbage");
+        let parsed = band_ladder_budgets_from_env();
+        env::remove_var("BAND_LADDER_BUDGETS_USD");
+        assert_eq!(parsed, vec![5.0, 25.0, 100.0]);
     }
 
     #[test]
