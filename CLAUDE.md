@@ -1,4 +1,4 @@
-# CLAUDE.md (proposed 2026-09-18; adopt by renaming to the repo root)
+# CLAUDE.md
 
 PolyMomentum: a Rust engine (`rust_engine/`) trading Polymarket btc-updown-5m windows on a 2-core VPS
 (`polymomentum-band-canary.service`), plus a Python evaluator and factory (`scripts/`) on the Mac.
@@ -12,7 +12,8 @@ the working tree; read them with `git show 0cd8b0d:docs/<path>`.
   existing style; mention unrelated dead code, delete it only when asked.
 - Goal-driven: turn each task into a verifiable check (test, replay, byte-diff) and loop until it passes.
 - Python dependency management is `uv` only (`uv run`, `uv sync`); never pip.
-- Never commit or push; the operator commits at phase boundaries. Never stage or restore the deleted docs.
+- Commit at phase boundaries with a clear message and push to `codex/audit1`; never force-push; never commit
+  operator-made deletions or state changes without confirmation. Legacy docs were removed on purpose (7b4a39e).
 - Never `cargo build --release` from an agent session. Verify on the Mac with `cargo test` and the debug
   binary; the operator builds on the VPS with `nice -n 10 cargo build --release -j 1`, one build at a time.
 
@@ -33,8 +34,8 @@ the working tree; read them with `git show 0cd8b0d:docs/<path>`.
 
 ## 3. VPS coexistence
 
-- The VPS is currently UNREACHABLE (ssh timeout). Treat VPS facts as unavailable and say so; write every VPS
-  step as an operator recipe.
+- The VPS (ssh alias `vps`) may be unreachable at times; when it is, say so and write every VPS step as an
+  operator recipe. Read-only ssh (journal, session files, sqlite) is allowed.
 - Never write to the VPS from an agent session. Transfers are pull-only (rsync into
   `logs/band-canary-mirror/`).
 - The box is shared with adgts and polyarbitrage: never read their dirs (`/opt/polyarbitrage/*`), never
