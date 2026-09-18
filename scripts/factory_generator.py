@@ -481,6 +481,12 @@ def direction_wins(aggregate: Mapping[str, Any]) -> int:
     )
 
 
+def look_id(candidate: str, stage: str, fresh_range: Sequence[int]) -> str:
+    """One look = one (candidate, stage, window range) read of the labels."""
+    payload = "%s|%s|%s" % (candidate, stage, json.dumps([int(value) for value in fresh_range]))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def append_trial_entry(
     loop_config: Mapping[str, Any],
     candidate: str,
@@ -488,9 +494,13 @@ def append_trial_entry(
     verdict: str,
     n: Optional[int] = None,
     wins: Optional[int] = None,
+    fresh_range: Optional[Sequence[int]] = None,
 ) -> bool:
     """One line per screen-stage verdict, shape-compatible with
-    scripts/fresh_gate_public_v1.py's trial ledger records."""
+    scripts/fresh_gate_public_v1.py's trial ledger records.  With a
+    fresh_range the row carries look_id = sha256(candidate|stage|range) and
+    a row with that look_id already in the ledger is not written again (one
+    ledger row per (fingerprint, look_id)); returns False for the skip."""
     try:
         if not generator_config(loop_config)["trial_ledger_enabled"]:
             return False
@@ -510,6 +520,14 @@ def append_trial_entry(
         record["verdict"] = str(verdict)
         path = state_dir / "trial_ledger.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        if fresh_range is not None:
+            record["fresh_range"] = [int(value) for value in fresh_range]
+            record["look_id"] = look_id(candidate, stage, fresh_range)
+            marker = '"look_id": "%s"' % record["look_id"]
+            if path.is_file():
+                with path.open(encoding="utf-8") as handle:
+                    if any(marker in line for line in handle):
+                        return False
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
         return True

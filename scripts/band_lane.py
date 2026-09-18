@@ -61,7 +61,11 @@ from adaptation_persistence_study import DATA_API, http_json, taker_fee  # noqa:
 
 ROOT = Path(__file__).resolve().parents[1]
 LANE = "band_mechanisms"
-BAND_EVALUATOR_VERSION = "band_public_v1"
+# v2: stage 1 no longer gates signal accuracy against entry break-even
+# (wilson_above_break_even and recent_above_break_even dropped) and the
+# tripwire is WR > 0.995 at n >= 100; fingerprints scored under v1 stay
+# distinct in the ledger (CLAUDE.md section 5).
+BAND_EVALUATOR_VERSION = "band_public_v2"
 PRINTS_DIR = ROOT / "logs/strategy-research/band_lane_cache/prints"
 BAND_QUEUE_FILE = "band_proposal_queue.jsonl"
 
@@ -82,6 +86,25 @@ _CASTS = {
     "direction": str,
     "favorite_price_floor": float,
     "favorite_price_cap": float,
+}
+# Grammar C (docs/profitability_basement_2026-09-18.md, scored by
+# scripts/executable_truth.py), alongside BAND_GRID so the running lane keeps
+# its rules.  Ask floor 0.80 and direction both are fixed (up/down is a
+# tripwire, never a rule), no sigma floor; 336 cells, the 189 with floor >=
+# 75 and decision >= 180 registrable, floor 50 the control.
+BAND_GRID_V2_VERSION = "band_grid_v2"
+BAND_V2_ASK_FLOOR = 0.80
+BAND_GRID_V2: Dict[str, Tuple[Any, ...]] = {
+    "decision_second": (150, 180, 210, 240),
+    "margin_floor_usd": (50, 75, 100, 150),
+    "favorite_price_cap": (0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99),
+    "patience_s": (0, 15, 30),
+}
+_CASTS_V2 = {
+    "decision_second": int,
+    "margin_floor_usd": int,
+    "favorite_price_cap": float,
+    "patience_s": int,
 }
 # Deterministic prefix: the live rule, then a higher floor, then a sigma floor.
 BAND_PRIORS = (
@@ -133,11 +156,13 @@ KILLED_STATUSES = {"rejected_signal_screen", "rejected_entry_economics", "killed
 # the entry window, the live engine's wait of up to 30 s for an in-band ask.
 ENTRY_SEMANTICS = ("one_look", "patient")
 # Tripwire: a realized win rate this high on this much support is more
-# likely a tape or label defect than an edge.  The candidate holds status
-# manual_audit (no promotion) until its fingerprint is listed under
+# likely a tape or label defect than an edge (CLAUDE.md section 5: WR >
+# 0.995 at n >= 100; the earlier 0.97 held the edge region, whose break-even
+# at a 0.97 cap is 0.972).  The candidate holds status manual_audit (no
+# promotion) until its fingerprint is listed under
 # lanes.band_mechanisms.audit_cleared by an operator.
-TRIPWIRE_WIN_RATE = 0.97
-TRIPWIRE_MINIMUM_N = 50
+TRIPWIRE_WIN_RATE = 0.995
+TRIPWIRE_MINIMUM_N = 100
 
 
 def _enum(kind: str, values: Sequence[Any]) -> Dict[str, Any]:
@@ -229,11 +254,13 @@ def wilson_lower(wins: int, total: int) -> Optional[float]:
 # --- grammar -----------------------------------------------------------------
 
 
-def normalized_band_rule(raw: Mapping[str, Any]) -> Dict[str, Any]:
-    if not isinstance(raw, Mapping) or set(raw) != set(BAND_GRID):
+def _normalize_rule(
+    raw: Mapping[str, Any], grid: Mapping[str, Sequence[Any]], casts: Mapping[str, Callable[[Any], Any]]
+) -> Dict[str, Any]:
+    if not isinstance(raw, Mapping) or set(raw) != set(grid):
         raise ValueError("invalid band rule fields")
     rule: Dict[str, Any] = {}
-    for field, cast in _CASTS.items():
+    for field, cast in casts.items():
         value = raw[field]
         try:
             normalized = cast(value)
@@ -242,10 +269,22 @@ def normalized_band_rule(raw: Mapping[str, Any]) -> Dict[str, Any]:
         # int(50.7) == 50 and int("50") == 50 would silently coerce.
         if isinstance(value, bool) or normalized != value:
             raise ValueError("%s is not a %s" % (field, cast.__name__))
-        if normalized not in BAND_GRID[field]:
+        if normalized not in grid[field]:
             raise ValueError("%s is outside the band grid" % field)
         rule[field] = normalized
     return rule
+
+
+def normalized_band_rule(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    return _normalize_rule(raw, BAND_GRID, _CASTS)
+
+
+def normalized_band_rule_v2(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    return _normalize_rule(raw, BAND_GRID_V2, _CASTS_V2)
+
+
+def grid_v2_rules() -> List[Dict[str, Any]]:
+    return [dict(zip(BAND_GRID_V2, values)) for values in itertools.product(*BAND_GRID_V2.values())]
 
 
 def validate_band_proposal(proposal: Mapping[str, Any]) -> Dict[str, Any]:
@@ -875,13 +914,14 @@ def evaluate_band_rule(
     }
     recent = _score([row for row in scored if row["window_start"] >= int(now_ts) - RECENT_SECONDS])
     even_at_cap = break_even(rule["favorite_price_cap"])
+    # Signal accuracy is a ceiling on what any entry can realize, never the
+    # entry evidence itself: stage 1 gates support and recency only (no
+    # comparison of signal accuracy, overall or recent, with break-even at
+    # the cap, which is reported), and stage 2 gates the realized win rate
+    # at the entry print against its break-even (CLAUDE.md section 4).
     gate_results = {
         "support": overall["signals"] >= int(gates["minimum_signals"]),
-        "wilson_above_break_even": (
-            overall["wilson_lower"] is not None and overall["wilson_lower"] >= even_at_cap
-        ),
         "recent_support": recent["signals"] >= int(gates["minimum_recent_signals"]),
-        "recent_above_break_even": recent["accuracy"] is not None and recent["accuracy"] >= even_at_cap,
     }
     stage_1 = {
         "stage": "band_signal_screen",

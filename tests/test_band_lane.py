@@ -130,7 +130,7 @@ class BandLaneTest(unittest.TestCase):
             self.assertNotIn(token, band.BAND_SYSTEM_PROMPT.lower())
 
     def test_fingerprint_is_stable(self):
-        pinned = "b2bed36ed28ec5a8550073a2430dd35b2e53d2881f8aefaf5823c3b1ea602ae1"
+        pinned = "a9bfe51acf4aab88162e15f955d95da1a40f6f20760896f086a237338b6b3360"  # band_public_v2: stage-1 break-even gates dropped, tripwire 0.995@100
         self.assertEqual(band.band_fingerprint(LIVE_RULE), pinned)
         reordered = dict(reversed(list(LIVE_RULE.items())))
         self.assertEqual(band.band_fingerprint(reordered), pinned)
@@ -138,7 +138,7 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(
             band.band_fingerprint(LIVE_RULE),
             loop.stable_hash(
-                {"lane": "band_mechanisms", "rule": LIVE_RULE, "evaluator_version": "band_public_v1"}
+                {"lane": "band_mechanisms", "rule": LIVE_RULE, "evaluator_version": "band_public_v2"}
             ),
         )
         self.assertNotEqual(band.band_fingerprint({**LIVE_RULE, "margin_floor_usd": 75}), pinned)
@@ -189,12 +189,10 @@ class BandLaneTest(unittest.TestCase):
         passing = band.evaluate_band_rule(windows(120), {}, LIVE_RULE, GATES, now_ts)
         stage_1 = passing["stage_1"]
         self.assertTrue(stage_1["survivor"])
-        self.assertEqual(stage_1["gates"], {
-            "support": True,
-            "wilson_above_break_even": True,
-            "recent_support": True,
-            "recent_above_break_even": True,
-        })
+        # Signal accuracy is a ceiling: no stage-1 gate against entry
+        # break-even, overall or recent (CLAUDE.md section 4); the
+        # break-even at the cap is reported beside the accuracy only.
+        self.assertEqual(stage_1["gates"], {"support": True, "recent_support": True})
         self.assertAlmostEqual(stage_1["break_even_at_cap"], 0.92 + 0.07 * 0.92 * 0.08)
         self.assertEqual(stage_1["by_margin_bucket"]["50-75"]["signals"], 120)
         self.assertEqual(stage_1["by_margin_bucket"]["100-inf"]["signals"], 0)
@@ -207,12 +205,17 @@ class BandLaneTest(unittest.TestCase):
         stale = band.evaluate_band_rule(windows(120), {}, LIVE_RULE, GATES, now_ts + 3 * 86400)
         self.assertEqual(stale["stage_1"]["recent_48h"]["signals"], 0)
         self.assertFalse(stale["stage_1"]["gates"]["recent_support"])
-        self.assertFalse(stale["stage_1"]["gates"]["recent_above_break_even"])
+        self.assertNotIn("recent_above_break_even", stale["stage_1"]["gates"])
         mixed = [window(BASE_WS + index * 300, official="up" if index % 10 else "down") for index in range(120)]
         noisy = band.evaluate_band_rule(mixed, {}, LIVE_RULE, GATES, now_ts)
+        # 108/120 = 0.90 signal accuracy under the 0.925 break-even at the
+        # cap still reaches stage 2: only the priced subpopulation decides.
         self.assertEqual(noisy["stage_1"]["overall"]["wins"], 108)
-        self.assertFalse(noisy["stage_1"]["gates"]["wilson_above_break_even"])
-        self.assertFalse(noisy["stage_1"]["survivor"])
+        self.assertNotIn("wilson_above_break_even", noisy["stage_1"]["gates"])
+        self.assertNotIn("recent_above_break_even", noisy["stage_1"]["gates"])
+        self.assertTrue(noisy["stage_1"]["survivor"])
+        self.assertIsNotNone(noisy["stage_2"])
+        self.assertAlmostEqual(noisy["stage_1"]["break_even_at_cap"], band.break_even(0.92))
         below_floor = band.evaluate_band_rule(windows(120, margin=40.0), {}, LIVE_RULE, GATES, now_ts)
         self.assertEqual(below_floor["stage_1"]["overall"]["signals"], 0)
         down_only = band.evaluate_band_rule(windows(120), {}, {**LIVE_RULE, "direction": "down"}, GATES, now_ts)
@@ -1222,7 +1225,7 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(status_screened, "manual_audit")
         self.assertTrue(evidence["stage_2"]["survivor"])
         self.assertEqual(
-            evidence["stage_2"]["tripwire"], {"triggered": True, "maximum_win_rate": 0.97, "minimum_entries": 50}
+            evidence["stage_2"]["tripwire"], {"triggered": True, "maximum_win_rate": 0.995, "minimum_entries": 100}
         )
         # Evidence keeps accruing during the audit; promotion does not, even
         # though the accrual's own 10/10 is below the tripwire's support.
@@ -1242,10 +1245,12 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(band.screen_status(stage_1, tripped), "manual_audit")
         self.assertEqual(band.screen_status(stage_1, tripped, cleared=True), "stage_2_survivor")
         self.assertEqual(band.screen_status(stage_1, {**tripped, "survivor": False}), "rejected_entry_economics")
-        self.assertFalse(band.tripwire_triggered(49, 49))
-        self.assertFalse(band.tripwire_triggered(97, 100))
-        self.assertTrue(band.tripwire_triggered(98, 100))
-        self.assertTrue(band.tripwire_triggered(50, 50))
+        # WR > 0.995 at n >= 100 (CLAUDE.md section 5): 99/99 is below support,
+        # 199/200 is exactly 0.995 and does not trip, 100/100 and 200/200 do.
+        self.assertFalse(band.tripwire_triggered(99, 99))
+        self.assertFalse(band.tripwire_triggered(199, 200))
+        self.assertTrue(band.tripwire_triggered(100, 100))
+        self.assertTrue(band.tripwire_triggered(200, 200))
 
     def seed_family(self, ledger, members):
         """members: (name, status, e, n, wins, verdict); the e-process state is
@@ -1271,7 +1276,7 @@ class BandLaneTest(unittest.TestCase):
             ("b", "promote_candidate", 700.0, 80, 70, "promote"),
             ("c", "accruing", 100.0, 40, 35, "promote"),
             ("d", "accruing", 5.0, 20, 15, "continue"),
-            ("held", "accruing", 2000.0, 60, 59, "promote"),
+            ("held", "accruing", 2000.0, 120, 120, "promote"),  # WR 1.0 at n >= 100 trips
             ("dead", "accruing", 0.05, 30, 10, "kill"),
         ]
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:

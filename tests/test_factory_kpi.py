@@ -266,8 +266,8 @@ class FactoryKpiTest(unittest.TestCase):
             ("band-0", "accruing", 1300.0, 80, 70, "promote"),
             ("band-1", "promote_candidate", 700.0, 80, 70, "promote"),
             ("band-2", "accruing", 100.0, 40, 35, "promote"),
-            ("band-3", "manual_audit", 2000.0, 60, 59, "promote"),  # cleared below
-            ("band-4", "accruing", 5000.0, 60, 59, "promote"),  # trips on its accrual
+            ("band-3", "manual_audit", 2000.0, 120, 120, "promote"),  # cleared below
+            ("band-4", "accruing", 5000.0, 120, 120, "promote"),  # WR 1.0 at n >= 100 trips on its accrual
             ("band-5", "accruing", 0.05, 30, 10, "kill"),
         )
 

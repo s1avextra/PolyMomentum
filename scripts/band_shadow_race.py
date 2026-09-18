@@ -77,6 +77,7 @@ def _load(name: str, filename: str):
 
 band_lane = _load("band_lane", "band_lane.py")
 evidence_accrual = _load("evidence_accrual", "evidence_accrual.py")
+executable_truth = _load("executable_truth", "executable_truth.py")
 
 DEFAULT_SESSIONS_DIR = ROOT / "logs/band-canary-mirror/sessions"
 VPS_SESSIONS = "vps:/opt/polymomentum/logs/band-canary/sessions/"
@@ -213,7 +214,38 @@ def binance_sigmas(
 def rule_trade(
     rule: Mapping[str, Any], anchor: Mapping[str, Any], sigma: Optional[float]
 ) -> Optional[Dict[str, Any]]:
-    """The trade `rule` takes on one anchor, or None when it does not trade."""
+    """The trade `rule` takes on one anchor, or None when it does not trade.
+
+    A band_ladder record (it carries `samples`) is scored by the ladder
+    model (executable_truth.ladder_trade): the first sample within the
+    rule's patience_s (0 when absent) whose $25 quote clears the band on a
+    fresh, coherent book; the trade's `entry` is the FOK worst price."""
+    if "samples" in anchor:
+        margin = anchor.get("margin")
+        if margin is None or float(margin) == 0.0:
+            return None
+        direction = "up" if float(margin) > 0 else "down"
+        if rule["direction"] != "both" and direction != rule["direction"]:
+            return None
+        if abs(float(margin)) < float(rule["margin_floor_usd"]):
+            return None
+        floor_sigma = float(rule.get("margin_floor_sigma", 0.0))
+        if floor_sigma > 0 and (sigma is None or abs(float(margin)) < floor_sigma * sigma):
+            return None
+        ladder_rule = {"favorite_price_cap": rule["favorite_price_cap"], "patience_s": rule.get("patience_s", 0)}
+        trade = executable_truth.ladder_trade(
+            ladder_rule, anchor, direction, executable_truth.LADDER_BUDGET_USD, floor=float(rule["favorite_price_floor"])
+        )
+        if trade is None:
+            return None
+        return {
+            "direction": direction,
+            "vwap": trade["vwap"],
+            "worst": trade["worst"],
+            "entry": trade["entry"],
+            "t": trade["t"],
+            "stake_usd": trade["budget_usd"],
+        }
     # The engine's cycle gates, replayed for every rule: pick_book_prices
     # needs a fresh best ask on both sides, and the live sizing policy must
     # size the window (stake_usd null: stale books, or kelly_lo declined the
@@ -298,7 +330,9 @@ def race(
             if trade is None:
                 continue
             trade["won"] = trade["direction"] == outcomes[window_start]
-            trade["score"] = trade_score(trade["vwap"], trade["won"])
+            # Anchor quotes score at the VWAP; ladder rows at the FOK worst
+            # price (`entry`), the ladder model's executable price.
+            trade["score"] = trade_score(trade.get("entry", trade["vwap"]), trade["won"])
             taken[window_start] = trade
         trades.append(taken)
         stats.append(
