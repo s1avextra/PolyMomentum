@@ -97,6 +97,17 @@ pub struct Settings {
     /// Money-free challenger capture: window seconds at which a
     /// `band_anchor` event records the live quote; empty disables.
     pub band_anchor_seconds: Vec<f64>,
+    /// Which book drives band sizing and the cumulative money floor:
+    /// "v1" (BANKROLL_USD pinned + actualized session PnL) or "v2" (the
+    /// wallet-anchored postings ledger, docs/risk_book_v2/). Lowercased at
+    /// parse; live refuses to start on anything else.
+    pub risk_book: String,
+    /// RISK_BOOK=v2 wallet reconciliation: |wallet - book| above this on two
+    /// consecutive readings posts a `wallet_reconcile` adjustment.
+    pub risk_book_reconcile_tolerance_usd: f64,
+    /// RISK_BOOK=v2 drift halt: a difference still above this on the reading
+    /// after that adjustment trips `accounting_drift`.
+    pub risk_book_drift_halt_usd: f64,
     pub poly_gamma_url: String,
 
     pub venue: VenueMode,
@@ -272,6 +283,9 @@ impl Settings {
             ),
             band_sizing: env_str("BAND_SIZING", "pct"),
             band_anchor_seconds: band_anchor_seconds_from_env(),
+            risk_book: env_str("RISK_BOOK", "v1").trim().to_ascii_lowercase(),
+            risk_book_reconcile_tolerance_usd: env_f64("RISK_BOOK_RECONCILE_TOLERANCE_USD", 0.50),
+            risk_book_drift_halt_usd: env_f64("RISK_BOOK_DRIFT_HALT_USD", 5.0),
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
 
             venue,
@@ -415,6 +429,11 @@ impl Settings {
         }
     }
 
+    /// RISK_BOOK=v2: the v2 band sub-book drives sizing and the money floor.
+    pub fn risk_book_v2(&self) -> bool {
+        self.risk_book == "v2"
+    }
+
     pub fn simulated_bankroll_usd(&self) -> f64 {
         if self.bankroll_usd > 0.0 {
             self.bankroll_usd
@@ -479,6 +498,15 @@ mod tests {
         assert!(s.kelly_fraction > 0.0 && s.kelly_fraction <= 1.0);
         assert!(s.max_position_per_market_usd > 0.0);
         assert!(s.simulated_bankroll_usd() > 0.0);
+    }
+
+    #[test]
+    fn risk_book_defaults_to_v1() {
+        let s = Settings::from_env();
+        assert_eq!(s.risk_book, "v1");
+        assert!(!s.risk_book_v2());
+        assert_eq!(s.risk_book_reconcile_tolerance_usd, 0.50);
+        assert_eq!(s.risk_book_drift_halt_usd, 5.0);
     }
 
     #[test]

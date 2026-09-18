@@ -1061,6 +1061,36 @@ mod tests {
         assert!(err.contains("does not match"), "unexpected error: {err}");
     }
 
+    /// The checked-in cap-0.91 artifact (direction memo 2026-09-07, gap 3)
+    /// is the margin50 policy with `ask_cap` 0.91, built by
+    /// `band-promotion-artifact` from the same gate and fill evidence the
+    /// live margin50 artifact cites.
+    #[test]
+    fn checked_in_cap91_band_artifact_validates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/promotions/band_promotion_margin50_cap91.json");
+        let artifact: PromotionArtifact =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(promotion_validation_error(&artifact), None);
+        let params: crate::live::pipeline::BandPolicyParams =
+            serde_json::from_value(artifact.strategy_params.clone()).unwrap();
+        assert_eq!(params.ask_cap, 0.91);
+        assert_eq!(params.ask_floor, 0.55);
+        assert_eq!(params.decision_seconds, 240.0);
+        assert_eq!(params.entry_window_seconds, 30.0);
+        assert_eq!(params.stake_usd, 25.0);
+        assert_eq!(params.position_pct, 0.25);
+        assert_eq!(params.min_decision_margin_usd, 50.0);
+        assert_eq!(
+            artifact.source_report_hash,
+            "c3aa2dc0b20de80e53b9a4c1d39b48f3e4af77cea47201dda0c0de8d1857d92f"
+        );
+        assert_eq!(
+            artifact.data_manifest_hash,
+            "dde5e45433abbc9f7a072c940d5390b308fed699cd3241171d38a01618fb86f1"
+        );
+    }
+
     fn test_settings(tmp: &TempDir) -> Settings {
         let mut s = Settings::from_env();
         let root = tmp.path();

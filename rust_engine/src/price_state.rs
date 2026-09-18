@@ -26,6 +26,11 @@ pub struct PriceState {
     price_history: VecDeque<(f64, f64)>,
     reference_history: HashMap<String, VecDeque<(f64, f64)>>,
     alt_history: HashMap<String, VecDeque<(f64, f64)>>,
+    /// Per-source tick history on the venue's own event clock (binance
+    /// only today, via `update_at`): the band's margin basis, which the
+    /// composite `price_history` (live-source mean stamped at receipt)
+    /// cannot supply. Bounded by `record_history`'s one-hour window.
+    source_history: HashMap<String, VecDeque<(f64, f64)>>,
 }
 
 impl Default for PriceState {
@@ -52,6 +57,7 @@ impl PriceState {
             price_history: VecDeque::new(),
             reference_history: HashMap::new(),
             alt_history: HashMap::new(),
+            source_history: HashMap::new(),
         }
     }
 
@@ -59,24 +65,7 @@ impl PriceState {
         if price <= 0.0 || !price.is_finite() {
             return;
         }
-        // A single mis-scaled venue timestamp (e.g. microseconds) would
-        // become the monotonic high-water mark and silently reject every
-        // later legitimate update until restart — the same failure class as
-        // polymarket_ws::clamp_timestamp_us_to_local. Clamp implausible
-        // timestamps to "received now" before the monotonic comparison.
-        let observed_at_ms = {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(observed_at_ms);
-            let lower = now_ms - 60 * 60 * 1_000;
-            let upper = now_ms + 10 * 1_000;
-            if (lower..=upper).contains(&observed_at_ms) {
-                observed_at_ms
-            } else {
-                now_ms
-            }
-        };
+        let observed_at_ms = clamp_observed_at_ms(observed_at_ms);
         if observed_at_ms <= 0
             || self
                 .reference_observed_at_ms
@@ -132,6 +121,44 @@ impl PriceState {
             })
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(_, price)| price)
+    }
+
+    /// A venue tick on the venue's own event clock: recorded into the
+    /// per-source history (`source_price_at_or_before`), then folded into
+    /// the composite exactly as `update`. Timestamps are clamped like
+    /// `update_reference_at`; an out-of-order tick is dropped from the
+    /// history by `record_history`'s monotonic step but still updates the
+    /// composite.
+    pub fn update_at(&mut self, source: &str, price: f64, observed_at_ms: i64) {
+        if price <= 0.0 || !price.is_finite() {
+            return;
+        }
+        let observed_at_ms = clamp_observed_at_ms(observed_at_ms);
+        record_history(
+            self.source_history.entry(source.to_string()).or_default(),
+            observed_at_ms as f64 / 1_000.0,
+            price,
+        );
+        self.update(source, price);
+    }
+
+    /// The last `source` tick at or before `target_s`, provided it is no
+    /// older than `max_distance_s` — a 1 s ticker's close of the second
+    /// ending at `target_s`. Never reaches forward past `target_s`, unlike
+    /// the nearest-tick lookups.
+    pub fn source_price_at_or_before(
+        &self,
+        source: &str,
+        target_s: f64,
+        max_distance_s: f64,
+    ) -> Option<f64> {
+        self.source_history
+            .get(source)?
+            .iter()
+            .rev()
+            .find(|(ts, _)| *ts <= target_s)
+            .filter(|(ts, _)| target_s - *ts <= max_distance_s)
+            .map(|(_, price)| *price)
     }
 
     pub fn update(&mut self, source: &str, price: f64) {
@@ -229,6 +256,25 @@ impl PriceState {
     }
 }
 
+/// A single mis-scaled venue timestamp (e.g. microseconds) would become
+/// the monotonic high-water mark and silently reject every later
+/// legitimate update until restart — the same failure class as
+/// polymarket_ws::clamp_timestamp_us_to_local. Clamp implausible
+/// timestamps to "received now" before the monotonic comparison.
+fn clamp_observed_at_ms(observed_at_ms: i64) -> i64 {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(observed_at_ms);
+    let lower = now_ms - 60 * 60 * 1_000;
+    let upper = now_ms + 10 * 1_000;
+    if (lower..=upper).contains(&observed_at_ms) {
+        observed_at_ms
+    } else {
+        now_ms
+    }
+}
+
 fn record_history(history: &mut VecDeque<(f64, f64)>, ts_s: f64, price: f64) {
     if price <= 0.0 {
         return;
@@ -291,6 +337,43 @@ mod tests {
             history.front().copied(),
             Some((PRICE_HISTORY_MAX_AGE_S + 1.0, 11.0))
         );
+    }
+
+    #[test]
+    fn source_history_looks_up_at_or_before_only() {
+        let now_ms = now_millis();
+        let mut ps = PriceState::new();
+        ps.update_at("binance", 100.0, now_ms - 3_000);
+        ps.update_at("binance", 101.0, now_ms - 2_000);
+        ps.update_at("binance", 103.0, now_ms - 500);
+        let at = |age_ms: i64| (now_ms - age_ms) as f64 / 1_000.0;
+
+        // At or before the instant, never the nearer LATER tick.
+        assert_eq!(
+            ps.source_price_at_or_before("binance", at(600), 2.0),
+            Some(101.0)
+        );
+        assert_eq!(
+            ps.source_price_at_or_before("binance", at(2_000), 2.0),
+            Some(101.0)
+        );
+        assert_eq!(
+            ps.source_price_at_or_before("binance", at(0), 2.0),
+            Some(103.0)
+        );
+        // Older than the tolerance, nothing before the instant, other source.
+        assert_eq!(
+            ps.source_price_at_or_before("binance", at(-5_000), 2.0),
+            None
+        );
+        assert_eq!(
+            ps.source_price_at_or_before("binance", at(3_500), 2.0),
+            None
+        );
+        assert_eq!(ps.source_price_at_or_before("bybit", at(0), 2.0), None);
+        // The tick still feeds the composite.
+        assert_eq!(ps.mid_price, 103.0);
+        assert_eq!(ps.n_live_sources(), 1);
     }
 
     #[test]

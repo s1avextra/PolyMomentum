@@ -3,8 +3,13 @@ Description=PolyMomentum band canary (signal_favorite_band_official_v1, live)
 After=network-online.target
 Wants=network-online.target
 # A persistent startup failure must become a clean stop, not an infinite
-# 10-second restart loop (preflight failures exit 2 and are excluded from
-# restarts entirely).
+# 10-second restart loop (preflight failures exit 2, refuse-to-run
+# conditions in pipeline init exit 3; both are excluded from restarts
+# entirely). A breaker trip never exits: the engine parks in place
+# (candle.halted heartbeat, operator bot). A restart while tripped for a
+# money, accounting-integrity or operator reason starts parked again;
+# the session-relative brakes and the kill switch re-base the session on
+# restart (the kill-switch file re-trips on the first cycle).
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
@@ -25,13 +30,16 @@ EnvironmentFile=/etc/polymomentum/band-canary-secrets.env
 # band-canary.env - a command-line pin here silently overrode the env and
 # started the wrong strategy version (2026-09-01).
 ExecStart=/opt/polymomentum/tools/polymomentum-engine-band-v1 live --mode live --i-understand-live
-ExecStop=/bin/kill -SIGTERM $MAINPID
+# No ExecStop: systemd delivers KillSignal itself. The former
+# `/bin/kill $MAINPID` failed whenever the process had already exited
+# (MAINPID empty), which marked the stop failed and re-triggered
+# Restart=on-failure after a clean exit 0 (2026-08-31, 2026-09-01).
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=20
 Restart=on-failure
 RestartSec=10
-RestartPreventExitStatus=2
+RestartPreventExitStatus=2 3
 LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal

@@ -180,5 +180,43 @@ class SignedUpdateTest(unittest.TestCase):
         self.assertEqual(mixed.n, 2)
 
 
+class EBhTest(unittest.TestCase):
+    def test_e_bh_discovers_the_largest_k_meeting_its_threshold(self):
+        family = accrual.e_bh({"a": 1300.0, "b": 700.0, "c": 100.0, "d": 5.0}, 64)
+        self.assertEqual(
+            family,
+            {
+                "campaign_n": 64,
+                "alpha": 0.05,
+                "candidates": 4,
+                "k_star": 2,
+                "threshold": 640.0,
+                "promoted": ["a", "b"],
+                "overflow": False,
+            },
+        )
+        # N=1 is Ville's e >= 1/alpha = 20.
+        self.assertEqual(accrual.e_bh({"a": 20.0}, 1)["promoted"], ["a"])
+        self.assertEqual(accrual.e_bh({"a": 19.9}, 1)["promoted"], [])
+        # The running bar for a lone discovery is N/alpha.
+        lone = accrual.e_bh({"a": 1279.9}, 64)
+        self.assertEqual((lone["k_star"], lone["threshold"], lone["promoted"]), (0, 1280.0, []))
+        # Ties at the boundary enter together.
+        self.assertEqual(accrual.e_bh({"b": 640.0, "a": 640.0}, 64)["promoted"], ["a", "b"])
+        # k* is the largest k: a weak third leaves the top two standing.
+        self.assertEqual(accrual.e_bh({"a": 641.0, "b": 640.0, "c": 1.0}, 64)["k_star"], 2)
+        # More candidates than registered: N grows to the count, flagged.
+        overflow = accrual.e_bh({"a": 1300.0, "b": 700.0, "c": 100.0, "d": 5.0}, 2)
+        self.assertEqual((overflow["campaign_n"], overflow["overflow"], overflow["k_star"]), (4, True, 3))
+        self.assertEqual(overflow["promoted"], ["a", "b", "c"])
+        # Unregistered: nothing can be discovered.
+        self.assertEqual(
+            accrual.e_bh({"a": 1e9}, None),
+            {"campaign_n": None, "alpha": 0.05, "candidates": 1, "k_star": 0, "threshold": None, "promoted": [], "overflow": False},
+        )
+        self.assertEqual(accrual.e_bh({}, 64)["promoted"], [])
+        self.assertEqual(accrual.e_bh({"a": 20.0}, 1, alpha=0.1)["threshold"], 10.0)
+
+
 if __name__ == "__main__":
     unittest.main()

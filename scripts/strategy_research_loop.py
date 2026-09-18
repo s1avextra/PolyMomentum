@@ -511,6 +511,11 @@ class Ledger:
         ).fetchone()
         return dict(row) if row else None
 
+    def delete_lane_accrual(self, lane: str) -> int:
+        cursor = self.connection.execute("DELETE FROM evidence_accrual WHERE lane = ?", (lane,))
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     def accrue(
         self,
         fingerprint: str,

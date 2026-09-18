@@ -2587,8 +2587,12 @@ async fn main() {
                     }
                 }
                 Err(e) => {
+                    // A refuse-to-run condition (blocked start, missing
+                    // readiness flags, unseedable book): exit 3 is excluded
+                    // from the unit's restarts so it stops cleanly instead
+                    // of looping every 10 s to the start limit.
                     eprintln!("pipeline init failed: {e}");
-                    std::process::exit(1);
+                    std::process::exit(3);
                 }
             }
         }
@@ -6667,7 +6671,12 @@ fn cmd_band_promotion_artifact(
             .context("gate row missing won")?;
         anyhow::ensure!(0.0 < entry && entry < 1.0, "gate row entry {entry} out of (0,1)");
         let shares = params.stake_usd / entry;
-        let fee = 0.072 * entry * (1.0 - entry) * shares;
+        // The live taker fee, one constant with `kelly_lo_stake` and the
+        // fill models (the 2026-08 artifacts were built at 0.072).
+        let fee = polymomentum_engine::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE
+            * entry
+            * (1.0 - entry)
+            * shares;
         total_fees += fee;
         if won {
             wins += 1;
@@ -6777,9 +6786,11 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
     ) {
         Ok(reader) => match reader.fetch_balances().await {
             Ok(balances) => {
-                let configured_budget = live_configured_order_budget_usd(settings, &balances);
+                let v2_equity = live_preflight_v2_equity(settings).await;
+                let configured_budget =
+                    live_configured_order_budget_usd(settings, &balances, v2_equity);
                 let min_order_budget = live_min_order_budget_usd(settings);
-                let required = live_required_wallet_usd(settings, &balances);
+                let required = live_required_wallet_usd(settings, &balances, v2_equity);
                 let budget_ready = live_wallet_covers_budget(&balances, required);
                 let config_ready = configured_budget + 1e-9 >= min_order_budget;
                 let status = if balances.live_ready() && budget_ready && config_ready {
@@ -6795,6 +6806,7 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
                         configured_budget,
                         min_order_budget,
                         required,
+                        v2_equity,
                     ),
                 }
             }
@@ -6812,11 +6824,33 @@ async fn live_wallet_preflight_check(settings: &config::Settings) -> release::Pr
     }
 }
 
+/// RISK_BOOK=v2: the band sub-book equity the engine will size on, read
+/// from the v2 ledger next to the state db. None under v1, and on a first
+/// v2 run (empty book), where the engine seeds the book from the wallet
+/// reading itself.
+async fn live_preflight_v2_equity(settings: &config::Settings) -> Option<f64> {
+    if !settings.risk_book_v2() {
+        return None;
+    }
+    let book =
+        polymomentum_engine::risk::book_v2::BookV2::open(live::pipeline::book_v2_path(settings))
+            .ok()?;
+    if book.is_empty().await.ok()? {
+        return None;
+    }
+    book.equity_for("band").await.ok()
+}
+
 fn live_configured_order_budget_usd(
     settings: &config::Settings,
     balances: &data::wallet::WalletBalances,
+    v2_equity: Option<f64>,
 ) -> f64 {
-    let bankroll = if settings.bankroll_usd > 0.0 {
+    // Under RISK_BOOK=v2 the sizing equity is the wallet-anchored book
+    // (the wallet itself on a first run); BANKROLL_USD is informational.
+    let bankroll = if settings.risk_book_v2() {
+        v2_equity.unwrap_or(balances.pusd)
+    } else if settings.bankroll_usd > 0.0 {
         settings.bankroll_usd
     } else {
         balances.pusd
@@ -6848,8 +6882,9 @@ fn live_min_order_budget_usd(settings: &config::Settings) -> f64 {
 fn live_required_wallet_usd(
     settings: &config::Settings,
     balances: &data::wallet::WalletBalances,
+    v2_equity: Option<f64>,
 ) -> f64 {
-    let raw_required = live_configured_order_budget_usd(settings, balances)
+    let raw_required = live_configured_order_budget_usd(settings, balances, v2_equity)
         .max(live_min_order_budget_usd(settings))
         .max(1.0);
     raw_required * settings.live_order_budget_buffer.max(1.0)
@@ -6871,18 +6906,25 @@ fn live_wallet_preflight_detail(
     configured_budget_usd: f64,
     min_order_budget_usd: f64,
     required_usd: f64,
+    v2_equity: Option<f64>,
 ) -> String {
     let base = balances.live_ready_detail();
     let budget_ready = live_wallet_covers_budget(balances, required_usd);
     let config_ready = configured_budget_usd + 1e-9 >= min_order_budget_usd;
-    format!(
+    let mut detail = format!(
         "{}; configured live order budget {}: configured=${:.2}, min_order_floor=${:.2}, requires pUSD and both CTF Exchange V2 allowances >= ${:.2}",
         base,
         if budget_ready && config_ready { "ok" } else { "not ready" },
         configured_budget_usd,
         min_order_budget_usd,
         required_usd.max(1.0)
-    )
+    );
+    if let Some(equity) = v2_equity {
+        detail.push_str(&format!(
+            "; RISK_BOOK=v2 sizes on book equity ${equity:.2} (BANKROLL_USD informational)"
+        ));
+    }
+    detail
 }
 
 fn install_signal_handlers(stop: std::sync::Arc<tokio::sync::Notify>) {
@@ -16763,7 +16805,7 @@ mod replay_validation_tests {
 
         let balances = wallet_balances(100.0, 100.0, 100.0);
 
-        assert_eq!(live_required_wallet_usd(&settings, &balances), 11.0);
+        assert_eq!(live_required_wallet_usd(&settings, &balances, None), 11.0);
     }
 
     #[test]
@@ -16776,16 +16818,53 @@ mod replay_validation_tests {
         settings.live_min_order_size_shares = 5.0;
 
         let balances = wallet_balances(1.0, 1.0, 1.0);
-        let configured = live_configured_order_budget_usd(&settings, &balances);
+        let configured = live_configured_order_budget_usd(&settings, &balances, None);
         let floor = live_min_order_budget_usd(&settings);
 
         assert_eq!(configured, 1.0);
         assert_eq!(floor, 4.5);
-        assert_eq!(live_required_wallet_usd(&settings, &balances), 4.95);
+        assert_eq!(live_required_wallet_usd(&settings, &balances, None), 4.95);
         assert!(!live_wallet_covers_budget(
             &balances,
-            live_required_wallet_usd(&settings, &balances)
+            live_required_wallet_usd(&settings, &balances, None)
         ));
+    }
+
+    #[test]
+    fn live_wallet_budget_sizes_on_v2_equity_under_risk_book_v2() {
+        let mut settings = config::Settings::from_env();
+        settings.risk_book = "v2".to_string();
+        settings.bankroll_usd = 100.0;
+        settings.candle_position_pct = 0.25;
+        settings.max_position_per_market_usd = 25.0;
+        settings.candle_max_price = 0.92;
+        settings.live_min_order_size_shares = 5.0;
+        settings.live_order_budget_buffer = 1.10;
+
+        let balances = wallet_balances(7.8, 7.8, 7.8);
+        // Book equity $7.80 -> clamp(0.25 x 7.8, $5, $25) = $5, not 25% of
+        // the informational BANKROLL_USD.
+        assert_eq!(
+            live_configured_order_budget_usd(&settings, &balances, Some(7.8)),
+            5.0
+        );
+        assert!((live_required_wallet_usd(&settings, &balances, Some(7.8)) - 5.5).abs() < 1e-9);
+        // First v2 run (empty book): the wallet reading is the seed.
+        assert_eq!(
+            live_configured_order_budget_usd(&settings, &balances, None),
+            5.0
+        );
+        let detail = live_wallet_preflight_detail(&balances, 5.0, 4.6, 5.5, Some(7.8));
+        assert!(
+            detail.contains("RISK_BOOK=v2 sizes on book equity $7.80"),
+            "{detail}"
+        );
+        // v1 is untouched: 25% of the pinned $100, capped at $25.
+        settings.risk_book = "v1".to_string();
+        assert_eq!(
+            live_configured_order_budget_usd(&settings, &balances, None),
+            25.0
+        );
     }
 
     #[test]
@@ -16798,7 +16877,7 @@ mod replay_validation_tests {
         settings.live_min_order_size_shares = 5.0;
 
         let balances = wallet_balances(1.0, 1.0, 1.0);
-        let required = live_required_wallet_usd(&settings, &balances);
+        let required = live_required_wallet_usd(&settings, &balances, None);
 
         assert_eq!(required, 11.0);
         assert!(!live_wallet_covers_budget(&balances, required));

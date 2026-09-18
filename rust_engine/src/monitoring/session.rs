@@ -47,6 +47,15 @@ pub struct SessionMonitor {
     counters: Mutex<Counters>,
 }
 
+/// Which book drives band sizing and the cumulative money floor
+/// (`RISK_BOOK`), with both equities: v1 = actualized baseline + session
+/// PnL, v2 = the wallet-anchored band sub-book (None when unreadable).
+pub struct RiskBookState {
+    pub driver: &'static str,
+    pub v1_equity: f64,
+    pub v2_equity: Option<f64>,
+}
+
 impl SessionMonitor {
     pub fn open(log_dir: impl Into<PathBuf>) -> Result<Self> {
         let log_dir = log_dir.into();
@@ -450,6 +459,7 @@ impl SessionMonitor {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn record_risk_state(
         &self,
         starting_bankroll: f64,
@@ -460,23 +470,26 @@ impl SessionMonitor {
         realized_pnl: f64,
         wins: u64,
         losses: u64,
+        book: Option<RiskBookState>,
     ) {
         let total = (wins + losses).max(1);
-        self.write_event(
-            "risk",
-            "state",
-            json!({
-                "starting_bankroll": round_n(starting_bankroll, 2),
-                "bankroll": round_n(bankroll, 2),
-                "exposure": round_n(exposure, 2),
-                "available": round_n(available, 2),
-                "positions": positions,
-                "realized_pnl": round_n(realized_pnl, 2),
-                "wins": wins,
-                "losses": losses,
-                "win_rate": round_n(wins as f64 / total as f64, 3),
-            }),
-        );
+        let mut data = json!({
+            "starting_bankroll": round_n(starting_bankroll, 2),
+            "bankroll": round_n(bankroll, 2),
+            "exposure": round_n(exposure, 2),
+            "available": round_n(available, 2),
+            "positions": positions,
+            "realized_pnl": round_n(realized_pnl, 2),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round_n(wins as f64 / total as f64, 3),
+        });
+        if let Some(book) = book {
+            data["risk_book"] = json!(book.driver);
+            data["v1_equity"] = json!(round_n(book.v1_equity, 2));
+            data["v2_equity"] = json!(book.v2_equity.map(|v| round_n(v, 2)));
+        }
+        self.write_event("risk", "state", data);
     }
 
     #[allow(clippy::too_many_arguments)]

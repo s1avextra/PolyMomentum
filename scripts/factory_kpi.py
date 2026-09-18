@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Factory KPI: funnel per lane x proposal source, sampler throughput, and the
-LLM-versus-uniform verdict (with the reviewer-rejected subset of the LLM arm).
-The verdict scores each arm over distinct stage-1 projections of its rules,
-not over rows, so execution-only variants of one rule count once.
+"""Factory KPI: funnel per lane x proposal source, sampler throughput, the
+LLM-versus-uniform verdict (with the reviewer-rejected subset of the LLM arm)
+and, for the band lane, the e-BH family decision at the pre-registered
+campaign_n (the `promote` column counts e-BH discoveries, not raw promote
+verdicts).  The verdict scores each arm over distinct stage-1 projections of
+its rules, not over rows, so execution-only variants of one rule count once.
 
 Read-only over one state dir: the research ledger (hypotheses incl. source and
-review, evidence_accrual, cycles), trial_ledger.jsonl and the evidence artifacts.
+review, evidence_accrual, cycles), trial_ledger.jsonl, the evidence artifacts
+and the lane config (the overlay loop-config.local.json in the state dir, else
+deploy/strategy-research-loop.json).
 """
 
 from __future__ import annotations
@@ -39,8 +43,10 @@ STAGE_1_REJECTS = {
 STAGE_2_PASSES = {
     ("economic_opportunity_screen", "passed"),
     ("band_entry_economics", "stage_2_survivor"),
+    ("band_entry_economics", "manual_audit"),
 }
 ACCRUAL_BUCKETS = {"continue": "accruing", "promote": "promote", "kill": "killed"}
+BAND_LANE = "band_mechanisms"
 # The late-lane stage-1 screen (evaluate_late_rule / causal_late_signal) reads
 # only these rule fields; the entry cap, sigma buffer and book pressure are
 # execution variants that reproduce the same public verdict.
@@ -99,13 +105,51 @@ def load_hypotheses(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
     return rows
 
 
-def load_accrual(connection: sqlite3.Connection) -> Dict[str, str]:
+def load_accrual(connection: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
     if "verdict" not in _columns(connection, "evidence_accrual"):
         return {}
     return {
-        str(row["fingerprint"]): str(row["verdict"])
-        for row in connection.execute("SELECT fingerprint, verdict FROM evidence_accrual")
+        str(row["fingerprint"]): {
+            "verdict": str(row["verdict"]),
+            "e_value": float(row["e_value"]),
+            "n": int(row["n"]),
+            "wins": int(row["wins"]),
+        }
+        for row in connection.execute("SELECT fingerprint, verdict, e_value, n, wins FROM evidence_accrual")
     }
+
+
+def lane_config(state_dir: Path) -> Dict[str, Any]:
+    for path in (state_dir / "loop-config.local.json", ROOT / "deploy/strategy-research-loop.json"):
+        if path.is_file():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                continue
+    return {}
+
+
+def band_family(
+    rows: Sequence[Mapping[str, Any]], accrual: Mapping[str, Mapping[str, Any]], config: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """e-BH over the band candidates the lane may still promote, the same
+    family accrue_band_hypotheses decides each cycle."""
+    lane = (config.get("lanes") or {}).get(BAND_LANE) or {}
+    eligible = {}
+    for row in rows:
+        state = accrual.get(row["fingerprint"])
+        if state is None or row["status"] not in loop.band_lane.ACCRUAL_STATUSES:
+            continue
+        if loop.band_lane.promotable(
+            lane, row["fingerprint"], row["status"], state["verdict"], state["wins"], state["n"]
+        ):
+            eligible[row["fingerprint"]] = state["e_value"]
+    family = loop.evidence_accrual.e_bh(eligible, loop.band_lane.campaign_n(config))
+    family["raw_promote_verdicts"] = sum(
+        1 for row in rows if (accrual.get(row["fingerprint"]) or {}).get("verdict") == "promote"
+    )
+    family["manual_audit"] = sum(1 for row in rows if row["status"] == "manual_audit")
+    return family
 
 
 def load_bursts(connection: sqlite3.Connection) -> Dict[str, List[Dict[str, Any]]]:
@@ -181,7 +225,10 @@ def _stage_1_survivors(rows: Sequence[Mapping[str, Any]]) -> int:
 
 
 def source_metrics(
-    rows: Sequence[Mapping[str, Any]], accrual: Mapping[str, str], stage_2_passes: Set[str]
+    rows: Sequence[Mapping[str, Any]],
+    accrual: Mapping[str, Mapping[str, Any]],
+    stage_2_passes: Set[str],
+    discoveries: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     survivors = _stage_1_survivors(rows)
     # The reviewer is advisory (a reject never swaps the proposal), so its
@@ -190,7 +237,11 @@ def source_metrics(
     accuracies = [row["accuracy"] for row in rows if row["accuracy"] is not None]
     buckets = {"accruing": 0, "promote": 0, "killed": 0}
     for row in rows:
-        bucket = ACCRUAL_BUCKETS.get(accrual.get(row["fingerprint"], ""))
+        verdict = (accrual.get(row["fingerprint"]) or {}).get("verdict", "")
+        bucket = ACCRUAL_BUCKETS.get(verdict)
+        # With a family decision, only an e-BH discovery is a promote.
+        if discoveries is not None and bucket == "promote" and row["fingerprint"] not in discoveries:
+            bucket = "accruing"
         if bucket:
             buckets[bucket] += 1
     return {
@@ -275,11 +326,14 @@ def build_report(state_dir: Path) -> Dict[str, Any]:
         row["accuracy"] = stage_1_accuracy(row["lane"], row["evidence_path"])
         row["rule_key"] = rule_key(row["lane"], row["proposal"])
         row["projection_key"] = projection_key(row["lane"], row["proposal"])
+    config = lane_config(state_dir)
     for lane in LANES:
         lane_rows = [row for row in hypotheses if row["lane"] == lane]
+        family = band_family(lane_rows, accrual, config) if lane == BAND_LANE else None
+        discoveries = set(family["promoted"]) if family else None
         sources = {
             source: source_metrics(
-                [row for row in lane_rows if row["source"] == source], accrual, stage_2_passes
+                [row for row in lane_rows if row["source"] == source], accrual, stage_2_passes, discoveries
             )
             for source in sorted({row["source"] for row in lane_rows})
         }
@@ -288,6 +342,8 @@ def build_report(state_dir: Path) -> Dict[str, Any]:
             "throughput": throughput(bursts[lane]),
             "verdict": sampler_verdict(lane_rows),
         }
+        if family:
+            report["lanes"][lane]["e_bh"] = family
     return report
 
 
@@ -336,6 +392,26 @@ def render(report: Mapping[str, Any]) -> str:
                 verdict["uniform_control"]["projections"],
                 verdict["reviewer_rejected"]["stage_1_survivors"],
                 verdict["reviewer_rejected"]["proposals"],
+            )
+        )
+    for lane, block in report["lanes"].items():
+        family = block.get("e_bh")
+        if not family:
+            continue
+        lines.append(
+            "E-BH FAMILY: lane=%s campaign_n=%s alpha=%s candidates=%d k_star=%d threshold=%s "
+            "promote=%d raw_promote_verdicts=%d manual_audit=%d%s"
+            % (
+                lane,
+                _cell(family["campaign_n"]),
+                family["alpha"],
+                family["candidates"],
+                family["k_star"],
+                _cell(family["threshold"]),
+                len(family["promoted"]),
+                family["raw_promote_verdicts"],
+                family["manual_audit"],
+                " OVERFLOW: candidates exceed the pre-registered N" if family["overflow"] else "",
             )
         )
     return "\n".join(lines)

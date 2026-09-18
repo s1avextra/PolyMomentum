@@ -165,7 +165,10 @@ pub async fn binance_feed(state: Arc<RwLock<PriceState>>) {
             async move {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(price) = v["c"].as_str().and_then(|s| s.parse::<f64>().ok()) {
-                        s.write().await.update("binance", price);
+                        // Binance's own event time: the band's margin basis
+                        // reads this series on Binance's clock, not ours.
+                        let observed_at_ms = v["E"].as_i64().unwrap_or(0);
+                        s.write().await.update_at("binance", price, observed_at_ms);
                         return true;
                     }
                 }

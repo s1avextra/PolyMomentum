@@ -460,13 +460,20 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
     parser.add_argument(
         "--json",
         action="store_true",
-        help="also write <state_dir>/band_race/<utc>.json and one trial-ledger row per challenger",
+        help="also write <state_dir>/band_race/<utc>.json",
+    )
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="with --json: also append one trial-ledger row per challenger (a look that counts)",
     )
     parser.add_argument("--research-db", type=Path, default=DEFAULT_RESEARCH_DB)
     parser.add_argument("--loop-config", type=Path, default=DEFAULT_LOOP_CONFIG)
     args = parser.parse_args(argv)
     if not 0.0 < args.alpha < 1.0:
         parser.error("--alpha must be in (0, 1)")
+    if args.record and not args.json:
+        parser.error("--record requires --json")
     if args.pull:
         args.sessions_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["rsync", "-az", VPS_SESSIONS, str(args.sessions_dir) + "/"], check=True)
@@ -509,7 +516,7 @@ def main(argv: Optional[Sequence[str]] = None, cache: Any = None, now_ts: Option
         path = state_dir / "band_race" / (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-        for row in report["challengers"]:
+        for row in report["challengers"] if args.record else []:
             factory_generator.append_trial_entry(
                 config,
                 row["fingerprint"],

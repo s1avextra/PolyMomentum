@@ -31,12 +31,14 @@ from __future__ import annotations
 
 import json
 import math
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 # Promote threshold: rejects the null at alpha = 1/20 = 0.05 by Ville.
 PROMOTE_E = 20.0
 # Practical futility stop; not a type-I bound.
 FUTILITY_E = 0.1
+# Family-wise level for e-BH over a campaign.
+E_BH_ALPHA = 0.05
 
 LAMBDA_STEP = 0.05
 LAMBDA_COUNT = 20
@@ -107,3 +109,36 @@ class EProcess:
     def from_json(cls, text: str) -> "EProcess":
         payload = json.loads(text)
         return cls(payload["log_wealth"], payload["n"])
+
+
+def e_bh(
+    e_values: Mapping[str, float], campaign_n: Optional[int], alpha: float = E_BH_ALPHA
+) -> Dict[str, Any]:
+    """e-BH (Wang & Ramdas 2022) over a family of running e-values.
+
+    Rank e_(1) >= e_(2) >= ...; k* is the largest k with e_(k) >= N/(alpha*k)
+    and the k* largest are the discoveries, FDR <= alpha under arbitrary
+    dependence.  N is the campaign size pre-registered before any outcome
+    was read.  More candidates than N means the pre-registration was
+    exceeded: N grows to the count (a larger N only raises every threshold)
+    and `overflow` says so.  No N at all: nothing can be discovered.
+    `threshold` is the running bar: N/(alpha*k*) once something is
+    discovered, else N/alpha, what a lone discovery needs."""
+    ranked = sorted(e_values.items(), key=lambda item: (-float(item[1]), str(item[0])))
+    count = len(ranked)
+    n = None if campaign_n is None else max(int(campaign_n), count)
+    k_star = 0
+    if n is not None:
+        for k in range(count, 0, -1):
+            if float(ranked[k - 1][1]) >= n / (alpha * k):
+                k_star = k
+                break
+    return {
+        "campaign_n": n,
+        "alpha": alpha,
+        "candidates": count,
+        "k_star": k_star,
+        "threshold": None if n is None else n / (alpha * max(k_star, 1)),
+        "promoted": [fingerprint for fingerprint, _ in ranked[:k_star]],
+        "overflow": campaign_n is not None and count > int(campaign_n),
+    }

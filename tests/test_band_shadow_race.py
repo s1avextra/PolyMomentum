@@ -521,8 +521,14 @@ class BandShadowRaceTest(unittest.TestCase):
             reports = sorted((Path(directory) / "band_race").glob("*.json"))
             self.assertEqual(len(reports), 1)
             report = json.loads(reports[0].read_text())
+            # A race report is not a look: --json alone writes no ledger row.
+            self.assertFalse((Path(directory) / "trial_ledger.jsonl").exists())
+            with self.assertRaises(SystemExit):
+                race.main([arg for arg in argv if arg != "--json"] + ["--record"], cache=cache, now_ts=ws[-1] + 3000)
+            with contextlib.redirect_stdout(io.StringIO()):
+                recorded = race.main(argv + ["--record"], cache=cache, now_ts=ws[-1] + 3000)
             ledger = [json.loads(line) for line in (Path(directory) / "trial_ledger.jsonl").read_text().splitlines()]
-        self.assertEqual(status, 0)
+        self.assertEqual((status, recorded), (0, 0))
         text = stdout.getvalue()
         self.assertIn("| rule | fingerprint | windows |", text)
         self.assertIn("(champion)", text)

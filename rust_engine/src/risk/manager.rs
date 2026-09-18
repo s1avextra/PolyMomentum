@@ -83,6 +83,9 @@ struct Inner {
     last_trade_time: std::collections::HashMap<String, f64>,
     total_pnl: f64,
     total_fees_paid: f64,
+    /// `total_pnl` folded into the baseline by `actualize_on_open` (0 when
+    /// nothing was); `undo_actualization` reverses exactly that fold.
+    actualized_pnl: f64,
 }
 
 impl RiskManager {
@@ -103,6 +106,7 @@ impl RiskManager {
                 last_trade_time: Default::default(),
                 total_pnl: 0.0,
                 total_fees_paid: 0.0,
+                actualized_pnl: 0.0,
             })),
         };
         mr.load_state().await?;
@@ -130,10 +134,30 @@ impl RiskManager {
                 active_bankroll,
                 "bankroll actualized on restart"
             );
+            i.actualized_pnl = i.total_pnl;
             i.cfg.initial_bankroll = active_bankroll;
             i.total_pnl = 0.0;
         }
         changed
+    }
+
+    /// Reverse this open's `actualize_on_open`: the session PnL goes back to
+    /// `total_pnl` and the baseline to what it was. A restart that keeps a
+    /// breaker trip parked keeps the session it was evaluated against, so
+    /// the base must not absorb that PnL (the retained session would count
+    /// it twice and the floor would move on every bounce). No-op when
+    /// nothing was actualized.
+    pub async fn undo_actualization(&self) -> Result<()> {
+        {
+            let mut i = self.inner.lock().await;
+            let pnl = std::mem::take(&mut i.actualized_pnl);
+            if pnl.abs() <= 1e-9 {
+                return Ok(());
+            }
+            i.cfg.initial_bankroll -= pnl;
+            i.total_pnl += pnl;
+        }
+        self.save_state().await
     }
 
     pub async fn initial_bankroll(&self) -> f64 {

@@ -193,7 +193,9 @@
         "minimum_signals": 100,
         "minimum_recent_signals": 20,
         "minimum_entries": 50
-      }
+      },
+      "campaign_n": 64,
+      "audit_cleared": []
     }
   }
 }

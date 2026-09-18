@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import math
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -257,6 +258,61 @@ class FactoryKpiTest(unittest.TestCase):
             "uniform_s1_projections=5/25 reviewer_rejected_s1=1/3" % LANE,
             text,
         )
+
+    def test_band_family_is_decided_by_e_bh_at_the_registered_campaign_n(self):
+        band = kpi.loop.band_lane
+        members = (
+            # name, status, e, n, wins, verdict
+            ("band-0", "accruing", 1300.0, 80, 70, "promote"),
+            ("band-1", "promote_candidate", 700.0, 80, 70, "promote"),
+            ("band-2", "accruing", 100.0, 40, 35, "promote"),
+            ("band-3", "manual_audit", 2000.0, 60, 59, "promote"),  # cleared below
+            ("band-4", "accruing", 5000.0, 60, 59, "promote"),  # trips on its accrual
+            ("band-5", "accruing", 0.05, 30, 10, "kill"),
+        )
+
+        def seed_band(state_dir, overlay):
+            (state_dir / "loop-config.local.json").write_text(json.dumps(overlay))
+            ledger = loop.Ledger(state_dir / "research.sqlite3")
+            try:
+                for index, (name, status, e, n, wins, verdict) in enumerate(members):
+                    rule = {"margin_floor_usd": 50, "favorite_price_floor": 0.55 + 0.05 * index}
+                    ledger.add_hypothesis(name, "band_mechanisms", {"rule": rule}, None, status, None, source="llm")
+                    state = kpi.loop.evidence_accrual.EProcess([math.log(e)] * 20, n).to_json()
+                    ledger.connection.execute(
+                        "INSERT INTO evidence_accrual VALUES(?, 'band_mechanisms', ?, ?, ?, ?, ?, ?, 'seeded')",
+                        (name, n, wins, state, 0, e, verdict),
+                    )
+                ledger.connection.commit()
+            finally:
+                ledger.close()
+
+        registered = {"lanes": {"band_mechanisms": {"campaign_n": 64, "audit_cleared": ["band-3"]}}}
+        report, text = self.report({}, lambda state_dir: seed_band(state_dir, registered))
+        family = report["lanes"]["band_mechanisms"]["e_bh"]
+        # Eligible: 2000 (cleared), 1300, 700, 100; N=64: k=3 (700 >= 426.7), k=4 fails.
+        self.assertEqual(family["promoted"], ["band-3", "band-0", "band-1"])
+        self.assertEqual((family["campaign_n"], family["candidates"], family["k_star"]), (64, 4, 3))
+        self.assertAlmostEqual(family["threshold"], 64 / (0.05 * 3))
+        self.assertEqual((family["raw_promote_verdicts"], family["manual_audit"], family["overflow"]), (5, 1, False))
+        llm = report["lanes"]["band_mechanisms"]["sources"]["llm"]
+        # Raw promote verdicts outside the discovery set count as accruing.
+        self.assertEqual((llm["promote"], llm["accruing"], llm["killed"]), (3, 2, 1))
+        self.assertIn(
+            "E-BH FAMILY: lane=band_mechanisms campaign_n=64 alpha=0.05 candidates=4 k_star=3 "
+            "threshold=426.667 promote=3 raw_promote_verdicts=5 manual_audit=1",
+            text,
+        )
+        self.assertNotIn("e_bh", report["lanes"][LANE])
+        self.assertTrue(band.promotable({}, "x", "accruing", "continue", 10, 10))
+        # An overlay without campaign_n: nothing is promotable, every flag reads as accruing.
+        report, text = self.report({}, lambda state_dir: seed_band(state_dir, {"lanes": {"band_mechanisms": {}}}))
+        family = report["lanes"]["band_mechanisms"]["e_bh"]
+        self.assertEqual((family["campaign_n"], family["promoted"], family["threshold"]), (None, [], None))
+        self.assertEqual(report["lanes"]["band_mechanisms"]["sources"]["llm"]["promote"], 0)
+        self.assertIn("campaign_n=- ", text)
+        # No overlay: the deploy config's registration applies.
+        self.assertEqual(kpi.lane_config(Path("/nonexistent"))["lanes"]["band_mechanisms"]["campaign_n"], 64)
 
     def test_legacy_ledger_without_source_column_reads_as_legacy(self):
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:

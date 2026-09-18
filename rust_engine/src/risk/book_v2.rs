@@ -219,7 +219,9 @@ pub fn kelly_lo_stake(price: f64, equity: f64, cap: f64) -> Option<f64> {
     } else {
         0.9413
     };
-    let fee_rate = 0.072;
+    // The live taker fee (0.07), one constant with the fill models and the
+    // promotion artifact builder; the study's 0.072 overstated it.
+    let fee_rate = crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
     let b = (1.0 - price) / price - fee_rate * (1.0 - price);
     if b <= 0.0 {
         return None;
@@ -281,5 +283,22 @@ mod tests {
         // cap binds as equity grows
         let s = kelly_lo_stake(0.75, 300.0, 25.0).unwrap();
         assert!((s - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kelly_lo_uses_the_live_taker_fee() {
+        use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
+        assert_eq!(DEFAULT_CRYPTO_TAKER_FEE_RATE, 0.07);
+        // Closed form at the live fee, unclamped ($19 equity, $25 cap).
+        let (p, q_lo) = (0.85, 0.9413);
+        let b = (1.0 - p) / p - DEFAULT_CRYPTO_TAKER_FEE_RATE * (1.0 - p);
+        let expect = 0.5 * (q_lo - (1.0 - q_lo) / b) * 19.0;
+        assert!(expect > BAND_VENUE_MIN_STAKE && expect < 25.0);
+        let s = kelly_lo_stake(p, 19.0, 25.0).unwrap();
+        assert!((s - expect).abs() < 1e-12, "got {s}, expected {expect}");
+        // The study's 0.072 would size differently.
+        let b_study = (1.0 - p) / p - 0.072 * (1.0 - p);
+        let study = 0.5 * (q_lo - (1.0 - q_lo) / b_study) * 19.0;
+        assert!((s - study).abs() > 1e-6);
     }
 }

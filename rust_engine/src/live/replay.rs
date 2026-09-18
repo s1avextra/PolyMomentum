@@ -700,6 +700,7 @@ impl LiveReplayStrategy {
             self.lifecycle.realized_pnl,
             self.lifecycle.wins,
             self.lifecycle.losses,
+            None,
         );
     }
 
@@ -776,6 +777,7 @@ impl LiveReplayStrategy {
             self.lifecycle.realized_pnl,
             self.lifecycle.wins,
             self.lifecycle.losses,
+            None,
         );
     }
 
