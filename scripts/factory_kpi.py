@@ -40,11 +40,12 @@ STAGE_1_REJECTS = {
     "rejected_signal_screen",
 }
 # (trial-ledger stage, verdict) pairs that mean the stage-2 screen passed.
-STAGE_2_PASSES = {
-    ("economic_opportunity_screen", "passed"),
-    ("band_entry_economics", "stage_2_survivor"),
-    ("band_entry_economics", "manual_audit"),
-}
+STAGE_2_PASSES = {("economic_opportunity_screen", "passed")}
+# Band stage-2 verdicts supersede each other per candidate in ledger order:
+# a rescreen (band_entry_economics again) or a rescore on the paginated tape
+# (band_rescore_paginated) withdraws an earlier pass.
+BAND_STAGE_2_STAGES = {"band_entry_economics", "band_rescore_paginated"}
+BAND_STAGE_2_PASS_VERDICTS = {"stage_2_survivor", "manual_audit"}
 ACCRUAL_BUCKETS = {"continue": "accruing", "promote": "promote", "kill": "killed"}
 BAND_LANE = "band_mechanisms"
 # The late-lane stage-1 screen (evaluate_late_rule / causal_late_signal) reads
@@ -132,19 +133,24 @@ def lane_config(state_dir: Path) -> Dict[str, Any]:
 def band_family(
     rows: Sequence[Mapping[str, Any]], accrual: Mapping[str, Mapping[str, Any]], config: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """e-BH over the band candidates the lane may still promote, the same
-    family accrue_band_hypotheses decides each cycle."""
+    """e-BH over the band candidates the lane may still promote, sized by
+    every band candidate that ever started an e-process: the same decision
+    accrue_band_hypotheses makes each cycle."""
     lane = (config.get("lanes") or {}).get(BAND_LANE) or {}
     eligible = {}
+    family_size = 0
     for row in rows:
         state = accrual.get(row["fingerprint"])
-        if state is None or row["status"] not in loop.band_lane.ACCRUAL_STATUSES:
+        if state is None:
+            continue
+        family_size += 1
+        if row["status"] not in loop.band_lane.ACCRUAL_STATUSES:
             continue
         if loop.band_lane.promotable(
             lane, row["fingerprint"], row["status"], state["verdict"], state["wins"], state["n"]
         ):
             eligible[row["fingerprint"]] = state["e_value"]
-    family = loop.evidence_accrual.e_bh(eligible, loop.band_lane.campaign_n(config))
+    family = loop.evidence_accrual.e_bh(eligible, loop.band_lane.campaign_n(config), family_size=family_size)
     family["raw_promote_verdicts"] = sum(
         1 for row in rows if (accrual.get(row["fingerprint"]) or {}).get("verdict") == "promote"
     )
@@ -167,6 +173,9 @@ def load_bursts(connection: sqlite3.Connection) -> Dict[str, List[Dict[str, Any]
 
 
 def load_stage_2_passes(path: Path) -> Set[str]:
+    """Candidates whose newest stage-2 verdict is a pass.  The ledger is
+    append-only in time order, so for the band lane the last band stage-2
+    row per candidate stands."""
     passes: Set[str] = set()
     if not path.is_file():
         return passes
@@ -175,8 +184,15 @@ def load_stage_2_passes(path: Path) -> Set[str]:
             record = json.loads(line)
         except ValueError:
             continue
-        if (record.get("stage"), record.get("verdict")) in STAGE_2_PASSES:
-            passes.add(str(record.get("candidate")))
+        stage, verdict = record.get("stage"), record.get("verdict")
+        candidate = str(record.get("candidate"))
+        if stage in BAND_STAGE_2_STAGES:
+            if verdict in BAND_STAGE_2_PASS_VERDICTS:
+                passes.add(candidate)
+            else:
+                passes.discard(candidate)
+        elif (stage, verdict) in STAGE_2_PASSES:
+            passes.add(candidate)
     return passes
 
 
@@ -399,19 +415,20 @@ def render(report: Mapping[str, Any]) -> str:
         if not family:
             continue
         lines.append(
-            "E-BH FAMILY: lane=%s campaign_n=%s alpha=%s candidates=%d k_star=%d threshold=%s "
+            "E-BH FAMILY: lane=%s campaign_n=%s alpha=%s candidates=%d family=%d k_star=%d threshold=%s "
             "promote=%d raw_promote_verdicts=%d manual_audit=%d%s"
             % (
                 lane,
                 _cell(family["campaign_n"]),
                 family["alpha"],
                 family["candidates"],
+                family["family"],
                 family["k_star"],
                 _cell(family["threshold"]),
                 len(family["promoted"]),
                 family["raw_promote_verdicts"],
                 family["manual_audit"],
-                " OVERFLOW: candidates exceed the pre-registered N" if family["overflow"] else "",
+                " OVERFLOW: the family exceeds the pre-registered N" if family["overflow"] else "",
             )
         )
     return "\n".join(lines)

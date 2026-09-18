@@ -5,6 +5,7 @@ import itertools
 import json
 import math
 from pathlib import Path
+import re
 import sqlite3
 import statistics
 import tempfile
@@ -194,7 +195,7 @@ class BandLaneTest(unittest.TestCase):
             "recent_support": True,
             "recent_above_break_even": True,
         })
-        self.assertAlmostEqual(stage_1["break_even_at_cap"], 0.92 + 0.072 * 0.92 * 0.08)
+        self.assertAlmostEqual(stage_1["break_even_at_cap"], 0.92 + 0.07 * 0.92 * 0.08)
         self.assertEqual(stage_1["by_margin_bucket"]["50-75"]["signals"], 120)
         self.assertEqual(stage_1["by_margin_bucket"]["100-inf"]["signals"], 0)
         self.assertEqual(passing["last_window_start"], BASE_WS + 119 * 300)
@@ -241,7 +242,7 @@ class BandLaneTest(unittest.TestCase):
         survivor = band.evaluate_band_rule(windows(120), prints, LIVE_RULE, GATES, now_ts)
         stage_2 = survivor["stage_2"]
         self.assertEqual(RecordingPrints.reads, 120)
-        even = 0.80 + 0.072 * 0.80 * 0.20
+        even = 0.80 + 0.07 * 0.80 * 0.20
         self.assertEqual((stage_2["entries"], stage_2["wins"]), (60, 60))
         self.assertAlmostEqual(stage_2["mean_break_even"], even)
         self.assertAlmostEqual(stage_2["mean_net_per_usd"], 1.0 / even - 1.0)
@@ -305,6 +306,30 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(band.entry_prints(trades, "up", decision_ts), [[30, 0.80]])
         self.assertEqual(band.entry_prints(trades, "down", decision_ts), [[1, 0.30]])
         self.assertEqual(band.entry_prints(trades[:1], "up", decision_ts), [])
+        # Whole-second stamps on a newest-first tape: within a second the API
+        # lists the later print first, so the first print of that second is
+        # the one listed last (0.94 printed before 0.91).
+        newest_first = [
+            {"side": "BUY", "asset": "up", "timestamp": decision_ts + 2, "price": 0.91},
+            {"side": "BUY", "asset": "up", "timestamp": decision_ts + 2, "price": 0.94},
+            {"side": "BUY", "asset": "up", "timestamp": decision_ts + 1, "price": 0.96},
+        ]
+        self.assertEqual(band.entry_prints(newest_first, "up", decision_ts), [[1, 0.96], [2, 0.94], [2, 0.91]])
+        self.assertEqual(band.entry_print(newest_first, "up", decision_ts), 0.96)
+        self.assertEqual(band.print_entry_price({"status": "ok", "signal": "up", "signal_prints": band.entry_prints(newest_first[:2], "up", decision_ts)}, "up", 0.55, 0.92, "patient"), (0.91, None))
+
+    def test_taker_fee_matches_the_engine_rate(self):
+        # One fee for the tape and the engine: stage-2 gates, the accrual
+        # p0 and the race scores must sit on the rate the live trades pay.
+        source = (ROOT / "rust_engine/src/data/models.rs").read_text()
+        match = re.search(r"DEFAULT_CRYPTO_TAKER_FEE_RATE: f64 = ([0-9.]+);", source)
+        self.assertIsNotNone(match)
+        rate = float(match.group(1))
+        self.assertEqual(rate, 0.07)
+        for price in (0.5, 0.8, 0.92):
+            self.assertAlmostEqual(band.taker_fee(price), rate * price * (1.0 - price), places=12)
+            self.assertAlmostEqual(loop.taker_fee(price), rate * price * (1.0 - price), places=12)
+        self.assertAlmostEqual(band.break_even(0.92), 0.92 + rate * 0.92 * 0.08, places=12)
 
     # --- proposer ------------------------------------------------------------
 
@@ -580,6 +605,7 @@ class BandLaneTest(unittest.TestCase):
                 "signal_entry": 0.80,
                 "signal_prints": [[5, 0.80]],
                 "coverage": {"oldest_offset_s": 185, "pages": 1, "complete": True},
+                "writer_version": band.PRINTS_WRITER_VERSION,
             },
         )
         self.assertEqual(len(prints), 7 * len(band.BAND_DECISION_SECONDS))
@@ -723,7 +749,7 @@ class BandLaneTest(unittest.TestCase):
                 "accruing": 1,
                 "manual_audit": 0,
                 "skipped": 0,
-                "e_bh": {"campaign_n": 64, "candidates": 1, "k_star": 0, "threshold": 1280.0},
+                "e_bh": {"campaign_n": 64, "candidates": 1, "family": 1, "k_star": 0, "threshold": 1280.0, "overflow": False},
             },
         )
         self.assertEqual((after_accrual["n"], after_accrual["wins"]), (10, 10))
@@ -859,12 +885,13 @@ class BandLaneTest(unittest.TestCase):
             seeded.refresh(BASE_WS, now_ts, budget=100)  # 11 settled windows, all covered
             # Three windows regress to the pre-pagination shape: no coverage, one
             # with a print the truncated tape had missed.  A fourth is covered
-            # but predates signal_prints.
+            # but written by an older writer (no signal_prints, no version).
             for ws in stale | {legacy}:
                 for d in band.BAND_DECISION_SECONDS:
                     row = json.loads(seeded.print_path(ws, d).read_text())
                     if ws == legacy:
                         del row["signal_prints"]
+                        del row["writer_version"]
                     else:
                         del row["coverage"]
                     if ws == BASE_WS + 2 * 300:
@@ -879,6 +906,8 @@ class BandLaneTest(unittest.TestCase):
                 return inner(condition_id, window_start)
 
             cache.fetch_trades = counting
+            # limit=0 is the network-free census: the whole backlog is reported.
+            backlog = band.rebuild_prints(self.stub_cache(directory), BASE_WS, now_ts, limit=0)
             first = band.rebuild_prints(cache, BASE_WS, now_ts, workers=2)
             rebuilt_row = json.loads(cache.print_path(BASE_WS + 2 * 300, 240).read_text())
             legacy_row = json.loads(cache.print_path(legacy, 240).read_text())
@@ -886,6 +915,7 @@ class BandLaneTest(unittest.TestCase):
             again = band.rebuild_prints(self.stub_cache(directory), BASE_WS, now_ts)
             bounded = band.rebuild_prints(self.stub_cache(directory), BASE_WS, now_ts, limit=0)
         self.assertEqual(sorted(calls), sorted((stale | {legacy}) - {broken}))
+        self.assertEqual((backlog["pending"], backlog["selected"], backlog["rebuilt"]), (4, 0, 0))
         self.assertEqual(
             first,
             {
@@ -893,6 +923,7 @@ class BandLaneTest(unittest.TestCase):
                 "covered": 7,
                 "unlisted": 0,
                 "pending": 4,
+                "selected": 4,
                 "rebuilt": 3,
                 "changed_windows": 1,
                 "changed_prints": 4,
@@ -903,6 +934,7 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(rebuilt_row["signal_entry"], 0.80)
         self.assertEqual(rebuilt_row["coverage"], {"oldest_offset_s": 185, "pages": 1, "complete": True})
         self.assertEqual(legacy_row["signal_prints"], [[5, 0.80]])
+        self.assertEqual(legacy_row["writer_version"], band.PRINTS_WRITER_VERSION)
         # The failed window keeps its old file and stays pending for the next run.
         self.assertNotIn("coverage", broken_row)
         self.assertEqual((again["covered"], again["pending"], again["rebuilt"], again["errors"]), (10, 1, 1, 0))
@@ -952,13 +984,22 @@ class BandLaneTest(unittest.TestCase):
                     name: json.loads((state_dir / ("evidence/band_mechanisms/%s.pre_pagination.json" % fingerprint)).read_text())
                     for name, fingerprint in fingerprints.items()
                 }
-                # A second pass keeps the original pre-pagination artifact.
-                band.rescore_band_hypotheses(config, ledger, windows, prints, now_ts)
+                # A second pass keeps the original pre-pagination artifact.  Run
+                # three days later on the same (now lagging) cache, the recent
+                # gate is anchored on the cache tail, so the live rule stands.
+                lagged = band.rescore_band_hypotheses(config, ledger, windows, prints, now_ts + 3 * band.DAY_S)
+                status_lagged = ledger.hypothesis(fingerprints["live"])["status"]
+                accrual_lagged = ledger.accrual(fingerprints["live"])
                 backup_again = json.loads((state_dir / ("evidence/band_mechanisms/%s.pre_pagination.json" % fingerprints["live"])).read_text())
             finally:
                 ledger.close()
             trial_rows = [json.loads(line) for line in (state_dir / "trial_ledger.jsonl").read_text().splitlines()]
         self.assertEqual(report["accrual_rows_deleted"], 3)
+        self.assertEqual(report["recent_clock"], BASE_WS + 129 * 300 + band.WINDOW_S + band.RESOLUTION_LAG_S)
+        self.assertEqual(lagged["recent_clock"], report["recent_clock"])
+        self.assertEqual(lagged["accrual_rows_deleted"], 1)
+        self.assertEqual(status_lagged, "stage_2_survivor")
+        self.assertEqual((accrual_lagged["n"], accrual_lagged["last_window_start"]), (0, BASE_WS + 129 * 300))
         self.assertEqual(report["before"], {"promote_candidate": 2, "accruing": 1})
         self.assertEqual(report["after"], {"stage_2_survivor": 1, "rejected_entry_economics": 1, "rejected_signal_screen": 1})
         self.assertEqual((report["survivors_before"], report["survivors_after"]), (3, 1))
@@ -996,6 +1037,57 @@ class BandLaneTest(unittest.TestCase):
             },
         )
         self.assertEqual(sum(1 for row in trial_rows if row["stage"] == "band_rescore_paginated"), 6)
+
+    def test_rescore_leaves_unvisited_hypotheses_whole_when_it_fails_mid_run(self):
+        config = band_config(enabled=True)
+        self.disarm_tripwire()
+        now_ts = BASE_WS + 130 * 300 + 1199
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config["state_dir"] = directory
+            cache = self.stub_cache(directory, price=0.85)
+            cache.refresh(BASE_WS, now_ts, budget=1000)
+            windows = cache.windows(BASE_WS, now_ts)
+            prints = cache.load_prints(windows)
+            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            try:
+                live = band.band_fingerprint(LIVE_RULE)
+                for fingerprint, rule in ((live, LIVE_RULE), ("malformed", {"bad": 1})):
+                    evidence_path = state_dir / ("evidence/band_mechanisms/%s.json" % fingerprint)
+                    band._atomic_write(evidence_path, json.dumps({"window_count": 40}))
+                    ledger.add_hypothesis(fingerprint, "band_mechanisms", proposal(rule), None, "promote_candidate", evidence_path, source="prior")
+                    ledger.accrue(fingerprint, "band_mechanisms", [(BASE_WS + 300 * index, 0.9, True) for index in range(25)])
+                with self.assertRaises(ValueError):
+                    band.rescore_band_hypotheses(config, ledger, windows, prints, now_ts)
+                visited = (ledger.hypothesis(live)["status"], ledger.accrual(live)["n"])
+                unvisited = (ledger.hypothesis("malformed")["status"], ledger.accrual("malformed")["n"])
+            finally:
+                ledger.close()
+        # The visited hypothesis is fully new (re-seeded at n=0); the one the
+        # failure stopped at is fully old: status and e-process both intact,
+        # never a survivor status without an accrual row.
+        self.assertEqual(visited, ("stage_2_survivor", 0))
+        self.assertEqual(unvisited, ("promote_candidate", 25))
+
+    def test_main_resolves_the_runner_config_and_holds_the_cycle_lock(self):
+        self.assertEqual(band.config_path("explicit.json"), Path("explicit.json"))
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            state_dir = Path(directory)
+            config = json.loads((ROOT / "deploy/strategy-research-loop.json").read_text())
+            config["state_dir"] = directory
+            overlay = state_dir / "loop-config.local.json"
+            overlay.write_text(json.dumps(config))
+            with mock.patch.object(band, "OVERLAY_CONFIG", overlay):
+                # The runner's overlay is what the lane accrues under: it wins.
+                self.assertEqual(band.config_path(None), overlay)
+                # A live factory cycle holds the lock: the action fails before
+                # it touches the cache.
+                with loop.CycleLock(state_dir / "locks/cycle.lock"), mock.patch.object(band, "BandCache") as cache_class:
+                    with self.assertRaises(RuntimeError):
+                        band.main(["--rebuild-prints", "--limit", "0"])
+                cache_class.assert_not_called()
+            with mock.patch.object(band, "OVERLAY_CONFIG", state_dir / "absent.json"):
+                self.assertEqual(band.config_path(None), band.DEPLOY_CONFIG)
 
     # --- entry semantics, tripwire, e-BH family, parents ---------------------
 
@@ -1049,6 +1141,58 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(evidence["stage_2"]["entry_semantics"], "patient")
         self.assertEqual(band.lane_entry_semantics({}), "one_look")
         self.assertEqual(band.lane_entry_semantics({"entry_semantics": "patient"}), "patient")
+
+    def test_patient_semantics_fail_closed_on_rows_without_print_lists(self):
+        rows = windows(4)
+        starts = [row["window_start"] for row in rows]
+        listed = {"status": "ok", "signal": "up", "signal_entry": 0.80, "signal_prints": [[1, 0.80]]}
+        prints = {(starts[index], 240): listed for index in (0, 2, 3)}
+        prints[(starts[1], 240)] = {"status": "ok", "signal": "up", "signal_entry": 0.80}
+        scored = band._labelled(rows, band.band_signal_records(rows, LIVE_RULE))
+        gates = {**GATES, "minimum_entries": 1}
+        patient = band.band_entry_economics(scored, prints, LIVE_RULE, gates, "patient")
+        one_look = band.band_entry_economics(scored, prints, LIVE_RULE, gates)
+        # One row predates the print list: stage 2 would otherwise score a
+        # subset of the windows, so the patient verdict fails closed.
+        self.assertEqual((patient["entries"], patient["windows_without_print_list"]), (3, 1))
+        self.assertFalse(patient["gates"]["print_lists_complete"])
+        self.assertFalse(patient["survivor"])
+        # one_look never needs the list: the live lane's artifact shape is unchanged.
+        self.assertEqual(set(patient["gates"]) - set(one_look["gates"]), {"print_lists_complete"})
+        self.assertEqual((one_look["entries"], one_look["windows_without_print_list"]), (4, 0))
+        # Accrual stops at the listless row so its window accrues once rebuilt.
+        self.assertEqual(
+            band.band_accrual_outcomes(rows, prints, LIVE_RULE, -1, "patient"),
+            [(starts[0], band.break_even(0.80), True)],
+        )
+        self.assertEqual(len(band.band_accrual_outcomes(rows, prints, LIVE_RULE, -1)), 4)
+        complete = {**prints, (starts[1], 240): listed}
+        self.assertTrue(band.band_entry_economics(scored, complete, LIVE_RULE, gates, "patient")["gates"]["print_lists_complete"])
+        self.assertEqual(len(band.band_accrual_outcomes(rows, complete, LIVE_RULE, -1, "patient")), 4)
+
+    def test_capped_tape_short_of_the_decision_second_is_uncovered(self):
+        rows = windows(3)
+        starts = [row["window_start"] for row in rows]
+
+        def row(oldest, complete):
+            return {
+                "status": "ok", "signal": "up", "decision_second": 180, "signal_entry": 0.80, "signal_prints": [[1, 0.80]],
+                "coverage": {"oldest_offset_s": oldest, "pages": band.TRADES_MAX_PAGES, "complete": complete},
+            }
+
+        # Eight full pages that stopped after the decision second: the first
+        # print after it may be missing, so the row is not scored.
+        self.assertEqual(band.print_entry_price(row(200, False), "up", 0.55, 0.92), (None, "uncovered"))
+        self.assertEqual(band.print_entry_price(row(200, False), "up", 0.55, 0.92, "patient"), (None, "uncovered"))
+        # Reaching the decision second, or read to the tape's end: scored.
+        self.assertEqual(band.print_entry_price(row(180, False), "up", 0.55, 0.92), (0.80, None))
+        self.assertEqual(band.print_entry_price(row(200, True), "up", 0.55, 0.92), (0.80, None))
+        rule = {**LIVE_RULE, "decision_second": 180}
+        prints = {(starts[0], 180): row(200, False), (starts[1], 180): row(150, False), (starts[2], 180): row(200, True)}
+        scored = band._labelled(rows, band.band_signal_records(rows, rule))
+        stage_2 = band.band_entry_economics(scored, prints, rule, GATES)
+        self.assertEqual((stage_2["entries"], stage_2["uncovered_windows"], stage_2["windows_without_print"]), (2, 1, 0))
+        self.assertEqual([ws for ws, _, _ in band.band_accrual_outcomes(rows, prints, rule, -1)], [starts[1], starts[2]])
 
     def test_tripwire_holds_too_good_survivors_as_manual_audit_until_cleared(self):
         config = band_config(enabled=True, maximum_new_windows_per_cycle=1000, minimum_interval_seconds=0)
@@ -1147,23 +1291,31 @@ class BandLaneTest(unittest.TestCase):
             finally:
                 ledger.close()
         # N=64: 1300 >= 1280 (k=1), 700 >= 640 (k=2), 100 < 426.7 (k=3): k* = 2.
-        # The tripped candidate is out of the family, the kill is futility.
+        # The tripped candidate and the futility kill are out of the running
+        # but still in the family of six e-processes started.
         self.assertEqual(
             registered,
             {
                 "evaluated": 6, "promoted": 2, "killed": 1, "accruing": 2, "manual_audit": 1, "skipped": 0,
-                "e_bh": {"campaign_n": 64, "candidates": 4, "k_star": 2, "threshold": 640.0},
+                "e_bh": {"campaign_n": 64, "candidates": 4, "family": 6, "k_star": 2, "threshold": 640.0, "overflow": False},
             },
         )
         self.assertEqual(
             statuses,
             {"a": "promote_candidate", "b": "promote_candidate", "c": "accruing", "d": "accruing", "held": "manual_audit", "dead": "killed_futility"},
         )
-        # N=4 (registered 2, four candidates): 100 >= 26.7 at k=3.
-        self.assertEqual(overflow["e_bh"], {"campaign_n": 4, "candidates": 4, "k_star": 3, "threshold": 4 / (0.05 * 3)})
+        # N=6 (registered 2; six e-processes started, the killed one keeps its
+        # row, four still running): 100 >= 40 at k=3, flagged as overflow.
+        self.assertEqual(
+            overflow["e_bh"],
+            {"campaign_n": 6, "candidates": 4, "family": 6, "k_star": 3, "threshold": 6 / (0.05 * 3), "overflow": True},
+        )
         self.assertEqual((statuses_overflow["c"], statuses_overflow["d"]), ("promote_candidate", "accruing"))
         # No registered N: the flags lapse; futility and the audit hold stand.
-        self.assertEqual(unregistered["e_bh"], {"campaign_n": None, "candidates": 4, "k_star": 0, "threshold": None})
+        self.assertEqual(
+            unregistered["e_bh"],
+            {"campaign_n": None, "candidates": 4, "family": 6, "k_star": 0, "threshold": None, "overflow": False},
+        )
         self.assertEqual(
             statuses_unregistered,
             {"a": "accruing", "b": "accruing", "c": "accruing", "d": "accruing", "held": "manual_audit", "dead": "killed_futility"},
@@ -1172,7 +1324,7 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(band.campaign_n({"generator": {"campaign_n": 7}, "lanes": {"band_mechanisms": {"campaign_n": 9}}}), 9)
         self.assertIsNone(band.campaign_n({}))
 
-    def test_elite_parents_skip_hamming_1_clones_of_chosen_accruing_elites(self):
+    def test_elite_parents_skip_hamming_1_clones_of_chosen_elites(self):
         def summary(status, wilson_lower, **fields):
             rule = {**LIVE_RULE, **fields}
             return {"rule": band.compact_band_rule(rule), "rule_fields": rule, "status": status, "wilson_lower": wilson_lower}
@@ -1182,10 +1334,13 @@ class BandLaneTest(unittest.TestCase):
         near = summary("rejected_entry_economics", 0.93, favorite_price_floor=0.60)  # H1 of top: skipped
         far = summary("rejected_signal_screen", 0.92, favorite_price_floor=0.60, favorite_price_cap=0.85)  # H2
         beside_far = summary("accruing", 0.91, favorite_price_floor=0.60, favorite_price_cap=0.85, direction="up")
+        other = summary("rejected_entry_economics", 0.90, margin_floor_usd=100, decision_second=180)  # H2 of top, H4 of far
         unscored = summary("accruing", None, margin_floor_usd=75)
-        chosen = band.elite_parents([unscored, clone, far, near, beside_far, top])
-        # A non-elite parent (far) does not fence its neighbours: beside_far stays.
-        self.assertEqual([item["rule"] for item in chosen], [top["rule"], far["rule"], beside_far["rule"]])
+        chosen = band.elite_parents([unscored, clone, far, near, beside_far, other, top])
+        # A rejected parent fences its neighbours too (a lane with nothing
+        # accruing must not present three clones): beside_far is skipped.
+        self.assertEqual([item["rule"] for item in chosen], [top["rule"], far["rule"], other["rule"]])
+        self.assertEqual(band.rule_hamming(far["rule_fields"], beside_far["rule_fields"]), 1)
         self.assertEqual(band.rule_hamming(top["rule_fields"], clone["rule_fields"]), 1)
         self.assertEqual(band.rule_hamming(top["rule_fields"], far["rule_fields"]), 2)
         self.assertEqual(band.rule_hamming(top["rule_fields"], top["rule_fields"]), 0)

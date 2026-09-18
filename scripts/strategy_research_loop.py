@@ -511,8 +511,10 @@ class Ledger:
         ).fetchone()
         return dict(row) if row else None
 
-    def delete_lane_accrual(self, lane: str) -> int:
-        cursor = self.connection.execute("DELETE FROM evidence_accrual WHERE lane = ?", (lane,))
+    def delete_accrual(self, fingerprint: str) -> int:
+        cursor = self.connection.execute(
+            "DELETE FROM evidence_accrual WHERE fingerprint = ?", (fingerprint,)
+        )
         self.connection.commit()
         return int(cursor.rowcount)
 
@@ -4651,8 +4653,9 @@ FRESH_PUBLIC_ACCRUAL_BUCKETS = {"continue": "accruing", "promote": "promoted", "
 
 def taker_fee(price: float) -> float:
     # Copied from scripts/adaptation_persistence_study.py so the loop does not
-    # import a study script for one line.
-    return 0.072 * price * (1.0 - price)
+    # import a study script for one line.  0.07 is the live venue rate the
+    # engine trades at (DEFAULT_CRYPTO_TAKER_FEE_RATE); tests pin the parity.
+    return 0.07 * price * (1.0 - price)
 
 
 def stage_1_screen_cut(evidence: Mapping[str, Any]) -> Optional[int]:

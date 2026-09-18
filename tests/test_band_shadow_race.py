@@ -209,7 +209,7 @@ class BandShadowRaceTest(unittest.TestCase):
     def test_trade_score_matches_band_lane_fee_model(self):
         vwap = 0.7
         even = vwap + band.taker_fee(vwap)
-        self.assertAlmostEqual(even, 0.7 + 0.072 * 0.7 * 0.3, places=12)
+        self.assertAlmostEqual(even, 0.7 + 0.07 * 0.7 * 0.3, places=12)
         fee_per_usd = 1.0 / vwap - 1.0 / even
         self.assertAlmostEqual(race.trade_score(vwap, True), (1.0 / vwap - 1.0) - fee_per_usd, places=12)
         self.assertAlmostEqual(race.trade_score(vwap, True), 1.0 / band.break_even(vwap) - 1.0, places=12)

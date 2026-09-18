@@ -34,7 +34,9 @@
   "risk_notes": [
     "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.",
     "Signal source is the exchange mid (Binance basis per preregistration); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.",
-    "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution."
+    "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution.",
+    "EVIDENCE SCOPE (audit 2026-09-18): trades/win_rate/total_pnl are the same 222 uncapped stage-1 gate rows as band_promotion_v1.json (ask_cap 0.92, source_window 2026-08-19..24) re-priced at fee 0.07 and stake 25. band-promotion-artifact does not apply ask_cap, ask_floor or min_decision_margin_usd, so 0.932 was never measured at cap 0.91.",
+    "RULE-PARITY ARTIFACT, NOT PROMOTION CLEARANCE: break-even at 0.91 with the 0.07 taker fee is 0.9157; of the entry-level Wilson lower bounds in direction memo 2026-09-07 gap 3 (0.921 fresh gate (0.89,0.92], 0.919 multiple-looks, 0.886 stage-2 in-band) only 0.921 clears it, and on the full paginated print tape (2026-08-19..09-08, 5814 windows) the (0.55,0.92] patient entry is 177/204 with lower 0.81 vs break-even 0.85, losses concentrated in (0.55,0.80] 30/49. Do not point POLYMOMENTUM_PROMOTION_ARTIFACT at this file until fresh_gate_public_v1 is re-run at ask_cap 0.91 on the newest fully resolved windows (CLAUDE.md section 6) and the rebuilt artifact's entry-level lower bound clears break-even at its cap (memo step 8)."
   ],
   "promotion_gate": {
     "min_trades": 30,

@@ -292,14 +292,14 @@ class FactoryKpiTest(unittest.TestCase):
         family = report["lanes"]["band_mechanisms"]["e_bh"]
         # Eligible: 2000 (cleared), 1300, 700, 100; N=64: k=3 (700 >= 426.7), k=4 fails.
         self.assertEqual(family["promoted"], ["band-3", "band-0", "band-1"])
-        self.assertEqual((family["campaign_n"], family["candidates"], family["k_star"]), (64, 4, 3))
+        self.assertEqual((family["campaign_n"], family["candidates"], family["family"], family["k_star"]), (64, 4, 6, 3))
         self.assertAlmostEqual(family["threshold"], 64 / (0.05 * 3))
         self.assertEqual((family["raw_promote_verdicts"], family["manual_audit"], family["overflow"]), (5, 1, False))
         llm = report["lanes"]["band_mechanisms"]["sources"]["llm"]
         # Raw promote verdicts outside the discovery set count as accruing.
         self.assertEqual((llm["promote"], llm["accruing"], llm["killed"]), (3, 2, 1))
         self.assertIn(
-            "E-BH FAMILY: lane=band_mechanisms campaign_n=64 alpha=0.05 candidates=4 k_star=3 "
+            "E-BH FAMILY: lane=band_mechanisms campaign_n=64 alpha=0.05 candidates=4 family=6 k_star=3 "
             "threshold=426.667 promote=3 raw_promote_verdicts=5 manual_audit=1",
             text,
         )
@@ -313,6 +313,24 @@ class FactoryKpiTest(unittest.TestCase):
         self.assertIn("campaign_n=- ", text)
         # No overlay: the deploy config's registration applies.
         self.assertEqual(kpi.lane_config(Path("/nonexistent"))["lanes"]["band_mechanisms"]["campaign_n"], 64)
+
+    def test_band_stage_2_passes_follow_the_newest_ledger_verdict(self):
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:
+            path = Path(directory) / "trial_ledger.jsonl"
+            with path.open("w") as handle:
+                for candidate, stage, verdict in (
+                    # A pass on the truncated tape, withdrawn by the paginated rescore.
+                    ("withdrawn", "band_entry_economics", "stage_2_survivor"),
+                    ("withdrawn", "band_rescore_paginated", "rejected_entry_economics"),
+                    # A support rejection re-screened into a pass once the cache grew.
+                    ("rescreened", "band_entry_economics", "rejected_entry_economics"),
+                    ("rescreened", "band_entry_economics", "stage_2_survivor"),
+                    ("held", "band_rescore_paginated", "manual_audit"),
+                    ("screened_out", "band_rescore_paginated", "rejected_signal_screen"),
+                    ("late", "economic_opportunity_screen", "passed"),
+                ):
+                    handle.write(json.dumps({"candidate": candidate, "stage": stage, "verdict": verdict}) + "\n")
+            self.assertEqual(kpi.load_stage_2_passes(path), {"rescreened", "held", "late"})
 
     def test_legacy_ledger_without_source_column_reads_as_legacy(self):
         with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as directory:

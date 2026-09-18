@@ -112,6 +112,10 @@ API_PAUSE_S = 0.12
 TRADES_PAGE_SIZE = 500
 TRADES_MAX_PAGES = 8
 TRADES_COVERAGE_S = 150
+# Every prints row records the writer that produced it; a bump makes
+# --rebuild-prints re-fetch every older row.  2: within-second tie order of
+# entry_prints (rows before 2 held the LAST print of a second as the first).
+PRINTS_WRITER_VERSION = 2
 UNIFORM_CONTROL_ATTEMPTS = 64
 PARENT_LIMIT = 3
 # A support-only rejection is re-scored only after this many new windows
@@ -402,12 +406,17 @@ def entry_prints(
     trades: Sequence[Mapping[str, Any]], token: Optional[str], decision_ts: int
 ) -> List[List[float]]:
     """Public BUY prints of `token` within (decision_ts, decision_ts + 30s] as
-    [seconds after the decision, price] in tape order.
+    [seconds after the decision, price] oldest-first.
 
-    The 1s close at decision_ts is the last trade of that second, so a print
-    stamped decision_ts can precede the signal: it is excluded."""
+    Timestamps are whole seconds and `trades` is the merged newest-first
+    /trades tape, so prints stamped in the same second are ordered by
+    reverse tape position (a larger index is older): the first print of a
+    second is the one the API listed last.  The 1s close at decision_ts is
+    the last trade of that second, so a print stamped decision_ts can
+    precede the signal: it is excluded."""
     prints: List[List[float]] = []
-    for trade in sorted(trades, key=lambda item: int(item.get("timestamp", 0))):
+    ordered = sorted(enumerate(trades), key=lambda item: (int(item[1].get("timestamp", 0)), -item[0]))
+    for _, trade in ordered:
         if trade.get("side") != "BUY" or str(trade.get("asset")) != token:
             continue
         ts = int(trade.get("timestamp", 0))
@@ -508,6 +517,7 @@ class BandCache:
                 "signal_entry": None,
                 "signal_prints": None,
                 "coverage": dict(coverage) if coverage else None,
+                "writer_version": PRINTS_WRITER_VERSION,
             }
             if token_by_name is None:
                 row["status"] = "market_not_found"
@@ -698,11 +708,23 @@ def print_entry_price(
 ) -> Tuple[Optional[float], Optional[str]]:
     """(in-band entry price, rejection) of one cached prints row under
     ENTRY_SEMANTICS.  Rows written before signal_prints was recorded hold
-    only the first print and cannot be scored patiently (no_print_list)."""
+    only the first print and cannot be scored patiently (no_print_list).  A
+    tape that stopped at TRADES_MAX_PAGES before reaching the row's decision
+    second may be missing the first print after it (uncovered)."""
     if semantics not in ENTRY_SEMANTICS:
         raise ValueError("unknown entry semantics %r" % semantics)
     if not cached or cached.get("status") != "ok" or cached.get("signal") != direction:
         return None, "no_print"
+    coverage = cached.get("coverage") or {}
+    oldest = coverage.get("oldest_offset_s")
+    decision_second = cached.get("decision_second")
+    if (
+        not coverage.get("complete")
+        and oldest is not None
+        and decision_second is not None
+        and int(oldest) > int(decision_second)
+    ):
+        return None, "uncovered"
     if semantics == "one_look":
         price = cached.get("signal_entry")
         if price is None:
@@ -723,6 +745,7 @@ _REJECTION_COUNTS = {
     "no_print": "windows_without_print",
     "out_of_band": "out_of_band_prints",
     "no_print_list": "windows_without_print_list",
+    "uncovered": "uncovered_windows",
 }
 
 
@@ -765,6 +788,10 @@ def band_entry_economics(
         "wilson_above_break_even": lower is not None and lower >= float(mean_break_even),
         "positive_mean_net": mean_net is not None and mean_net > 0.0,
     }
+    if semantics == "patient":
+        # A half-rebuilt cache would score only the windows that carry a
+        # print list (a margin-selected subset): fail closed until rebuilt.
+        gate_results["print_lists_complete"] = counts["windows_without_print_list"] == 0
     return {
         "stage": "band_entry_economics",
         "entry_semantics": semantics,
@@ -894,7 +921,10 @@ def band_accrual_outcomes(
 
     Same population as band_entry_economics: windows with a cached public
     print inside the band, at that print's break-even.  A window without a
-    print is not a trade the rule executes, so it carries no evidence."""
+    print is not a trade the rule executes, so it carries no evidence.  A
+    row without a print list (patient semantics on a row the rebuild has
+    not reached) ends the scan: the cut must not move past a window that
+    will hold its prints once rebuilt."""
     decision_second = int(rule["decision_second"])
     floor = float(rule["favorite_price_floor"])
     cap = float(rule["favorite_price_cap"])
@@ -902,9 +932,11 @@ def band_accrual_outcomes(
     for row in _labelled(windows, band_signal_records(windows, rule)):
         if row["window_start"] <= int(after_window_start):
             continue
-        price, _ = print_entry_price(
+        price, rejection = print_entry_price(
             prints.get((row["window_start"], decision_second)), row["direction"], floor, cap, semantics
         )
+        if rejection == "no_print_list":
+            break
         if price is None:
             continue
         outcomes.append((row["window_start"], break_even(price), bool(row["won"])))
@@ -927,11 +959,16 @@ def accrue_band_hypotheses(
         "evaluated": 0, "promoted": 0, "killed": 0, "accruing": 0, "manual_audit": 0, "skipped": 0
     }
     results: List[Tuple[Mapping[str, Any], Dict[str, Any]]] = []
+    # e-BH family: every band candidate that ever started an e-process
+    # (killed and held rows keep theirs), not only those still in the running.
+    family_size = 0
     for hypothesis in ledger.lane_hypotheses(LANE):
-        if hypothesis["status"] not in ACCRUAL_STATUSES:
-            continue
         fingerprint = hypothesis["fingerprint"]
         row = ledger.accrual(fingerprint)
+        if row is not None:
+            family_size += 1
+        if hypothesis["status"] not in ACCRUAL_STATUSES:
+            continue
         if row is None:
             summary["skipped"] += 1
             continue
@@ -955,7 +992,7 @@ def accrue_band_hypotheses(
             lane, hypothesis["fingerprint"], hypothesis["status"], result["verdict"], result["wins"], result["n"]
         )
     }
-    family = evidence_accrual.e_bh(eligible, campaign_n(config))
+    family = evidence_accrual.e_bh(eligible, campaign_n(config), family_size=family_size)
     for hypothesis, result in results:
         fingerprint = hypothesis["fingerprint"]
         if result["verdict"] == "kill":
@@ -970,7 +1007,9 @@ def accrue_band_hypotheses(
             ledger.update_hypothesis_status(fingerprint, status)
         summary["evaluated"] += 1
         summary[bucket] += 1
-    summary["e_bh"] = {key: family[key] for key in ("campaign_n", "candidates", "k_star", "threshold")}
+    summary["e_bh"] = {
+        key: family[key] for key in ("campaign_n", "candidates", "family", "k_star", "threshold", "overflow")
+    }
     return summary
 
 
@@ -1098,19 +1137,18 @@ def rule_hamming(a: Mapping[str, Any], b: Mapping[str, Any]) -> int:
 
 def elite_parents(summaries: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     """Top PARENT_LIMIT parents by stage-1 Wilson lower bound.  A candidate
-    within Hamming 1 of an accruing elite already chosen is skipped: shown a
-    cluster of clones, the sampler re-proposes clones (2026-09-08: 43 of the
-    50 pre-pagination elites were within Hamming 1 of another elite)."""
+    within Hamming 1 of an elite already chosen is skipped whatever that
+    elite's status: shown a cluster of clones, the sampler re-proposes
+    clones (2026-09-08: 43 of the 50 pre-pagination elites were within
+    Hamming 1 of another elite; once the rescore left nothing accruing, the
+    three parents were $100-floor clones of one rule with no band entry)."""
     ranked = sorted(
         (item for item in summaries if item["wilson_lower"] is not None),
         key=lambda item: -float(item["wilson_lower"]),
     )
     chosen: List[Mapping[str, Any]] = []
     for item in ranked:
-        if any(
-            elite["status"] in ACCRUAL_STATUSES and rule_hamming(item["rule_fields"], elite["rule_fields"]) <= 1
-            for elite in chosen
-        ):
+        if any(rule_hamming(item["rule_fields"], elite["rule_fields"]) <= 1 for elite in chosen):
             continue
         chosen.append(item)
         if len(chosen) == PARENT_LIMIT:
@@ -1459,9 +1497,11 @@ def rebuild_prints(
     progress: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Rebuild the prints of every settled window from start_ts whose tape is
-    not covered (print_covered) or predates signal_prints; resumable because
-    current windows are skipped.  short_tapes counts windows still short of
-    TRADES_COVERAGE_S after TRADES_MAX_PAGES pages."""
+    not covered (print_covered) or was written by an older writer than
+    PRINTS_WRITER_VERSION; resumable because current windows are skipped.
+    `pending` is the whole backlog, `selected` what this run fetches after
+    --limit.  short_tapes counts windows still short of TRADES_COVERAGE_S
+    after TRADES_MAX_PAGES pages."""
     last = last_eligible_window_start(now_ts)
     cache.load_closes(start_ts, last + max(BAND_DECISION_SECONDS), now_ts, fetch=False)
     summary = {
@@ -1469,6 +1509,7 @@ def rebuild_prints(
         "covered": 0,
         "unlisted": 0,
         "pending": 0,
+        "selected": 0,
         "rebuilt": 0,
         "changed_windows": 0,
         "changed_prints": 0,
@@ -1483,13 +1524,14 @@ def rebuild_prints(
         rows = cache.read_prints(window_start)
         if any(row.get("status") == "market_not_found" for row in rows.values()):
             summary["unlisted"] += 1
-        elif all(print_covered(row) and "signal_prints" in row for row in rows.values()):
+        elif all(print_covered(row) and row.get("writer_version") == PRINTS_WRITER_VERSION for row in rows.values()):
             summary["covered"] += 1
         else:
             pending.append(window_start)
+    summary["pending"] = len(pending)
     if limit is not None:
         pending = pending[: max(0, int(limit))]
-    summary["pending"] = len(pending)
+    summary["selected"] = len(pending)
     with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
         for index, result in enumerate(pool.map(lambda ws: rebuild_window_prints(cache, ws), pending), 1):
             if "error" in result:
@@ -1527,19 +1569,27 @@ def rescore_band_hypotheses(
 
     Each evidence artifact is rewritten (the truncated-tape version is kept
     as <fingerprint>.pre_pagination.json), hypotheses.status follows the
-    fresh verdict, every band accrual row is deleted (its windows were
-    scored on the truncated tape) and survivors are re-seeded at their
+    fresh verdict, the hypothesis's accrual row is deleted as it is
+    re-decided (its windows were scored on the truncated tape; per
+    hypothesis, so an exception mid-run leaves every other hypothesis
+    either fully old or fully new) and survivors are re-seeded at their
     newest scored window, so promote flags earned on the old tape are
-    withdrawn.  One trial-ledger row per hypothesis, stage
-    band_rescore_paginated (n/wins from stage 2 when it ran, else stage 1)."""
+    withdrawn.  The recent-window gate runs on the cache's own clock (the
+    newest window plus the resolution lag), not wall-clock time, so a cache
+    that lags behind does not fail borderline rules for data lag.  One
+    trial-ledger row per hypothesis, stage band_rescore_paginated (n/wins
+    from stage 2 when it ran, else stage 1)."""
     lane = (config.get("lanes") or {}).get(LANE) or {}
+    if windows:
+        now_ts = int(windows[-1]["window_start"]) + WINDOW_S + RESOLUTION_LAG_S
     rows = ledger.lane_hypotheses(LANE)
     before = Counter(row["status"] for row in rows)
     transitions: Counter = Counter()
     report: Dict[str, Any] = {
         "hypotheses": len(rows),
         "window_count": len(windows),
-        "accrual_rows_deleted": ledger.delete_lane_accrual(LANE),
+        "recent_clock": int(now_ts),
+        "accrual_rows_deleted": 0,
         "before": dict(before),
         "former_promote_candidates": [],
         "skipped_without_evidence": 0,
@@ -1588,6 +1638,7 @@ def rescore_band_hypotheses(
             n=stage_2["entries"] if stage_2 else stage_1["overall"]["signals"],
             wins=stage_2["wins"] if stage_2 else stage_1["overall"]["wins"],
         )
+        report["accrual_rows_deleted"] += ledger.delete_accrual(fingerprint)
         if status != hypothesis["status"]:
             ledger.update_hypothesis_status(fingerprint, status)
         if status in ("stage_2_survivor", "manual_audit"):
@@ -1628,12 +1679,29 @@ def _load_loop_module() -> Any:
     return module
 
 
+OVERLAY_CONFIG = ROOT / "logs/strategy-research/loop-config.local.json"
+DEPLOY_CONFIG = ROOT / "deploy/strategy-research-loop.json"
+
+
+def config_path(explicit: Optional[str]) -> Path:
+    """The runner's overlay when present (the config the lane accrues
+    under), else the fail-closed deploy config: factory_kpi's precedence."""
+    if explicit:
+        return Path(explicit)
+    return OVERLAY_CONFIG if OVERLAY_CONFIG.is_file() else DEPLOY_CONFIG
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     global API_PAUSE_S
     parser = argparse.ArgumentParser(
-        description="Band lane maintenance; stop deploy/factory-runner.sh before running either action."
+        description="Band lane maintenance; stop deploy/factory-runner.sh before running either action "
+        "(both hold the cycle lock, so a live cycle makes them fail loudly)."
     )
-    parser.add_argument("--config", default=str(ROOT / "deploy/strategy-research-loop.json"))
+    parser.add_argument(
+        "--config",
+        help="default: the runner's overlay %s when present, else %s"
+        % (OVERLAY_CONFIG.relative_to(ROOT), DEPLOY_CONFIG.relative_to(ROOT)),
+    )
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument(
         "--rebuild-prints",
@@ -1650,36 +1718,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--pause", type=float, default=API_PAUSE_S, help="seconds between API requests per worker")
     parser.add_argument("--limit", type=int, help="rebuild at most this many windows")
     args = parser.parse_args(argv)
-    config = json.loads(Path(args.config).read_text())
+    loop = _load_loop_module()
+    path = config_path(args.config)
+    config = loop.load_config(path)
     lane = config["lanes"][LANE]
+    state_dir = Path(str(config["state_dir"]))
+    if not state_dir.is_absolute():
+        state_dir = ROOT / state_dir
     start_ts = int(lane["start_ts"] if args.start_ts is None else args.start_ts)
     now_ts = int(time.time())
     API_PAUSE_S = float(args.pause)
-    cache = BandCache()
-    if args.rebuild_prints:
-        report = rebuild_prints(
-            cache,
-            start_ts,
-            now_ts,
-            args.workers,
-            args.limit,
-            progress=lambda line: print("%s %s" % (_utc_now(), line), file=sys.stderr, flush=True),
-        )
-    else:
-        loop = _load_loop_module()
-        state_dir = Path(str(config["state_dir"]))
-        if not state_dir.is_absolute():
-            state_dir = ROOT / state_dir
-        cache.load_closes(
-            start_ts, last_eligible_window_start(now_ts) + max(BAND_DECISION_SECONDS), now_ts, fetch=False
-        )
-        windows = cache.windows(start_ts, now_ts)
-        ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
-        try:
-            with loop.CycleLock(state_dir / "locks/cycle.lock"):
+    with loop.CycleLock(state_dir / "locks/cycle.lock"):
+        cache = BandCache()
+        if args.rebuild_prints:
+            report = rebuild_prints(
+                cache,
+                start_ts,
+                now_ts,
+                args.workers,
+                args.limit,
+                progress=lambda line: print("%s %s" % (_utc_now(), line), file=sys.stderr, flush=True),
+            )
+        else:
+            cache.load_closes(
+                start_ts, last_eligible_window_start(now_ts) + max(BAND_DECISION_SECONDS), now_ts, fetch=False
+            )
+            windows = cache.windows(start_ts, now_ts)
+            ledger = loop.Ledger(state_dir / "research.sqlite3", config["generator"])
+            try:
                 report = rescore_band_hypotheses(config, ledger, windows, cache.load_prints(windows), now_ts)
-        finally:
-            ledger.close()
+            finally:
+                ledger.close()
+    report.update({"config": str(path), "entry_semantics": lane_entry_semantics(lane)})
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

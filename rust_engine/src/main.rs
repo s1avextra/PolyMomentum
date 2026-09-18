@@ -6657,10 +6657,32 @@ fn cmd_band_promotion_artifact(
         .and_then(|v| v.as_array())
         .context("gate artifact rows missing")?;
     anyhow::ensure!(!rows.is_empty(), "gate artifact has no rows");
+    // The evidence is the rows the policy would have taken: entries outside
+    // (ask_floor, ask_cap] are the gate's, not this rule's (a cap-0.91
+    // artifact scored on (0.91, 0.92] rows carried trades it never takes).
+    // Rows without an entry price stay so the check below reports them.
+    let gate_rows = rows.len();
+    let rows: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| {
+            !row.get("signal_entry")
+                .and_then(|v| v.as_f64())
+                .is_some_and(|entry| entry <= params.ask_floor || entry > params.ask_cap)
+        })
+        .collect();
+    let promotion_gate = PromotionGate::default();
+    anyhow::ensure!(
+        rows.len() >= promotion_gate.min_trades,
+        "{} of {gate_rows} gate rows fall in the policy's ask band ({}, {}]; the gate needs {}",
+        rows.len(),
+        params.ask_floor,
+        params.ask_cap,
+        promotion_gate.min_trades
+    );
     let mut wins = 0usize;
     let mut total_pnl = 0.0f64;
     let mut total_fees = 0.0f64;
-    for row in rows {
+    for row in &rows {
         let entry = row
             .get("signal_entry")
             .and_then(|v| v.as_f64())
@@ -6733,10 +6755,11 @@ fn cmd_band_promotion_artifact(
         dominant_zone_trade_share: Some(1.0),
         risk_notes: vec![
             "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.".to_string(),
-            "Signal source is the exchange mid (Binance basis per preregistration); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.".to_string(),
+            "Signal source is Binance's own tick series at the window open and the decision instant (the basis the margin studies sampled; the composite exchange mid is recorded but never traded); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.".to_string(),
             "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution.".to_string(),
+            format!("Evidence rows are the gate rows with signal_entry in ({}, {}], the policy's ask band: {trades} of {gate_rows}.", params.ask_floor, params.ask_cap),
         ],
-        promotion_gate: PromotionGate::default(),
+        promotion_gate,
         robust_diagnostics: None,
     };
     polymomentum_engine::backtest::experiment::write_promotion_atomic(output, &artifact)?;
@@ -6745,6 +6768,7 @@ fn cmd_band_promotion_artifact(
         serde_json::json!({
             "output": output,
             "params_hash": artifact.selected_strategy.params_hash,
+            "gate_rows": gate_rows,
             "trades": trades,
             "win_rate": win_rate,
             "total_pnl": total_pnl,

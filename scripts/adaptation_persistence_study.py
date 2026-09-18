@@ -99,7 +99,11 @@ def twap(opens: dict[int, float], start: int, end: int) -> float | None:
 
 
 def taker_fee(price: float) -> float:
-    return 0.072 * price * (1.0 - price)
+    # Per-share taker fee at the live venue rate the engine trades at
+    # (rust_engine DEFAULT_CRYPTO_TAKER_FEE_RATE = 0.07; was 0.072 until
+    # 2026-09-18, a constant conservative offset the factory did not share
+    # with the engine).  tests/test_band_lane.py pins the parity.
+    return 0.07 * price * (1.0 - price)
 
 
 def study_window(ws: int, opens: dict[int, float], pause_s: float) -> dict | None:

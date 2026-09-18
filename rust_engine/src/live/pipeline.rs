@@ -339,6 +339,15 @@ fn pending_resolution_exposure(entry: &OraclePending) -> f64 {
     }
 }
 
+/// Shares the band sub-book settles for a resolved entry: the book's own
+/// fill first, then the fill size persisted with the pending entry, and
+/// only then the process-local trade_log ring (0 after a restart).
+fn settled_band_qty(book_fill: Option<f64>, pending_size: Option<f64>, ring_size: f64) -> f64 {
+    book_fill
+        .or(pending_size.filter(|s| *s > 0.0))
+        .unwrap_or(ring_size)
+}
+
 fn pending_requires_realization(entry: &OraclePending) -> bool {
     if entry.pnl_recorded {
         return false;
@@ -527,10 +536,11 @@ pub struct BandPolicyParams {
     pub ask_floor: f64,
     /// Inclusive upper bound; enforced on the FOK worst price, which is
     /// stricter than the replay's average-price bound. Break-even at the
-    /// 0.07 taker fee is 0.9063 at 0.90 and 0.9252 at 0.92; the entry-level
-    /// Wilson lower bounds measured so far (0.886-0.921) clear 0.91 and not
-    /// 0.92, so `band_policy_margin50_cap91.json` pins 0.91 (direction memo
-    /// 2026-09-07, gap 3).
+    /// 0.07 taker fee is 0.9063 at 0.90, 0.9157 at 0.91 and 0.9252 at 0.92;
+    /// of the entry-level Wilson lower bounds measured so far (0.886, 0.919,
+    /// 0.921) only 0.921 clears 0.9157 and none clears 0.9252, so
+    /// `band_policy_margin50_cap91.json` pins 0.91 as the largest cap any
+    /// measured bound clears (direction memo 2026-09-07, gap 3).
     pub ask_cap: f64,
     /// Upper cap on the per-trade stake in USD.
     pub stake_usd: f64,
@@ -990,9 +1000,13 @@ pub struct Pipeline {
     /// band sizing and the cumulative money floor. Position/exposure
     /// accounting and the breaker session stats stay on v1 in both modes.
     risk_book_v2: bool,
-    /// v2 band equity at process start in micro-USD (u64::MAX = unset):
-    /// the money floor's base under v2 (meta `v2_session_start_equity`).
-    v2_session_start_equity_micro: std::sync::atomic::AtomicU64,
+    /// The money floor's base under v2 in micro-USD (u64::MAX = unset):
+    /// the band equity at the cross-restart ledger's origin (meta
+    /// `v2_floor_base_equity`, set when the ledger is fresh and kept while
+    /// it accumulates, so a restart after a partial drawdown does not
+    /// shrink the floor), lowered by wallet withdrawals, never raised by
+    /// deposits (only the ledger post-mortem re-bases).
+    v2_floor_base_micro: std::sync::atomic::AtomicU64,
     /// v2 wallet reconciliation state (see `reconcile_v2_wallet`).
     v2_reconcile: Mutex<WalletReconcile>,
     breaker_tripped_at_s: Mutex<Option<i64>>,
@@ -1073,7 +1087,13 @@ impl Pipeline {
         }
 
         let monitor = Arc::new(SessionMonitor::open(&settings.session_log_dir)?);
-        let alerter = Alerter::from_env();
+        // Unit tests build live pipelines through the trip and held-restart
+        // paths, which notify: never from the process environment there.
+        let alerter = if cfg!(test) {
+            Alerter::disabled()
+        } else {
+            Alerter::from_env()
+        };
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
         let breaker_cfg = if runtime_strategy.band.is_some() {
@@ -1345,27 +1365,6 @@ impl Pipeline {
         if matches!(mode, Mode::Live) && !matches!(settings.risk_book.as_str(), "v1" | "v2") {
             bail!("RISK_BOOK must be v1 or v2 (got {:?})", settings.risk_book);
         }
-        let v2_session_start_equity = if risk_book_v2 {
-            let Some(book) = book_v2.as_ref() else {
-                bail!(
-                    "RISK_BOOK=v2: book_v2.db unavailable; cannot size on the wallet-anchored book"
-                );
-            };
-            if book.is_empty().await? && seed_book_v2_from_wallet(book, &settings).await.is_none() {
-                bail!("RISK_BOOK=v2: book_v2 is empty and the wallet is unreadable; cannot seed");
-            }
-            let equity = book.equity_for("band").await?;
-            risk.set_meta("v2_session_start_equity", &format!("{equity:.6}"))
-                .await?;
-            tracing::info!(
-                equity,
-                "risk_book v2 drives band sizing and the money floor"
-            );
-            Some(equity)
-        } else {
-            None
-        };
-
         // Cross-restart live loss ledger: prior-session cumulative realized
         // PnL. Checked together with current-session breaker PnL so live
         // losses cannot be laundered by restarting the process.
@@ -1374,10 +1373,82 @@ impl Pipeline {
             .await?
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
+        let v2_floor_base = if risk_book_v2 {
+            let Some(book) = book_v2.as_ref() else {
+                bail!(
+                    "RISK_BOOK=v2: book_v2.db unavailable; cannot size on the wallet-anchored book"
+                );
+            };
+            if book.is_empty().await? {
+                if seed_book_v2_from_wallet(book, &settings).await.is_none() {
+                    bail!("RISK_BOOK=v2: book_v2 is empty and the wallet is unreadable; cannot seed");
+                }
+            } else {
+                // The wallet may have moved while the process was down (a
+                // withdrawal, a purged FOK that filled on-chain, the funding
+                // the resume procedure calls for): the book follows it now,
+                // ahead of the session-start snapshot, or the floor base
+                // and the first readings' sizing would be a stale book's.
+                // An unreadable wallet leaves the book standing (the live
+                // preflight read the wallet seconds ago).
+                match read_wallet_pusd(&settings).await {
+                    Some(pusd) if pusd > 0.0 => {
+                        let equity = book.equity_for("band").await?;
+                        let diff = pusd - equity;
+                        if diff.abs() > settings.risk_book_reconcile_tolerance_usd {
+                            let posted =
+                                post_wallet_adjustment(book, diff, pusd, "wallet_reconcile_start")
+                                    .await;
+                            tracing::warn!(
+                                wallet = pusd,
+                                book = equity,
+                                adjustment = diff,
+                                posted,
+                                "book_v2 wallet_reconcile at start: band sub-book follows the wallet"
+                            );
+                        }
+                    }
+                    _ => tracing::warn!(
+                        "book_v2 start: wallet unreadable or empty; session-start equity is the book's"
+                    ),
+                }
+            }
+            let equity = book.equity_for("band").await?;
+            risk.set_meta("v2_session_start_equity", &format!("{equity:.6}"))
+                .await?;
+            // The floor's base is the equity at the ledger's origin: taken
+            // when the ledger is fresh (absent or zero: the operator's
+            // post-mortem reset, or the first v2 start), kept while it
+            // accumulates. Re-reading the drawn-down equity on every restart
+            // would compare losses against a base that already excludes
+            // them (a benign restart after losing 19 of 50 read a floor of
+            // -18.6 and blocked the start).
+            let ledger_fresh = live_loss_ledger_prior.abs() <= 1e-9;
+            let base = match risk
+                .get_meta("v2_floor_base_equity")
+                .await?
+                .and_then(|s| s.parse::<f64>().ok())
+            {
+                Some(base) if !ledger_fresh => base,
+                _ => {
+                    risk.set_meta("v2_floor_base_equity", &format!("{equity:.6}"))
+                        .await?;
+                    equity
+                }
+            };
+            tracing::info!(
+                equity,
+                floor_base = base,
+                "risk_book v2 drives band sizing and the money floor"
+            );
+            Some(base)
+        } else {
+            None
+        };
         if mode == Mode::Live {
             let cap_pct = settings.candle_live_max_cumulative_loss_pct;
-            let bankroll_floor = match v2_session_start_equity {
-                Some(equity) => equity.max(1.0),
+            let bankroll_floor = match v2_floor_base {
+                Some(base) => base.max(1.0),
                 None => risk.initial_bankroll().await.max(1.0),
             };
             if cap_pct > 0.0 && live_loss_ledger_prior <= -cap_pct * bankroll_floor {
@@ -1474,8 +1545,8 @@ impl Pipeline {
             trade_log: Mutex::new(std::collections::VecDeque::new()),
             book_v2,
             risk_book_v2,
-            v2_session_start_equity_micro: std::sync::atomic::AtomicU64::new(
-                v2_session_start_equity.map_or(u64::MAX, usd_to_micro),
+            v2_floor_base_micro: std::sync::atomic::AtomicU64::new(
+                v2_floor_base.map_or(u64::MAX, usd_to_micro),
             ),
             v2_reconcile: Mutex::new(WalletReconcile::default()),
             breaker_tripped_at_s: Mutex::new(breaker_tripped_at_s),
@@ -3754,6 +3825,16 @@ impl Pipeline {
             return;
         };
         let cid = c.market.condition_id.as_str();
+        // Parity with the latch: an anchor whose Binance sample is not final
+        // yet waits, uncaptured, for the covering tick the latch waits for
+        // (the deferral bound sits inside the capture span), so the decision
+        // anchor and the decision read the same series.
+        if anchors
+            .iter()
+            .any(|&a| elapsed_s >= a && binance_sample_pending(ps, open_ts + a, a, elapsed_s))
+        {
+            return;
+        }
         let due = {
             let mut seen = self.band_anchor_logged.lock().await;
             let due = due_band_anchors(&mut seen, anchors, cid, elapsed_s);
@@ -3894,6 +3975,20 @@ impl Pipeline {
         if self.band_latch.lock().await.contains_key(cid) {
             return;
         }
+        let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
+        let decision_ts = open_ts + band.decision_seconds;
+        // Binance's tick at or before the decision instant is final only
+        // once a tick at or after it has arrived (one in-order stream). The
+        // ticker runs at 1 Hz and the first in-window cycle lands ~50-100 ms
+        // after the instant, so on ordinary feed latency that tick is still
+        // in flight and the look would read the tick one second older,
+        // labelled basis=binance. While the sample is pending the look
+        // waits (`binance_sample_pending`: bounded, inside the missed
+        // tolerance, so a stalled ticker still decides on what it has - at
+        // or before the instant, never a later look).
+        if binance_sample_pending(ps, decision_ts, band.decision_seconds, elapsed_s) {
+            return;
+        }
 
         // The band's signal basis is Binance's own tick series on both ends
         // of the sign comparison - the instrument the mechanism was
@@ -3908,7 +4003,6 @@ impl Pipeline {
         // window: chainlink-basis "up" vs Binance-basis+official "down").
         // The settlement-alignment attestation governs the legacy candle
         // path only; the band ignores it by design.
-        let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
         // Composite window open via the shared per-window store (the
         // fallback basis; the anchor capture reads the same store).
         let composite_open = {
@@ -3929,12 +4023,7 @@ impl Pipeline {
             }
             det.get_open_price(cid)
         };
-        let (basis, open_price, btc) = band_basis_prices(
-            ps,
-            open_ts,
-            open_ts + band.decision_seconds,
-            composite_open,
-        );
+        let (basis, open_price, btc) = band_basis_prices(ps, open_ts, decision_ts, composite_open);
         let latch = band_latch_decision(band, elapsed_s, open_price, btc, basis);
         {
             let now_s = now.timestamp();
@@ -4019,6 +4108,21 @@ impl Pipeline {
             }) => (direction, open, btc, basis),
             Some(BandLatch::NoSignal(_)) | None => return Ok(false),
         };
+        // Money moves on the validated instrument only. A window decided on
+        // the composite fallback keeps its latch, detail and anchor for the
+        // race but is never traded: the composite mid flipped the $50 floor
+        // against Binance in 8/204 windows, both live losses among them
+        // (direction memo 2026-09-07, gap 2), and a degraded-feed sample is
+        // not the series the rule was validated on.
+        if basis != "binance" {
+            self.band_skip_with_detail(
+                cid,
+                "band_basis_unvalidated",
+                format!("basis={basis} open={open_price:.2} btc={decision_btc:.2}"),
+            )
+            .await;
+            return Ok(false);
+        }
         if self
             .venue_incident
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -4123,6 +4227,8 @@ impl Pipeline {
                 "sizing",
                 serde_json::json!({
                     "cid": short_cid(&c.market.condition_id),
+                    // Which book `equity` (and so `v1_stake`) came from.
+                    "risk_book": if self.risk_book_v2 { "v2" } else { "v1" },
                     "favorite_price": up_price.max(down_price),
                     "equity": bankroll,
                     "v1_stake": estimated_position,
@@ -5204,12 +5310,13 @@ impl Pipeline {
             let mut to_remove: Vec<String> = Vec::new();
             let parked = *self.breaker_tripped.lock().await;
             for (cid, mut entry) in pending {
-                // A timed-out entry has recorded its error and tripped the
-                // breaker; while parked it waits for the operator instead of
-                // being re-queried every pass (which re-recorded the error
-                // ~1440x/day per stuck entry across a multi-day hold). The
-                // first pass after /start re-tries and, still unresolved,
-                // re-trips.
+                // A timed-out entry, or one whose realization tripped, has
+                // recorded its error and tripped the breaker (the trip sites
+                // exhaust `attempts`); while parked it waits for the operator
+                // instead of being re-queried every pass (which re-recorded
+                // the error ~1440x/day per stuck entry across a multi-day
+                // hold). The first pass after /start re-tries and, still
+                // failing, re-trips.
                 if parked && entry.attempts >= MAX_ATTEMPTS {
                     continue;
                 }
@@ -5271,6 +5378,7 @@ impl Pipeline {
                                             false,
                                         );
                                         self.trip_breaker("oracle_pnl_correction_failed").await;
+                                        entry.attempts = entry.attempts.max(MAX_ATTEMPTS);
                                         self.oracle_pending.lock().await.insert(cid, entry);
                                         continue;
                                     } else {
@@ -5304,6 +5412,7 @@ impl Pipeline {
                                 self.monitor
                                     .record_error("oracle_pnl_realization", &msg, false);
                                 self.trip_breaker("oracle_pnl_realization_failed").await;
+                                entry.attempts = entry.attempts.max(MAX_ATTEMPTS);
                                 self.oracle_pending.lock().await.insert(cid, entry);
                                 continue;
                             } else {
@@ -5337,7 +5446,17 @@ impl Pipeline {
                                     }
                                 };
                                 if let Some(book) = &self.book_v2 {
-                                    let payout = if final_won { settled_qty } else { 0.0 };
+                                    // The book's own fill is the durable
+                                    // record; the trade_log ring is
+                                    // process-local (empty after a restart)
+                                    // and once settled a win at payout 0
+                                    // under the permanent key.
+                                    let band_qty = settled_band_qty(
+                                        book.fill_qty("band", &cid).await.ok().flatten(),
+                                        entry.size,
+                                        settled_qty,
+                                    );
+                                    let payout = if final_won { band_qty } else { 0.0 };
                                     let _ = book
                                         .post(
                                             nonzero_ts_or_now(0.0),
@@ -5345,7 +5464,7 @@ impl Pipeline {
                                             "band",
                                             &cid,
                                             payout,
-                                            settled_qty,
+                                            band_qty,
                                             0.0,
                                             if final_won { "won" } else { "lost" },
                                             &format!("{cid}::settle"),
@@ -5427,6 +5546,7 @@ impl Pipeline {
                             self.monitor
                                 .record_error("oracle_pnl_missing_fields", &msg, false);
                             self.trip_breaker("oracle_pnl_missing_fields").await;
+                            entry.attempts = entry.attempts.max(MAX_ATTEMPTS);
                             self.oracle_pending.lock().await.insert(cid, entry);
                             continue;
                         } else if agreed {
@@ -6156,13 +6276,13 @@ impl Pipeline {
     }
 
     /// Base for the breaker's bankroll-relative rules and the cumulative
-    /// money floor: under RISK_BOOK=v2 the v2 band equity at session start
-    /// (wallet-anchored; `v2_session_start_equity` meta), else the v1
+    /// money floor: under RISK_BOOK=v2 the band equity at the ledger's
+    /// origin (wallet-anchored; `v2_floor_base_micro`), else the v1
     /// baseline (BANKROLL_USD pinned, actualized on restart).
     async fn breaker_bankroll(&self) -> f64 {
         if self.risk_book_v2 {
             let micro = self
-                .v2_session_start_equity_micro
+                .v2_floor_base_micro
                 .load(std::sync::atomic::Ordering::Relaxed);
             if micro == u64::MAX {
                 1.0
@@ -6198,29 +6318,36 @@ impl Pipeline {
             self.settings.risk_book_drift_halt_usd,
         );
         match action {
-            ReconcileAction::Adjust => {
-                let ts = nonzero_ts_or_now(0.0);
-                let posted = book
-                    .post(
-                        ts,
-                        crate::risk::book_v2::PostingKind::Adjustment,
-                        "band",
-                        "",
-                        diff,
-                        0.0,
-                        0.0,
-                        "wallet_reconcile",
-                        // One posting per (second, wallet reading): a replay
-                        // of the same reading is a no-op, a new reading in
-                        // the same second is a new event.
-                        &format!("wallet_reconcile::{}::{}", ts as i64, usd_to_micro(pusd)),
-                    )
-                    .await;
+            ReconcileAction::Adjust | ReconcileAction::Reverse => {
+                let posted = post_wallet_adjustment(book, diff, pusd, "wallet_reconcile").await;
+                // Money that left the wallet is no longer at risk: a
+                // withdrawal (or an untracked loss) lowers the floor's
+                // base by the same amount. A deposit never raises it -
+                // only the ledger post-mortem re-bases. A reversal gives
+                // back what the reversed adjustment took (a lagged redeem
+                // is not a withdrawal) and never raises it otherwise.
+                let base_delta = match action {
+                    ReconcileAction::Adjust if diff < 0.0 => diff,
+                    ReconcileAction::Reverse if diff > 0.0 => diff,
+                    _ => 0.0,
+                };
+                if base_delta != 0.0 {
+                    let base = (self.breaker_bankroll().await + base_delta).max(0.0);
+                    self.v2_floor_base_micro
+                        .store(usd_to_micro(base), std::sync::atomic::Ordering::Relaxed);
+                    if let Err(e) = self
+                        .risk
+                        .set_meta("v2_floor_base_equity", &format!("{base:.6}"))
+                        .await
+                    {
+                        tracing::warn!(error = %e, "persist v2 floor base failed");
+                    }
+                }
                 tracing::warn!(
                     wallet = pusd,
                     book = equity,
                     adjustment = diff,
-                    posted = ?posted,
+                    posted,
                     "book_v2 wallet_reconcile: band sub-book follows the wallet"
                 );
                 self.monitor.record_v2_shadow(
@@ -6229,7 +6356,7 @@ impl Pipeline {
                         "wallet": pusd,
                         "book": equity,
                         "adjustment": diff,
-                        "posted": posted.unwrap_or(false),
+                        "posted": posted,
                     }),
                 );
                 self.alerter
@@ -6472,6 +6599,27 @@ enum BandLatch {
 /// validated on.
 const BAND_DECISION_TOLERANCE_S: f64 = 2.0;
 
+/// How long past the decision second the look may wait for Binance's tick
+/// at or after the instant (which makes the at-or-before sample final);
+/// under the missed tolerance so the bounded look still lands in time.
+/// The sample itself never moves: it is the tick at or before the instant.
+const BAND_DECISION_DEFER_S: f64 = 1.0;
+
+/// True while Binance's sample at `instant_s` is not final: the feed is
+/// live there (a tick within the basis tolerance at or before it) but no
+/// tick at or after it has arrived yet, and `elapsed_s` is still inside the
+/// deferral bound after `anchor_s` (the window second the instant belongs
+/// to). A dead or stalled feed never defers.
+fn binance_sample_pending(ps: &PriceState, instant_s: f64, anchor_s: f64, elapsed_s: f64) -> bool {
+    elapsed_s < anchor_s + BAND_DECISION_DEFER_S
+        && ps
+            .source_price_at_or_before("binance", instant_s, BAND_BASIS_TOLERANCE_S)
+            .is_some()
+        && !ps
+            .source_latest_ts("binance")
+            .is_some_and(|ts| ts >= instant_s)
+}
+
 /// The band's ONE look at the decision second. The rule was validated on a
 /// single sample per window, |close(open + decision_s) - open| >= floor,
 /// while re-reading the mid every cycle across the entry window and firing
@@ -6696,20 +6844,67 @@ pub fn book_v2_path(settings: &Settings) -> PathBuf {
 /// 2026-09-01: v2 opened $6.27 under chain). Both sub-books get the SAME
 /// opening balance at the SAME instant so their curves differ only by
 /// policy. Returns the opening balance, None when the wallet is unreadable.
+/// The funder wallet's pUSD, None when the reader or the RPC fails.
+async fn read_wallet_pusd(settings: &Settings) -> Option<f64> {
+    Some(
+        crate::data::wallet::WalletReader::for_funder(
+            &settings.polygon_rpc_url,
+            &settings.private_key,
+            &settings.poly_funder,
+        )
+        .ok()?
+        .fetch_balances()
+        .await
+        .ok()?
+        .pusd,
+    )
+}
+
+/// One `adjustment` posting per sub-book bringing the band book to the
+/// wallet by `diff`; the kelly sim receives the same deposit/withdrawal so
+/// the two curves keep differing by policy only. One posting per (note,
+/// second, wallet reading): a replay of the same reading is a no-op, a new
+/// reading in the same second is a new event. Returns whether the band
+/// posting was new.
+async fn post_wallet_adjustment(
+    book: &crate::risk::book_v2::BookV2,
+    diff: f64,
+    pusd: f64,
+    note: &str,
+) -> bool {
+    let ts = nonzero_ts_or_now(0.0);
+    let key = format!("{note}::{}::{}", ts as i64, usd_to_micro(pusd));
+    let mut posted = false;
+    for (strategy, key) in [
+        ("band", key.clone()),
+        (crate::risk::book_v2::KELLY_SIM_STRATEGY, format!("{key}::sim")),
+    ] {
+        match book
+            .post(
+                ts,
+                crate::risk::book_v2::PostingKind::Adjustment,
+                strategy,
+                "",
+                diff,
+                0.0,
+                0.0,
+                note,
+                &key,
+            )
+            .await
+        {
+            Ok(new) => posted |= new && strategy == "band",
+            Err(e) => tracing::warn!(error = %e, strategy, note, "book_v2 adjustment failed"),
+        }
+    }
+    posted
+}
+
 async fn seed_book_v2_from_wallet(
     book: &crate::risk::book_v2::BookV2,
     settings: &Settings,
 ) -> Option<f64> {
-    let opening = crate::data::wallet::WalletReader::for_funder(
-        &settings.polygon_rpc_url,
-        &settings.private_key,
-        &settings.poly_funder,
-    )
-    .ok()?
-    .fetch_balances()
-    .await
-    .ok()?
-    .pusd;
+    let opening = read_wallet_pusd(settings).await?;
     let ts = nonzero_ts_or_now(0.0);
     for (strategy, key, note) in [
         ("band", "import_wallet", "opening balance = on-chain wallet"),
@@ -6742,12 +6937,15 @@ fn usd_to_micro(usd: f64) -> u64 {
 }
 
 /// State of the v2 wallet reconciliation (`Pipeline::reconcile_v2_wallet`).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct WalletReconcile {
     /// Consecutive readings with |wallet - book| above the tolerance.
     streak: u32,
     /// The previous reading posted an adjustment: this reading verifies it.
     adjusted: bool,
+    /// The amount that adjustment posted (a reversal of it on the
+    /// verifying reading is the wallet catching up, not drift).
+    last_adjustment: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6758,6 +6956,10 @@ enum ReconcileAction {
     Watch,
     /// Second consecutive reading outside: post the difference.
     Adjust,
+    /// The reading after an adjustment reversed it (the wallet caught up
+    /// with the book after all): post the reversal, undo what the
+    /// adjustment did to the floor base.
+    Reverse,
     /// Still beyond the halt tolerance right after an adjustment.
     Drift,
 }
@@ -6770,7 +6972,18 @@ fn wallet_reconcile_step(
 ) -> ReconcileAction {
     let verifying = std::mem::replace(&mut state.adjusted, false);
     if verifying && diff.abs() > halt {
-        state.streak = 0;
+        // The difference reversed the adjustment just posted: the wallet
+        // caught up with the book after all (an auto-redeem landing on the
+        // reading after two lagged ones; the smallest win payout, $5 at
+        // the cap, already exceeds the default halt). Post the reversal,
+        // no drift.
+        if (diff + state.last_adjustment).abs() <= tolerance {
+            state.streak = 0;
+            state.adjusted = true;
+            state.last_adjustment = diff;
+            return ReconcileAction::Reverse;
+        }
+        *state = WalletReconcile::default();
         return ReconcileAction::Drift;
     }
     if diff.abs() <= tolerance {
@@ -6783,6 +6996,7 @@ fn wallet_reconcile_step(
     }
     state.streak = 0;
     state.adjusted = true;
+    state.last_adjustment = diff;
     ReconcileAction::Adjust
 }
 
@@ -7778,7 +7992,8 @@ mod tests {
         assert_eq!(band_latch_of(&p, cid).await, None);
         assert!(band_skip_details(&p, cid).is_empty());
 
-        // 240.05 s: the look, latched UP on the (fallback) composite basis.
+        // 240.05 s: the look, latched UP on the (fallback) composite basis
+        // - recorded, never traded (the money path wants Binance's series).
         let t1 = end - chrono::Duration::milliseconds(59_950);
         let books = band_test_books(0.94, 0.07, t1.timestamp() as f64);
         assert!(!band_cycle(&p, &band, &c, &ps, t1, &books).await);
@@ -7791,7 +8006,87 @@ mod tests {
                 basis: "composite",
             })
         );
-        assert_eq!(band_skip_details(&p, cid), vec!["band_price_out_of_range"]);
+        assert_eq!(band_skip_details(&p, cid), vec!["band_basis_unvalidated"]);
+    }
+
+    /// The look waits (bounded) for Binance's tick at or after the decision
+    /// instant, which makes the at-or-before sample final; a ticker that
+    /// never gets past the instant is sampled at the deferral bound on the
+    /// tick it has. Both windows sit in the past so their instants fall
+    /// inside the tick clamp window.
+    #[tokio::test]
+    async fn band_latch_waits_for_the_covering_binance_tick() {
+        use chrono::Timelike;
+        let tmp = TempDir::new().unwrap();
+        let (p, band) = band_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let mut ps = PriceState::new();
+        ps.mid_price = open - 500.0;
+        let end1 = Utc::now().with_nanosecond(0).unwrap() - chrono::Duration::seconds(400);
+        let open1_ms = (end1 - chrono::Duration::seconds(300)).timestamp_millis();
+        let dec1_ms = open1_ms + 240_000;
+        let cid1 = "0xcover-late";
+        let c1 = band_window_ending(cid1, end1);
+        let at = |end: DateTime<Utc>, ms_after_decision: i64| {
+            end - chrono::Duration::milliseconds(60_000 - ms_after_decision)
+        };
+        let cycle = |c: &CandleContract, ps: &PriceState, now: DateTime<Utc>| {
+            let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+            let p = p.clone();
+            let band = band.clone();
+            let c = c.clone();
+            let ps = ps.clone();
+            async move { band_cycle(&p, &band, &c, &ps, now, &books).await }
+        };
+
+        // Open tick, then the tick one second before the instant: the
+        // at-or-before tick is still in flight at 240.05 s - no look yet.
+        ps.update_at("binance", open, open1_ms - 300);
+        ps.update_at("binance", open + 40.0, dec1_ms - 1_050);
+        assert!(!cycle(&c1, &ps, at(end1, 50)).await);
+        assert_eq!(band_latch_of(&p, cid1).await, None);
+        assert!(band_skip_details(&p, cid1).is_empty());
+        // The at-or-before tick lands; still nothing past the instant.
+        ps.update_at("binance", open + 60.0, dec1_ms - 50);
+        assert!(!cycle(&c1, &ps, at(end1, 400)).await);
+        assert_eq!(band_latch_of(&p, cid1).await, None);
+        // The covering tick lands: decided on the at-or-before tick, never
+        // on the later one.
+        ps.update_at("binance", open - 500.0, dec1_ms + 500);
+        assert!(!cycle(&c1, &ps, at(end1, 600)).await);
+        assert_eq!(
+            band_latch_of(&p, cid1).await,
+            Some(BandLatch::Signal {
+                direction: "up",
+                open,
+                btc: open + 60.0,
+                basis: "binance",
+            })
+        );
+
+        // Next window: Binance live at the instant but never past it. The
+        // look waits to the deferral bound, then samples what it has.
+        let end2 = end1 + chrono::Duration::seconds(300);
+        let open2_ms = end1.timestamp_millis();
+        let dec2_ms = open2_ms + 240_000;
+        let cid2 = "0xcover-stalled";
+        let c2 = band_window_ending(cid2, end2);
+        ps.update_at("binance", open, open2_ms - 300);
+        ps.update_at("binance", open - 55.0, dec2_ms - 1_050);
+        assert!(!cycle(&c2, &ps, at(end2, 50)).await);
+        assert_eq!(band_latch_of(&p, cid2).await, None);
+        assert!(!cycle(&c2, &ps, at(end2, 950)).await);
+        assert_eq!(band_latch_of(&p, cid2).await, None);
+        assert!(!cycle(&c2, &ps, at(end2, 1_050)).await);
+        assert_eq!(
+            band_latch_of(&p, cid2).await,
+            Some(BandLatch::Signal {
+                direction: "down",
+                open,
+                btc: open - 55.0,
+                basis: "binance",
+            })
+        );
     }
 
     /// The latch reads Binance's own ticks at or before the open and at or
@@ -7893,7 +8188,8 @@ mod tests {
                 basis: "composite",
             })
         );
-        assert_eq!(detail["reason"], "band_price_out_of_range");
+        // Recorded on the fallback basis, never traded on it.
+        assert_eq!(detail["reason"], "band_basis_unvalidated");
         assert!(detail["detail"]
             .as_str()
             .unwrap()
@@ -7944,11 +8240,20 @@ mod tests {
             .unwrap()
             .set_window_open(cid, open);
         let mut ps = PriceState::new();
+        // Binance at the open, at the decision instant and past it (the
+        // money path trades the validated series only). Instants come from
+        // the contract's whole-second end.
+        let end = parse_end(&c.end_date).unwrap();
+        let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+        let decision_ms = (end - chrono::Duration::seconds(60)).timestamp_millis();
+        ps.update_at("binance", open, open_ms - 300);
+        ps.update_at("binance", open + 60.0, decision_ms - 300);
+        ps.update_at("binance", open + 61.0, decision_ms + 400);
         let signal_up = Some(BandLatch::Signal {
             direction: "up",
             open,
             btc: open + 60.0,
-            basis: "composite",
+            basis: "binance",
         });
 
         // 240 s: UP by 60, but the UP ask is above the cap - wait.
@@ -8114,13 +8419,18 @@ mod tests {
     #[tokio::test]
     async fn persisted_money_trip_holds_across_restart_until_operator_rearm() {
         let tmp = TempDir::new().unwrap();
-        let settings = band_live_test_settings(&tmp);
+        let mut settings = band_live_test_settings(&tmp);
+        // The live canary's floor (0.6 x $19 = -11.40), not the env default.
+        settings.candle_live_max_cumulative_loss_pct = 0.6;
         let p = Pipeline::new(settings.clone(), Mode::Live).await.unwrap();
         {
             let mut bs = p.breaker.lock().await;
             bs.losses = 5;
             bs.realized_pnl = -5.02;
         }
+        // The v1 book carries the same session loss (as `record_pnl` does
+        // at realization), so the restart has something to actualize.
+        p.risk.record_pnl(-5.02).await.unwrap();
         p.trip_breaker("live_cumulative_loss").await;
         assert!(stop_not_requested(&p).await);
         assert_eq!(
@@ -8156,20 +8466,58 @@ mod tests {
             "held trip is not folded into the ledger"
         );
         assert_eq!(breaker_meta_present(&p).await, CANDLE_BREAKER_META_KEYS);
+        // The v1 base did not absorb the retained session either: the
+        // floor and the status equity are the ones the trip fired on.
+        assert!((p.breaker_bankroll().await - 19.0).abs() < 1e-9);
+        assert!((p.risk.effective_bankroll().await - 13.98).abs() < 1e-9);
+        let status = p.operator_status_text().await;
+        assert!(status.contains("stop at -11.40"), "{status}");
+        assert!(status.contains("v1 $13.98"), "{status}");
         drop(p);
 
         // A second bounce does not re-arm either.
         let p = Pipeline::new(settings.clone(), Mode::Live).await.unwrap();
         assert!(*p.breaker_tripped.lock().await);
+        assert!((p.breaker_bankroll().await - 19.0).abs() < 1e-9);
 
-        // Only the operator's re-arm clears it, in memory and in the db.
-        p.operator_rearm().await;
+        // Only the operator's re-arm clears it, in memory and in the db -
+        // and the held session reaches the cross-restart ledger there.
+        p.operator_rearm().await.expect("ledger -5.02 is above the -11.40 floor");
         assert!(!*p.breaker_tripped.lock().await);
         assert!(p.breaker_trip_reason.lock().await.is_none());
         assert!(breaker_meta_present(&p).await.is_empty());
+        assert_eq!(
+            p.risk
+                .get_meta("live_cumulative_realized_pnl")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("-5.020000"),
+            "re-arm folds the held session into the ledger"
+        );
+        assert!((p.live_loss_ledger_prior() + 5.02).abs() < 1e-9);
+        assert!(p.breaker.lock().await.realized_pnl.abs() < 1e-9);
         drop(p);
         let p = Pipeline::new(settings, Mode::Live).await.unwrap();
         assert!(!*p.breaker_tripped.lock().await);
+        assert!((p.live_loss_ledger_prior() + 5.02).abs() < 1e-9);
+
+        // A held session that still breaches the floor cannot be /start-ed
+        // away: the fold lands, the trip re-fires at once.
+        p.breaker.lock().await.realized_pnl = -6.50;
+        p.trip_breaker("live_cumulative_loss").await;
+        let err = p.operator_rearm().await.expect_err("ledger -11.52 breaches -11.40");
+        assert!(err.contains("still halted"), "{err}");
+        assert!(*p.breaker_tripped.lock().await);
+        assert!((p.live_loss_ledger_prior() + 11.52).abs() < 1e-9);
+        assert_eq!(
+            p.risk
+                .get_meta("live_cumulative_realized_pnl")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("-11.520000")
+        );
     }
 
 
@@ -8271,6 +8619,20 @@ mod tests {
         assert_eq!(step(&mut st, -6.0), Watch);
         assert_eq!(step(&mut st, -6.0), Adjust);
         assert_eq!(step(&mut st, -6.0), Drift);
+        // A settled win the wallet has not redeemed yet: the book is
+        // ahead by the payout for two readings, the adjustment follows the
+        // wallet, then the redeem lands and the difference reverses the
+        // adjustment. That is the wallet catching up, posted back, not
+        // drift (the default halt is under the smallest payout).
+        assert_eq!(step(&mut st, -5.49), Watch);
+        assert_eq!(step(&mut st, -5.49), Adjust);
+        assert_eq!(step(&mut st, 5.49), Reverse);
+        assert_eq!(step(&mut st, 0.0), Ok);
+        assert!(st.streak == 0 && !st.adjusted);
+        // A same-sign residual after an adjustment is still drift.
+        assert_eq!(step(&mut st, 7.0), Watch);
+        assert_eq!(step(&mut st, 7.0), Adjust);
+        assert_eq!(step(&mut st, 7.0), Drift);
     }
 
     #[tokio::test]
@@ -8293,9 +8655,11 @@ mod tests {
         );
         // Money floor: 0.6 x $7.80 = -$4.68 on real equity (v1's pinned
         // base would allow -$11.40).
-        let mut bs = BreakerState::default();
-        bs.losses = 1;
-        bs.realized_pnl = -4.70;
+        let mut bs = BreakerState {
+            losses: 1,
+            realized_pnl: -4.70,
+            ..Default::default()
+        };
         assert_eq!(
             p.breaker_trip_reason_for(&bs, 0.0, p.breaker_bankroll().await),
             Some("live_cumulative_loss")
@@ -8327,9 +8691,11 @@ mod tests {
             p.risk.get_meta("v2_session_start_equity").await.unwrap(),
             None
         );
-        let mut bs = BreakerState::default();
-        bs.losses = 1;
-        bs.realized_pnl = -4.70;
+        let bs = BreakerState {
+            losses: 1,
+            realized_pnl: -4.70,
+            ..Default::default()
+        };
         assert_eq!(
             p.breaker_trip_reason_for(&bs, 0.0, p.breaker_bankroll().await),
             None
@@ -8364,6 +8730,69 @@ mod tests {
         assert!(Pipeline::new(v1, Mode::Live).await.is_ok());
     }
 
+    /// The floor's base is the equity at the ledger's origin, not the
+    /// drawn-down equity at each restart: losing $3 of $7.80 and bouncing
+    /// keeps the floor at -4.68 (start allowed) instead of re-basing to
+    /// 0.6 x 4.80 = -2.88 and blocking it. Only the ledger reset re-bases.
+    #[tokio::test]
+    async fn risk_book_v2_floor_base_survives_restarts_until_the_ledger_resets() {
+        use crate::risk::book_v2::PostingKind;
+        let tmp = TempDir::new().unwrap();
+        let settings = band_live_v2_settings(&tmp, 7.8).await;
+        {
+            let p = Pipeline::new(settings.clone(), Mode::Live).await.unwrap();
+            assert!((p.breaker_bankroll().await - 7.8).abs() < 1e-9);
+            assert_eq!(
+                p.risk.get_meta("v2_floor_base_equity").await.unwrap().as_deref(),
+                Some("7.800000")
+            );
+            // A lost $3 stake: the book and the session carry it.
+            let book = p.book_v2.as_ref().unwrap();
+            book.post(2.0, PostingKind::Fill, "band", "0xl1", -3.0, 3.5, 0.857, "", "l1::fill")
+                .await
+                .unwrap();
+            book.post(3.0, PostingKind::Settlement, "band", "0xl1", 0.0, 3.5, 0.0, "lost", "0xl1::settle")
+                .await
+                .unwrap();
+            {
+                let mut bs = p.breaker.lock().await;
+                bs.losses = 1;
+                bs.realized_pnl = -3.0;
+            }
+            p.persist_breaker_state().await;
+        }
+        // Restart: the session folds into the ledger (-3), the book reads
+        // 4.80, the floor base stays 7.80.
+        let p = Pipeline::new(settings.clone(), Mode::Live).await.unwrap();
+        assert!((p.live_loss_ledger_prior() + 3.0).abs() < 1e-9);
+        assert!((p.band_sizing_equity().await - 4.8).abs() < 1e-9);
+        assert!((p.breaker_bankroll().await - 7.8).abs() < 1e-9);
+        let status = p.operator_status_text().await;
+        assert!(status.contains("stop at -4.68"), "{status}");
+        // The operator's post-mortem zeroes the ledger: the next start
+        // re-bases on the equity it finds.
+        p.risk
+            .set_meta("live_cumulative_realized_pnl", "0")
+            .await
+            .unwrap();
+        drop(p);
+        let p = Pipeline::new(settings, Mode::Live).await.unwrap();
+        assert!((p.breaker_bankroll().await - 4.8).abs() < 1e-9);
+        assert_eq!(
+            p.risk.get_meta("v2_floor_base_equity").await.unwrap().as_deref(),
+            Some("4.800000")
+        );
+        assert!(p.operator_status_text().await.contains("stop at -2.88"));
+    }
+
+    #[test]
+    fn settled_band_qty_prefers_durable_records() {
+        assert_eq!(settled_band_qty(Some(5.48), Some(5.48), 0.0), 5.48);
+        assert_eq!(settled_band_qty(None, Some(5.48), 0.0), 5.48);
+        assert_eq!(settled_band_qty(None, Some(0.0), 7.0), 7.0);
+        assert_eq!(settled_band_qty(None, None, 0.0), 0.0);
+    }
+
     #[tokio::test]
     async fn risk_book_v2_refuses_to_start_unseeded_or_misconfigured() {
         let tmp = TempDir::new().unwrap();
@@ -8395,12 +8824,17 @@ mod tests {
         assert_eq!(v2_posting_count(&p).await, before);
         assert!((p.band_sizing_equity().await - 7.8).abs() < 1e-9);
         p.reconcile_v2_wallet(17.8).await;
-        assert_eq!(v2_posting_count(&p).await, before + 1);
+        // One posting per sub-book: the kelly sim receives the deposit too,
+        // so the two curves keep differing by policy only.
+        assert_eq!(v2_posting_count(&p).await, before + 2);
         assert!((p.band_sizing_equity().await - 17.8).abs() < 1e-9);
+        let book = p.book_v2.as_ref().unwrap();
+        let sim = crate::risk::book_v2::KELLY_SIM_STRATEGY;
+        assert!((book.equity_for(sim).await.unwrap() - 17.8).abs() < 1e-9);
         // Idempotent: the reconciled book posts nothing more.
         p.reconcile_v2_wallet(17.8).await;
         p.reconcile_v2_wallet(17.8).await;
-        assert_eq!(v2_posting_count(&p).await, before + 1);
+        assert_eq!(v2_posting_count(&p).await, before + 2);
         assert!(!*p.breaker_tripped.lock().await);
         let records = std::fs::read_to_string(p.monitor.events_path()).unwrap();
         assert_eq!(
@@ -8411,10 +8845,41 @@ mod tests {
         // The money floor base stays the session-start equity: a deposit
         // does not launder the ledger.
         assert!((p.breaker_bankroll().await - 7.8).abs() < 1e-9);
+        // A settled win the wallet redeems late: two lagged readings post
+        // the payout out of the book (and off the base), the redeem then
+        // reverses both - no drift, base restored (readings differ by a
+        // few cents so the per-reading postings do not collide in-second).
+        p.reconcile_v2_wallet(12.31).await;
+        p.reconcile_v2_wallet(12.31).await;
+        assert_eq!(v2_posting_count(&p).await, before + 4);
+        assert!((p.breaker_bankroll().await - 2.31).abs() < 1e-9);
+        p.reconcile_v2_wallet(17.9).await;
+        assert_eq!(v2_posting_count(&p).await, before + 6);
+        assert!(!*p.breaker_tripped.lock().await, "a lagged redeem is not drift");
+        assert!((p.band_sizing_equity().await - 17.9).abs() < 1e-9);
+        assert!((p.breaker_bankroll().await - 7.9).abs() < 1e-9);
+        p.reconcile_v2_wallet(17.9).await;
+        // A withdrawal lowers it by the same amount: the floor is measured
+        // on money still in the wallet.
+        p.reconcile_v2_wallet(12.9).await;
+        p.reconcile_v2_wallet(12.9).await;
+        assert_eq!(v2_posting_count(&p).await, before + 8);
+        assert!((p.band_sizing_equity().await - 12.9).abs() < 1e-9);
+        assert!((p.breaker_bankroll().await - 2.9).abs() < 1e-9);
+        assert_eq!(
+            p.risk
+                .get_meta("v2_floor_base_equity")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2.900000")
+        );
+        p.reconcile_v2_wallet(12.9).await;
+        p.reconcile_v2_wallet(12.9).await;
         // Drift: the reading after an adjustment is still far off.
         p.reconcile_v2_wallet(30.0).await;
         p.reconcile_v2_wallet(30.0).await;
-        assert_eq!(v2_posting_count(&p).await, before + 2);
+        assert_eq!(v2_posting_count(&p).await, before + 10);
         p.reconcile_v2_wallet(40.0).await;
         assert!(*p.breaker_tripped.lock().await);
         assert_eq!(

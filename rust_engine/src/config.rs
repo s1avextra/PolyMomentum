@@ -100,7 +100,11 @@ pub struct Settings {
     /// Which book drives band sizing and the cumulative money floor:
     /// "v1" (BANKROLL_USD pinned + actualized session PnL) or "v2" (the
     /// wallet-anchored postings ledger, docs/risk_book_v2/). Lowercased at
-    /// parse; live refuses to start on anything else.
+    /// parse; live refuses to start on anything else. v2 seeds, sizes and
+    /// reconciles on the ENTIRE funder wallet's pUSD: it requires a wallet
+    /// used by this bot only (a BANKROLL_USD slice of a shared wallet is a
+    /// v1-only arrangement; a peer's fills would read as deposits,
+    /// withdrawals and drift).
     pub risk_book: String,
     /// RISK_BOOK=v2 wallet reconciliation: |wallet - book| above this on two
     /// consecutive readings posts a `wallet_reconcile` adjustment.

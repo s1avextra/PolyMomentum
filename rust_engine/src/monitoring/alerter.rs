@@ -54,6 +54,12 @@ impl Alerter {
         Self::new(webhook.ok())
     }
 
+    /// No webhook, no Telegram, whatever the process environment holds:
+    /// for test pipelines, so a unit test can never reach the operator.
+    pub fn disabled() -> Self {
+        Self::new_with_telegram(None, None)
+    }
+
     pub fn enabled(&self) -> bool {
         self.webhook.is_some() || self.telegram.is_some()
     }

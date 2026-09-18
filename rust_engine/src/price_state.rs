@@ -161,6 +161,16 @@ impl PriceState {
             .map(|(_, price)| *price)
     }
 
+    /// Event time of the newest `source` tick, if any. The at-or-before
+    /// lookup for an instant is final only once a tick at or after that
+    /// instant has arrived (in-order delivery on one stream).
+    pub fn source_latest_ts(&self, source: &str) -> Option<f64> {
+        self.source_history
+            .get(source)?
+            .back()
+            .map(|(ts, _)| *ts)
+    }
+
     pub fn update(&mut self, source: &str, price: f64) {
         if price <= 0.0 || !price.is_finite() {
             return;
@@ -371,6 +381,9 @@ mod tests {
             None
         );
         assert_eq!(ps.source_price_at_or_before("bybit", at(0), 2.0), None);
+        // The newest tick's event time, per source.
+        assert_eq!(ps.source_latest_ts("binance"), Some(at(500)));
+        assert_eq!(ps.source_latest_ts("bybit"), None);
         // The tick still feeds the composite.
         assert_eq!(ps.mid_price, 103.0);
         assert_eq!(ps.n_live_sources(), 1);

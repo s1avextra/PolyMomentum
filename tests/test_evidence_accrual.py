@@ -189,6 +189,7 @@ class EBhTest(unittest.TestCase):
                 "campaign_n": 64,
                 "alpha": 0.05,
                 "candidates": 4,
+                "family": 4,
                 "k_star": 2,
                 "threshold": 640.0,
                 "promoted": ["a", "b"],
@@ -209,10 +210,21 @@ class EBhTest(unittest.TestCase):
         overflow = accrual.e_bh({"a": 1300.0, "b": 700.0, "c": 100.0, "d": 5.0}, 2)
         self.assertEqual((overflow["campaign_n"], overflow["overflow"], overflow["k_star"]), (4, True, 3))
         self.assertEqual(overflow["promoted"], ["a", "b", "c"])
+        # The family is every e-process the campaign started, not only those
+        # still running: kills and holds leave e_values but keep raising the
+        # bar (90 tested -> a lone discovery needs 1800, not 1280).
+        churned = accrual.e_bh({"a": 1300.0}, 64, family_size=90)
+        self.assertEqual(
+            (churned["campaign_n"], churned["family"], churned["candidates"], churned["overflow"], churned["k_star"], churned["threshold"]),
+            (90, 90, 1, True, 0, 1800.0),
+        )
+        self.assertEqual(accrual.e_bh({"a": 1300.0}, 64, family_size=64)["promoted"], ["a"])
+        # A family smaller than the running set cannot shrink it.
+        self.assertEqual(accrual.e_bh({"a": 1300.0, "b": 1.0}, 64, family_size=1)["family"], 2)
         # Unregistered: nothing can be discovered.
         self.assertEqual(
             accrual.e_bh({"a": 1e9}, None),
-            {"campaign_n": None, "alpha": 0.05, "candidates": 1, "k_star": 0, "threshold": None, "promoted": [], "overflow": False},
+            {"campaign_n": None, "alpha": 0.05, "candidates": 1, "family": 1, "k_star": 0, "threshold": None, "promoted": [], "overflow": False},
         )
         self.assertEqual(accrual.e_bh({}, 64)["promoted"], [])
         self.assertEqual(accrual.e_bh({"a": 20.0}, 1, alpha=0.1)["threshold"], 10.0)
