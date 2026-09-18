@@ -44,37 +44,15 @@ for pid in $(pgrep -f "bash .*$(basename "$0")"); do
     fi
 done
 tick=0
-# LM Studio on MainPC is reached through an ssh tunnel over Tailscale
-# (127.0.0.1:1235 -> mainpc:1234); LM Link proved to drop models mid-burst.
-ensure_tunnel() {
-    pgrep -f "ssh .*-L 1235:127.0.0.1:1234 mainpc" >/dev/null && return 0
-    ssh -o ExitOnForwardFailure=yes -o ConnectTimeout=8 -f -N -L 1235:127.0.0.1:1234 mainpc \
-        >> "$log" 2>&1 || echo "$(date -u +%FT%TZ) factory-runner: tunnel to mainpc failed" >> "$log"
-}
 while true; do
-    ensure_tunnel
-    models=$(python3 -c 'import json, sys
-llm = json.load(open(sys.argv[1]))["llm"]
-seen = []
-for model in [llm.get("default_model")] + list(llm.get("sampler_models") or []) + [llm.get("reviewer_model")]:
-    if model and model not in seen:
-        seen.append(model)
-print("\n".join(seen))' "$config" 2>/dev/null)
-    for model in $models; do
-        curl -s -m 25 -o /dev/null -X POST http://127.0.0.1:1235/v1/chat/completions \
-            -H 'Content-Type: application/json' \
-            -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
-            || true
-    done
-    case $((tick % 3)) in
-        0) lane_args=() ;;
-        1) lane_args=(--lane late_window_mechanisms) ;;
-        2) lane_args=(--lane band_mechanisms) ;;
-    esac
+    # Phase 0 of docs/profitability_basement_2026-09-18.md: band lane only,
+    # no LLM tunnel or keepalive (the grid is enumerated by the evaluator;
+    # LLM turns fall through to the control draw when no model answers).
+    if [ -f "$log" ] && [ "$(stat -f %z "$log" 2>/dev/null || echo 0)" -gt 5000000 ]; then
+        mv "$log" "$log.1"
+    fi
     uv run python scripts/strategy_research_loop.py \
-        --config "$config" --once \
-        "${lane_args[@]}" \
+        --config "$config" --once --lane band_mechanisms \
         >> "$log" 2>&1
-    tick=$((tick + 1))
     sleep 300
 done
