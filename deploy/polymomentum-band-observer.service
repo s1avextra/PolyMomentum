@@ -22,13 +22,14 @@ EnvironmentFile=/etc/polymomentum/band-observer.env
 # The promotion artifact comes from POLYMOMENTUM_PROMOTION_ARTIFACT in
 # band-observer.env - never a command-line pin (2026-09-01).
 # The writable tree must exist before the sandbox below is set up: an
-# absent ReadWritePaths entry fails namespace setup with 226/NAMESPACE
+# The ReadWritePaths directory must exist BEFORE the unit starts: systemd
+# builds the mount namespace ahead of ExecStartPre, so a missing path fails
+# with 226/NAMESPACE. Install step:
+#   sudo install -d -o polymomentum -g polymomentum -m 0755 /opt/polymomentum/logs/band-observer
 # (the canary unit's /tmp lesson) and nothing else creates it (deploy.sh
 # and setup.sh make logs/candle and logs/sessions only). `+` runs these as
 # root outside the sandbox; the engine creates candle/ and sessions/
 # underneath on its own.
-ExecStartPre=+/bin/mkdir -p /opt/polymomentum/logs/band-observer
-ExecStartPre=+/bin/chown polymomentum: /opt/polymomentum/logs/band-observer
 ExecStart=/opt/polymomentum/tools/polymomentum-engine-band-v1 live --mode paper
 # No ExecStop: systemd delivers KillSignal itself.
 KillMode=mixed
