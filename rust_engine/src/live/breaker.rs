@@ -31,13 +31,12 @@ impl Default for BreakerConfig {
 }
 
 impl BreakerConfig {
+    /// Backtest-harness breaker: the defaults with the streak limit from
+    /// the environment (the band runtime builds its own config).
     pub fn from_settings(settings: &crate::config::Settings) -> Self {
         Self {
-            min_trades: settings.candle_breaker_min_trades.max(1) as u32,
-            min_win_rate: settings.candle_breaker_min_win_rate,
-            max_drawdown_pct: settings.candle_breaker_max_drawdown_pct,
-            max_session_loss_pct: settings.candle_breaker_max_session_loss_pct,
             max_consecutive_losses: settings.candle_breaker_max_consecutive_losses.max(0) as u32,
+            ..Default::default()
         }
     }
 }

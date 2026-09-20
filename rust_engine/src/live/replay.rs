@@ -42,6 +42,12 @@ use crate::strategy::momentum::{MomentumConfig, MomentumDetector};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
 
 const DEFAULT_EXPOSURE_RATIO: f64 = 0.80;
+/// Feed-forward stress cap of the settings-built replay strategy: the
+/// value the deleted `CANDLE_MAX_PROJECTED_STRESSED_DRAWDOWN_PCT` defaulted
+/// to (no deploy env ever set it; `StrategyVariant::baseline` carries 0.0
+/// = disabled), so replay reports before and after the engine cut size
+/// alike.
+const SETTINGS_REPLAY_STRESS_DRAWDOWN_CAP_PCT: f64 = 0.25;
 
 fn valid_tick_size_or_default(tick_size: f64) -> f64 {
     if tick_size.is_finite() && tick_size > 0.0 && tick_size < 1.0 {
@@ -88,7 +94,7 @@ impl ReplayStrategy {
                 artifact.selected_strategy.name
             );
         }
-        let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
+        let variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
             .context("parse promoted strategy_params as StrategyVariant")?;
         if !variant.exit.is_disabled() {
             bail!(
@@ -103,44 +109,8 @@ impl ReplayStrategy {
                 artifact.selected_strategy.params_hash
             );
         }
-        let zone_before = variant.zone_config;
-        let zone_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
-        let settlement_floor_applied = settlement_fields_changed(zone_before, variant.zone_config);
-        let decision_floor_applied =
-            zone_floor_applied && !zones_equal_except_settlement(zone_before, variant.zone_config);
-        let runtime_floor_applied = apply_runtime_variant_safety_floor(&mut variant, settings);
-        let mut strategy_spec = artifact.selected_strategy;
-        let mut source = format!("promotion:{path}");
-        if zone_floor_applied || runtime_floor_applied {
-            strategy_spec = StrategySpec::from_serializable_params(
-                strategy_spec.name.clone(),
-                strategy_spec.version.clone(),
-                &variant,
-                format!(
-                    "{};runtime_floor conf>={:.2},z>={:.2},edge>={:.2},ev>={:.2},price=[{:.2},{:.2}],micro_spread<={:.3},micro_depth>={:.2},micro_pressure>={:.2},settlement cutoff_min={:.2},guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
-                    strategy_spec.risk_profile,
-                    variant.min_confidence,
-                    variant.zone_config.primary_min_z,
-                    variant.min_edge,
-                    variant.zone_config.min_ev_buffer,
-                    variant.zone_config.min_price,
-                    variant.zone_config.max_price,
-                    variant.microstructure.max_spread,
-                    variant.microstructure.min_book_depth,
-                    variant.microstructure.min_book_pressure,
-                    variant.zone_config.settlement_cutoff_minutes,
-                    variant.zone_config.settlement_guard_minutes,
-                    variant.zone_config.settlement_min_abs_move_usd,
-                    variant.zone_config.settlement_sigma_buffer,
-                ),
-            );
-            if settlement_floor_applied {
-                source = format!("{source}+settlement_floor");
-            }
-            if decision_floor_applied || runtime_floor_applied {
-                source = format!("{source}+runtime_floor");
-            }
-        }
+        let strategy_spec = artifact.selected_strategy;
+        let source = format!("promotion:{path}");
 
         Ok(Self {
             variant,
@@ -150,35 +120,28 @@ impl ReplayStrategy {
     }
 
     pub fn from_settings(settings: &Settings) -> Self {
-        let zone_config = ZoneConfig::from_settings(settings);
+        let zone_config = ZoneConfig::default();
         let mut variant = StrategyVariant::baseline();
         variant.name = "settings_live_replay".to_string();
         variant.zone_config = zone_config;
-        variant.skip_dead_zone = settings.candle_skip_dead_zone;
         variant.min_confidence = DEFAULT_MIN_CONFIDENCE;
         variant.min_edge = DEFAULT_MIN_EDGE;
         variant.position_pct = settings.candle_position_pct;
         variant.max_per_market_usd = settings.max_position_per_market_usd;
-        variant.max_projected_stressed_drawdown_pct =
-            settings.candle_max_projected_stressed_drawdown_pct;
+        variant.max_projected_stressed_drawdown_pct = SETTINGS_REPLAY_STRESS_DRAWDOWN_CAP_PCT;
         variant.prefer_maker = false;
         variant.default_fee_rate = DEFAULT_CRYPTO_TAKER_FEE_RATE;
         variant.maker_fee_rate = DEFAULT_MAKER_FEE_RATE;
         variant.microstructure = MicrostructureConfig::disabled();
-        variant.microstructure.apply_safety_floor(
-            settings.candle_microstructure_max_spread,
-            settings.candle_microstructure_min_book_depth,
-            settings.candle_microstructure_min_book_pressure,
-        );
 
         let params = serde_json::json!({
             "zone_config": zone_config,
-            "skip_dead_zone": settings.candle_skip_dead_zone,
+            "skip_dead_zone": variant.skip_dead_zone,
             "min_confidence": DEFAULT_MIN_CONFIDENCE,
             "min_edge": DEFAULT_MIN_EDGE,
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
-            "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
+            "max_projected_stressed_drawdown_pct": variant.max_projected_stressed_drawdown_pct,
             "prefer_maker": false,
             "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
             "microstructure": variant.microstructure,
@@ -191,7 +154,7 @@ impl ReplayStrategy {
                 "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
                 settings.candle_position_pct,
                 settings.max_position_per_market_usd,
-                settings.candle_max_projected_stressed_drawdown_pct
+                variant.max_projected_stressed_drawdown_pct
             ),
         );
 
@@ -201,61 +164,6 @@ impl ReplayStrategy {
             source: "settings".to_string(),
         }
     }
-}
-
-fn apply_runtime_variant_safety_floor(variant: &mut StrategyVariant, settings: &Settings) -> bool {
-    let mut changed = false;
-    if settings.candle_runtime_min_confidence_floor.is_finite()
-        && variant.min_confidence < settings.candle_runtime_min_confidence_floor
-    {
-        variant.min_confidence = settings.candle_runtime_min_confidence_floor;
-        changed = true;
-    }
-    if settings.candle_runtime_min_edge_floor.is_finite()
-        && variant.min_edge < settings.candle_runtime_min_edge_floor
-    {
-        variant.min_edge = settings.candle_runtime_min_edge_floor;
-        changed = true;
-    }
-    changed |= variant.microstructure.apply_safety_floor(
-        settings.candle_microstructure_max_spread,
-        settings.candle_microstructure_min_book_depth,
-        settings.candle_microstructure_min_book_pressure,
-    );
-    changed
-}
-
-fn settlement_fields_changed(before: ZoneConfig, after: ZoneConfig) -> bool {
-    before.settlement_cutoff_minutes != after.settlement_cutoff_minutes
-        || before.settlement_guard_minutes != after.settlement_guard_minutes
-        || before.settlement_min_abs_move_usd != after.settlement_min_abs_move_usd
-        || before.settlement_sigma_buffer != after.settlement_sigma_buffer
-}
-
-fn zones_equal_except_settlement(before: ZoneConfig, after: ZoneConfig) -> bool {
-    let mut before = before;
-    before.settlement_cutoff_minutes = after.settlement_cutoff_minutes;
-    before.settlement_guard_minutes = after.settlement_guard_minutes;
-    before.settlement_min_abs_move_usd = after.settlement_min_abs_move_usd;
-    before.settlement_sigma_buffer = after.settlement_sigma_buffer;
-    before.early_min_confidence == after.early_min_confidence
-        && before.early_min_z == after.early_min_z
-        && before.early_min_edge == after.early_min_edge
-        && before.primary_min_z == after.primary_min_z
-        && before.late_min_confidence == after.late_min_confidence
-        && before.late_min_z == after.late_min_z
-        && before.late_min_edge == after.late_min_edge
-        && before.terminal_min_confidence == after.terminal_min_confidence
-        && before.terminal_min_z == after.terminal_min_z
-        && before.terminal_min_edge == after.terminal_min_edge
-        && before.dead_zone_lo == after.dead_zone_lo
-        && before.dead_zone_hi == after.dead_zone_hi
-        && before.min_price == after.min_price
-        && before.max_price == after.max_price
-        && before.edge_cap == after.edge_cap
-        && before.min_ev_buffer == after.min_ev_buffer
-        && before.min_reversion_count == after.min_reversion_count
-        && before.max_reversion_count == after.max_reversion_count
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1598,6 +1506,18 @@ mod tests {
             replay.variant.max_per_market_usd,
             settings.max_position_per_market_usd
         );
+        // The stress cap the deleted env knob defaulted to, not the
+        // baseline variant's disabled 0.0: replay sizing across the cut
+        // compares.
+        assert_eq!(replay.variant.max_projected_stressed_drawdown_pct, 0.25);
+        assert!(
+            replay
+                .strategy_spec
+                .risk_profile
+                .contains("stress_dd_cap=0.2500"),
+            "{}",
+            replay.strategy_spec.risk_profile
+        );
 
         let tmp = TempDir::new().unwrap();
         let monitor = Arc::new(SessionMonitor::open(tmp.path()).unwrap());
@@ -1642,82 +1562,12 @@ mod tests {
 
         let mut settings = Settings::from_env();
         settings.promotion_artifact_path = path.display().to_string();
-        settings.candle_settlement_cutoff_minutes = 0.30;
-        settings.candle_settlement_guard_minutes = 1.0;
-        settings.candle_settlement_min_abs_move_usd = 10.0;
-        settings.candle_settlement_sigma_buffer = 0.0;
         let replay = ReplayStrategy::load(&settings).unwrap();
 
         assert_eq!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
         assert_eq!(replay.variant.name, "maker_first");
         assert!(replay.variant.prefer_maker);
         assert!(replay.source.starts_with("promotion:"));
-    }
-
-    #[test]
-    fn replay_strategy_applies_same_settlement_safety_floor_as_live() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("promotion.json");
-        let mut variant = StrategyVariant::maker_first();
-        variant.zone_config.settlement_cutoff_minutes = 0.1;
-        variant.zone_config.settlement_guard_minutes = 0.5;
-        variant.zone_config.settlement_min_abs_move_usd = 2.0;
-        variant.zone_config.settlement_sigma_buffer = 0.0;
-        let strategy_spec = StrategySpec::from_serializable_params(
-            "candle_momentum",
-            "1",
-            &variant,
-            variant.risk_profile(),
-        );
-        let artifact = crate::backtest::experiment::PromotionArtifact {
-            schema_version: 1,
-            inventory_model_version: crate::backtest::experiment::CURRENT_INVENTORY_MODEL_VERSION,
-            created_at: "2026-05-06T00:00:00Z".to_string(),
-            source_report_hash: "source".to_string(),
-            source_label: "unit".to_string(),
-            source_window: "2026-04-25T10:00:00Z..2026-04-25T10:00:00Z".to_string(),
-            selected_strategy: strategy_spec.clone(),
-            strategy_params: serde_json::to_value(&variant).unwrap(),
-            data_manifest_hash: "manifest".to_string(),
-            market_count: 1,
-            trades: 30,
-            win_rate: 0.7,
-            total_pnl: 10.0,
-            avg_pnl: 0.33,
-            total_fees: 0.0,
-            sharpe_like: 1.0,
-            dominant_zone: None,
-            dominant_zone_trade_share: None,
-            risk_notes: Vec::new(),
-            promotion_gate: crate::backtest::experiment::PromotionGate::default(),
-            robust_diagnostics: None,
-        };
-        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
-
-        let mut settings = Settings::from_env();
-        settings.promotion_artifact_path = path.display().to_string();
-        settings.candle_settlement_cutoff_minutes = 1.5;
-        settings.candle_settlement_guard_minutes = 5.0;
-        settings.candle_settlement_min_abs_move_usd = 25.0;
-        settings.candle_settlement_sigma_buffer = 0.2;
-        settings.candle_runtime_min_confidence_floor = 0.7;
-        settings.candle_runtime_min_edge_floor = 0.09;
-        settings.candle_microstructure_max_spread = 0.02;
-        settings.candle_microstructure_min_book_depth = 20.0;
-        settings.candle_microstructure_min_book_pressure = 0.0;
-        let replay = ReplayStrategy::load(&settings).unwrap();
-
-        assert_eq!(replay.variant.zone_config.settlement_cutoff_minutes, 1.5);
-        assert_eq!(replay.variant.zone_config.settlement_guard_minutes, 5.0);
-        assert_eq!(replay.variant.zone_config.settlement_min_abs_move_usd, 25.0);
-        assert_eq!(replay.variant.zone_config.settlement_sigma_buffer, 0.2);
-        assert_eq!(replay.variant.min_confidence, 0.7);
-        assert_eq!(replay.variant.min_edge, 0.09);
-        assert_eq!(replay.variant.microstructure.max_spread, 0.02);
-        assert_eq!(replay.variant.microstructure.min_book_depth, 20.0);
-        assert_eq!(replay.variant.microstructure.min_book_pressure, 0.0);
-        assert_ne!(replay.strategy_spec.params_hash, strategy_spec.params_hash);
-        assert!(replay.source.ends_with("+settlement_floor+runtime_floor"));
     }
 
     fn replay_resolution_contract(up_price: f64, down_price: f64, closed: bool) -> CandleContract {

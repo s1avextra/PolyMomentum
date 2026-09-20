@@ -556,6 +556,12 @@ pub struct BandPolicyParams {
     /// artifacts (stake_usd then binds via the cap).
     #[serde(default = "default_band_position_pct")]
     pub position_pct: f64,
+    /// Kelly sizing input (`kelly_lo_stake`): the cell's running ladder
+    /// Wilson lower bound. 0 disables Kelly and means the fixed `stake_usd`
+    /// (the Tier 1 probe); `skip_serializing_if` keeps the params hash of
+    /// artifacts without the key byte-identical.
+    #[serde(default, skip_serializing_if = "serde_f64_is_zero")]
+    pub kelly_q_lo: f64,
 }
 
 fn default_band_position_pct() -> f64 {
@@ -591,6 +597,9 @@ impl BandPolicyParams {
         if !(self.position_pct > 0.0 && self.position_pct <= 1.0) {
             return Err(format!("position_pct {} out of (0,1]", self.position_pct));
         }
+        if !(0.0..1.0).contains(&self.kelly_q_lo) {
+            return Err(format!("kelly_q_lo {} out of [0,1)", self.kelly_q_lo));
+        }
         Ok(())
     }
 
@@ -613,6 +622,36 @@ impl BandPolicyParams {
     pub fn quote_clears_band(&self, vwap: f64, worst_price: f64) -> bool {
         vwap > self.ask_floor && worst_price <= self.ask_cap
     }
+}
+
+/// What a Kelly artifact (`kelly_q_lo` > 0) needs from the environment
+/// before it may run, checked by the preflight and again by
+/// `Pipeline::new`: `KELLY_FRACTION` in (0, 1], and in live mode the
+/// wallet-anchored v2 book - the v1 book is `BANKROLL_USD` plus session
+/// PnL, a pinned number the policy must never size on (CLAUDE.md section
+/// 2). Paper mode (the observer) has no wallet and keeps the v1 book; a
+/// fixed-stake artifact is unaffected.
+pub fn kelly_policy_config_error(
+    band: &BandPolicyParams,
+    settings: &Settings,
+    live: bool,
+) -> Option<String> {
+    if band.kelly_q_lo <= 0.0 {
+        return None;
+    }
+    if !crate::risk::book_v2::kelly_fraction_valid(settings.kelly_fraction) {
+        return Some(format!(
+            "kelly_q_lo {} needs KELLY_FRACTION in (0,1] (got {})",
+            band.kelly_q_lo, settings.kelly_fraction
+        ));
+    }
+    if live && !settings.risk_book_v2() {
+        return Some(format!(
+            "kelly_q_lo {} requires RISK_BOOK=v2: Kelly sizes on the wallet-anchored book, never the pinned BANKROLL_USD (RISK_BOOK={:?})",
+            band.kelly_q_lo, settings.risk_book
+        ));
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -775,6 +814,13 @@ impl Pipeline {
     pub async fn new(settings: Settings, mode: Mode) -> Result<Arc<Self>> {
         let release_manifest = ReleaseManifest::capture(&settings, mode.runtime_mode());
         let runtime_strategy = RuntimeStrategy::load(&settings)?;
+        if let Some(error) = runtime_strategy
+            .band
+            .as_ref()
+            .and_then(|band| kelly_policy_config_error(band, &settings, matches!(mode, Mode::Live)))
+        {
+            bail!("{error}");
+        }
         let bankroll = if matches!(mode, Mode::Paper) {
             settings.simulated_bankroll_usd()
         } else if settings.bankroll_usd > 0.0 {
@@ -819,32 +865,27 @@ impl Pipeline {
         };
         let gamma = GammaClient::new(&settings.poly_gamma_url);
         let ctf = CtfReader::new(&settings.polygon_rpc_url);
-        let breaker_cfg = if runtime_strategy.band.is_some() {
-            // Band stopping policy, reformatted ground-up (2026-09-01).
-            // Trading halts for exactly three families of reasons:
-            //   1. MONEY  - restart-proof cumulative floor
-            //              (live_cumulative_loss: ledger + session <=
-            //              -CANDLE_LIVE_MAX_CUMULATIVE_LOSS_PCT x base) and
-            //              the consecutive-loss streak below;
-            //   2. BUGS   - band_exposure_anomaly (exposure beyond what
-            //              sizing could commit) and the accounting-integrity
-            //              trips (fee/journal/oracle failures);
-            //   3. OPERATOR - kill switch and telegram /stop.
-            // Removed from halting: session_loss_floor (the cumulative
-            // floor already includes the session - profits are risk capital
-            // under compounding), realized_drawdown (peak-relative: could
-            // halt while net POSITIVE), win_rate_low (indirect proxy; the
-            // direct money measures bind first).
-            BreakerConfig {
-                min_trades: u32::MAX,
-                min_win_rate: 0.0,
-                max_drawdown_pct: f64::INFINITY,
-                max_session_loss_pct: 0.0,
-                max_consecutive_losses: settings.candle_breaker_max_consecutive_losses.max(1)
-                    as u32,
-            }
-        } else {
-            BreakerConfig::from_settings(&settings)
+        // Band stopping policy, reformatted ground-up (2026-09-01).
+        // Trading halts for exactly three families of reasons:
+        //   1. MONEY  - restart-proof cumulative floor
+        //              (live_cumulative_loss: ledger + session <=
+        //              -CANDLE_LIVE_MAX_CUMULATIVE_LOSS_PCT x base) and
+        //              the consecutive-loss streak below;
+        //   2. BUGS   - band_exposure_anomaly (exposure beyond what
+        //              sizing could commit) and the accounting-integrity
+        //              trips (fee/journal/oracle failures);
+        //   3. OPERATOR - kill switch and telegram /stop.
+        // Removed from halting: session_loss_floor (the cumulative
+        // floor already includes the session - profits are risk capital
+        // under compounding), realized_drawdown (peak-relative: could
+        // halt while net POSITIVE), win_rate_low (indirect proxy; the
+        // direct money measures bind first).
+        let breaker_cfg = BreakerConfig {
+            min_trades: u32::MAX,
+            min_win_rate: 0.0,
+            max_drawdown_pct: f64::INFINITY,
+            max_session_loss_pct: 0.0,
+            max_consecutive_losses: settings.candle_breaker_max_consecutive_losses.max(1) as u32,
         };
 
         // Restore breaker + paper positions + oracle pending
@@ -1799,12 +1840,6 @@ impl Pipeline {
         }
     }
 
-    async fn public_fill_evidence(&self, market: &str, created_ts: f64) -> Option<bool> {
-        self.public_fill_details(market, "", created_ts)
-            .await
-            .map(|d| d.is_some())
-    }
-
     /// Aggregated public-data-api trade rows matching our order: same maker,
     /// same market, BUY side, at/after order creation; token filter optional.
     /// Outer None = channel unavailable; Some(None) = positively no fill.
@@ -2384,7 +2419,6 @@ impl Pipeline {
                 cid: position.contract_id.clone(),
                 price: fill_price,
                 size: fill_size,
-                cost: fill_size * fill_price,
                 outcome: None,
             });
             while log.len() > 30 {
@@ -2405,19 +2439,27 @@ impl Pipeline {
                     &format!("{}::fill", order.intent.intent_id),
                 )
                 .await;
-            // Parallel sizing emulation: what the Kelly-lower policy would
-            // have staked on THIS fill, compounding on its own sub-book
-            // equity (skips price buckets it refuses). Lets the operator
-            // watch both equity curves before switching policies.
-            if let Some(band) = self.runtime_strategy.band.as_ref() {
+            // Parallel sizing emulation: what the Kelly policy at the
+            // artifact's q_lo would have staked on THIS fill, compounding
+            // on its own sub-book equity (with its own venue-minimum and
+            // equity-cap skips), so the operator can watch both curves.
+            // Nothing to emulate under a fixed stake (kelly_q_lo 0).
+            if let Some(band) = self
+                .runtime_strategy
+                .band
+                .as_ref()
+                .filter(|band| band.kelly_q_lo > 0.0)
+            {
                 let sim = crate::risk::book_v2::KELLY_SIM_STRATEGY;
                 let sim_equity = book.equity_for(sim).await.unwrap_or(0.0);
                 match crate::risk::book_v2::kelly_lo_stake(
                     fill_price,
                     sim_equity,
+                    band.kelly_q_lo,
+                    self.settings.kelly_fraction,
                     band.stake_usd,
                 ) {
-                    Some(stake) if fill_size * fill_price > 0.0 => {
+                    Ok(stake) if fill_size * fill_price > 0.0 => {
                         let scale = stake / (fill_size * fill_price);
                         let _ = book
                             .post(
@@ -2433,13 +2475,14 @@ impl Pipeline {
                             )
                             .await;
                     }
-                    _ => {
+                    other => {
                         self.monitor.record_v2_shadow(
                             "sim_skip",
                             serde_json::json!({
                                 "cid": short_cid(&position.contract_id),
                                 "price": fill_price,
                                 "sim_equity": sim_equity,
+                                "reason": other.err().map(|skip| skip.as_str()),
                             }),
                         );
                     }
@@ -2907,9 +2950,10 @@ impl Pipeline {
     /// `stake_usd` is null exactly when this cycle's champion could not
     /// trade for reasons that are not the rule's: no fresh best ask on both
     /// sides (`pick_book_prices`, the `fresh_outcome_book_unavailable` skip)
-    /// or the live sizing policy declining the bucket (kelly_lo, the
-    /// `kelly_no_edge_bucket` skip); the offline scorer treats null as "no
-    /// trade" for every rule. The quote budget is the sizing target BEFORE
+    /// or the Kelly policy declining the stake (`kelly_q_lo` > 0: the
+    /// `kelly_*` skips of `kelly_lo_stake`, never a clamp-up); the offline
+    /// scorer treats null as "no trade" for every rule. The quote budget
+    /// is the sizing target BEFORE
     /// the per-market / available-capital / stress caps
     /// `evaluate_band_opportunity` applies, so the anchor is a rule-vs-rule
     /// comparison on a common budget, not a replica of the live champion:
@@ -2979,8 +3023,15 @@ impl Pipeline {
         let bankroll = self.band_sizing_equity().await;
         let stake = band.and_then(|band| {
             let (up, down) = pick_book_prices(c, books, now_ts)?;
-            if self.settings.band_sizing == "kelly_lo" {
-                crate::risk::book_v2::kelly_lo_stake(up.max(down), bankroll, band.stake_usd)
+            if band.kelly_q_lo > 0.0 {
+                crate::risk::book_v2::kelly_lo_stake(
+                    up.max(down),
+                    bankroll,
+                    band.kelly_q_lo,
+                    self.settings.kelly_fraction,
+                    band.stake_usd,
+                )
+                .ok()
             } else {
                 Some(band.target_stake(bankroll))
             }
@@ -3456,54 +3507,53 @@ impl Pipeline {
             .available_capital_for_exposure(open_exposure)
             .await;
         let favorite_price = up_price.max(down_price);
-        let target = if self.settings.band_sizing == "kelly_lo" {
-            // Operator-approved 2026-09-01 (docs/risk_book_v2/): half-Kelly
-            // on the Wilson LOWER bound per price bucket; the <=0.70 bucket's
-            // edge CI straddles break-even, so it does not trade. One day of
-            // live A/B: the sim book beat the live book by \$2.87 and dodged
-            // 3 of the 5 streak losses.
-            match crate::risk::book_v2::kelly_lo_stake(
+        let f_k = self.settings.kelly_fraction;
+        // Kelly on the artifact's running ladder Wilson lower bound
+        // (basement section C, "Sizing and accounting"): stake = f_k x f_lo
+        // x equity, a skip below the venue minimum (never a clamp-up) and
+        // above 10% of a sub-$500 equity; kelly_q_lo 0 is the fixed stake.
+        let kelly = (band.kelly_q_lo > 0.0).then(|| {
+            crate::risk::book_v2::kelly_lo_stake(
                 favorite_price,
                 bankroll,
+                band.kelly_q_lo,
+                f_k,
                 band.stake_usd,
-            ) {
-                Some(stake) => stake,
-                None => {
-                    self.band_skip_with_detail(
-                        cid,
-                        "kelly_no_edge_bucket",
-                        format!("favorite={favorite_price:.2} equity={bankroll:.2}"),
-                    )
-                    .await;
-                    return Ok(false);
-                }
+            )
+        });
+        let target = match kelly {
+            Some(Ok(stake)) => stake,
+            Some(Err(skip)) => {
+                self.band_skip_with_detail(
+                    cid,
+                    skip.as_str(),
+                    format!(
+                        "favorite={favorite_price:.2} equity={bankroll:.2} q_lo={:.4} f_k={f_k:.2}",
+                        band.kelly_q_lo
+                    ),
+                )
+                .await;
+                return Ok(false);
             }
-        } else {
-            band.target_stake(bankroll)
+            None => band.target_stake(bankroll),
         };
         let mut estimated_position = target.min(per_market).min(available);
-        // RiskBook v2 sizing shadow: log what the Kelly-lower policy would
-        // stake here (docs/risk_book_v2/sizing_study_2026-09-01.md). Uses
-        // the favorite price as the bucket proxy at evaluation time.
-        {
-            let v2 = crate::risk::book_v2::kelly_lo_stake(
-                up_price.max(down_price),
-                bankroll,
-                band.stake_usd,
-            );
-            self.monitor.record_v2_shadow(
-                "sizing",
-                serde_json::json!({
-                    "cid": short_cid(&c.market.condition_id),
-                    // Which book `equity` (and so `v1_stake`) came from.
-                    "risk_book": if self.risk_book_v2 { "v2" } else { "v1" },
-                    "favorite_price": up_price.max(down_price),
-                    "equity": bankroll,
-                    "v1_stake": estimated_position,
-                    "v2_stake": v2,
-                }),
-            );
-        }
+        // Sizing shadow: the policy's inputs and its stake next to the
+        // position the per-market / available-capital caps left.
+        self.monitor.record_v2_shadow(
+            "sizing",
+            serde_json::json!({
+                "cid": short_cid(&c.market.condition_id),
+                // Which book `equity` (and so `stake`) came from.
+                "risk_book": if self.risk_book_v2 { "v2" } else { "v1" },
+                "favorite_price": favorite_price,
+                "equity": bankroll,
+                "kelly_q_lo": band.kelly_q_lo,
+                "f_k": f_k,
+                "kelly_stake": kelly.and_then(|k| k.ok()),
+                "stake": estimated_position,
+            }),
+        );
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
             self.risk.initial_bankroll().await.max(1.0),
@@ -3586,6 +3636,76 @@ impl Pipeline {
             self.band_skip_with_detail(cid, "band_quote_unavailable", detail)
                 .await;
             return Ok(false);
+        };
+
+        // Kelly at the price the entry pays. The touch overstates f_lo
+        // whenever the top of the book is thin (two shares at 0.90 over
+        // depth at 0.94: no edge at 0.94, yet the touch sized $9.66), and
+        // the cell's q_lo and break-even are defined at entry = the FOK
+        // worst price (section C). Re-derived at `quote.worst_price`: a
+        // skip when the policy has no stake there, a smaller budget - and
+        // a fresh quote at it, which walks no deeper - when it sizes below
+        // the cost just quoted. The pair and band checks below run on the
+        // quote that goes out.
+        let quote = if kelly.is_some() {
+            let at_worst = crate::risk::book_v2::kelly_lo_stake(
+                quote.worst_price,
+                bankroll,
+                band.kelly_q_lo,
+                f_k,
+                band.stake_usd,
+            );
+            self.monitor.record_v2_shadow(
+                "sizing_at_worst",
+                serde_json::json!({
+                    "cid": short_cid(cid),
+                    "favorite_price": favorite_price,
+                    "worst_price": quote.worst_price,
+                    "vwap": quote.vwap,
+                    "quoted_cost": quote.spend,
+                    "kelly_stake_at_worst": at_worst.ok(),
+                    "reason": at_worst.err().map(|skip| skip.as_str()),
+                }),
+            );
+            match at_worst {
+                Err(skip) => {
+                    self.band_skip_with_detail(
+                        cid,
+                        skip.as_str(),
+                        format!(
+                            "at_worst worst={:.4} vwap={:.4} favorite={favorite_price:.2} equity={bankroll:.2} q_lo={:.4} f_k={f_k:.2}",
+                            quote.worst_price, quote.vwap, band.kelly_q_lo
+                        ),
+                    )
+                    .await;
+                    return Ok(false);
+                }
+                Ok(stake) if stake + 1e-9 < quote.spend => {
+                    let budget = stake.min(estimated_position);
+                    let Some(requote) = live_buy_book_quote(
+                        token_id,
+                        books,
+                        budget,
+                        self.settings.live_min_order_size_shares,
+                        market_tick,
+                    ) else {
+                        self.band_skip_with_detail(
+                            cid,
+                            "band_quote_unavailable",
+                            format!(
+                                "at_worst budget={budget:.2} worst={:.4} quoted_cost={:.2}",
+                                quote.worst_price, quote.spend
+                            ),
+                        )
+                        .await;
+                        return Ok(false);
+                    };
+                    requote
+                }
+                Ok(_) => quote,
+            }
+        } else {
+            quote
         };
 
         // Both sides must be fresh and coherent. A binary pair's asks sum
@@ -3794,6 +3914,14 @@ impl Pipeline {
 
         match self.mode {
             Mode::Paper => {
+                // The observer's fill is bounded by the executable quote the
+                // evaluation sized (a Kelly stake sits under this chain's
+                // min(bankroll, stake_usd)), so the paper position, its v1
+                // trade record and the sizing record carry one stake.
+                let position = match &taker_quote {
+                    Some(quote) => position.min(quote.spend),
+                    None => position,
+                };
                 let taker_fee_rate = contract
                     .market
                     .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
@@ -4858,10 +4986,18 @@ impl Pipeline {
                             let bs = *self.breaker.lock().await;
                             let v1_equity =
                                 self.risk.initial_bankroll().await + bs.realized_pnl;
-                            let sim_equity = book
-                                .equity_for(crate::risk::book_v2::KELLY_SIM_STRATEGY)
-                                .await
-                                .unwrap_or(f64::NAN);
+                            // The Kelly emulation only runs under a Kelly
+                            // artifact; under a fixed stake it is idle and
+                            // its equity is null, never a curve to compare.
+                            let sim_equity = if self.kelly_policy_active() {
+                                Some(
+                                    book.equity_for(crate::risk::book_v2::KELLY_SIM_STRATEGY)
+                                        .await
+                                        .unwrap_or(f64::NAN),
+                                )
+                            } else {
+                                None
+                            };
                             let band_equity = book.equity_for("band").await.unwrap_or(f64::NAN);
                             self.monitor.record_v2_shadow(
                                 "reconcile",
@@ -4873,7 +5009,7 @@ impl Pipeline {
                                     "v2_minus_wallet": band_equity - b.pusd,
                                     "v2_minus_v1": band_equity - v1_equity,
                                     "kelly_sim_equity": sim_equity,
-                                    "kelly_sim_vs_live": sim_equity - band_equity,
+                                    "kelly_sim_vs_live": sim_equity.map(|sim| sim - band_equity),
                                 }),
                             );
                             let _ = v2_equity;
@@ -5169,7 +5305,12 @@ impl Pipeline {
             }
         ));
         if let Some(book) = &self.book_v2 {
-            if let (Ok(live), Ok(sim)) = (
+            // Under a fixed stake the emulation never trades: its sub-book
+            // beats live by exactly the live losses, which is no sizing
+            // evidence (CLAUDE.md section 5), so the comparison is not shown.
+            if !self.kelly_policy_active() {
+                out.push_str("\nkelly-sim idle (fixed stake)");
+            } else if let (Ok(live), Ok(sim)) = (
                 book.equity_for("band").await,
                 book.equity_for(crate::risk::book_v2::KELLY_SIM_STRATEGY).await,
             ) {
@@ -5474,6 +5615,15 @@ impl Pipeline {
             return Some(reason);
         }
         self.cumulative_loss_trip(bs, bankroll)
+    }
+
+    /// Whether the artifact sizes by Kelly (`kelly_q_lo` > 0): the Kelly
+    /// emulation sub-book only trades, and is only reported, under one.
+    fn kelly_policy_active(&self) -> bool {
+        self.runtime_strategy
+            .band
+            .as_ref()
+            .is_some_and(|band| band.kelly_q_lo > 0.0)
     }
 
     /// Equity the band sizing compounds on: the v2 band sub-book under
@@ -6032,7 +6182,6 @@ struct TradeLogRecord {
     cid: String,
     price: f64,
     size: f64,
-    cost: f64,
     outcome: Option<(bool, f64)>, // (won, pnl) once settled
 }
 
@@ -6546,6 +6695,7 @@ mod tests {
             stake_usd: 5.0,
             min_decision_margin_usd: 0.0,
             position_pct: 1.0,
+            kelly_q_lo: 0.0,
         }
     }
 
@@ -6599,6 +6749,7 @@ mod tests {
             stake_usd: 25.0,
             min_decision_margin_usd: 0.0,
             position_pct: 0.25,
+            kelly_q_lo: 0.0,
         };
         // one $5 position on a drawn-down bankroll: legitimate
         assert!(band_exposure_within_contract(&band, 0.0, 13.8, 5.0));
@@ -6650,7 +6801,7 @@ mod tests {
 
     #[test]
     fn band_anchor_recorded_once_per_cid_and_anchor() {
-        let anchors = [180.0, 210.0, 240.0, 270.0];
+        let anchors = [150.0, 180.0, 210.0, 240.0];
         let mut seen = HashSet::new();
         // First cycle inside the [240, 244) span records the anchor.
         assert_eq!(
@@ -6661,12 +6812,12 @@ mod tests {
         assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 241.5).is_empty());
         assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 243.99).is_empty());
         assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 250.0).is_empty());
-        // A missed span is not back-filled; the next anchor is independent.
+        // A missed span is not back-filled; every anchor is independent.
         assert_eq!(
-            due_band_anchors(&mut seen, &anchors, "cid-a", 270.0),
-            vec![270]
+            due_band_anchors(&mut seen, &anchors, "cid-a", 210.0),
+            vec![210]
         );
-        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 272.0).is_empty());
+        assert!(due_band_anchors(&mut seen, &anchors, "cid-a", 212.0).is_empty());
         // Another window has its own (cid, anchor) keys.
         assert_eq!(
             due_band_anchors(&mut seen, &anchors, "cid-b", 241.0),
@@ -6684,30 +6835,30 @@ mod tests {
         let cid = "0xabc".to_string();
         let end = parse_end("2026-09-02T10:05:00Z").unwrap();
         let c = band_anchor_contract(&cid, "2026-09-02T10:05:00Z");
-        let anchors = [240.0, 270.0];
+        let anchors = [210.0, 240.0];
         let mut seen = HashSet::new();
         let mut traded_set: HashSet<String> = HashSet::new();
 
-        // 240s: champion decision second.
+        // 210s: a champion deciding at 210 s.
         let (elapsed_s, open_ts) =
-            band_anchor_elapsed(&c, end - chrono::Duration::seconds(60)).unwrap();
-        assert_eq!(elapsed_s, 240.0);
+            band_anchor_elapsed(&c, end - chrono::Duration::seconds(90)).unwrap();
+        assert_eq!(elapsed_s, 210.0);
         assert_eq!(open_ts, end.timestamp() as f64 - 300.0);
         assert_eq!(
             due_band_anchors(&mut seen, &anchors, &cid, elapsed_s),
-            vec![240]
+            vec![210]
         );
 
         // The champion fills and the loop adds the cid to `traded`. The
         // anchor capture runs BEFORE the traded-set skip and keys on
-        // (cid, anchor), so the 270s anchor is still captured.
+        // (cid, anchor), so the 240s anchor is still captured.
         traded_set.insert(cid.clone());
-        let (elapsed_s, _) = band_anchor_elapsed(&c, end - chrono::Duration::seconds(29)).unwrap();
-        assert_eq!(elapsed_s, 271.0);
+        let (elapsed_s, _) = band_anchor_elapsed(&c, end - chrono::Duration::seconds(59)).unwrap();
+        assert_eq!(elapsed_s, 241.0);
         assert!(traded_set.contains(&cid));
         assert_eq!(
             due_band_anchors(&mut seen, &anchors, &cid, elapsed_s),
-            vec![270]
+            vec![240]
         );
 
         // A window that has not opened yet is not anchored, even for a `0`
@@ -6885,7 +7036,6 @@ mod tests {
         settings.promotion_artifact_path = path.display().to_string();
         settings.state_db_path = tmp.path().join("state.db").display().to_string();
         settings.session_log_dir = tmp.path().join("sessions").display().to_string();
-        settings.band_sizing = "pct".to_string();
         settings.band_anchor_seconds = Vec::new();
         settings.live_min_order_size_shares = 5.0;
         settings
@@ -7846,8 +7996,18 @@ mod tests {
 
     /// sha256 of the canonical `band_anchor` + `band_ladder` records of
     /// `band_ladder_replay_digest_is_pinned`, pinned at 461bd2b (the tree
-    /// the basement's engine cut starts from). A deletion step that moves
-    /// it changed what the observer records.
+    /// the basement's engine cut starts from). It pins record shape and
+    /// quote mechanics under the fixed-stake fixture (`band_params`:
+    /// kelly_q_lo 0, stake_usd 5, position_pct 1.0, $100 on the v1 book,
+    /// where anchor `stake_usd` = `quote_budget_usd` = 5 before and after
+    /// the cut) and not the sizing policy: the observers ran the deleted
+    /// `BAND_SIZING=kelly_lo` q_lo table, so their rebuilt `band_anchor`
+    /// records carry the fixed target (5.00 at every favourite) where the
+    /// table gave ~6 at 0.75 and null (declined) at or below 0.70; the
+    /// Kelly anchor semantics are pinned separately by
+    /// `band_anchor_stake_null_on_a_kelly_skip_quote_budget_fixed`. A
+    /// deletion step that moves the digest changed the records' shape or
+    /// quotes.
     const BAND_LADDER_REPLAY_DIGEST: &str =
         "ef89c7292b8d462538a1181da8568419638e9cd059ff125991af22855374d8d7";
 
@@ -8764,6 +8924,485 @@ mod tests {
             .unwrap()
             .insert("lock_strength_min".to_string(), serde_json::json!(0.5));
         assert!(serde_json::from_value::<BandPolicyParams>(v).is_err());
+    }
+
+    #[test]
+    fn band_params_kelly_q_lo_defaults_to_zero_and_keeps_the_hash() {
+        let params = band_params();
+        let v = serde_json::to_value(&params).unwrap();
+        // A fixed-stake artifact serializes without the key, so artifacts
+        // written before it existed parse to q_lo 0 and hash identically.
+        assert!(v.get("kelly_q_lo").is_none());
+        let parsed: BandPolicyParams = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(parsed, params);
+        assert_eq!(stable_json_hash(&parsed), stable_json_hash(&params));
+        let mut with_kelly = v;
+        with_kelly
+            .as_object_mut()
+            .unwrap()
+            .insert("kelly_q_lo".to_string(), serde_json::json!(0.95));
+        let kelly: BandPolicyParams = serde_json::from_value(with_kelly).unwrap();
+        assert_eq!(kelly.kelly_q_lo, 0.95);
+        assert!(kelly.validate().is_ok());
+        assert_ne!(stable_json_hash(&kelly), stable_json_hash(&params));
+        for bad in [1.0, -0.1, 1.5, f64::NAN] {
+            let mut p = band_params();
+            p.kelly_q_lo = bad;
+            assert!(p.validate().is_err(), "kelly_q_lo {bad} must not validate");
+        }
+    }
+
+    /// `kelly_lo_stake` on the band path: a Kelly stake under the venue
+    /// minimum is a `kelly_below_venue_min` skip (never the $5 clamp-up the
+    /// pct path keeps), one above 10% of a sub-$500 equity a
+    /// `kelly_above_equity_cap` skip, and one in between sizes the entry
+    /// and the sizing shadow record at f_k x f_lo x equity.
+    #[tokio::test]
+    async fn band_kelly_sizing_skips_never_clamps_up() {
+        // Favourite ask 0.90, $100 equity, f_k 0.25: q_lo 0.92 sizes ~$3.8,
+        // 0.95 ~$11.7 (above 10% of equity), 0.94 ~$9.1.
+        let (ask, equity, f_k) = (0.90, 100.0, 0.25);
+        let b = (1.0 - ask) / ask - DEFAULT_CRYPTO_TAKER_FEE_RATE * (1.0 - ask);
+        for (q_lo, expect) in [
+            (0.92, Err("kelly_below_venue_min")),
+            (0.95, Err("kelly_above_equity_cap")),
+            (0.94, Ok(())),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let mut params = band_params();
+            params.min_decision_margin_usd = 50.0;
+            params.stake_usd = 25.0;
+            params.kelly_q_lo = q_lo;
+            let mut settings = band_test_settings(&tmp, &params);
+            settings.bankroll_usd = equity;
+            settings.kelly_fraction = f_k;
+            let p = Pipeline::new(settings, Mode::Paper).await.unwrap();
+            let open = 110_000.0;
+            let t0 = Utc::now();
+            let cid = "0xkelly";
+            let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+            p.momentum
+                .lock()
+                .await
+                .get_mut("BTC")
+                .unwrap()
+                .set_window_open(cid, open);
+            let mut ps = PriceState::new();
+            let end = parse_end(&c.end_date).unwrap();
+            let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+            let decision_ms = (end - chrono::Duration::seconds(60)).timestamp_millis();
+            ps.update_at("binance", open, open_ms - 300);
+            ps.update_at("binance", open + 60.0, decision_ms - 300);
+            ps.update_at("binance", open + 61.0, decision_ms + 400);
+            ps.mid_price = open + 60.0;
+            let books = band_test_books(ask, 1.01 - ask, t0.timestamp() as f64);
+            let traded = band_cycle(&p, &params, &c, &ps, t0, &books).await;
+            let sizing = band_records_of(&p, "sizing", cid);
+            match expect {
+                Err(reason) => {
+                    assert!(!traded, "q_lo {q_lo}");
+                    assert_eq!(band_skip_details(&p, cid), vec![reason], "q_lo {q_lo}");
+                    assert!(p.paper_positions.lock().await.is_empty());
+                    assert!(sizing.is_empty());
+                }
+                Ok(()) => {
+                    assert!(traded, "q_lo {q_lo}");
+                    let expected = f_k * (q_lo - (1.0 - q_lo) / b) * equity;
+                    assert!(expected > BAND_MIN_STAKE_USD && expected < 0.1 * equity);
+                    assert_eq!(sizing.len(), 1);
+                    assert_eq!(sizing[0]["kelly_q_lo"], q_lo);
+                    assert_eq!(sizing[0]["f_k"], f_k);
+                    assert!((sizing[0]["kelly_stake"].as_f64().unwrap() - expected).abs() < 1e-9);
+                    assert!((sizing[0]["stake"].as_f64().unwrap() - expected).abs() < 1e-9);
+                    // The executable quote (the live FOK's size) is budgeted
+                    // at the Kelly stake, not the $25 cap.
+                    let evaluation = band_records_of(&p, "evaluation", cid);
+                    assert_eq!(evaluation.len(), 1);
+                    let detail = evaluation[0]["skip_detail"].as_str().unwrap();
+                    let shares: f64 = detail
+                        .split("shares=")
+                        .nth(1)
+                        .and_then(|rest| rest.split(' ').next())
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| panic!("{detail}"));
+                    assert!(
+                        (shares * ask - expected).abs() < 0.02,
+                        "{detail} vs {expected}"
+                    );
+                    // So is the paper fill (the kept observer branch), not
+                    // the $25 execute_trade's own chain would have staked:
+                    // the quote's cost less 30 bps of paper slippage and the
+                    // cent flooring of the share size.
+                    let position = p.paper_positions.lock().await[cid].clone();
+                    let cost = position.size * position.entry_price;
+                    assert!(
+                        cost <= expected + 1e-6 && cost > expected - 0.05,
+                        "paper fill {cost} vs kelly stake {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A Kelly artifact (`kelly_q_lo` > 0) is refused at start on the
+    /// pinned v1 book in live mode: `band_sizing_equity` would be
+    /// BANKROLL_USD plus session PnL, so with 150 pinned and $60 in the
+    /// wallet the 10%-of-equity guard passes a $7.59 stake that is 12.7%
+    /// of the real book. Refused in every mode when KELLY_FRACTION is
+    /// outside (0, 1]. Paper (the observer, no wallet) keeps v1; the v2
+    /// book starts it and is what it sizes on.
+    #[tokio::test]
+    async fn band_kelly_artifact_requires_the_v2_book_in_live_mode() {
+        let mut params = band_params();
+        params.kelly_q_lo = 0.94;
+        params.stake_usd = 25.0;
+        let tmp = TempDir::new().unwrap();
+        let mut settings = band_live_test_settings(&tmp);
+        settings.bankroll_usd = 150.0;
+        std::fs::write(
+            &settings.promotion_artifact_path,
+            serde_json::to_vec(&band_promotion(&params)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings.risk_book, "v1");
+        let err = Pipeline::new(settings.clone(), Mode::Live)
+            .await
+            .err()
+            .expect("a kelly artifact on the v1 book must not start live")
+            .to_string();
+        assert!(
+            err.contains("kelly_q_lo 0.94 requires RISK_BOOK=v2"),
+            "{err}"
+        );
+        Pipeline::new(settings.clone(), Mode::Paper).await.unwrap();
+        for f_k in [0.0, 25.0, f64::NAN] {
+            settings.kelly_fraction = f_k;
+            for mode in [Mode::Paper, Mode::Live] {
+                let err = Pipeline::new(settings.clone(), mode)
+                    .await
+                    .err()
+                    .unwrap_or_else(|| panic!("f_k {f_k} must not start"))
+                    .to_string();
+                assert!(err.contains("KELLY_FRACTION in (0,1]"), "f_k {f_k}: {err}");
+            }
+        }
+        let tmp = TempDir::new().unwrap();
+        let settings = band_live_v2_settings(&tmp, 150.0).await;
+        std::fs::write(
+            &settings.promotion_artifact_path,
+            serde_json::to_vec(&band_promotion(&params)).unwrap(),
+        )
+        .unwrap();
+        let p = Pipeline::new(settings, Mode::Live).await.unwrap();
+        assert!(p.risk_book_v2);
+        assert!((p.band_sizing_equity().await - 150.0).abs() < 1e-9);
+    }
+
+    /// Kelly is re-derived at the FOK worst price, never the touch. Two
+    /// shares at 0.90 over depth: with the depth at 0.94 a q_lo of 0.93
+    /// sizes $9.66 at the touch and has no edge at the price paid, so the
+    /// entry is a `kelly_no_edge` skip; with the depth at 0.92 a q_lo of
+    /// 0.94 sizes $13.64 at the touch but $7.59 at 0.92, so the quote is
+    /// re-issued at the smaller budget and the paper fill follows it.
+    #[tokio::test]
+    async fn band_kelly_sizes_on_the_fok_worst_price_not_the_touch() {
+        use crate::risk::book_v2::{kelly_lo_stake, KellySkip};
+        let (equity, f_k) = (150.0, 0.25);
+        for (q_lo, deep_ask, requoted) in [(0.93, 0.94, false), (0.94, 0.92, true)] {
+            let tmp = TempDir::new().unwrap();
+            let mut params = band_params();
+            params.min_decision_margin_usd = 50.0;
+            params.ask_floor = 0.80;
+            params.ask_cap = 0.95;
+            params.stake_usd = 25.0;
+            params.kelly_q_lo = q_lo;
+            let mut settings = band_test_settings(&tmp, &params);
+            settings.bankroll_usd = equity;
+            settings.kelly_fraction = f_k;
+            let p = Pipeline::new(settings, Mode::Paper).await.unwrap();
+            let open = 110_000.0;
+            let t0 = Utc::now();
+            let cid = "0xkelly-worst";
+            let c = band_window_ending(cid, t0 + chrono::Duration::seconds(60));
+            p.momentum
+                .lock()
+                .await
+                .get_mut("BTC")
+                .unwrap()
+                .set_window_open(cid, open);
+            let mut ps = PriceState::new();
+            let end = parse_end(&c.end_date).unwrap();
+            let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+            let decision_ms = (end - chrono::Duration::seconds(60)).timestamp_millis();
+            ps.update_at("binance", open, open_ms - 300);
+            ps.update_at("binance", open + 60.0, decision_ms - 300);
+            ps.update_at("binance", open + 61.0, decision_ms + 400);
+            ps.mid_price = open + 60.0;
+            // UP is the momentum side: a thin touch over the depth.
+            let mut books = band_test_books(0.90, 0.06, t0.timestamp() as f64);
+            books.get_mut("up").unwrap().asks = vec![
+                crate::polymarket_ws::BookLevel {
+                    price: 0.90,
+                    size: 2.0,
+                },
+                crate::polymarket_ws::BookLevel {
+                    price: deep_ask,
+                    size: 500.0,
+                },
+            ];
+            let at_touch = kelly_lo_stake(0.90, equity, q_lo, f_k, 25.0).unwrap();
+            assert!(at_touch > BAND_MIN_STAKE_USD && at_touch < 0.1 * equity);
+            let at_worst = kelly_lo_stake(deep_ask, equity, q_lo, f_k, 25.0);
+            let traded = band_cycle(&p, &params, &c, &ps, t0, &books).await;
+            let sizing = band_records_of(&p, "sizing", cid);
+            assert_eq!(sizing.len(), 1);
+            assert!((sizing[0]["kelly_stake"].as_f64().unwrap() - at_touch).abs() < 1e-9);
+            let worst = band_records_of(&p, "sizing_at_worst", cid);
+            assert_eq!(worst.len(), 1);
+            assert_eq!(worst[0]["worst_price"], deep_ask);
+            assert!(worst[0]["quoted_cost"].as_f64().unwrap() > at_touch - 0.1);
+            if !requoted {
+                assert_eq!(at_worst, Err(KellySkip::NoEdge));
+                assert!(!traded);
+                assert_eq!(band_skip_details(&p, cid), vec!["kelly_no_edge"]);
+                assert_eq!(worst[0]["reason"], "kelly_no_edge");
+                assert!(worst[0]["kelly_stake_at_worst"].is_null());
+                assert!(p.paper_positions.lock().await.is_empty());
+                continue;
+            }
+            let at_worst = at_worst.unwrap();
+            assert!(at_worst < at_touch - 1.0, "{at_worst} vs {at_touch}");
+            assert!(traded, "{:?}", band_skip_details(&p, cid));
+            assert!((worst[0]["kelly_stake_at_worst"].as_f64().unwrap() - at_worst).abs() < 1e-9);
+            // The quote that went out is budgeted at the worst-price stake:
+            // its FOK worst-case cost (shares x worst) is within a cent of
+            // share size under it.
+            let evaluation = band_records_of(&p, "evaluation", cid);
+            assert_eq!(evaluation.len(), 1);
+            let detail = evaluation[0]["skip_detail"].as_str().unwrap().to_string();
+            let field = |name: &str| -> f64 {
+                detail
+                    .split(&format!("{name}="))
+                    .nth(1)
+                    .and_then(|rest| rest.split(' ').next())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| panic!("{name} in {detail}"))
+            };
+            assert_eq!(field("worst"), deep_ask);
+            let fok_cost = field("shares") * field("worst");
+            assert!(
+                fok_cost <= at_worst + 1e-6 && fok_cost > at_worst - 0.02,
+                "{detail} vs {at_worst}"
+            );
+            // And so is the paper fill.
+            let position = p.paper_positions.lock().await[cid].clone();
+            let cost = position.size * position.entry_price;
+            assert!(
+                cost <= at_worst + 1e-6 && cost > at_worst - 0.10,
+                "paper fill {cost} vs kelly stake at worst {at_worst}"
+            );
+        }
+    }
+
+    /// A live fill posts to the Kelly emulation sub-book only under a Kelly
+    /// artifact, scaled onto the fill at f_k x f_lo x the sub-book's own
+    /// equity, with the sub-book's own venue-minimum skip recorded; under
+    /// a fixed stake (kelly_q_lo 0) nothing is emulated, no skip is
+    /// recorded, and the operator status says the sub-book is idle instead
+    /// of showing it beating live by exactly the live losses.
+    #[tokio::test]
+    async fn record_live_fill_position_emulates_kelly_only_under_a_kelly_artifact() {
+        use crate::risk::book_v2::{kelly_lo_stake, KELLY_SIM_STRATEGY};
+        // A Filled taker order of `size` at `price` with its pending
+        // position, as the live path books them before the user channel
+        // confirms the fill.
+        fn live_fill(cid: &str, size: f64, price: f64) -> (ManagedOrder, PendingLivePosition) {
+            let fee = polymarket_fee(size, price, DEFAULT_CRYPTO_TAKER_FEE_RATE);
+            let intent = OrderIntent {
+                intent_id: format!("intent-{cid}"),
+                strategy: StrategySpec::new("test", "1", "hash", "risk"),
+                market_id: cid.to_string(),
+                token_id: "up".to_string(),
+                side: "buy".to_string(),
+                order_type: "market".to_string(),
+                limit_price: Some(price),
+                size,
+                reason: "test".to_string(),
+            };
+            let order = ManagedOrder {
+                intent,
+                state: OrderState::Filled,
+                venue_order_id: Some(format!("0xorder-{cid}")),
+                requested_size: size,
+                filled_size: size,
+                avg_fill_price: price,
+                total_fees: fee,
+                reject_reason: None,
+                created_ts: 1.0,
+                updated_ts: 2.0,
+            };
+            let pending = PendingLivePosition {
+                position: PaperPosition {
+                    direction: "up".to_string(),
+                    entry_price: price,
+                    fee: 0.0,
+                    size,
+                    open_btc: 100.0,
+                    end_time: 10.0,
+                    asset: "BTC".to_string(),
+                    contract_id: cid.to_string(),
+                    event_id: "event".to_string(),
+                    shadow: false,
+                },
+                entry_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
+                recovery_misses: 0,
+            };
+            (order, pending)
+        }
+        async fn book_fill(p: &Pipeline, cid: &str, size: f64, price: f64) -> ManagedOrder {
+            let (order, pending) = live_fill(cid, size, price);
+            p.live_pending_positions
+                .lock()
+                .await
+                .insert(order.intent.intent_id.clone(), pending);
+            p.record_live_fill_position(&order, 10.0, size, price)
+                .await
+                .unwrap();
+            order
+        }
+        let (size, price) = (5.4348, 0.92); // a $5.00 fill
+
+        // Kelly artifact (q_lo 0.94, f_k 0.25), $100 in both sub-books.
+        let tmp = TempDir::new().unwrap();
+        let mut params = band_params();
+        params.kelly_q_lo = 0.94;
+        params.stake_usd = 25.0;
+        let mut settings = band_live_v2_settings(&tmp, 100.0).await;
+        settings.kelly_fraction = 0.25;
+        std::fs::write(
+            &settings.promotion_artifact_path,
+            serde_json::to_vec(&band_promotion(&params)).unwrap(),
+        )
+        .unwrap();
+        let p = Pipeline::new(settings, Mode::Live).await.unwrap();
+        let book = p.book_v2.as_ref().unwrap();
+        let order = book_fill(&p, "0xfill-1", size, price).await;
+        let stake = kelly_lo_stake(price, 100.0, 0.94, 0.25, 25.0).unwrap();
+        assert!(stake > BAND_MIN_STAKE_USD && stake < 6.0, "{stake}");
+        assert!((book.fill_qty("band", "0xfill-1").await.unwrap().unwrap() - size).abs() < 1e-9);
+        let sim_qty = book.fill_qty(KELLY_SIM_STRATEGY, "0xfill-1").await.unwrap();
+        assert!(
+            (sim_qty.unwrap() - stake / price).abs() < 1e-9,
+            "{sim_qty:?}"
+        );
+        let scale = stake / (size * price);
+        let sim_equity = book.equity_for(KELLY_SIM_STRATEGY).await.unwrap();
+        assert!(
+            (sim_equity - (100.0 - stake - order.total_fees * scale)).abs() < 1e-9,
+            "{sim_equity}"
+        );
+        let live_equity = book.equity_for("band").await.unwrap();
+        assert!(
+            (live_equity - (100.0 - size * price - order.total_fees)).abs() < 1e-9,
+            "{live_equity}"
+        );
+        assert!(band_records_of(&p, "sim_skip", "0xfill-1").is_empty());
+        let status = p.operator_status_text().await;
+        assert!(
+            status.contains(&format!(
+                "kelly-sim ${sim_equity:.2} vs live ${live_equity:.2}"
+            )),
+            "{status}"
+        );
+        // The sub-book's own equity is now under the $5 stake at 0.92
+        // (0.25 x 0.2025 x $94.9 = $4.80): its skip, and no posting.
+        assert_eq!(
+            kelly_lo_stake(price, sim_equity, 0.94, 0.25, 25.0),
+            Err(crate::risk::book_v2::KellySkip::BelowVenueMin)
+        );
+        book_fill(&p, "0xfill-2", size, price).await;
+        assert!(book.fill_qty("band", "0xfill-2").await.unwrap().is_some());
+        assert_eq!(
+            book.fill_qty(KELLY_SIM_STRATEGY, "0xfill-2").await.unwrap(),
+            None
+        );
+        let skips = band_records_of(&p, "sim_skip", "0xfill-2");
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0]["reason"], "kelly_below_venue_min");
+        assert!((skips[0]["sim_equity"].as_f64().unwrap() - sim_equity).abs() < 1e-9);
+        drop(p);
+
+        // Fixed-stake artifact (the Tier 1 probe): the band posting only.
+        let tmp = TempDir::new().unwrap();
+        let settings = band_live_v2_settings(&tmp, 100.0).await;
+        let p = Pipeline::new(settings, Mode::Live).await.unwrap();
+        let book = p.book_v2.as_ref().unwrap();
+        book_fill(&p, "0xfill-3", size, price).await;
+        assert!(book.fill_qty("band", "0xfill-3").await.unwrap().is_some());
+        assert_eq!(
+            book.fill_qty(KELLY_SIM_STRATEGY, "0xfill-3").await.unwrap(),
+            None
+        );
+        assert!((book.equity_for(KELLY_SIM_STRATEGY).await.unwrap() - 100.0).abs() < 1e-9);
+        assert!(band_records_of(&p, "sim_skip", "0xfill-3").is_empty());
+        let status = p.operator_status_text().await;
+        assert!(status.contains("kelly-sim idle (fixed stake)"), "{status}");
+        assert!(!status.contains("kelly-sim $"), "{status}");
+    }
+
+    /// Under a Kelly artifact the anchor's `stake_usd` is the Kelly stake
+    /// at the favourite and null when the policy declines (a `kelly_*`
+    /// skip, which the race reads as "policy declined"), while
+    /// `quote_budget_usd` falls back to the fixed target so the anchor
+    /// still carries a quote. The fixed-stake fixture of the replay digest
+    /// never exercises this.
+    #[tokio::test]
+    async fn band_anchor_stake_null_on_a_kelly_skip_quote_budget_fixed() {
+        use chrono::Timelike;
+        let (equity, f_k, favourite) = (100.0, 0.25, 0.90);
+        for q_lo in [0.92, 0.94] {
+            let tmp = TempDir::new().unwrap();
+            let mut params = band_params();
+            params.stake_usd = 25.0;
+            params.kelly_q_lo = q_lo;
+            let mut settings = band_test_settings(&tmp, &params);
+            settings.bankroll_usd = equity;
+            settings.kelly_fraction = f_k;
+            settings.band_anchor_seconds = vec![240.0];
+            let p = Pipeline::new(settings, Mode::Paper).await.unwrap();
+            let open = 110_000.0;
+            let cid = "0xanchor-kelly";
+            let end = Utc::now().with_nanosecond(0).unwrap() - chrono::Duration::seconds(100);
+            let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+            let mut ps = PriceState::new();
+            ps.update_at("binance", open, open_ms - 300);
+            ps.update_at("binance", open + 60.0, open_ms + 240_000 - 300);
+            ps.update_at("binance", open + 61.0, open_ms + 240_000 + 400);
+            ps.mid_price = open + 60.0;
+            let c = band_window_ending(cid, end);
+            let now = end - chrono::Duration::milliseconds(59_950);
+            let now_ts = now.timestamp() as f64;
+            let books = band_test_books(favourite, 1.01 - favourite, now_ts);
+            p.capture_band_anchors(&c, std::slice::from_ref(&c), &books, &ps, now, now_ts)
+                .await;
+            let anchors = band_records_of(&p, "band_anchor", cid);
+            assert_eq!(anchors.len(), 1, "q_lo {q_lo}");
+            assert_eq!(anchors[0]["direction"], "up");
+            let stake = crate::risk::book_v2::kelly_lo_stake(favourite, equity, q_lo, f_k, 25.0);
+            match stake {
+                Err(skip) => {
+                    assert_eq!(skip, crate::risk::book_v2::KellySkip::BelowVenueMin);
+                    assert!(anchors[0]["stake_usd"].is_null(), "{}", anchors[0]);
+                    assert_eq!(anchors[0]["quote_budget_usd"], params.target_stake(equity));
+                    assert_eq!(anchors[0]["quote_budget_usd"], 25.0);
+                }
+                Ok(stake) => {
+                    assert!(stake > BAND_MIN_STAKE_USD && stake < 0.1 * equity);
+                    assert_eq!(anchors[0]["stake_usd"], round_to(stake, 4));
+                    assert_eq!(anchors[0]["quote_budget_usd"], round_to(stake, 4));
+                }
+            }
+        }
     }
 
     #[test]

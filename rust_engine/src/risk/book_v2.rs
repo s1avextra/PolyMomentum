@@ -203,34 +203,90 @@ impl BookV2 {
     }
 }
 
-/// Sizing from the 2026-09-01 Monte Carlo study
-/// (docs/risk_book_v2/sizing_study_2026-09-01.md): half-Kelly on the
-/// per-bucket Wilson LOWER bound of the 222-row gate evidence, venue
-/// clamped. The <=0.70 bucket's edge CI straddles break-even, so it sizes
-/// to zero — no stake on an unproven bucket.
-pub fn kelly_lo_stake(price: f64, equity: f64, cap: f64) -> Option<f64> {
-    if !(0.0..1.0).contains(&price) || equity <= 0.0 {
-        return None;
+/// Kelly sizing guard: until equity reaches `KELLY_EQUITY_CAP_RELEASE_USD`
+/// a Kelly stake above this fraction of equity is refused - a `q_lo` good
+/// enough to size that large on a small book is a defect until audited.
+pub const KELLY_EQUITY_FRACTION_CAP: f64 = 0.10;
+pub const KELLY_EQUITY_CAP_RELEASE_USD: f64 = 500.0;
+
+/// Why `kelly_lo_stake` declined to size (the `band_skip_detail` reason).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KellySkip {
+    /// No positive Kelly fraction at this price for this `q_lo` (or an
+    /// input outside its domain).
+    NoEdge,
+    /// `f_k x f_lo x equity` is below the venue minimum: skipped, never
+    /// clamped up.
+    BelowVenueMin,
+    /// Above `KELLY_EQUITY_FRACTION_CAP` of an equity still below
+    /// `KELLY_EQUITY_CAP_RELEASE_USD`.
+    AboveEquityCap,
+    /// `f_k` (`KELLY_FRACTION`) outside (0, 1]: a configuration error,
+    /// named as such so the skip never reads as a verdict on the price.
+    BadFraction,
+}
+
+impl KellySkip {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KellySkip::NoEdge => "kelly_no_edge",
+            KellySkip::BelowVenueMin => "kelly_below_venue_min",
+            KellySkip::AboveEquityCap => "kelly_above_equity_cap",
+            KellySkip::BadFraction => "kelly_bad_fraction",
+        }
     }
-    let q_lo = if price <= 0.70 {
-        return None;
-    } else if price <= 0.80 {
-        0.9124
-    } else {
-        0.9413
-    };
+}
+
+/// `KELLY_FRACTION` is a Kelly multiple in (0, 1] (full Kelly at most;
+/// NaN fails). One predicate for the sizer, the preflight and
+/// `Pipeline::new`.
+pub fn kelly_fraction_valid(f_k: f64) -> bool {
+    f_k > 0.0 && f_k <= 1.0
+}
+
+/// Kelly on the promoted cell's running ladder Wilson lower bound
+/// (docs/profitability_basement_2026-09-18.md, section C "Sizing and
+/// accounting"): `stake = f_k x f_lo x equity` with
+/// `f_lo = q_lo - (1 - q_lo) / b`, `b` the net odds at the live taker fee.
+/// `q_lo` is the artifact's `kelly_q_lo` (callers use the fixed `stake_usd`
+/// when it is 0) and `f_k` the operator's `KELLY_FRACTION`, refused
+/// outside (0, 1] (`BadFraction`). Never clamps up: a stake below
+/// `BAND_VENUE_MIN_STAKE` is a skip; so is one above 10% of equity until
+/// equity reaches $500. Capped at `cap` (`stake_usd`).
+pub fn kelly_lo_stake(
+    price: f64,
+    equity: f64,
+    q_lo: f64,
+    f_k: f64,
+    cap: f64,
+) -> Result<f64, KellySkip> {
+    if !kelly_fraction_valid(f_k) {
+        return Err(KellySkip::BadFraction);
+    }
+    // Positive-form domain test: NaN anywhere fails it.
+    let in_domain = price > 0.0 && price < 1.0 && equity > 0.0 && q_lo > 0.0 && q_lo < 1.0;
+    if !in_domain {
+        return Err(KellySkip::NoEdge);
+    }
     // The live taker fee (0.07), one constant with the fill models and the
-    // promotion artifact builder; the study's 0.072 overstated it.
+    // promotion artifact builder.
     let fee_rate = crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
     let b = (1.0 - price) / price - fee_rate * (1.0 - price);
     if b <= 0.0 {
-        return None;
+        return Err(KellySkip::NoEdge);
     }
     let f_lo = q_lo - (1.0 - q_lo) / b;
     if f_lo <= 0.0 {
-        return None;
+        return Err(KellySkip::NoEdge);
     }
-    Some((0.5 * f_lo * equity).clamp(BAND_VENUE_MIN_STAKE, cap))
+    let stake = f_k * f_lo * equity;
+    if !stake.is_finite() || stake < BAND_VENUE_MIN_STAKE {
+        return Err(KellySkip::BelowVenueMin);
+    }
+    if equity < KELLY_EQUITY_CAP_RELEASE_USD && stake > KELLY_EQUITY_FRACTION_CAP * equity {
+        return Err(KellySkip::AboveEquityCap);
+    }
+    Ok(stake.min(cap))
 }
 
 #[cfg(test)]
@@ -267,38 +323,89 @@ mod tests {
         assert!(book.open_cost().await.unwrap().abs() < 1e-9);
     }
 
+    /// Net odds at the live taker fee, as `kelly_lo_stake` computes them.
+    fn net_odds(p: f64) -> f64 {
+        (1.0 - p) / p - crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE * (1.0 - p)
+    }
+
     #[test]
-    fn kelly_lo_schedule_matches_the_study() {
-        // p=0.75 at $19: study says $6.03
-        let s = kelly_lo_stake(0.75, 19.0, 25.0).unwrap();
-        assert!((s - 6.03).abs() < 0.15, "got {s}");
-        // p=0.85 at $19: ~$5.58
-        let s = kelly_lo_stake(0.85, 19.0, 25.0).unwrap();
-        assert!((s - 5.58).abs() < 0.2, "got {s}");
-        // p=0.92 clamps up to the venue min
-        let s = kelly_lo_stake(0.92, 19.0, 25.0).unwrap();
-        assert!((s - 5.0).abs() < 1e-9);
-        // the unproven bucket sizes to zero
-        assert!(kelly_lo_stake(0.65, 19.0, 25.0).is_none());
-        // cap binds as equity grows
-        let s = kelly_lo_stake(0.75, 300.0, 25.0).unwrap();
-        assert!((s - 25.0).abs() < 1e-9);
+    fn kelly_lo_sizes_on_the_artifact_q_lo_and_never_clamps_up() {
+        // p=0.92, q_lo=0.94, f_k=0.25 at $100: f_lo ~ 0.202, stake $5.05.
+        let (p, q_lo, f_k) = (0.92, 0.94, 0.25);
+        let f_lo = q_lo - (1.0 - q_lo) / net_odds(p);
+        let expect = f_k * f_lo * 100.0;
+        assert!(expect > BAND_VENUE_MIN_STAKE && expect < 10.0, "{expect}");
+        let s = kelly_lo_stake(p, 100.0, q_lo, f_k, 25.0).unwrap();
+        assert!((s - expect).abs() < 1e-12, "got {s}, expected {expect}");
+        // A hair less equity puts the stake under $5: a skip, never $5.
+        assert_eq!(
+            kelly_lo_stake(p, 95.0, q_lo, f_k, 25.0),
+            Err(KellySkip::BelowVenueMin)
+        );
+        // Below break-even (q_be = 1/(1+b) ~ 0.9248 at 0.92): no edge.
+        assert_eq!(
+            kelly_lo_stake(p, 1_000.0, 0.92, f_k, 25.0),
+            Err(KellySkip::NoEdge)
+        );
+        // q_lo 0 (fixed-stake artifact) and other out-of-domain inputs.
+        assert_eq!(kelly_lo_stake(p, 100.0, 0.0, f_k, 25.0), Err(KellySkip::NoEdge));
+        assert_eq!(kelly_lo_stake(p, 100.0, 1.0, f_k, 25.0), Err(KellySkip::NoEdge));
+        assert_eq!(kelly_lo_stake(p, 0.0, q_lo, f_k, 25.0), Err(KellySkip::NoEdge));
+        assert_eq!(kelly_lo_stake(1.0, 100.0, q_lo, f_k, 25.0), Err(KellySkip::NoEdge));
+        assert_eq!(kelly_lo_stake(0.0, 100.0, q_lo, f_k, 25.0), Err(KellySkip::NoEdge));
+        // KELLY_FRACTION outside (0, 1] is a configuration error, named as
+        // one: 0 (a disabled Kelly is q_lo 0, not f_k 0), a percent typed
+        // as 25, above full Kelly, NaN and infinite - never a price verdict
+        // and never a stake bounded only by the cap ($3,037 raw at $600).
+        for bad in [0.0, -0.25, 1.5, 25.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                kelly_lo_stake(p, 600.0, q_lo, bad, 25.0),
+                Err(KellySkip::BadFraction),
+                "f_k {bad}"
+            );
+            assert!(!kelly_fraction_valid(bad), "f_k {bad}");
+        }
+        assert_eq!(KellySkip::BadFraction.as_str(), "kelly_bad_fraction");
+        // Full Kelly is the largest multiple accepted: at $600 the cap binds.
+        assert!(kelly_fraction_valid(1.0));
+        assert_eq!(kelly_lo_stake(p, 600.0, q_lo, 1.0, 25.0), Ok(25.0));
+    }
+
+    #[test]
+    fn kelly_lo_refuses_above_ten_percent_of_a_small_equity_then_caps() {
+        // p=0.92, q_lo=0.97, f_k=0.25: f_lo ~ 0.60, i.e. 15% of equity.
+        let (p, q_lo, f_k) = (0.92, 0.97, 0.25);
+        let f_lo = q_lo - (1.0 - q_lo) / net_odds(p);
+        assert!(f_k * f_lo > KELLY_EQUITY_FRACTION_CAP);
+        assert_eq!(
+            kelly_lo_stake(p, 100.0, q_lo, f_k, 25.0),
+            Err(KellySkip::AboveEquityCap)
+        );
+        assert_eq!(
+            kelly_lo_stake(p, 499.0, q_lo, f_k, 25.0),
+            Err(KellySkip::AboveEquityCap)
+        );
+        // At $500 the guard releases and the cap (stake_usd) binds.
+        let s = kelly_lo_stake(p, 500.0, q_lo, f_k, 25.0).unwrap();
+        assert!((s - 25.0).abs() < 1e-9, "got {s}");
+        // Under the cap the stake is the plain product.
+        let s = kelly_lo_stake(p, 500.0, q_lo, f_k, 100.0).unwrap();
+        assert!((s - f_k * f_lo * 500.0).abs() < 1e-9, "got {s}");
     }
 
     #[test]
     fn kelly_lo_uses_the_live_taker_fee() {
         use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
         assert_eq!(DEFAULT_CRYPTO_TAKER_FEE_RATE, 0.07);
-        // Closed form at the live fee, unclamped ($19 equity, $25 cap).
-        let (p, q_lo) = (0.85, 0.9413);
-        let b = (1.0 - p) / p - DEFAULT_CRYPTO_TAKER_FEE_RATE * (1.0 - p);
-        let expect = 0.5 * (q_lo - (1.0 - q_lo) / b) * 19.0;
-        assert!(expect > BAND_VENUE_MIN_STAKE && expect < 25.0);
-        let s = kelly_lo_stake(p, 19.0, 25.0).unwrap();
+        // Closed form at the live fee, unguarded ($600 equity, $100 cap).
+        let (p, q_lo, f_k) = (0.85, 0.9413, 0.05);
+        let expect = f_k * (q_lo - (1.0 - q_lo) / net_odds(p)) * 600.0;
+        assert!(expect > BAND_VENUE_MIN_STAKE && expect < 100.0);
+        let s = kelly_lo_stake(p, 600.0, q_lo, f_k, 100.0).unwrap();
         assert!((s - expect).abs() < 1e-12, "got {s}, expected {expect}");
-        // The study's 0.072 would size differently.
+        // The 2026-09-01 study's 0.072 would size differently.
         let b_study = (1.0 - p) / p - 0.072 * (1.0 - p);
-        let study = 0.5 * (q_lo - (1.0 - q_lo) / b_study) * 19.0;
+        let study = f_k * (q_lo - (1.0 - q_lo) / b_study) * 600.0;
         assert!((s - study).abs() > 1e-6);
     }
 }

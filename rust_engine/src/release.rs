@@ -187,8 +187,8 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "candle_simulated_balance_reset_on_start": settings.candle_simulated_balance_reset_on_start,
         "max_total_exposure_usd": settings.max_total_exposure_usd,
         "max_position_per_market_usd": settings.max_position_per_market_usd,
+        "kelly_fraction": settings.kelly_fraction,
         "candle_position_pct": settings.candle_position_pct,
-        "candle_max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
         "candle_window_minutes": settings.candle_window_minutes,
         "candle_settlement_alignment_ready": settings.candle_settlement_alignment_ready,
         "alert_required": settings.alert_required,
@@ -863,6 +863,10 @@ fn check_promotion_artifact(
         Ok(artifact) => {
             if let Some(detail) = promotion_validation_error(&artifact) {
                 push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+            } else if let Some(detail) =
+                band_kelly_config_error(&artifact, settings, mode.is_live())
+            {
+                push(checks, "promotion_artifact", CheckStatus::Fail, detail);
             } else if let Some(detail) = promotion_inventory_model_error(&artifact) {
                 if !mode.is_live() && settings.allow_stale_research_artifact {
                     push(
@@ -893,6 +897,22 @@ fn check_promotion_artifact(
             format!("failed to load promotion artifact {path}: {e}"),
         ),
     }
+}
+
+/// A validated band artifact's Kelly policy against the environment it
+/// would run in (`kelly_policy_config_error`): a `kelly_q_lo` artifact
+/// needs `KELLY_FRACTION` in (0, 1] and, live, the v2 book.
+fn band_kelly_config_error(
+    artifact: &PromotionArtifact,
+    settings: &Settings,
+    live: bool,
+) -> Option<String> {
+    if artifact.selected_strategy.name != crate::live::pipeline::BAND_FAMILY {
+        return None;
+    }
+    let params: crate::live::pipeline::BandPolicyParams =
+        serde_json::from_value(artifact.strategy_params.clone()).ok()?;
+    crate::live::pipeline::kelly_policy_config_error(&params, settings, live)
 }
 
 fn promotion_inventory_model_error(artifact: &PromotionArtifact) -> Option<String> {
@@ -970,8 +990,9 @@ mod tests {
     use crate::backtest::experiment::{PromotionGate, CURRENT_INVENTORY_MODEL_VERSION};
     use tempfile::TempDir;
 
-    #[test]
-    fn promotion_validation_accepts_band_family_and_rejects_tampering() {
+    /// The live margin50 band policy with `kelly_q_lo` as given (0 = the
+    /// fixed stake), hashed the way the artifact builder hashes it.
+    fn band_test_artifact(kelly_q_lo: f64) -> PromotionArtifact {
         let params = crate::live::pipeline::BandPolicyParams {
             family: crate::live::pipeline::BAND_FAMILY.to_string(),
             decision_seconds: 240.0,
@@ -981,8 +1002,9 @@ mod tests {
             stake_usd: 5.0,
             min_decision_margin_usd: 0.0,
             position_pct: 1.0,
+            kelly_q_lo,
         };
-        let mut artifact = PromotionArtifact {
+        PromotionArtifact {
             schema_version: 1,
             inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
             created_at: "2026-08-24T00:00:00Z".to_string(),
@@ -1009,12 +1031,65 @@ mod tests {
             risk_notes: Vec::new(),
             promotion_gate: PromotionGate::default(),
             robust_diagnostics: None,
-        };
+        }
+    }
+
+    #[test]
+    fn promotion_validation_accepts_band_family_and_rejects_tampering() {
+        let mut artifact = band_test_artifact(0.0);
         assert_eq!(promotion_validation_error(&artifact), None);
 
         artifact.strategy_params["ask_cap"] = serde_json::json!(0.95);
         let err = promotion_validation_error(&artifact).expect("tampered band must be rejected");
         assert!(err.contains("does not match"), "unexpected error: {err}");
+    }
+
+    /// A Kelly artifact (`kelly_q_lo` > 0) fails the live preflight on the
+    /// pinned v1 book and in every mode on a `KELLY_FRACTION` outside
+    /// (0, 1]; paper keeps v1 (the observer), the v2 book passes, and a
+    /// fixed-stake artifact is unaffected. Same rule as `Pipeline::new`.
+    #[test]
+    fn preflight_refuses_a_kelly_artifact_off_the_v2_book_in_live_mode() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("band_promotion.json");
+        let write = |kelly_q_lo: f64| {
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&band_test_artifact(kelly_q_lo)).unwrap(),
+            )
+            .unwrap()
+        };
+        let check = |s: &Settings, mode: RuntimeMode| -> PreflightCheck {
+            run_preflight(s, mode, true)
+                .checks
+                .into_iter()
+                .find(|c| c.name == "promotion_artifact")
+                .unwrap()
+        };
+        write(0.94);
+        let mut s = test_settings(&tmp);
+        s.promotion_artifact_path = path.display().to_string();
+        assert_eq!(s.risk_book, "v1");
+        let live = check(&s, RuntimeMode::Live);
+        assert_eq!(live.status, CheckStatus::Fail, "{}", live.detail);
+        assert!(
+            live.detail
+                .contains("kelly_q_lo 0.94 requires RISK_BOOK=v2"),
+            "{}",
+            live.detail
+        );
+        assert_eq!(check(&s, RuntimeMode::Paper).status, CheckStatus::Ok);
+        s.risk_book = "v2".to_string();
+        assert_eq!(check(&s, RuntimeMode::Live).status, CheckStatus::Ok);
+        s.kelly_fraction = 25.0;
+        for mode in [RuntimeMode::Paper, RuntimeMode::Live] {
+            let c = check(&s, mode);
+            assert_eq!(c.status, CheckStatus::Fail, "{}", c.detail);
+            assert!(c.detail.contains("KELLY_FRACTION in (0,1]"), "{}", c.detail);
+        }
+        write(0.0);
+        s.risk_book = "v1".to_string();
+        assert_eq!(check(&s, RuntimeMode::Live).status, CheckStatus::Ok);
     }
 
     /// The checked-in cap-0.91 artifact (direction memo 2026-09-07, gap 3)
@@ -1060,7 +1135,6 @@ mod tests {
         std::fs::create_dir_all(&s.session_log_dir).unwrap();
         std::fs::create_dir_all(root.join("logs/candle")).unwrap();
         s.venue = VenueMode::PaperOnly;
-        s.venue_raw = "paper_only".to_string();
         s.venue_parse_error = None;
         s.alert_required = false;
         s.bankroll_usd = 100.0;
@@ -1119,7 +1193,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut s = test_settings(&tmp);
         s.venue = VenueMode::PolymarketInternational;
-        s.venue_raw = "polymarket_international".to_string();
         s.operator_country = "IE".to_string();
         s.venue_compliance_ok = true;
         s.clob_v2_ready = false;
@@ -1140,7 +1213,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut s = test_settings(&tmp);
         s.venue = VenueMode::PolymarketInternational;
-        s.venue_raw = "polymarket_international".to_string();
         s.operator_country = "IE".to_string();
         s.venue_compliance_ok = true;
         s.clob_v2_ready = true;

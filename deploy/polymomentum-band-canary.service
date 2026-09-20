@@ -19,12 +19,10 @@ User=polymomentum
 WorkingDirectory=/opt/polymomentum
 EnvironmentFile=/etc/polymomentum/env
 EnvironmentFile=/etc/polymomentum/band-canary.env
-# Server-only secrets (band wallet PRIVATE_KEY + derived POLY_API_*).
-# Loaded LAST so they always win; this file is never synced from the
-# repo, so config redeploys can no longer clobber credentials.
-EnvironmentFile=-/etc/polymomentum/band-canary-secrets.env
-# Credentials live in their own file so config redeploys of
-# band-canary.env can never clobber them (incident 2026-08-25 10:10).
+# Server-only secrets (band wallet PRIVATE_KEY + derived POLY_API_*), in
+# their own file and loaded LAST so they always win: config redeploys of
+# band-canary.env can never clobber them (incident 2026-08-25 10:10). The
+# file is never synced from the repo; a missing file fails the start.
 EnvironmentFile=/etc/polymomentum/band-canary-secrets.env
 # The promotion artifact comes from POLYMOMENTUM_PROMOTION_ARTIFACT in
 # band-canary.env - a command-line pin here silently overrode the env and

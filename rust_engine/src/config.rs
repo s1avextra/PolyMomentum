@@ -81,9 +81,9 @@ impl fmt::Display for VenueMode {
 }
 
 #[derive(Debug, Clone)]
-// Some fields are read by future-phase code paths or surfaced as public
-// config knobs (Kelly fraction, alert_required, etc.) even though the
-// current pipeline does not branch on them. Silence the dead-field warnings.
+// A few fields are only surfaced through the release manifest / preflight
+// (venue_parse_error, alert_required, etc.) rather than read by the pipeline.
+// Silence the dead-field warnings.
 #[allow(dead_code)]
 pub struct Settings {
     pub poly_api_key: String,
@@ -94,9 +94,6 @@ pub struct Settings {
     pub poly_base_url: String,
     /// Venue status page summary endpoint; empty disables the incident gate.
     pub poly_status_url: String,
-    /// Band stake policy: "pct" (legacy 25%-clamp) or "kelly_lo"
-    /// (half-Kelly on the per-bucket Wilson lower bound; skips <=0.70).
-    pub band_sizing: String,
     /// Money-free challenger capture: window seconds at which a
     /// `band_anchor` event records the live quote; empty disables.
     pub band_anchor_seconds: Vec<f64>,
@@ -124,7 +121,6 @@ pub struct Settings {
     pub poly_gamma_url: String,
 
     pub venue: VenueMode,
-    pub venue_raw: String,
     pub venue_parse_error: Option<String>,
     pub operator_country: String,
     pub venue_compliance_ok: bool,
@@ -140,53 +136,19 @@ pub struct Settings {
     pub bankroll_usd: f64,
     pub max_total_exposure_usd: f64,
     pub max_position_per_market_usd: f64,
-    pub cooldown_seconds: f64,
-    pub min_profit_usd: f64,
+    /// Kelly multiple `f_k` for `kelly_lo_stake` (`KELLY_FRACTION`, default
+    /// 0.25 during fill parity; 0.5 after).
     pub kelly_fraction: f64,
-    pub min_crypto_edge: f64,
-    pub max_crypto_position_pct: f64,
 
-    pub candle_zone_early_min_confidence: f64,
-    pub candle_zone_early_min_z: f64,
-    pub candle_zone_early_min_edge: f64,
-    pub candle_zone_primary_min_z: f64,
-    pub candle_zone_late_min_confidence: f64,
-    pub candle_zone_late_min_z: f64,
-    pub candle_zone_late_min_edge: f64,
-    pub candle_zone_terminal_min_confidence: f64,
-    pub candle_zone_terminal_min_z: f64,
-    pub candle_zone_terminal_min_edge: f64,
-    pub candle_dead_zone_lo: f64,
-    pub candle_dead_zone_hi: f64,
-    pub candle_min_price: f64,
+    /// Preflight worst-case first-order price (`live_min_order_budget_usd`).
     pub candle_max_price: f64,
-    pub candle_edge_cap: f64,
-    pub candle_skip_dead_zone: bool,
-    pub candle_min_ev_buffer: f64,
-    pub candle_settlement_cutoff_minutes: f64,
-    pub candle_settlement_guard_minutes: f64,
-    pub candle_settlement_min_abs_move_usd: f64,
-    pub candle_settlement_sigma_buffer: f64,
     pub candle_settlement_alignment_ready: bool,
-    pub candle_runtime_min_confidence_floor: f64,
-    pub candle_runtime_min_z_floor: f64,
-    pub candle_runtime_min_edge_floor: f64,
-    pub candle_runtime_min_ev_buffer_floor: f64,
-    pub candle_runtime_min_price_floor: f64,
-    pub candle_runtime_max_price_ceiling: f64,
-    pub candle_microstructure_max_spread: f64,
-    pub candle_microstructure_min_book_depth: f64,
-    pub candle_microstructure_min_book_pressure: f64,
     pub candle_window_minutes: f64,
 
     pub candle_noise_z_threshold: f64,
+    /// Preflight first-order budget proxy (`live_configured_order_budget_usd`).
     pub candle_position_pct: f64,
-    pub candle_max_projected_stressed_drawdown_pct: f64,
 
-    pub candle_breaker_min_trades: i64,
-    pub candle_breaker_min_win_rate: f64,
-    pub candle_breaker_max_drawdown_pct: f64,
-    pub candle_breaker_max_session_loss_pct: f64,
     pub candle_breaker_max_consecutive_losses: i64,
     /// Cross-restart cumulative live-loss cap as a fraction of initial
     /// bankroll. The ledger survives bankroll actualization; 0 disables.
@@ -295,7 +257,6 @@ impl Settings {
                 "POLY_STATUS_URL",
                 "https://status.polymarket.com/api/v2/summary.json",
             ),
-            band_sizing: env_str("BAND_SIZING", "pct"),
             band_anchor_seconds: band_anchor_seconds_from_env(),
             band_ladder_budgets_usd: band_ladder_budgets_from_env(),
             band_host_label: env_str("POLYMOMENTUM_HOST_LABEL", ""),
@@ -305,7 +266,6 @@ impl Settings {
             poly_gamma_url: env_str("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
 
             venue,
-            venue_raw,
             venue_parse_error,
             operator_country: env_str("OPERATOR_COUNTRY", ""),
             venue_compliance_ok: env_bool("POLYMOMENTUM_VENUE_COMPLIANCE_OK", false),
@@ -321,74 +281,15 @@ impl Settings {
             bankroll_usd: env_f64("BANKROLL_USD", 0.0),
             max_total_exposure_usd: env_f64("MAX_TOTAL_EXPOSURE_USD", 80.0),
             max_position_per_market_usd: env_f64("MAX_POSITION_PER_MARKET_USD", 20.0),
-            cooldown_seconds: env_f64("COOLDOWN_SECONDS", 120.0),
-            min_profit_usd: env_f64("MIN_PROFIT_USD", 0.10),
             kelly_fraction: env_f64("KELLY_FRACTION", 0.25),
-            min_crypto_edge: env_f64("MIN_CRYPTO_EDGE", 0.03),
-            max_crypto_position_pct: env_f64("MAX_CRYPTO_POSITION_PCT", 0.10),
 
-            candle_zone_early_min_confidence: env_f64("CANDLE_ZONE_EARLY_MIN_CONFIDENCE", 0.55),
-            candle_zone_early_min_z: env_f64("CANDLE_ZONE_EARLY_MIN_Z", 2.0),
-            candle_zone_early_min_edge: env_f64("CANDLE_ZONE_EARLY_MIN_EDGE", 0.03),
-            candle_zone_primary_min_z: env_f64("CANDLE_ZONE_PRIMARY_MIN_Z", 1.0),
-            candle_zone_late_min_confidence: env_f64("CANDLE_ZONE_LATE_MIN_CONFIDENCE", 0.65),
-            candle_zone_late_min_z: env_f64("CANDLE_ZONE_LATE_MIN_Z", 0.5),
-            candle_zone_late_min_edge: env_f64("CANDLE_ZONE_LATE_MIN_EDGE", 0.08),
-            candle_zone_terminal_min_confidence: env_f64(
-                "CANDLE_ZONE_TERMINAL_MIN_CONFIDENCE",
-                0.55,
-            ),
-            candle_zone_terminal_min_z: env_f64("CANDLE_ZONE_TERMINAL_MIN_Z", 0.3),
-            candle_zone_terminal_min_edge: env_f64("CANDLE_ZONE_TERMINAL_MIN_EDGE", 0.03),
-            candle_dead_zone_lo: env_f64("CANDLE_DEAD_ZONE_LO", 0.80),
-            candle_dead_zone_hi: env_f64("CANDLE_DEAD_ZONE_HI", 0.90),
-            candle_min_price: env_f64("CANDLE_MIN_PRICE", 0.10),
             candle_max_price: env_f64("CANDLE_MAX_PRICE", 0.90),
-            candle_edge_cap: env_f64("CANDLE_EDGE_CAP", 0.25),
-            candle_skip_dead_zone: env_bool("CANDLE_SKIP_DEAD_ZONE", true),
-            candle_min_ev_buffer: env_f64("CANDLE_MIN_EV_BUFFER", 0.05),
-            candle_settlement_cutoff_minutes: env_f64("CANDLE_SETTLEMENT_CUTOFF_MINUTES", 0.30),
-            candle_settlement_guard_minutes: env_f64("CANDLE_SETTLEMENT_GUARD_MINUTES", 1.0),
-            candle_settlement_min_abs_move_usd: env_f64("CANDLE_SETTLEMENT_MIN_ABS_MOVE_USD", 10.0),
-            candle_settlement_sigma_buffer: env_f64("CANDLE_SETTLEMENT_SIGMA_BUFFER", 0.0),
             candle_settlement_alignment_ready: env_bool("CANDLE_SETTLEMENT_ALIGNMENT_READY", false),
-            candle_runtime_min_confidence_floor: env_f64(
-                "CANDLE_RUNTIME_MIN_CONFIDENCE_FLOOR",
-                0.0,
-            ),
-            candle_runtime_min_z_floor: env_f64("CANDLE_RUNTIME_MIN_Z_FLOOR", 0.0),
-            candle_runtime_min_edge_floor: env_f64("CANDLE_RUNTIME_MIN_EDGE_FLOOR", 0.0),
-            candle_runtime_min_ev_buffer_floor: env_f64("CANDLE_RUNTIME_MIN_EV_BUFFER_FLOOR", -1.0),
-            candle_runtime_min_price_floor: env_f64("CANDLE_RUNTIME_MIN_PRICE_FLOOR", 0.0),
-            candle_runtime_max_price_ceiling: env_f64("CANDLE_RUNTIME_MAX_PRICE_CEILING", 1.0),
-            candle_microstructure_max_spread: env_f64("CANDLE_MICROSTRUCTURE_MAX_SPREAD", 1.0),
-            candle_microstructure_min_book_depth: env_f64(
-                "CANDLE_MICROSTRUCTURE_MIN_BOOK_DEPTH",
-                0.0,
-            ),
-            candle_microstructure_min_book_pressure: env_f64(
-                "CANDLE_MICROSTRUCTURE_MIN_BOOK_PRESSURE",
-                -1.0,
-            ),
             candle_window_minutes: env_f64("CANDLE_WINDOW_MINUTES", 5.0),
 
             candle_noise_z_threshold: env_f64("CANDLE_NOISE_Z_THRESHOLD", 0.3),
             candle_position_pct: env_f64("CANDLE_POSITION_PCT", 0.10),
-            // Enabled by default since 2026-08-17 (audit Ф0): the feed-forward
-            // sizing cap is the only pre-trade drawdown control during the
-            // first `min_trades` resolutions. Set 0.0 to disable explicitly.
-            candle_max_projected_stressed_drawdown_pct: env_f64(
-                "CANDLE_MAX_PROJECTED_STRESSED_DRAWDOWN_PCT",
-                0.25,
-            ),
 
-            candle_breaker_min_trades: env_i64("CANDLE_BREAKER_MIN_TRADES", 20),
-            candle_breaker_min_win_rate: env_f64("CANDLE_BREAKER_MIN_WIN_RATE", 0.65),
-            candle_breaker_max_drawdown_pct: env_f64("CANDLE_BREAKER_MAX_DRAWDOWN_PCT", 0.30),
-            candle_breaker_max_session_loss_pct: env_f64(
-                "CANDLE_BREAKER_MAX_SESSION_LOSS_PCT",
-                0.20,
-            ),
             candle_breaker_max_consecutive_losses: env_i64(
                 "CANDLE_BREAKER_MAX_CONSECUTIVE_LOSSES",
                 8,
@@ -498,8 +399,7 @@ mod tests {
     #[test]
     fn defaults_are_sane() {
         let s = Settings::from_env();
-        assert!(s.candle_min_price < s.candle_max_price);
-        assert!(s.candle_dead_zone_lo < s.candle_dead_zone_hi);
+        assert!(s.candle_max_price > 0.0 && s.candle_max_price < 1.0);
         assert!(s.candle_window_minutes >= 0.0);
         assert!(s.kelly_fraction > 0.0 && s.kelly_fraction <= 1.0);
         assert!(s.max_position_per_market_usd > 0.0);
@@ -535,11 +435,11 @@ mod tests {
         assert_eq!(parse_band_anchor_seconds(""), Some(Vec::new()));
         assert_eq!(parse_band_anchor_seconds("  "), Some(Vec::new()));
         assert_eq!(
-            parse_band_anchor_seconds(" 240 , 270 "),
-            Some(vec![240.0, 270.0])
+            parse_band_anchor_seconds(" 150 , 240 "),
+            Some(vec![150.0, 240.0])
         );
         assert_eq!(parse_band_anchor_seconds("abc"), None);
-        assert_eq!(parse_band_anchor_seconds("240,,270"), None);
+        assert_eq!(parse_band_anchor_seconds("150,,240"), None);
         assert_eq!(parse_band_anchor_seconds("-5"), None);
         assert_eq!(parse_band_anchor_seconds("nan"), None);
         // Garbage in the environment falls back to the default, no panic.
