@@ -146,7 +146,6 @@ pub fn run_preflight(
         check_live_reconciliation(settings, &mut checks);
         check_live_credentials(settings, &mut checks);
         check_live_alerts(settings, &mut checks);
-        check_live_order_style_alignment(settings, &mut checks);
     } else {
         check_paper_bankroll(settings, &mut checks);
         push(
@@ -179,7 +178,6 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "live_reconciliation_ready": settings.live_reconciliation_ready,
         "live_min_order_size_shares": settings.live_min_order_size_shares,
         "live_order_budget_buffer": settings.live_order_budget_buffer,
-        "live_allow_maker_orders": settings.live_allow_maker_orders,
         "private_key_present": !settings.private_key.is_empty(),
         "poly_api_key_present": !settings.poly_api_key.is_empty(),
         "poly_api_secret_present": !settings.poly_api_secret.is_empty(),
@@ -191,10 +189,7 @@ fn redacted_config_hash(settings: &Settings) -> String {
         "max_position_per_market_usd": settings.max_position_per_market_usd,
         "candle_position_pct": settings.candle_position_pct,
         "candle_max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
-        "candle_prefer_maker": settings.candle_prefer_maker,
-        "candle_maker_timeout_s": settings.candle_maker_timeout_s,
         "candle_window_minutes": settings.candle_window_minutes,
-        "candle_cross_asset_enabled": settings.candle_cross_asset_enabled,
         "candle_settlement_alignment_ready": settings.candle_settlement_alignment_ready,
         "alert_required": settings.alert_required,
         "promotion_artifact_present": !settings.promotion_artifact_path.trim().is_empty(),
@@ -324,45 +319,6 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
             win_rate: None,
             total_pnl: None,
         },
-    }
-}
-
-fn check_live_order_style_alignment(settings: &Settings, checks: &mut Vec<PreflightCheck>) {
-    let path = settings.promotion_artifact_path.trim();
-    if path.is_empty() {
-        return;
-    }
-
-    let Ok(artifact) = crate::backtest::experiment::read_promotion(path) else {
-        return;
-    };
-    let Ok(variant) = serde_json::from_value::<StrategyVariant>(artifact.strategy_params.clone())
-    else {
-        return;
-    };
-
-    if variant.prefer_maker && !settings.live_allow_maker_orders {
-        push(
-            checks,
-            "live_order_style",
-            CheckStatus::Fail,
-            "promoted strategy uses maker orders; set LIVE_ALLOW_MAKER_ORDERS=1 or promote a taker strategy before live"
-                .to_string(),
-        );
-    } else if variant.prefer_maker {
-        push(
-            checks,
-            "live_order_style",
-            CheckStatus::Ok,
-            "promoted maker strategy matches LIVE_ALLOW_MAKER_ORDERS=1".to_string(),
-        );
-    } else {
-        push(
-            checks,
-            "live_order_style",
-            CheckStatus::Ok,
-            "promoted taker strategy does not require maker enablement".to_string(),
-        );
     }
 }
 
@@ -1320,34 +1276,6 @@ mod tests {
         let report = run_preflight(&s, RuntimeMode::Live, true);
         assert!(!report.ok);
         assert!(report.failure_summary().contains("CANDLE_WINDOW_MINUTES=5"));
-    }
-
-    #[test]
-    fn live_preflight_rejects_maker_promotion_without_maker_permission() {
-        let tmp = TempDir::new().unwrap();
-        let mut s = test_settings(&tmp);
-        let artifact = write_test_promotion(tmp.path(), StrategyVariant::maker_first());
-        s.promotion_artifact_path = artifact.display().to_string();
-        s.venue = VenueMode::PolymarketInternational;
-        s.venue_raw = "polymarket_international".to_string();
-        s.operator_country = "IE".to_string();
-        s.venue_compliance_ok = true;
-        s.clob_v2_ready = true;
-        s.live_reconciliation_ready = true;
-        s.candle_settlement_alignment_ready = true;
-        s.alert_required = true;
-        s.live_allow_maker_orders = false;
-        s.private_key =
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string();
-        s.poly_api_key = "key".to_string();
-        s.poly_api_secret = "c2VjcmV0".to_string();
-        s.poly_api_passphrase = "pass".to_string();
-
-        let report = run_preflight(&s, RuntimeMode::Live, true);
-        assert!(!report.ok);
-        assert!(report
-            .failure_summary()
-            .contains("LIVE_ALLOW_MAKER_ORDERS=1"));
     }
 
     fn write_test_promotion(root: &std::path::Path, variant: StrategyVariant) -> PathBuf {

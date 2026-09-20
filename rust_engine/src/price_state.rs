@@ -20,12 +20,8 @@ pub struct PriceState {
     reference_prices: HashMap<String, f64>,
     reference_timestamps: HashMap<String, Instant>,
     reference_observed_at_ms: HashMap<String, i64>,
-    pub alt_prices: HashMap<String, HashMap<String, f64>>,
-    pub alt_mid: HashMap<String, f64>,
-    pub alt_timestamps: HashMap<String, Instant>,
     price_history: VecDeque<(f64, f64)>,
     reference_history: HashMap<String, VecDeque<(f64, f64)>>,
-    alt_history: HashMap<String, VecDeque<(f64, f64)>>,
     /// Per-source tick history on the venue's own event clock (binance
     /// only today, via `update_at`): the band's margin basis, which the
     /// composite `price_history` (live-source mean stamped at receipt)
@@ -51,12 +47,8 @@ impl PriceState {
             reference_prices: HashMap::new(),
             reference_timestamps: HashMap::new(),
             reference_observed_at_ms: HashMap::new(),
-            alt_prices: HashMap::new(),
-            alt_mid: HashMap::new(),
-            alt_timestamps: HashMap::new(),
             price_history: VecDeque::new(),
             reference_history: HashMap::new(),
-            alt_history: HashMap::new(),
             source_history: HashMap::new(),
         }
     }
@@ -202,52 +194,16 @@ impl PriceState {
         }
     }
 
-    pub fn update_alt(&mut self, asset: &str, source: &str, price: f64) {
-        if price <= 0.0 || !price.is_finite() {
-            return;
-        }
-        let key = format!("{asset}:{source}");
-        self.alt_timestamps.insert(key, Instant::now());
-
-        let sources = self.alt_prices.entry(asset.to_string()).or_default();
-        sources.insert(source.to_string(), price);
-
-        let now = Instant::now();
-        let live: Vec<f64> = sources
-            .iter()
-            .filter(|(src, _)| {
-                let key = format!("{asset}:{src}");
-                self.alt_timestamps
-                    .get(&key)
-                    .map(|t| now.duration_since(*t).as_secs() < 10)
-                    .unwrap_or(false)
-            })
-            .map(|(_, p)| *p)
-            .collect();
-
-        if !live.is_empty() {
-            let mid = live.iter().sum::<f64>() / live.len() as f64;
-            self.alt_mid.insert(asset.to_string(), mid);
-            record_history(
-                self.alt_history.entry(asset.to_string()).or_default(),
-                now_seconds(),
-                mid,
-            );
-        }
-    }
-
     pub fn price_near_seconds(
         &self,
         asset: &str,
         target_s: f64,
         max_distance_s: f64,
     ) -> Option<f64> {
-        let history = if asset == "BTC" {
-            &self.price_history
-        } else {
-            self.alt_history.get(asset)?
-        };
-        history
+        if asset != "BTC" {
+            return None;
+        }
+        self.price_history
             .iter()
             .filter_map(|(ts, price)| {
                 let distance = (*ts - target_s).abs();

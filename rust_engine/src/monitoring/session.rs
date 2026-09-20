@@ -163,6 +163,25 @@ impl SessionMonitor {
         );
     }
 
+    /// Startup record for the band runtime: the promoted spec and its
+    /// source; the band carries no zone/microstructure/selectivity model.
+    pub fn record_band_runtime_strategy(
+        &self,
+        source: &str,
+        strategy: &crate::strategy::spec::StrategySpec,
+        settlement_alignment_ready: bool,
+    ) {
+        self.write_event(
+            "system",
+            "runtime_strategy",
+            json!({
+                "source": source,
+                "strategy": strategy,
+                "settlement_alignment_ready": settlement_alignment_ready,
+            }),
+        );
+    }
+
     pub fn record_order_placed(&self, evt: &OrderPlaced) {
         self.counters.lock().unwrap().order_count += 1;
         self.write_event(

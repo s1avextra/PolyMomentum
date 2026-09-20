@@ -3,7 +3,7 @@
 //! Translates `src/polymomentum/crypto/candle_pipeline.py::CandlePipeline`
 //! to async Rust:
 //!
-//! - 8-exchange BTC + ETH/SOL spot WS aggregator (already in `exchange.rs`)
+//! - multi-exchange BTC spot WS aggregator (already in `exchange.rs`)
 //! - Polymarket WS L2 books (already in `polymarket_ws.rs`)
 //! - Gamma REST contract refresh (every 2 min)
 //! - 10 Hz cycle loop: per-contract evaluation + decision
@@ -23,10 +23,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::time::sleep;
 
-use crate::backtest::fill_model::{
-    ceil_buy_price_to_tick, resting_limit_price, Side, DEFAULT_TICK,
-};
-use crate::backtest::strategies::{SelectivityFilter, StrategyVariant};
+use crate::backtest::fill_model::{ceil_buy_price_to_tick, DEFAULT_TICK};
 use crate::clob::{create_shared_client, SharedClobClient, SubmitFailureKind};
 use crate::clob_user_ws::{
     parse_rest_trade_events, polymarket_user_feed, UserChannelAuth, UserEvent,
@@ -34,11 +31,11 @@ use crate::clob_user_ws::{
 use crate::config::{RuntimeMode, Settings};
 use crate::data::ctf::{CtfReader, Resolution};
 use crate::data::gamma::GammaClient;
-use crate::data::models::{DEFAULT_CRYPTO_TAKER_FEE_RATE, DEFAULT_MAKER_FEE_RATE};
+use crate::data::models::DEFAULT_CRYPTO_TAKER_FEE_RATE;
 use crate::data::scanner::{scan_candle_markets, CandleContract};
 use crate::execution::fees::polymarket_fee;
 use crate::execution::order_manager::{ManagedOrder, OrderManager, OrderState};
-use crate::execution::sizing::{buy_book_quote_from_budget, shares_from_budget, BuyBookQuote};
+use crate::execution::sizing::{buy_book_quote_from_budget, BuyBookQuote};
 use crate::live::breaker::{BreakerConfig, BreakerState};
 use crate::live::paper_fill::{simulate_paper_fill, PaperFillCfg};
 use crate::live::window::{
@@ -54,13 +51,8 @@ use crate::polymarket_ws::{
 use crate::price_state::PriceState;
 use crate::release::ReleaseManifest;
 use crate::risk::manager::{RiskConfig, RiskManager, TradeRecord};
-use crate::strategy::decision::{
-    decide_candle_trade_with_fee, DecisionResult, ZoneConfig, DEFAULT_MIN_CONFIDENCE,
-    DEFAULT_MIN_EDGE,
-};
 use crate::strategy::microstructure::{
-    apply_causal_dynamic_tick_transition, bookwalk_buy_slippage, recent_mid_runup, BookLevelView,
-    BookMicrostructure, MicrostructureConfig,
+    apply_causal_dynamic_tick_transition, BookLevelView, BookMicrostructure,
 };
 use crate::strategy::momentum::{MomentumConfig, MomentumDetector, MomentumSignal};
 use crate::strategy::spec::{stable_json_hash, OrderIntent, Signal, StrategySpec};
@@ -626,24 +618,10 @@ impl BandPolicyParams {
 #[derive(Debug, Clone)]
 struct RuntimeStrategy {
     strategy_spec: StrategySpec,
-    zone_config: ZoneConfig,
-    skip_dead_zone: bool,
-    min_confidence: f64,
-    min_edge: f64,
-    decision_volatility_floor: f64,
     position_pct: f64,
     max_per_market_usd: f64,
     max_projected_stressed_drawdown_pct: f64,
-    degraded_after_losses: u64,
-    degraded_after_drawdown_pct: f64,
-    degraded_min_z: f64,
-    degraded_max_price: f64,
-    degraded_force_taker: bool,
-    prefer_maker: bool,
     default_fee_rate: f64,
-    maker_fee_rate: f64,
-    microstructure: MicrostructureConfig,
-    selectivity: SelectivityFilter,
     band: Option<BandPolicyParams>,
     source: String,
 }
@@ -652,7 +630,7 @@ impl RuntimeStrategy {
     fn load(settings: &Settings) -> Result<Self> {
         let path = settings.promotion_artifact_path.trim();
         if path.is_empty() {
-            return Ok(Self::from_settings(settings));
+            bail!("POLYMOMENTUM_PROMOTION_ARTIFACT is required: the band family is the only runtime strategy");
         }
         let artifact = crate::backtest::experiment::read_promotion(path)
             .with_context(|| format!("load promotion artifact {path}"))?;
@@ -670,297 +648,34 @@ impl RuntimeStrategy {
                 );
             }
             return Ok(Self::band_runtime(
-                settings,
                 artifact.selected_strategy,
                 params,
                 format!("promotion:{path}"),
             ));
         }
-        if artifact.selected_strategy.name != "candle_momentum" {
-            bail!(
-                "unsupported promoted strategy {}",
-                artifact.selected_strategy.name
-            );
-        }
-        let mut variant: StrategyVariant = serde_json::from_value(artifact.strategy_params.clone())
-            .context("parse promoted strategy_params as StrategyVariant")?;
-        if !variant.exit.is_disabled() {
-            bail!("promoted strategy enables an exit lifecycle that live runtime does not yet implement");
-        }
-        let params_hash = stable_json_hash(&variant);
-        if params_hash != artifact.selected_strategy.params_hash {
-            bail!(
-                "promotion artifact hash mismatch: strategy_params hash {} != selected_strategy hash {}",
-                params_hash,
-                artifact.selected_strategy.params_hash
-            );
-        }
-        let zone_before = variant.zone_config;
-        let zone_floor_applied = variant.zone_config.apply_settings_safety_floor(settings);
-        let settlement_floor_applied = settlement_fields_changed(zone_before, variant.zone_config);
-        let decision_floor_applied =
-            zone_floor_applied && !zones_equal_except_settlement(zone_before, variant.zone_config);
-        let runtime_floor_applied = apply_runtime_variant_safety_floor(&mut variant, settings);
-        let mut strategy_spec = artifact.selected_strategy;
-        let mut source = format!("promotion:{path}");
-        if zone_floor_applied || runtime_floor_applied {
-            strategy_spec = StrategySpec::from_serializable_params(
-                strategy_spec.name.clone(),
-                strategy_spec.version.clone(),
-                &variant,
-                format!(
-                    "{};runtime_floor conf>={:.2},z>={:.2},edge>={:.2},ev>={:.2},price=[{:.2},{:.2}],micro_spread<={:.3},micro_depth>={:.2},micro_pressure>={:.2},settlement cutoff_min={:.2},guard_min={:.2},min_abs_usd={:.2},sigma_buffer={:.2}",
-                    strategy_spec.risk_profile,
-                    variant.min_confidence,
-                    variant.zone_config.primary_min_z,
-                    variant.min_edge,
-                    variant.zone_config.min_ev_buffer,
-                    variant.zone_config.min_price,
-                    variant.zone_config.max_price,
-                    variant.microstructure.max_spread,
-                    variant.microstructure.min_book_depth,
-                    variant.microstructure.min_book_pressure,
-                    variant.zone_config.settlement_cutoff_minutes,
-                    variant.zone_config.settlement_guard_minutes,
-                    variant.zone_config.settlement_min_abs_move_usd,
-                    variant.zone_config.settlement_sigma_buffer,
-                ),
-            );
-            if settlement_floor_applied {
-                source = format!("{source}+settlement_floor");
-            }
-            if decision_floor_applied || runtime_floor_applied {
-                source = format!("{source}+runtime_floor");
-            }
-        }
-        Ok(Self {
-            strategy_spec,
-            zone_config: variant.zone_config,
-            skip_dead_zone: variant.skip_dead_zone,
-            min_confidence: variant.min_confidence,
-            min_edge: variant.min_edge,
-            decision_volatility_floor: variant.decision_volatility_floor,
-            position_pct: variant.position_pct,
-            max_per_market_usd: variant.max_per_market_usd,
-            max_projected_stressed_drawdown_pct: variant.max_projected_stressed_drawdown_pct,
-            degraded_after_losses: variant.degraded_after_losses,
-            degraded_after_drawdown_pct: variant.degraded_after_drawdown_pct,
-            degraded_min_z: variant.degraded_min_z,
-            degraded_max_price: variant.degraded_max_price,
-            degraded_force_taker: variant.degraded_force_taker,
-            prefer_maker: variant.prefer_maker,
-            default_fee_rate: variant.default_fee_rate,
-            maker_fee_rate: variant.maker_fee_rate,
-            microstructure: variant.microstructure,
-            selectivity: variant.selectivity,
-            band: None,
-            source,
-        })
+        bail!(
+            "unsupported promoted strategy {}: the band family is the only runtime strategy",
+            artifact.selected_strategy.name
+        );
     }
 
-    /// Runtime for the frozen band family. The candle_momentum knobs below
-    /// are inert placeholders: the band branch in `scan_loop` bypasses the
-    /// candle decision path entirely. Sizing intent: position_pct=1.0 with
-    /// the $-stake enforced by MAX_POSITION_PER_MARKET_USD /
+    /// Runtime for the frozen band family. Sizing intent: position_pct=1.0
+    /// with the $-stake enforced by MAX_POSITION_PER_MARKET_USD /
     /// MAX_TOTAL_EXPOSURE_USD so `execute_trade`'s existing chain yields
     /// min(bankroll, stake). stress cap 1.0 = wallet-bounded canary; the
     /// operative loss brakes are the session-loss floor and the
     /// consecutive-losses breaker, both of which stay active.
-    fn band_runtime(
-        settings: &Settings,
-        strategy_spec: StrategySpec,
-        params: BandPolicyParams,
-        source: String,
-    ) -> Self {
+    fn band_runtime(strategy_spec: StrategySpec, params: BandPolicyParams, source: String) -> Self {
         Self {
             strategy_spec,
-            zone_config: ZoneConfig::from_settings(settings),
-            skip_dead_zone: false,
-            min_confidence: 1.0,
-            min_edge: 0.0,
-            decision_volatility_floor: 0.0,
             position_pct: 1.0,
             max_per_market_usd: params.stake_usd,
             max_projected_stressed_drawdown_pct: 1.0,
-            degraded_after_losses: 0,
-            degraded_after_drawdown_pct: 0.0,
-            degraded_min_z: 0.0,
-            degraded_max_price: 0.0,
-            degraded_force_taker: false,
-            prefer_maker: false,
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
-            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
-            microstructure: MicrostructureConfig::disabled(),
-            selectivity: SelectivityFilter::default(),
             band: Some(params),
             source,
         }
     }
-
-    fn from_settings(settings: &Settings) -> Self {
-        let zone_config = ZoneConfig::from_settings(settings);
-        let mut microstructure = MicrostructureConfig::disabled();
-        microstructure.apply_safety_floor(
-            settings.candle_microstructure_max_spread,
-            settings.candle_microstructure_min_book_depth,
-            settings.candle_microstructure_min_book_pressure,
-        );
-        let params = json!({
-            "zone_config": zone_config,
-            "skip_dead_zone": settings.candle_skip_dead_zone,
-            "min_confidence": DEFAULT_MIN_CONFIDENCE,
-            "min_edge": DEFAULT_MIN_EDGE,
-            "decision_volatility_floor": 0.0,
-            "position_pct": settings.candle_position_pct,
-            "max_per_market_usd": settings.max_position_per_market_usd,
-            "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
-            "degraded_after_losses": 0,
-            "degraded_after_drawdown_pct": 0.0,
-            "degraded_min_z": 0.0,
-            "degraded_max_price": 0.0,
-            "degraded_force_taker": false,
-            "prefer_maker": settings.candle_prefer_maker,
-            "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
-            "maker_fee_rate": DEFAULT_MAKER_FEE_RATE,
-            "microstructure": microstructure,
-        });
-        Self {
-            strategy_spec: StrategySpec::from_serializable_params(
-                "candle_momentum",
-                "1",
-                &params,
-                format!(
-                    "position_pct={:.4};max_per_market_usd={:.2};stress_dd_cap={:.4}",
-                    settings.candle_position_pct,
-                    settings.max_position_per_market_usd,
-                    settings.candle_max_projected_stressed_drawdown_pct
-                ),
-            ),
-            zone_config,
-            skip_dead_zone: settings.candle_skip_dead_zone,
-            min_confidence: DEFAULT_MIN_CONFIDENCE,
-            min_edge: DEFAULT_MIN_EDGE,
-            decision_volatility_floor: 0.0,
-            position_pct: settings.candle_position_pct,
-            max_per_market_usd: settings.max_position_per_market_usd,
-            max_projected_stressed_drawdown_pct: settings
-                .candle_max_projected_stressed_drawdown_pct,
-            degraded_after_losses: 0,
-            degraded_after_drawdown_pct: 0.0,
-            degraded_min_z: 0.0,
-            degraded_max_price: 0.0,
-            degraded_force_taker: false,
-            prefer_maker: settings.candle_prefer_maker,
-            default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
-            maker_fee_rate: DEFAULT_MAKER_FEE_RATE,
-            microstructure,
-            selectivity: SelectivityFilter::default(),
-            band: None,
-            source: "settings".to_string(),
-        }
-    }
-
-    fn degraded_execution_active(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
-        self.degraded_after_losses > 0
-            && losses >= self.degraded_after_losses
-            && realized_drawdown_pct.is_finite()
-            && realized_drawdown_pct >= self.degraded_after_drawdown_pct.max(0.0)
-    }
-
-    fn effective_zone_config(&self, losses: u64, realized_drawdown_pct: f64) -> ZoneConfig {
-        let mut cfg = self.zone_config;
-        if self.degraded_execution_active(losses, realized_drawdown_pct)
-            && self.degraded_min_z.is_finite()
-            && self.degraded_min_z > 0.0
-        {
-            cfg.early_min_z = cfg.early_min_z.max(self.degraded_min_z);
-            cfg.primary_min_z = cfg.primary_min_z.max(self.degraded_min_z);
-            cfg.late_min_z = cfg.late_min_z.max(self.degraded_min_z);
-            cfg.terminal_min_z = cfg.terminal_min_z.max(self.degraded_min_z);
-        }
-        if self.degraded_execution_active(losses, realized_drawdown_pct)
-            && self.degraded_max_price.is_finite()
-            && self.degraded_max_price > 0.0
-        {
-            cfg.max_price = cfg.max_price.min(self.degraded_max_price);
-            if cfg.min_price > cfg.max_price {
-                cfg.min_price = cfg.max_price;
-            }
-        }
-        cfg
-    }
-
-    fn effective_prefer_maker(&self, losses: u64, realized_drawdown_pct: f64) -> bool {
-        if self.degraded_force_taker
-            && self.degraded_execution_active(losses, realized_drawdown_pct)
-        {
-            false
-        } else {
-            self.prefer_maker
-        }
-    }
-
-    fn decision_volatility(&self, observed_volatility: f64) -> f64 {
-        crate::backtest::strategies::decision_volatility_with_floor(
-            observed_volatility,
-            self.decision_volatility_floor,
-        )
-    }
-}
-
-fn apply_runtime_variant_safety_floor(variant: &mut StrategyVariant, settings: &Settings) -> bool {
-    let mut changed = false;
-    if settings.candle_runtime_min_confidence_floor.is_finite()
-        && variant.min_confidence < settings.candle_runtime_min_confidence_floor
-    {
-        variant.min_confidence = settings.candle_runtime_min_confidence_floor;
-        changed = true;
-    }
-    if settings.candle_runtime_min_edge_floor.is_finite()
-        && variant.min_edge < settings.candle_runtime_min_edge_floor
-    {
-        variant.min_edge = settings.candle_runtime_min_edge_floor;
-        changed = true;
-    }
-    changed |= variant.microstructure.apply_safety_floor(
-        settings.candle_microstructure_max_spread,
-        settings.candle_microstructure_min_book_depth,
-        settings.candle_microstructure_min_book_pressure,
-    );
-    changed
-}
-
-fn settlement_fields_changed(before: ZoneConfig, after: ZoneConfig) -> bool {
-    before.settlement_cutoff_minutes != after.settlement_cutoff_minutes
-        || before.settlement_guard_minutes != after.settlement_guard_minutes
-        || before.settlement_min_abs_move_usd != after.settlement_min_abs_move_usd
-        || before.settlement_sigma_buffer != after.settlement_sigma_buffer
-}
-
-fn zones_equal_except_settlement(before: ZoneConfig, after: ZoneConfig) -> bool {
-    let mut before = before;
-    before.settlement_cutoff_minutes = after.settlement_cutoff_minutes;
-    before.settlement_guard_minutes = after.settlement_guard_minutes;
-    before.settlement_min_abs_move_usd = after.settlement_min_abs_move_usd;
-    before.settlement_sigma_buffer = after.settlement_sigma_buffer;
-    before.early_min_confidence == after.early_min_confidence
-        && before.early_min_z == after.early_min_z
-        && before.early_min_edge == after.early_min_edge
-        && before.primary_min_z == after.primary_min_z
-        && before.late_min_confidence == after.late_min_confidence
-        && before.late_min_z == after.late_min_z
-        && before.late_min_edge == after.late_min_edge
-        && before.terminal_min_confidence == after.terminal_min_confidence
-        && before.terminal_min_z == after.terminal_min_z
-        && before.terminal_min_edge == after.terminal_min_edge
-        && before.dead_zone_lo == after.dead_zone_lo
-        && before.dead_zone_hi == after.dead_zone_hi
-        && before.min_price == after.min_price
-        && before.max_price == after.max_price
-        && before.edge_cap == after.edge_cap
-        && before.min_ev_buffer == after.min_ev_buffer
-        && before.min_reversion_count == after.min_reversion_count
-        && before.max_reversion_count == after.max_reversion_count
 }
 
 pub struct Pipeline {
@@ -1608,15 +1323,9 @@ impl Pipeline {
 
     pub async fn run(self: &Arc<Self>) -> Result<()> {
         self.monitor.record_release_manifest(&self.release_manifest);
-        self.monitor.record_runtime_strategy(
+        self.monitor.record_band_runtime_strategy(
             &self.runtime_strategy.source,
             &self.runtime_strategy.strategy_spec,
-            &self.runtime_strategy.zone_config,
-            self.runtime_strategy.min_confidence,
-            self.runtime_strategy.min_edge,
-            self.runtime_strategy.skip_dead_zone,
-            &self.runtime_strategy.microstructure,
-            &self.runtime_strategy.selectivity,
             self.settings.candle_settlement_alignment_ready,
         );
         tracing::info!(
@@ -1806,65 +1515,9 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Maker timeout sweep: request venue cancels for resting GTC orders
-    /// older than `CANDLE_MAKER_TIMEOUT_S`. The cancel is only an ACTION —
-    /// no local lifecycle state is mutated from its response; authoritative
-    /// truth arrives via the user channel and the REST reconciliation pass
-    /// that runs immediately after in the same recovery tick. An ambiguous
-    /// cancel therefore leaves the order treated as possibly-live, exactly
-    /// like an ambiguous submit.
-    async fn sweep_resting_maker_orders(&self) {
-        let Some(clob) = self.clob.clone() else {
-            return;
-        };
-        let timeout_s = self.settings.candle_maker_timeout_s.max(1.0);
-        let now = nonzero_ts_or_now(0.0);
-        let stale: Vec<(String, String)> = {
-            let manager = self.order_manager.lock().await;
-            self.live_pending_positions
-                .lock()
-                .await
-                .keys()
-                .filter_map(|intent_id| {
-                    let order = manager.get(intent_id)?;
-                    crate::execution::order_manager::resting_timeout_candidate(
-                        order, now, timeout_s,
-                    )
-                    .map(|venue_id| (intent_id.clone(), venue_id.to_string()))
-                })
-                .collect()
-        };
-        for (intent_id, venue_order_id) in stale {
-            let outcome = clob.write().await.cancel_order(&venue_order_id).await;
-            match outcome {
-                Ok(_) => tracing::info!(
-                    %intent_id,
-                    order_id = %venue_order_id,
-                    timeout_s,
-                    "resting maker order cancel accepted; awaiting authoritative reconciliation"
-                ),
-                Err(error) if error.kind == SubmitFailureKind::DefinitiveReject => {
-                    tracing::warn!(
-                        %intent_id,
-                        order_id = %venue_order_id,
-                        error = %error.message,
-                        "venue refused maker-timeout cancel (likely already terminal); REST pass will resolve"
-                    );
-                }
-                Err(error) => tracing::warn!(
-                    %intent_id,
-                    order_id = %venue_order_id,
-                    error = %error.message,
-                    "ambiguous maker-timeout cancel; order treated as possibly live"
-                ),
-            }
-        }
-    }
-
     async fn live_recovery_loop(self: Arc<Self>) {
         let mut consecutive_failures: u32 = 0;
         loop {
-            self.sweep_resting_maker_orders().await;
             match self.reconcile_live_orders_once().await {
                 Ok(()) => {
                     consecutive_failures = 0;
@@ -2898,13 +2551,10 @@ impl Pipeline {
     }
 
     async fn fetch_live_contract_markets(&self) -> Result<Vec<crate::data::models::Market>> {
-        if !self.settings.candle_cross_asset_enabled {
-            if let Some(step_s) = btc_updown_slug_step_seconds(self.settings.candle_window_minutes)
-            {
-                let slugs = btc_updown_slugs_for_live_horizon(Utc::now(), step_s, 45);
-                tracing::info!(slugs = slugs.len(), step_s, "candle.slug_discovery");
-                return self.gamma.fetch_markets_by_slugs(&slugs, false).await;
-            }
+        if let Some(step_s) = btc_updown_slug_step_seconds(self.settings.candle_window_minutes) {
+            let slugs = btc_updown_slugs_for_live_horizon(Utc::now(), step_s, 45);
+            tracing::info!(slugs = slugs.len(), step_s, "candle.slug_discovery");
+            return self.gamma.fetch_markets_by_slugs(&slugs, false).await;
         }
 
         self.gamma.fetch_markets_by_end_date(3.0, 0.0).await
@@ -3037,29 +2687,6 @@ impl Pipeline {
                 last_momentum_tick_ts_s = momentum_tick_ts_s;
             }
 
-            // Tick alts (ETH/SOL) if cross-asset is enabled — feed their WS
-            // prices (`ps.alt_mid`) into per-asset momentum detectors.
-            if should_tick_momentum && self.settings.candle_cross_asset_enabled {
-                let mut moms = self.momentum.lock().await;
-                for asset in ["ETH", "SOL"] {
-                    if let Some(&alt_price) = ps.alt_mid.get(asset) {
-                        if alt_price > 0.0 {
-                            let det = moms.entry(asset.to_string()).or_insert_with(|| {
-                                MomentumDetector::new(
-                                    Some(ps.implied_vol),
-                                    MomentumConfig {
-                                        noise_z_threshold: self.settings.candle_noise_z_threshold,
-                                        ..Default::default()
-                                    },
-                                )
-                            });
-                            det.add_tick(alt_price, Some(momentum_tick_ts_s));
-                            det.set_realized_vol(ps.implied_vol);
-                        }
-                    }
-                }
-            }
-
             // Kill switch
             if self.kill_switch_active() {
                 self.trip_breaker("kill_switch").await;
@@ -3142,15 +2769,6 @@ impl Pipeline {
                 )
                 .await;
 
-                let asset_price = if c.asset == "BTC" {
-                    btc
-                } else {
-                    ps.alt_mid.get(&c.asset).copied().unwrap_or(0.0)
-                };
-                if asset_price <= 0.0 {
-                    continue;
-                }
-
                 let Some((up_price, down_price)) = pick_book_prices(c, &books, now_ts) else {
                     self.monitor
                         .record_signal_skip(&cid, "fresh_outcome_book_unavailable");
@@ -3191,523 +2809,6 @@ impl Pipeline {
                     continue;
                 }
 
-                // Detect momentum for the contract's own asset
-                let (signal, observed_vol) = {
-                    let mut moms = self.momentum.lock().await;
-                    let det = moms.entry(c.asset.clone()).or_insert_with(|| {
-                        MomentumDetector::new(
-                            Some(ps.implied_vol),
-                            MomentumConfig {
-                                noise_z_threshold: self.settings.candle_noise_z_threshold,
-                                ..Default::default()
-                            },
-                        )
-                    });
-                    if det.get_open_price(&cid).is_none() {
-                        let open_ts = end.timestamp() as f64 - window_minutes * 60.0;
-                        let open_price = if c.asset == "BTC"
-                            && self.settings.candle_settlement_alignment_ready
-                        {
-                            ps.reference_price_near_seconds("chainlink_settlement", open_ts, 2.0)
-                        } else {
-                            ps.price_near_seconds(&c.asset, open_ts, 2.0)
-                        };
-                        if let Some(open_price) = open_price {
-                            det.set_window_open(&cid, open_price);
-                        }
-                    }
-                    let signal = det.detect(&cid, minutes_elapsed, minutes_left, asset_price, None);
-                    if signal.is_none() && det.get_open_price(&cid).is_none() {
-                        self.monitor
-                            .record_signal_skip(&cid, "open_price_unavailable");
-                    }
-                    let observed_vol = det.rolling_realized_vol(3_600.0).unwrap_or(0.50);
-                    (signal, observed_vol)
-                };
-                let Some(signal) = signal else { continue };
-                let decision_vol = self.runtime_strategy.decision_volatility(observed_vol);
-
-                let open_exposure = self.open_position_exposure().await;
-                let breaker_state = *self.breaker.lock().await;
-                let breaker_metrics = breaker_state
-                    .metrics(open_exposure, self.risk.initial_bankroll().await.max(1.0));
-                let effective_zone_config = self.runtime_strategy.effective_zone_config(
-                    breaker_state.losses,
-                    breaker_metrics.realized_drawdown_pct,
-                );
-                let prefer_maker = self.settings.live_allow_maker_orders
-                    && self.runtime_strategy.effective_prefer_maker(
-                        breaker_state.losses,
-                        breaker_metrics.realized_drawdown_pct,
-                    )
-                    && crate::strategy::decision::zone_for(minutes_elapsed / window_minutes)
-                        != "terminal";
-                let entry_fee_rate = if prefer_maker {
-                    c.market
-                        .effective_maker_fee_rate(self.runtime_strategy.maker_fee_rate)
-                } else {
-                    c.market
-                        .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate)
-                };
-                let decision = decide_candle_trade_with_fee(
-                    &signal,
-                    minutes_elapsed,
-                    minutes_left,
-                    window_minutes,
-                    up_price,
-                    down_price,
-                    asset_price,
-                    signal.open_price,
-                    decision_vol,
-                    entry_fee_rate,
-                    self.runtime_strategy.min_confidence,
-                    self.runtime_strategy.min_edge,
-                    self.runtime_strategy.skip_dead_zone,
-                    &effective_zone_config,
-                    0.0, // cross-asset boost not yet wired
-                );
-                let signal_token_id = if signal.direction == "up" {
-                    &c.up_token_id
-                } else {
-                    &c.down_token_id
-                };
-                let signal_micro = live_microstructure(signal_token_id, &books, now_ts);
-
-                let (vol_fast, vol_slow) = {
-                    let moms = self.momentum.lock().await;
-                    moms.get(&c.asset)
-                        .map(|d| (d.realized_vol(), d.slow_realized_vol()))
-                        .unwrap_or((ps.implied_vol, ps.implied_vol))
-                };
-                let eval_ts_ms = (SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0)) as i64;
-
-                match decision {
-                    DecisionResult::Skip(skip) => {
-                        let aggregate = format!("{}_{}", skip.reason, skip.zone);
-                        self.monitor.record_signal_skip(&cid, &aggregate);
-                        self.monitor.record_signal_evaluation(&SignalEvaluation {
-                            ts_ms: eval_ts_ms,
-                            cid: short_cid(&cid),
-                            asset: c.asset.clone(),
-                            open: signal.open_price,
-                            px: signal.current_price,
-                            chg: signal.price_change,
-                            chg_pct: signal.price_change_pct,
-                            cons: signal.consistency,
-                            z: signal.z_score,
-                            conf: signal.confidence,
-                            reversion_count: signal.reversion_count,
-                            elapsed_min: signal.minutes_elapsed,
-                            remaining_min: signal.minutes_remaining,
-                            dir: signal.direction.clone(),
-                            vol_fast,
-                            vol_slow,
-                            implied_vol: decision_vol,
-                            cross_boost: 0.0,
-                            up_price,
-                            down_price,
-                            book_spread: signal_micro.spread,
-                            book_pressure: signal_micro.pressure,
-                            book_bid_depth: signal_micro.bid_depth,
-                            book_ask_depth: signal_micro.ask_depth,
-                            zone: skip.zone.clone(),
-                            fair: 0.0,
-                            edge: 0.0,
-                            decision_trade: false,
-                            execution_attempted: false,
-                            traded: false,
-                            skip_reason: Some(skip.reason),
-                            skip_detail: Some(skip.detail),
-                        });
-                    }
-                    DecisionResult::Trade(mut decision) => {
-                        let traded_token_id = if decision.direction == "up" {
-                            &c.up_token_id
-                        } else {
-                            &c.down_token_id
-                        };
-                        let micro = live_microstructure(traded_token_id, &books, now_ts);
-                        decision.regime.attach_time_inputs(now_ts);
-                        decision.regime.attach_orderbook_inputs(
-                            micro.best_bid,
-                            micro.best_ask,
-                            micro.spread,
-                            micro.bid_depth,
-                            micro.ask_depth,
-                            micro.pressure,
-                            micro.imbalance,
-                        );
-                        let mut estimated_position = self.risk.effective_bankroll().await
-                            * self.runtime_strategy.position_pct;
-                        let max_per_market = self.risk.max_per_market().await;
-                        let available = self
-                            .risk
-                            .available_capital_for_exposure(open_exposure)
-                            .await;
-                        estimated_position = estimated_position.min(max_per_market).min(available);
-                        if let Some(stress_headroom) = breaker_state
-                            .stressed_drawdown_exposure_headroom(
-                                open_exposure,
-                                self.risk.initial_bankroll().await.max(1.0),
-                                self.runtime_strategy.max_projected_stressed_drawdown_pct,
-                            )
-                        {
-                            estimated_position = estimated_position.min(stress_headroom);
-                        }
-                        let market_tick = live_market_tick_size(
-                            c.market.minimum_tick_size,
-                            [&c.up_token_id, &c.down_token_id],
-                            &books,
-                        );
-                        let taker_quote = (!prefer_maker && estimated_position >= 1.0)
-                            .then(|| {
-                                live_buy_book_quote(
-                                    traded_token_id,
-                                    &books,
-                                    estimated_position,
-                                    self.settings.live_min_order_size_shares,
-                                    market_tick,
-                                )
-                            })
-                            .flatten();
-                        let mut execution_quote_skip = None;
-                        if !prefer_maker {
-                            match taker_quote {
-                                Some(quote) => {
-                                    if let Err(skip) = decision.reprice_for_taker_execution(
-                                        quote.vwap,
-                                        quote.worst_price,
-                                        entry_fee_rate,
-                                        self.runtime_strategy.min_edge,
-                                        &effective_zone_config,
-                                    ) {
-                                        execution_quote_skip = Some((skip.reason, skip.detail));
-                                    }
-                                }
-                                None => {
-                                    execution_quote_skip = Some((
-                                        "taker_visible_depth_unavailable".to_string(),
-                                        "budget-aware visible L2 quote unavailable".to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                        let estimated_sizing_price = if prefer_maker {
-                            resting_limit_price(
-                                Side::Buy,
-                                micro.best_bid,
-                                micro.best_ask,
-                                market_tick,
-                            )
-                        } else {
-                            None
-                        };
-                        let estimated_size = taker_quote.map(|quote| quote.shares).or_else(|| {
-                            estimated_sizing_price
-                                .filter(|price| *price > 0.0 && estimated_position >= 1.0)
-                                .and_then(|price| {
-                                    shares_from_budget(
-                                        estimated_position,
-                                        price,
-                                        self.settings.live_min_order_size_shares,
-                                    )
-                                })
-                        });
-                        decision.regime.attach_orderbook_quality_inputs(
-                            taker_quote
-                                .map(|quote| quote.slippage_per_share)
-                                .or_else(|| {
-                                    estimated_size.and_then(|size| {
-                                        live_bookwalk_buy_slippage(traded_token_id, &books, size)
-                                    })
-                                }),
-                            live_book_age_ms(traded_token_id, &books, now_ts),
-                        );
-                        let recent_runup = live_recent_mid_runup(
-                            traded_token_id,
-                            &books,
-                            now_ts,
-                            self.runtime_strategy
-                                .microstructure
-                                .recent_mid_lookback_seconds,
-                        );
-                        decision.regime.attach_orderbook_path_inputs(recent_runup);
-                        if execution_quote_skip.is_none() {
-                            if let Some(reason) = self
-                                .runtime_strategy
-                                .selectivity
-                                .reject_reason(&decision.regime)
-                            {
-                                let aggregate = format!("{}_{}", reason, decision.zone);
-                                self.monitor.record_signal_skip(&cid, &aggregate);
-                                self.monitor.record_signal_evaluation(&SignalEvaluation {
-                                    ts_ms: eval_ts_ms,
-                                    cid: short_cid(&cid),
-                                    asset: c.asset.clone(),
-                                    open: signal.open_price,
-                                    px: signal.current_price,
-                                    chg: signal.price_change,
-                                    chg_pct: signal.price_change_pct,
-                                    cons: signal.consistency,
-                                    z: signal.z_score,
-                                    conf: signal.confidence,
-                                    reversion_count: signal.reversion_count,
-                                    elapsed_min: signal.minutes_elapsed,
-                                    remaining_min: signal.minutes_remaining,
-                                    dir: signal.direction.clone(),
-                                    vol_fast,
-                                    vol_slow,
-                                    implied_vol: decision_vol,
-                                    cross_boost: 0.0,
-                                    up_price,
-                                    down_price,
-                                    book_spread: signal_micro.spread,
-                                    book_pressure: signal_micro.pressure,
-                                    book_bid_depth: signal_micro.bid_depth,
-                                    book_ask_depth: signal_micro.ask_depth,
-                                    zone: decision.zone.clone(),
-                                    fair: decision.fair_value,
-                                    edge: decision.edge,
-                                    decision_trade: false,
-                                    execution_attempted: false,
-                                    traded: false,
-                                    skip_reason: Some(reason),
-                                    skip_detail: Some(
-                                        "causal selectivity filter rejected the decision"
-                                            .to_string(),
-                                    ),
-                                });
-                                continue;
-                            }
-                        }
-                        let execution_guard_skip = execution_quote_skip
-                            .or_else(|| {
-                                self.runtime_strategy
-                                    .microstructure
-                                    .check_recent_mid_path(recent_runup)
-                                    .err()
-                                    .map(|skip| (skip.reason, skip.detail))
-                            })
-                            .or_else(|| {
-                                micro
-                                    .check_long_entry(&self.runtime_strategy.microstructure)
-                                    .err()
-                                    .map(|skip| (skip.reason, skip.detail))
-                            })
-                            .or_else(|| {
-                                (prefer_maker
-                                    && resting_limit_price(
-                                        Side::Buy,
-                                        micro.best_bid,
-                                        micro.best_ask,
-                                        market_tick,
-                                    )
-                                    .is_none())
-                                .then(|| {
-                                    (
-                                        "maker_invalid_book".to_string(),
-                                        format!(
-                                            "bid={:.4} ask={:.4}",
-                                            micro.best_bid, micro.best_ask
-                                        ),
-                                    )
-                                })
-                            });
-                        if let Some((reason, detail)) = execution_guard_skip {
-                            let aggregate = format!("{}_{}", reason, decision.zone);
-                            self.monitor.record_signal_skip(&cid, &aggregate);
-                            self.monitor.record_signal_evaluation(&SignalEvaluation {
-                                ts_ms: eval_ts_ms,
-                                cid: short_cid(&cid),
-                                asset: c.asset.clone(),
-                                open: signal.open_price,
-                                px: signal.current_price,
-                                chg: signal.price_change,
-                                chg_pct: signal.price_change_pct,
-                                cons: signal.consistency,
-                                z: signal.z_score,
-                                conf: signal.confidence,
-                                reversion_count: signal.reversion_count,
-                                elapsed_min: signal.minutes_elapsed,
-                                remaining_min: signal.minutes_remaining,
-                                dir: signal.direction.clone(),
-                                vol_fast,
-                                vol_slow,
-                                implied_vol: decision_vol,
-                                cross_boost: 0.0,
-                                up_price,
-                                down_price,
-                                book_spread: micro.spread,
-                                book_pressure: micro.pressure,
-                                book_bid_depth: micro.bid_depth,
-                                book_ask_depth: micro.ask_depth,
-                                zone: decision.zone.clone(),
-                                fair: decision.fair_value,
-                                edge: decision.edge,
-                                decision_trade: true,
-                                execution_attempted: false,
-                                traded: false,
-                                skip_reason: Some(reason),
-                                skip_detail: Some(detail),
-                            });
-                            continue;
-                        }
-                        if !self.settings.candle_settlement_alignment_ready {
-                            let reason = "settlement_alignment_unverified".to_string();
-                            let aggregate = format!("{}_{}", reason, decision.zone);
-                            self.monitor.record_signal_skip(&cid, &aggregate);
-                            self.monitor.record_signal_evaluation(&SignalEvaluation {
-                                ts_ms: eval_ts_ms,
-                                cid: short_cid(&cid),
-                                asset: c.asset.clone(),
-                                open: signal.open_price,
-                                px: signal.current_price,
-                                chg: signal.price_change,
-                                chg_pct: signal.price_change_pct,
-                                cons: signal.consistency,
-                                z: signal.z_score,
-                                conf: signal.confidence,
-                                reversion_count: signal.reversion_count,
-                                elapsed_min: signal.minutes_elapsed,
-                                remaining_min: signal.minutes_remaining,
-                                dir: signal.direction.clone(),
-                                vol_fast,
-                                vol_slow,
-                                implied_vol: decision_vol,
-                                cross_boost: 0.0,
-                                up_price,
-                                down_price,
-                                book_spread: signal_micro.spread,
-                                book_pressure: signal_micro.pressure,
-                                book_bid_depth: signal_micro.bid_depth,
-                                book_ask_depth: signal_micro.ask_depth,
-                                zone: decision.zone.clone(),
-                                fair: decision.fair_value,
-                                edge: decision.edge,
-                                decision_trade: false,
-                                execution_attempted: false,
-                                traded: false,
-                                skip_reason: Some(reason),
-                                skip_detail: Some(
-                                    "CANDLE_SETTLEMENT_ALIGNMENT_READY=false".to_string(),
-                                ),
-                            });
-                            let entry_price = if decision.direction == "up" {
-                                up_price
-                            } else {
-                                down_price
-                            };
-                            let mut position = self.risk.effective_bankroll().await
-                                * self.runtime_strategy.position_pct;
-                            let max_per_market = self.risk.max_per_market().await;
-                            let avail = self
-                                .risk
-                                .available_capital_for_exposure(open_exposure)
-                                .await;
-                            position = position.min(max_per_market).min(avail);
-                            if let Some(stress_headroom) = breaker_state
-                                .stressed_drawdown_exposure_headroom(
-                                    open_exposure,
-                                    self.risk.initial_bankroll().await.max(1.0),
-                                    self.runtime_strategy.max_projected_stressed_drawdown_pct,
-                                )
-                            {
-                                position = position.min(stress_headroom);
-                            }
-                            if position < 1.0 {
-                                continue;
-                            }
-                            let taker_fee_rate = c
-                                .market
-                                .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
-                            let cfg = PaperFillCfg {
-                                prefer_maker: self.runtime_strategy.effective_prefer_maker(
-                                    breaker_state.losses,
-                                    breaker_metrics.realized_drawdown_pct,
-                                ),
-                                default_taker_rate: taker_fee_rate,
-                                min_order_size_shares: self.settings.live_min_order_size_shares,
-                                ..Default::default()
-                            };
-                            let Some(fill) = simulate_paper_fill(entry_price, position, &cfg)
-                            else {
-                                continue;
-                            };
-                            let shadow_position = PaperPosition {
-                                direction: decision.direction.clone(),
-                                entry_price: fill.fill_price,
-                                fee: fill.fee,
-                                size: fill.shares,
-                                open_btc: signal.open_price,
-                                end_time: end.timestamp() as f64,
-                                asset: c.asset.clone(),
-                                contract_id: c.market.condition_id.clone(),
-                                event_id: c.market.event_id.clone(),
-                                shadow: true,
-                            };
-                            let inserted = {
-                                let mut positions = self.paper_positions.lock().await;
-                                if positions.contains_key(&cid) {
-                                    false
-                                } else {
-                                    positions.insert(cid.clone(), shadow_position);
-                                    true
-                                }
-                            };
-                            if inserted {
-                                self.traded.lock().await.insert(cid.clone());
-                                self.persist_paper_positions().await;
-                            }
-                            continue;
-                        }
-                        traded_windows.insert(c.end_date.clone());
-                        self.monitor.record_signal_evaluation(&SignalEvaluation {
-                            ts_ms: eval_ts_ms,
-                            cid: short_cid(&cid),
-                            asset: c.asset.clone(),
-                            open: signal.open_price,
-                            px: signal.current_price,
-                            chg: signal.price_change,
-                            chg_pct: signal.price_change_pct,
-                            cons: signal.consistency,
-                            z: signal.z_score,
-                            conf: signal.confidence,
-                            reversion_count: signal.reversion_count,
-                            elapsed_min: signal.minutes_elapsed,
-                            remaining_min: signal.minutes_remaining,
-                            dir: signal.direction.clone(),
-                            vol_fast,
-                            vol_slow,
-                            implied_vol: decision_vol,
-                            cross_boost: 0.0,
-                            up_price,
-                            down_price,
-                            book_spread: micro.spread,
-                            book_pressure: micro.pressure,
-                            book_bid_depth: micro.bid_depth,
-                            book_ask_depth: micro.ask_depth,
-                            zone: decision.zone.clone(),
-                            fair: decision.fair_value,
-                            edge: decision.edge,
-                            decision_trade: true,
-                            execution_attempted: true,
-                            traded: false,
-                            skip_reason: None,
-                            skip_detail: None,
-                        });
-                        if let Err(e) = self
-                            .execute_trade(c, &signal, &decision, &micro, taker_quote, market_tick)
-                            .await
-                        {
-                            tracing::warn!(error = %e, "execute_trade failed");
-                            self.monitor
-                                .record_error("execute_trade", &e.to_string(), true);
-                        }
-                    }
-                }
             }
 
             let cycle_ms = cycle_start.elapsed().as_secs_f64() * 1000.0;
@@ -4662,13 +3763,6 @@ impl Pipeline {
         position = position.min(max_per_market).min(avail);
         let breaker_state = *self.breaker.lock().await;
         let breaker_bankroll = self.risk.initial_bankroll().await.max(1.0);
-        let breaker_metrics = breaker_state.metrics(open_exposure, breaker_bankroll);
-        let prefer_maker = self.settings.live_allow_maker_orders
-            && self.runtime_strategy.effective_prefer_maker(
-                breaker_state.losses,
-                breaker_metrics.realized_drawdown_pct,
-            )
-            && decision.zone != "terminal";
         let mut stress_capped = false;
         if let Some(stress_headroom) = breaker_state.stressed_drawdown_exposure_headroom(
             open_exposure,
@@ -4704,7 +3798,6 @@ impl Pipeline {
                     .market
                     .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
                 let cfg = PaperFillCfg {
-                    prefer_maker,
                     default_taker_rate: taker_fee_rate,
                     min_order_size_shares: self.settings.live_min_order_size_shares,
                     ..Default::default()
@@ -4877,29 +3970,7 @@ impl Pipeline {
                     );
                     return Ok(false);
                 };
-                let min_order_size = self.settings.live_min_order_size_shares.max(0.0);
-                let (limit_price, shares) = if prefer_maker {
-                    let Some(price) =
-                        resting_limit_price(Side::Buy, micro.best_bid, micro.best_ask, market_tick)
-                    else {
-                        tracing::warn!(
-                            best_bid = micro.best_bid,
-                            best_ask = micro.best_ask,
-                            "live maker order skipped: invalid visible book"
-                        );
-                        return Ok(false);
-                    };
-                    let Some(shares) = shares_from_budget(position, price, min_order_size) else {
-                        tracing::warn!(
-                            min_order_size,
-                            limit_price = price,
-                            position,
-                            "live order skipped: below configured minimum order size"
-                        );
-                        return Ok(false);
-                    };
-                    (price, shares)
-                } else {
+                let (limit_price, shares) = {
                     let Some(quote) = taker_quote else {
                         tracing::warn!("live taker order skipped: visible L2 quote unavailable");
                         return Ok(false);
@@ -4983,7 +4054,7 @@ impl Pipeline {
                     self.runtime_strategy.strategy_spec.clone(),
                     &order_signal,
                     "buy",
-                    if prefer_maker { "limit" } else { "market" },
+                    "market",
                     Some(limit_price),
                     shares,
                     "live_candle_momentum_decision",
@@ -4992,15 +4063,9 @@ impl Pipeline {
                         contract.market.condition_id
                     ),
                 );
-                let entry_fee_rate = if prefer_maker {
-                    contract
-                        .market
-                        .effective_maker_fee_rate(self.runtime_strategy.maker_fee_rate)
-                } else {
-                    contract
-                        .market
-                        .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate)
-                };
+                let entry_fee_rate = contract
+                    .market
+                    .effective_taker_fee_rate(self.runtime_strategy.default_fee_rate);
                 let pending_position = PendingLivePosition {
                     position: PaperPosition {
                         direction: signal.direction.clone(),
@@ -5018,25 +4083,14 @@ impl Pipeline {
                     recovery_misses: 0,
                 };
 
-                let prepared = if prefer_maker {
-                    clob.read().await.prepare_maker_order(
-                        token_id,
-                        limit_price,
-                        shares,
-                        "BUY",
-                        neg_risk,
-                        market_tick,
-                    )
-                } else {
-                    clob.read().await.prepare_taker_order(
-                        token_id,
-                        limit_price,
-                        shares,
-                        "BUY",
-                        neg_risk,
-                        market_tick,
-                    )
-                }
+                let prepared = clob.read().await.prepare_taker_order(
+                    token_id,
+                    limit_price,
+                    shares,
+                    "BUY",
+                    neg_risk,
+                    market_tick,
+                )
                 .map_err(anyhow::Error::msg)?;
                 let expected_order_id = prepared.expected_order_id().to_string();
 
@@ -5340,13 +4394,7 @@ impl Pipeline {
                 }
                 let close_price = ps
                     .price_near_seconds(&pos.asset, pos.end_time, 2.0)
-                    .unwrap_or_else(|| {
-                        if pos.asset == "BTC" {
-                            btc
-                        } else {
-                            ps.alt_mid.get(&pos.asset).copied().unwrap_or(btc)
-                        }
-                    });
+                    .unwrap_or(btc);
                 let actual = if close_price >= pos.open_btc {
                     "up"
                 } else {
@@ -7055,34 +6103,6 @@ fn live_market_tick_size(
     tick_size
 }
 
-fn live_book_age_ms(
-    token_id: &str,
-    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
-    now_ts: f64,
-) -> Option<f64> {
-    books
-        .get(token_id)
-        .and_then(|book| live_book_age_seconds(now_ts, book.last_update_us))
-        .map(|age| age * 1_000.0)
-}
-
-fn live_bookwalk_buy_slippage(
-    token_id: &str,
-    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
-    size: f64,
-) -> Option<f64> {
-    let asks = books
-        .get(token_id)?
-        .asks
-        .iter()
-        .map(|level| BookLevelView {
-            price: level.price,
-            size: level.size,
-        })
-        .collect::<Vec<_>>();
-    bookwalk_buy_slippage(&asks, size, crate::backtest::fill_model::DEFAULT_TICK)
-}
-
 fn live_buy_book_quote(
     token_id: &str,
     books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
@@ -7097,15 +6117,6 @@ fn live_buy_book_quote(
         .map(|level| (level.price, level.size))
         .collect::<Vec<_>>();
     buy_book_quote_from_budget(budget_usd, &asks, min_order_size_shares, tick_size)
-}
-
-fn live_recent_mid_runup(
-    token_id: &str,
-    books: &HashMap<String, crate::polymarket_ws::TokenBookState>,
-    now_ts: f64,
-    lookback_seconds: f64,
-) -> Option<f64> {
-    recent_mid_runup(&books.get(token_id)?.mid_history, now_ts, lookback_seconds)
 }
 
 fn parse_end(s: &str) -> Result<DateTime<Utc>> {
@@ -7371,25 +6382,6 @@ fn spawn_exchange_feeds(state: Arc<RwLock<PriceState>>) {
             }
         });
     }
-    // Alts
-    {
-        let s = state.clone();
-        tokio::spawn(async move {
-            loop {
-                exchange::binance_alt_feed(s.clone()).await;
-                sleep(Duration::from_secs(3)).await;
-            }
-        });
-    }
-    {
-        let s = state.clone();
-        tokio::spawn(async move {
-            loop {
-                exchange::bybit_alt_feed(s.clone()).await;
-                sleep(Duration::from_secs(3)).await;
-            }
-        });
-    }
     // Deribit IV
     {
         let s = state.clone();
@@ -7542,116 +6534,6 @@ mod tests {
             live_market_tick_size(Some(0.01), ["up", "down"], &books),
             0.001
         );
-    }
-
-    #[test]
-    fn live_book_quality_populates_runtime_selectivity_inputs() {
-        let token_id = "token".to_string();
-        let mut books = HashMap::new();
-        books.insert(
-            token_id.clone(),
-            crate::polymarket_ws::TokenBookState {
-                best_bid: 0.79,
-                best_ask: 0.80,
-                mid: 0.795,
-                asks: vec![
-                    crate::polymarket_ws::BookLevel {
-                        price: 0.80,
-                        size: 5.0,
-                    },
-                    crate::polymarket_ws::BookLevel {
-                        price: 0.82,
-                        size: 10.0,
-                    },
-                ],
-                last_update_us: 99_950_000,
-                mid_history: std::collections::VecDeque::from([
-                    (85.0, 0.78),
-                    (90.0, 0.79),
-                    (95.0, 0.80),
-                    (99.95, 0.795),
-                ]),
-                ..crate::polymarket_ws::TokenBookState::default()
-            },
-        );
-
-        let age = live_book_age_ms(&token_id, &books, 100.0);
-        let slippage = live_bookwalk_buy_slippage(&token_id, &books, 10.0);
-        let runup = live_recent_mid_runup(&token_id, &books, 100.0, 15.0);
-        assert!((age.unwrap() - 50.0).abs() < 1e-9);
-        // Small negative age is venue clock skew, tolerated and clamped to 0.
-        assert_eq!(live_book_age_ms(&token_id, &books, 99.0), Some(0.0));
-        // A far-future timestamp is implausible and still rejected.
-        assert_eq!(live_book_age_ms(&token_id, &books, 85.0), None);
-        assert!((slippage.unwrap() - 0.01).abs() < 1e-9);
-        assert!((runup.unwrap() - 0.015).abs() < 1e-9);
-
-        let mut regime = crate::strategy::decision::DecisionRegime::default();
-        regime.attach_orderbook_quality_inputs(slippage, age);
-        regime.attach_orderbook_path_inputs(runup);
-        let mut filter = SelectivityFilter::default();
-        filter
-            .require_tags
-            .insert("book_age".to_string(), "lte_100ms".to_string());
-        assert!(filter.reject_reason(&regime).is_none());
-        assert!(regime
-            .causal_tags()
-            .contains(&("book_runup".to_string(), "lte_0.02".to_string())));
-    }
-
-    fn promotion_for_variant(variant: &StrategyVariant) -> PromotionArtifact {
-        let spec =
-            StrategySpec::from_serializable_params("candle_momentum", "1", variant, "test-risk");
-        PromotionArtifact {
-            schema_version: 1,
-            inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
-            created_at: "2026-05-01T00:00:00Z".to_string(),
-            source_report_hash: "report-hash".to_string(),
-            source_label: "unit".to_string(),
-            source_window: "a..b".to_string(),
-            selected_strategy: spec,
-            strategy_params: serde_json::to_value(variant).unwrap(),
-            data_manifest_hash: "manifest-hash".to_string(),
-            market_count: 1,
-            trades: 30,
-            win_rate: 0.6,
-            total_pnl: 1.0,
-            avg_pnl: 0.03,
-            total_fees: 0.1,
-            sharpe_like: 1.0,
-            dominant_zone: Some("primary".to_string()),
-            dominant_zone_trade_share: Some(0.5),
-            risk_notes: Vec::new(),
-            promotion_gate: PromotionGate::default(),
-            robust_diagnostics: None,
-        }
-    }
-
-    #[test]
-    fn runtime_strategy_uses_promoted_variant() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("promotion.json");
-        let mut variant = StrategyVariant::loose_maker();
-        variant.decision_volatility_floor = 0.80;
-        let artifact = promotion_for_variant(&variant);
-        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
-        let mut settings = Settings::from_env();
-        settings.promotion_artifact_path = path.display().to_string();
-        settings.candle_settlement_cutoff_minutes = 0.30;
-        settings.candle_settlement_guard_minutes = 1.0;
-        settings.candle_settlement_min_abs_move_usd = 10.0;
-        settings.candle_settlement_sigma_buffer = 0.0;
-
-        let runtime = RuntimeStrategy::load(&settings).unwrap();
-
-        assert_eq!(runtime.strategy_spec, artifact.selected_strategy);
-        assert!(runtime.prefer_maker);
-        assert_eq!(runtime.min_confidence, variant.min_confidence);
-        assert_eq!(runtime.min_edge, variant.min_edge);
-        assert_eq!(runtime.max_per_market_usd, variant.max_per_market_usd);
-        assert_eq!(runtime.decision_volatility(0.35), 0.80);
-        assert_eq!(runtime.decision_volatility(0.90), 0.90);
-        assert!(runtime.decision_volatility(f64::NAN).is_nan());
     }
 
     fn band_params() -> BandPolicyParams {
@@ -8850,6 +7732,295 @@ mod tests {
         assert_eq!(samples[30]["t"], 30);
     }
 
+    /// Paper `Pipeline` with all four anchors, the three ladder budgets and
+    /// a pinned $100 paper bankroll (`band_test_settings` turns the anchors
+    /// off; the bankroll and the v1 book are pinned so `stake_usd` in the
+    /// anchor records never depends on the environment).
+    async fn band_replay_pipeline(tmp: &TempDir) -> Arc<Pipeline> {
+        let mut settings = band_test_settings(tmp, &band_params());
+        settings.band_anchor_seconds = vec![150.0, 180.0, 210.0, 240.0];
+        settings.band_ladder_budgets_usd = vec![5.0, 25.0, 100.0];
+        settings.band_host_label = "replay".to_string();
+        settings.bankroll_usd = 100.0;
+        settings.risk_book = "v1".to_string();
+        Pipeline::new(settings, Mode::Paper).await.unwrap()
+    }
+
+    /// The replay's Binance close at whole second `k` of the window:
+    /// `open + delta`, piecewise linear through +80 at 150 s, +55 at 180 s,
+    /// exactly 0 at 210 s (no direction), -70 at 240 s and -40 at 300 s.
+    fn replay_binance_price(open: f64, k: i64) -> f64 {
+        let k = k as f64;
+        let delta = if k <= 150.0 {
+            80.0 * k / 150.0
+        } else if k <= 180.0 {
+            80.0 - 25.0 * (k - 150.0) / 30.0
+        } else if k <= 210.0 {
+            55.0 - 55.0 * (k - 180.0) / 30.0
+        } else if k <= 240.0 {
+            -70.0 * (k - 210.0) / 30.0
+        } else {
+            -70.0 + 30.0 * (k - 240.0) / 60.0
+        };
+        open + delta
+    }
+
+    /// The replay's book at whole second `k`: the UP ask follows the
+    /// Binance delta (0.5 + delta / 200 on the cent grid), the DOWN ask is
+    /// its complement plus one cent (pair sum 1.01); ask levels a cent
+    /// apart whose sizes cycle through seven depth phases on `k % 7`
+    /// (3 shares: unquotable at every budget; 6: $5 only; 28; 140: every
+    /// budget clears, the $100 limit walks two levels; 150; 36; 5 + 3:
+    /// the $5 quote walks a level), one 100-share bid, and a book age
+    /// cycling 0 / 0.25 / 0.5 s on `k % 3`.
+    fn replay_books(
+        k: i64,
+        open: f64,
+        now_ts: f64,
+    ) -> HashMap<String, crate::polymarket_ws::TokenBookState> {
+        use crate::polymarket_ws::{BookLevel, TokenBookState};
+        let cents = |p: f64| (p * 100.0).round() / 100.0;
+        let delta = replay_binance_price(open, k) - open;
+        let up_ask = cents((0.5 + delta / 200.0).clamp(0.05, 0.95));
+        let down_ask = cents(1.01 - up_ask);
+        let sizes: &[f64] = match k % 7 {
+            0 => &[3.0],
+            1 => &[6.0],
+            2 => &[8.0, 20.0],
+            3 => &[10.0, 30.0, 100.0],
+            4 => &[50.0, 100.0],
+            5 => &[12.0, 12.0, 12.0],
+            _ => &[5.0, 3.0],
+        };
+        let last_update_us = ((now_ts - 0.25 * (k % 3) as f64) * 1e6) as u64;
+        let book = |touch: f64| TokenBookState {
+            best_bid: cents(touch - 0.01),
+            best_ask: touch,
+            bids: vec![BookLevel {
+                price: cents(touch - 0.01),
+                size: 100.0,
+            }],
+            asks: sizes
+                .iter()
+                .enumerate()
+                .map(|(i, &size)| BookLevel {
+                    price: cents(touch + 0.01 * i as f64),
+                    size,
+                })
+                .collect(),
+            last_update_us,
+            ..Default::default()
+        };
+        HashMap::from([
+            ("up".to_string(), book(up_ask)),
+            ("down".to_string(), book(down_ask)),
+        ])
+    }
+
+    /// Sorted-key JSON text, so the digest never depends on the map order
+    /// of `serde_json::Value` or on the writer's field order.
+    fn canonical_json(v: &serde_json::Value) -> String {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let fields: Vec<String> = keys
+                    .into_iter()
+                    .map(|k| {
+                        format!(
+                            "{}:{}",
+                            serde_json::Value::from(k.as_str()),
+                            canonical_json(&map[k])
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", fields.join(","))
+            }
+            serde_json::Value::Array(items) => {
+                let items: Vec<String> = items.iter().map(canonical_json).collect();
+                format!("[{}]", items.join(","))
+            }
+            scalar => scalar.to_string(),
+        }
+    }
+
+    /// sha256 of the canonical `band_anchor` + `band_ladder` records of
+    /// `band_ladder_replay_digest_is_pinned`, pinned at 461bd2b (the tree
+    /// the basement's engine cut starts from). A deletion step that moves
+    /// it changed what the observer records.
+    const BAND_LADDER_REPLAY_DIGEST: &str =
+        "ef89c7292b8d462538a1181da8568419638e9cd059ff125991af22855374d8d7";
+
+    /// Replay fixture for the basement's engine cut
+    /// (docs/profitability_basement_2026-09-18.md, E row 3: byte-identical
+    /// `band_ladder` output on a replayed synthetic book). One synthetic
+    /// BTC 5m window is driven through the loop's anchor and ladder calls
+    /// in the loop's order at 4 cycles/s: Binance's 1 s closes
+    /// (`replay_binance_price`) arrive 600 ms after their event second, so
+    /// every anchor waits one cycle for its covering tick; the book is a
+    /// pure function of the window second (`replay_books`); the loop
+    /// stalls over (243.0, 246.2) s inside the 240 s span. The four
+    /// anchors read UP (+80), UP (+55), no direction (0) and DOWN (-70).
+    /// The records, in log order with `ts`/`ts_iso` stripped, are checked
+    /// in shape and then as one digest against
+    /// `BAND_LADDER_REPLAY_DIGEST`; `BAND_LADDER_REPLAY_DUMP=<path>` writes
+    /// the canonical records for a diff.
+    #[tokio::test]
+    async fn band_ladder_replay_digest_is_pinned() {
+        use chrono::Timelike;
+        use sha2::Digest;
+        let tmp = TempDir::new().unwrap();
+        let p = band_replay_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let cid = "0xreplay";
+        // The whole window lies inside the past hour (`PriceState` clamps
+        // event times to [now - 1 h, now + 10 s]) and ends on a whole
+        // second, so every elapsed offset is exact.
+        let end = Utc::now().with_nanosecond(0).unwrap() - chrono::Duration::seconds(10);
+        let c = band_window_ending(cid, end);
+        let contracts = vec![c.clone()];
+        let open_dt = end - chrono::Duration::seconds(300);
+        let open_ms = open_dt.timestamp_millis();
+        let mut ps = PriceState::new();
+        let mut delivered: i64 = -1;
+        for i in 0.. {
+            let elapsed_ms: i64 = 100 + 250 * i;
+            if elapsed_ms >= 300_000 {
+                break;
+            }
+            if (243_000..246_200).contains(&elapsed_ms) {
+                continue;
+            }
+            while delivered < 300 && (delivered + 1) * 1_000 + 600 <= elapsed_ms {
+                delivered += 1;
+                ps.update_at(
+                    "binance",
+                    replay_binance_price(open, delivered),
+                    open_ms + delivered * 1_000,
+                );
+            }
+            let now = open_dt + chrono::Duration::milliseconds(elapsed_ms);
+            let now_ts = now.timestamp() as f64;
+            let books = replay_books(elapsed_ms / 1_000, open, now_ts);
+            p.capture_band_anchors(&c, &contracts, &books, &ps, now, now_ts)
+                .await;
+            p.sample_band_ladder(&c, &contracts, &books, &ps, now, now_ts)
+                .await;
+        }
+        assert!(p.band_ladder.lock().await.is_empty());
+
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(p.monitor.events_path())
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|v| v["type"] == "band_anchor" || v["type"] == "band_ladder")
+            .map(|mut v| {
+                let fields = v.as_object_mut().unwrap();
+                fields.remove("ts");
+                fields.remove("ts_iso");
+                v
+            })
+            .collect();
+        // Log order: each anchor is captured at a + 0.6 s (the covering
+        // tick), each ladder flushed at a + 31 s.
+        let shape: Vec<(&str, u64)> = records
+            .iter()
+            .map(|r| (r["type"].as_str().unwrap(), r["anchor_s"].as_u64().unwrap()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("band_anchor", 150),
+                ("band_anchor", 180),
+                ("band_ladder", 150),
+                ("band_anchor", 210),
+                ("band_ladder", 180),
+                ("band_anchor", 240),
+                ("band_ladder", 210),
+                ("band_ladder", 240),
+            ]
+        );
+        let anchors: Vec<&serde_json::Value> = records
+            .iter()
+            .filter(|r| r["type"] == "band_anchor")
+            .collect();
+        let ladders: Vec<&serde_json::Value> = records
+            .iter()
+            .filter(|r| r["type"] == "band_ladder")
+            .collect();
+        for (r, (a, direction, margin)) in anchors.iter().zip([
+            (150.0, json!("up"), json!(80.0)),
+            (180.0, json!("up"), json!(55.0)),
+            (210.0, json!(null), json!(0.0)),
+            (240.0, json!("down"), json!(-70.0)),
+        ]) {
+            assert_eq!(r["cid"], cid);
+            assert_eq!(r["elapsed_s"], a + 0.6);
+            assert_eq!(r["basis"], "binance");
+            assert_eq!(r["open"], open);
+            assert_eq!(r["direction"], direction, "{r}");
+            assert_eq!(r["margin"], margin, "{r}");
+            assert_eq!(r["stake_usd"], 5.0);
+            assert_eq!(r["quote_budget_usd"], 5.0);
+            assert_eq!(r["pair_sum"], 1.01);
+        }
+        // Depth phases at the anchor seconds: 150 % 7 = 3 (quoted), 210 % 7
+        // = 0 (three shares: no executable quote, best ask still recorded).
+        assert_eq!(anchors[0]["up"]["worst"], 0.9);
+        assert_eq!(anchors[2]["up"]["worst"], serde_json::Value::Null);
+        assert_eq!(anchors[2]["up"]["best_ask"], 0.5);
+        for (r, (direction, samples)) in ladders.iter().zip([
+            (json!("up"), 31),
+            (json!("up"), 31),
+            (json!(null), 31),
+            (json!("down"), 28),
+        ]) {
+            assert_eq!(r["cid"], cid);
+            assert_eq!(r["basis"], "binance");
+            assert_eq!(r["direction"], direction, "{r}");
+            assert_eq!(r["budgets_usd"], json!([5.0, 25.0, 100.0]));
+            assert_eq!(r["host"], "replay");
+            assert_eq!(r["samples"].as_array().unwrap().len(), samples, "{r}");
+        }
+        // The stall: offsets 3, 4 and 5 of the 240 s span are absent and
+        // the largest cycle gap is 246.35 - 242.85.
+        let offsets: Vec<u64> = ladders[3]["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["t"].as_u64().unwrap())
+            .collect();
+        assert_eq!(offsets[..4], [0, 1, 2, 6]);
+        assert_eq!(ladders[3]["max_gap_s"], 3.5);
+        assert_eq!(ladders[0]["max_gap_s"], 0.25);
+        // Depth phases along the 150 s span: t = 1 (151 % 7 = 4) clears
+        // every budget, t = 4 (154 % 7 = 0) quotes none, t = 5 (155 % 7 =
+        // 1) clears $5 only; the no-direction ladder quotes both sides.
+        let s150 = ladders[0]["samples"].as_array().unwrap();
+        assert_eq!(s150[1]["q"][2][3], false, "{}", s150[1]);
+        assert_eq!(s150[4]["q"], json!([null, null, null]));
+        assert_eq!(s150[5]["q"][0][3], false, "{}", s150[5]);
+        assert_eq!(s150[5]["q"][1][3], true, "{}", s150[5]);
+        assert_eq!(s150[5]["q"][2][3], true, "{}", s150[5]);
+        assert!(ladders[2]["samples"][0]["q"]["up"].is_array());
+        assert!(ladders[2]["samples"][0]["q"]["down"].is_array());
+
+        let canonical = records
+            .iter()
+            .map(canonical_json)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let Ok(path) = std::env::var("BAND_LADDER_REPLAY_DUMP") {
+            std::fs::write(&path, &canonical).unwrap();
+        }
+        let digest = hex::encode(sha2::Sha256::digest(canonical.as_bytes()));
+        assert_eq!(
+            digest, BAND_LADDER_REPLAY_DIGEST,
+            "band_anchor + band_ladder replay records changed \
+             (BAND_LADDER_REPLAY_DUMP=<path> writes the canonical records)"
+        );
+    }
+
     #[tokio::test]
     async fn band_latch_signal_keeps_side_and_waits_for_in_band_ask() {
         let tmp = TempDir::new().unwrap();
@@ -9609,10 +8780,8 @@ mod tests {
 
         assert_eq!(runtime.band.as_ref(), Some(&params));
         assert_eq!(runtime.strategy_spec, artifact.selected_strategy);
-        assert!(!runtime.prefer_maker);
         assert_eq!(runtime.position_pct, 1.0);
         assert_eq!(runtime.max_projected_stressed_drawdown_pct, 1.0);
-        assert_eq!(runtime.degraded_after_losses, 0);
     }
 
     #[test]
@@ -9777,63 +8946,6 @@ mod tests {
             ),
             None
         );
-    }
-
-    #[test]
-    fn runtime_strategy_applies_settlement_safety_floor_to_promotion() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("promotion.json");
-        let mut variant = StrategyVariant::loose_maker();
-        variant.zone_config.settlement_cutoff_minutes = 0.1;
-        variant.zone_config.settlement_guard_minutes = 0.5;
-        variant.zone_config.settlement_min_abs_move_usd = 2.0;
-        variant.zone_config.settlement_sigma_buffer = 0.0;
-        let artifact = promotion_for_variant(&variant);
-        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
-        let mut settings = Settings::from_env();
-        settings.promotion_artifact_path = path.display().to_string();
-        settings.candle_settlement_cutoff_minutes = 1.5;
-        settings.candle_settlement_guard_minutes = 5.0;
-        settings.candle_settlement_min_abs_move_usd = 25.0;
-        settings.candle_settlement_sigma_buffer = 0.2;
-        settings.candle_runtime_min_confidence_floor = 0.7;
-        settings.candle_runtime_min_edge_floor = 0.09;
-        settings.candle_microstructure_max_spread = 0.02;
-        settings.candle_microstructure_min_book_depth = 20.0;
-        settings.candle_microstructure_min_book_pressure = 0.0;
-
-        let runtime = RuntimeStrategy::load(&settings).unwrap();
-
-        assert_eq!(runtime.zone_config.settlement_cutoff_minutes, 1.5);
-        assert_eq!(runtime.zone_config.settlement_guard_minutes, 5.0);
-        assert_eq!(runtime.zone_config.settlement_min_abs_move_usd, 25.0);
-        assert_eq!(runtime.zone_config.settlement_sigma_buffer, 0.2);
-        assert_eq!(runtime.min_confidence, 0.7);
-        assert_eq!(runtime.min_edge, 0.09);
-        assert_eq!(runtime.microstructure.max_spread, 0.02);
-        assert_eq!(runtime.microstructure.min_book_depth, 20.0);
-        assert_eq!(runtime.microstructure.min_book_pressure, 0.0);
-        assert_ne!(
-            runtime.strategy_spec.params_hash,
-            artifact.selected_strategy.params_hash
-        );
-        assert!(runtime.source.ends_with("+settlement_floor+runtime_floor"));
-    }
-
-    #[test]
-    fn runtime_strategy_rejects_tampered_params() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("promotion.json");
-        let variant = StrategyVariant::loose_maker();
-        let mut artifact = promotion_for_variant(&variant);
-        artifact.strategy_params["min_edge"] = serde_json::json!(0.99);
-        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
-        let mut settings = Settings::from_env();
-        settings.promotion_artifact_path = path.display().to_string();
-
-        let err = RuntimeStrategy::load(&settings).unwrap_err();
-
-        assert!(err.to_string().contains("hash mismatch"));
     }
 
     #[test]

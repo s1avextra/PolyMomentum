@@ -655,10 +655,6 @@ impl ClobClient {
     /// the order may or may not still rest — callers must treat ambiguous
     /// results as "possibly still live" and reconcile via the user channel
     /// or REST lookup, never as a completed cancel.
-    ///
-    /// This is the primitive required before `LIVE_ALLOW_MAKER_ORDERS` can
-    /// ever be enabled; the resting-order timeout policy that drives it is
-    /// separate work in the pipeline.
     pub async fn cancel_order(&mut self, order_id: &str) -> Result<CancelReceipt, SubmitOrderError> {
         if order_id.trim().is_empty() {
             return Err(SubmitOrderError::definitive("empty order id".to_string()));

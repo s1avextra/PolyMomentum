@@ -133,7 +133,6 @@ pub struct Settings {
     pub live_reconciliation_ready: bool,
     pub live_min_order_size_shares: f64,
     pub live_order_budget_buffer: f64,
-    pub live_allow_maker_orders: bool,
 
     pub private_key: String,
     pub polygon_rpc_url: String,
@@ -183,12 +182,6 @@ pub struct Settings {
     pub candle_noise_z_threshold: f64,
     pub candle_position_pct: f64,
     pub candle_max_projected_stressed_drawdown_pct: f64,
-    pub candle_cross_asset_enabled: bool,
-    pub candle_cross_asset_min_correlation: f64,
-    pub candle_cross_asset_confidence_boost: f64,
-
-    pub candle_prefer_maker: bool,
-    pub candle_maker_timeout_s: f64,
 
     pub candle_breaker_min_trades: i64,
     pub candle_breaker_min_win_rate: f64,
@@ -321,7 +314,6 @@ impl Settings {
             live_reconciliation_ready: env_bool("POLYMOMENTUM_LIVE_RECONCILIATION_READY", false),
             live_min_order_size_shares: env_f64("LIVE_MIN_ORDER_SIZE_SHARES", 5.0),
             live_order_budget_buffer: env_f64("LIVE_ORDER_BUDGET_BUFFER", 1.10),
-            live_allow_maker_orders: env_bool("LIVE_ALLOW_MAKER_ORDERS", false),
 
             private_key: env_str("PRIVATE_KEY", ""),
             polygon_rpc_url: env_str("POLYGON_RPC_URL", "https://polygon-bor-rpc.publicnode.com"),
@@ -389,15 +381,6 @@ impl Settings {
                 "CANDLE_MAX_PROJECTED_STRESSED_DRAWDOWN_PCT",
                 0.25,
             ),
-            candle_cross_asset_enabled: env_bool("CANDLE_CROSS_ASSET_ENABLED", false),
-            candle_cross_asset_min_correlation: env_f64("CANDLE_CROSS_ASSET_MIN_CORRELATION", 0.70),
-            candle_cross_asset_confidence_boost: env_f64(
-                "CANDLE_CROSS_ASSET_CONFIDENCE_BOOST",
-                0.10,
-            ),
-
-            candle_prefer_maker: env_bool("CANDLE_PREFER_MAKER", false),
-            candle_maker_timeout_s: env_f64("CANDLE_MAKER_TIMEOUT_S", 3.0),
 
             candle_breaker_min_trades: env_i64("CANDLE_BREAKER_MIN_TRADES", 20),
             candle_breaker_min_win_rate: env_f64("CANDLE_BREAKER_MIN_WIN_RATE", 0.65),

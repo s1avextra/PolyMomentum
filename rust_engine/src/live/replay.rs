@@ -161,7 +161,7 @@ impl ReplayStrategy {
         variant.max_per_market_usd = settings.max_position_per_market_usd;
         variant.max_projected_stressed_drawdown_pct =
             settings.candle_max_projected_stressed_drawdown_pct;
-        variant.prefer_maker = settings.candle_prefer_maker;
+        variant.prefer_maker = false;
         variant.default_fee_rate = DEFAULT_CRYPTO_TAKER_FEE_RATE;
         variant.maker_fee_rate = DEFAULT_MAKER_FEE_RATE;
         variant.microstructure = MicrostructureConfig::disabled();
@@ -179,7 +179,7 @@ impl ReplayStrategy {
             "position_pct": settings.candle_position_pct,
             "max_per_market_usd": settings.max_position_per_market_usd,
             "max_projected_stressed_drawdown_pct": settings.candle_max_projected_stressed_drawdown_pct,
-            "prefer_maker": settings.candle_prefer_maker,
+            "prefer_maker": false,
             "default_fee_rate": DEFAULT_CRYPTO_TAKER_FEE_RATE,
             "microstructure": variant.microstructure,
         });
