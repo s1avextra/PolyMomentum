@@ -1,0 +1,10 @@
+[Unit]
+Description=PolyMomentum node watchdog (Mac heartbeat, observer, disk; one-shot, fired by .timer)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/polymomentum/env
+ExecStart=/opt/polymomentum/nodecheck.sh
+StandardOutput=journal
+StandardError=journal

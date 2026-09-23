@@ -51,5 +51,6 @@ while true; do
             >> "$tick_log" 2>&1
     fi
     loop=$((loop + 1))
+    bash scripts/push_heartbeat.sh >/dev/null 2>&1 || true
     sleep 300
 done
