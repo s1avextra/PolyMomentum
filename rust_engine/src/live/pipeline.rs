@@ -663,6 +663,8 @@ struct RuntimeStrategy {
     default_fee_rate: f64,
     band: Option<BandPolicyParams>,
     source: String,
+    /// A discovery-twin artifact: the paper observer's, never live.
+    paper_only: bool,
 }
 
 impl RuntimeStrategy {
@@ -673,6 +675,9 @@ impl RuntimeStrategy {
         }
         let artifact = crate::backtest::experiment::read_promotion(path)
             .with_context(|| format!("load promotion artifact {path}"))?;
+        if let Some(error) = promotion_schema_error(&artifact) {
+            bail!("{error}");
+        }
         if artifact.selected_strategy.name == BAND_FAMILY {
             let params: BandPolicyParams =
                 serde_json::from_value(artifact.strategy_params.clone())
@@ -686,11 +691,14 @@ impl RuntimeStrategy {
                     artifact.selected_strategy.params_hash
                 );
             }
-            return Ok(Self::band_runtime(
+            let paper_only = artifact_is_paper_only(&artifact);
+            let mut runtime = Self::band_runtime(
                 artifact.selected_strategy,
                 params,
                 format!("promotion:{path}"),
-            ));
+            );
+            runtime.paper_only = paper_only;
+            return Ok(runtime);
         }
         bail!(
             "unsupported promoted strategy {}: the band family is the only runtime strategy",
@@ -713,8 +721,53 @@ impl RuntimeStrategy {
             default_fee_rate: DEFAULT_CRYPTO_TAKER_FEE_RATE,
             band: Some(params),
             source,
+            paper_only: false,
         }
     }
+}
+
+/// The `source_label` a discovery twin carries (the gate's `registration`
+/// for an unregistered cell): a second paper-only marker, so a twin whose
+/// `paper_only` key was dropped still reads as the observer's.
+pub const DISCOVERY_SOURCE_LABEL: &str = "discovery";
+/// Promotions are schema 1. A discovery twin is written as schema 2: an
+/// engine built before `paper_only` existed drops the unknown key on parse
+/// (`PromotionArtifact` has no `deny_unknown_fields`) and would run the
+/// twin live, but refuses schema 2 in every mode ("unsupported promotion
+/// schema 2"), so the schema is what makes a twin unloadable there.
+pub const PAPER_TWIN_SCHEMA_VERSION: u32 = 2;
+
+/// Either paper-only marker of a discovery twin.
+pub fn artifact_is_paper_only(artifact: &crate::backtest::experiment::PromotionArtifact) -> bool {
+    artifact.paper_only || artifact.source_label == DISCOVERY_SOURCE_LABEL
+}
+
+/// The schema/marker pairing: schema 1 without a paper-only marker (a
+/// promotion) or schema 2 with one (a twin); anything else is refused, by
+/// the preflight and again by `RuntimeStrategy::load`.
+pub fn promotion_schema_error(
+    artifact: &crate::backtest::experiment::PromotionArtifact,
+) -> Option<String> {
+    match (artifact.schema_version, artifact_is_paper_only(artifact)) {
+        (1, false) | (PAPER_TWIN_SCHEMA_VERSION, true) => None,
+        (PAPER_TWIN_SCHEMA_VERSION, false) => Some(format!(
+            "unsupported promotion schema {PAPER_TWIN_SCHEMA_VERSION}: a discovery twin's schema without its paper_only marker"
+        )),
+        (1, true) => Some(format!(
+            "a discovery twin (paper_only) must be promotion schema {PAPER_TWIN_SCHEMA_VERSION}, not 1: an engine without the flag would run it live"
+        )),
+        (other, _) => Some(format!("unsupported promotion schema {other}")),
+    }
+}
+
+/// A `paper_only` (discovery twin) artifact may run the paper observer
+/// only; checked by the preflight and again by `Pipeline::new`, like the
+/// Kelly policy.
+pub fn paper_only_mode_error(paper_only: bool, live: bool) -> Option<String> {
+    (paper_only && live).then(|| {
+        "promotion artifact is a discovery twin (paper_only): the paper observer's twin, never a live artifact"
+            .to_string()
+    })
 }
 
 pub struct Pipeline {
@@ -818,6 +871,11 @@ impl Pipeline {
             .band
             .as_ref()
             .and_then(|band| kelly_policy_config_error(band, &settings, matches!(mode, Mode::Live)))
+        {
+            bail!("{error}");
+        }
+        if let Some(error) =
+            paper_only_mode_error(runtime_strategy.paper_only, matches!(mode, Mode::Live))
         {
             bail!("{error}");
         }
@@ -7882,13 +7940,13 @@ mod tests {
         assert_eq!(samples[30]["t"], 30);
     }
 
-    /// Paper `Pipeline` with all four anchors, the three ladder budgets and
+    /// Paper `Pipeline` with all six anchors, the three ladder budgets and
     /// a pinned $100 paper bankroll (`band_test_settings` turns the anchors
     /// off; the bankroll and the v1 book are pinned so `stake_usd` in the
     /// anchor records never depends on the environment).
     async fn band_replay_pipeline(tmp: &TempDir) -> Arc<Pipeline> {
         let mut settings = band_test_settings(tmp, &band_params());
-        settings.band_anchor_seconds = vec![150.0, 180.0, 210.0, 240.0];
+        settings.band_anchor_seconds = vec![150.0, 180.0, 195.0, 210.0, 225.0, 240.0];
         settings.band_ladder_budgets_usd = vec![5.0, 25.0, 100.0];
         settings.band_host_label = "replay".to_string();
         settings.bankroll_usd = 100.0;
@@ -7996,7 +8054,13 @@ mod tests {
 
     /// sha256 of the canonical `band_anchor` + `band_ladder` records of
     /// `band_ladder_replay_digest_is_pinned`, pinned at 461bd2b (the tree
-    /// the basement's engine cut starts from). It pins record shape and
+    /// the basement's engine cut starts from) and re-pinned 2026-09-23 when
+    /// the anchors 195 and 225 were added (`DEFAULT_BAND_ANCHOR_SECONDS`):
+    /// the digest moved because the replay now carries two more anchors,
+    /// each an anchor record and a ladder record (12 records, not 8); the
+    /// four original anchors' records are byte-identical (dropping the
+    /// 195/225 records from the `BAND_LADDER_REPLAY_DUMP` output hashes
+    /// to the previous digest ef89c729...). It pins record shape and
     /// quote mechanics under the fixed-stake fixture (`band_params`:
     /// kelly_q_lo 0, stake_usd 5, position_pct 1.0, $100 on the v1 book,
     /// where anchor `stake_usd` = `quote_budget_usd` = 5 before and after
@@ -8009,7 +8073,7 @@ mod tests {
     /// deletion step that moves the digest changed the records' shape or
     /// quotes.
     const BAND_LADDER_REPLAY_DIGEST: &str =
-        "ef89c7292b8d462538a1181da8568419638e9cd059ff125991af22855374d8d7";
+        "360ebb423cba54c398498231250170dcfe9796dad42ee28b9518fdc830c1a69f";
 
     /// Replay fixture for the basement's engine cut
     /// (docs/profitability_basement_2026-09-18.md, E row 3: byte-identical
@@ -8019,8 +8083,9 @@ mod tests {
     /// (`replay_binance_price`) arrive 600 ms after their event second, so
     /// every anchor waits one cycle for its covering tick; the book is a
     /// pure function of the window second (`replay_books`); the loop
-    /// stalls over (243.0, 246.2) s inside the 240 s span. The four
-    /// anchors read UP (+80), UP (+55), no direction (0) and DOWN (-70).
+    /// stalls over (243.0, 246.2) s inside the 240 s and 225 s spans. The
+    /// six anchors read UP (+80), UP (+55), UP (+27.5), no direction (0),
+    /// DOWN (-35) and DOWN (-70).
     /// The records, in log order with `ts`/`ts_iso` stripped, are checked
     /// in shape and then as one digest against
     /// `BAND_LADDER_REPLAY_DIGEST`; `BAND_LADDER_REPLAY_DUMP=<path>` writes
@@ -8082,7 +8147,8 @@ mod tests {
             })
             .collect();
         // Log order: each anchor is captured at a + 0.6 s (the covering
-        // tick), each ladder flushed at a + 31 s.
+        // tick), each ladder flushed at a + 31 s; ladders 15 s apart
+        // overlap (the accumulator is keyed by anchor).
         let shape: Vec<(&str, u64)> = records
             .iter()
             .map(|r| (r["type"].as_str().unwrap(), r["anchor_s"].as_u64().unwrap()))
@@ -8093,10 +8159,14 @@ mod tests {
                 ("band_anchor", 150),
                 ("band_anchor", 180),
                 ("band_ladder", 150),
+                ("band_anchor", 195),
                 ("band_anchor", 210),
                 ("band_ladder", 180),
+                ("band_anchor", 225),
+                ("band_ladder", 195),
                 ("band_anchor", 240),
                 ("band_ladder", 210),
+                ("band_ladder", 225),
                 ("band_ladder", 240),
             ]
         );
@@ -8111,7 +8181,9 @@ mod tests {
         for (r, (a, direction, margin)) in anchors.iter().zip([
             (150.0, json!("up"), json!(80.0)),
             (180.0, json!("up"), json!(55.0)),
+            (195.0, json!("up"), json!(27.5)),
             (210.0, json!(null), json!(0.0)),
+            (225.0, json!("down"), json!(-35.0)),
             (240.0, json!("down"), json!(-70.0)),
         ]) {
             assert_eq!(r["cid"], cid);
@@ -8125,14 +8197,30 @@ mod tests {
             assert_eq!(r["pair_sum"], 1.01);
         }
         // Depth phases at the anchor seconds: 150 % 7 = 3 (quoted), 210 % 7
-        // = 0 (three shares: no executable quote, best ask still recorded).
+        // = 0 (three shares: no executable quote, best ask still recorded),
+        // 195 % 7 = 6 (the $5 quote walks a level: 5 + 3 shares), 225 % 7
+        // = 1 (six shares: the $5 quote takes them all at the touch).
         assert_eq!(anchors[0]["up"]["worst"], 0.9);
-        assert_eq!(anchors[2]["up"]["worst"], serde_json::Value::Null);
-        assert_eq!(anchors[2]["up"]["best_ask"], 0.5);
+        assert_eq!(anchors[3]["up"]["worst"], serde_json::Value::Null);
+        assert_eq!(anchors[3]["up"]["best_ask"], 0.5);
+        assert_eq!(
+            (anchors[2]["up"]["best_ask"].as_f64(), anchors[2]["up"]["worst"].as_f64()),
+            (Some(0.64), Some(0.65)),
+            "{}",
+            anchors[2]
+        );
+        assert_eq!(
+            (anchors[4]["down"]["worst"].as_f64(), anchors[4]["down"]["shares"].as_f64()),
+            (Some(0.68), Some(6.0)),
+            "{}",
+            anchors[4]
+        );
         for (r, (direction, samples)) in ladders.iter().zip([
             (json!("up"), 31),
             (json!("up"), 31),
+            (json!("up"), 31),
             (json!(null), 31),
+            (json!("down"), 28),
             (json!("down"), 28),
         ]) {
             assert_eq!(r["cid"], cid);
@@ -8142,16 +8230,25 @@ mod tests {
             assert_eq!(r["host"], "replay");
             assert_eq!(r["samples"].as_array().unwrap().len(), samples, "{r}");
         }
-        // The stall: offsets 3, 4 and 5 of the 240 s span are absent and
-        // the largest cycle gap is 246.35 - 242.85.
-        let offsets: Vec<u64> = ladders[3]["samples"]
+        // The stall: offsets 3, 4 and 5 of the 240 s span (18, 19 and 20
+        // of the 225 s span) are absent and the largest cycle gap is
+        // 246.35 - 242.85 in both.
+        let offsets: Vec<u64> = ladders[5]["samples"]
             .as_array()
             .unwrap()
             .iter()
             .map(|s| s["t"].as_u64().unwrap())
             .collect();
         assert_eq!(offsets[..4], [0, 1, 2, 6]);
-        assert_eq!(ladders[3]["max_gap_s"], 3.5);
+        assert_eq!(ladders[5]["max_gap_s"], 3.5);
+        let offsets_225: Vec<u64> = ladders[4]["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["t"].as_u64().unwrap())
+            .collect();
+        assert_eq!(offsets_225[16..20], [16, 17, 21, 22]);
+        assert_eq!(ladders[4]["max_gap_s"], 3.5);
         assert_eq!(ladders[0]["max_gap_s"], 0.25);
         // Depth phases along the 150 s span: t = 1 (151 % 7 = 4) clears
         // every budget, t = 4 (154 % 7 = 0) quotes none, t = 5 (155 % 7 =
@@ -8162,8 +8259,8 @@ mod tests {
         assert_eq!(s150[5]["q"][0][3], false, "{}", s150[5]);
         assert_eq!(s150[5]["q"][1][3], true, "{}", s150[5]);
         assert_eq!(s150[5]["q"][2][3], true, "{}", s150[5]);
-        assert!(ladders[2]["samples"][0]["q"]["up"].is_array());
-        assert!(ladders[2]["samples"][0]["q"]["down"].is_array());
+        assert!(ladders[3]["samples"][0]["q"]["up"].is_array());
+        assert!(ladders[3]["samples"][0]["q"]["down"].is_array());
 
         let canonical = records
             .iter()
@@ -8873,6 +8970,7 @@ mod tests {
             risk_notes: Vec::new(),
             promotion_gate: PromotionGate::default(),
             robust_diagnostics: None,
+            paper_only: false,
         }
     }
 
@@ -9421,6 +9519,75 @@ mod tests {
         assert_eq!(runtime.strategy_spec, artifact.selected_strategy);
         assert_eq!(runtime.position_pct, 1.0);
         assert_eq!(runtime.max_projected_stressed_drawdown_pct, 1.0);
+        assert!(!runtime.paper_only);
+    }
+
+    /// A discovery-twin artifact (`paper_only`: executable_truth.py
+    /// --cell-gate-json through band-promotion-artifact) is promotion
+    /// schema 2, loads for the paper observer and is refused in live mode
+    /// by `Pipeline::new` (`paper_only_mode_error`, the preflight's check
+    /// too); a promotion never carries the flag, and its JSON never carries
+    /// the key. The schema/marker pairing is enforced both ways: a
+    /// schema-1 twin (which an older engine would run live) and a schema-2
+    /// file without a marker are refused; the `discovery` source label is a
+    /// marker on its own.
+    #[tokio::test]
+    async fn discovery_twin_artifact_runs_paper_only() {
+        let tmp = TempDir::new().unwrap();
+        let params = band_params();
+        let settings = band_test_settings(&tmp, &params);
+        let mut artifact = band_promotion(&params);
+        artifact.paper_only = true;
+        artifact.schema_version = PAPER_TWIN_SCHEMA_VERSION;
+        let text = serde_json::to_string(&artifact).unwrap();
+        assert!(text.contains("\"paper_only\":true"), "{text}");
+        assert!(text.contains("\"schema_version\":2"), "{text}");
+        assert!(!serde_json::to_string(&band_promotion(&params))
+            .unwrap()
+            .contains("paper_only"));
+        std::fs::write(&settings.promotion_artifact_path, text.as_bytes()).unwrap();
+        let runtime = RuntimeStrategy::load(&settings).unwrap();
+        assert!(runtime.paper_only);
+        assert_eq!(runtime.band.as_ref(), Some(&params));
+        assert_eq!(paper_only_mode_error(true, false), None);
+        assert_eq!(paper_only_mode_error(false, true), None);
+        let err = paper_only_mode_error(true, true).unwrap();
+        assert!(err.contains("discovery twin"), "{err}");
+        assert!(Pipeline::new(settings.clone(), Mode::Paper).await.is_ok());
+        let refused = Pipeline::new(settings.clone(), Mode::Live)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(refused.contains("discovery twin"), "{refused}");
+        // Schema 1 with the flag: what an engine without the flag would
+        // parse as a promotion; refused outright.
+        let write = |artifact: &PromotionArtifact| {
+            std::fs::write(
+                &settings.promotion_artifact_path,
+                serde_json::to_vec(artifact).unwrap(),
+            )
+            .unwrap()
+        };
+        artifact.schema_version = 1;
+        write(&artifact);
+        let err = RuntimeStrategy::load(&settings).err().unwrap().to_string();
+        assert!(err.contains("must be promotion schema 2"), "{err}");
+        // Schema 2 without any marker: unsupported, in every mode.
+        artifact.schema_version = PAPER_TWIN_SCHEMA_VERSION;
+        artifact.paper_only = false;
+        write(&artifact);
+        let err = RuntimeStrategy::load(&settings).err().unwrap().to_string();
+        assert!(err.contains("unsupported promotion schema 2"), "{err}");
+        assert_eq!(promotion_schema_error(&artifact).unwrap(), err);
+        // The discovery source label alone marks a twin.
+        artifact.source_label = DISCOVERY_SOURCE_LABEL.to_string();
+        write(&artifact);
+        assert!(artifact_is_paper_only(&artifact));
+        assert_eq!(promotion_schema_error(&artifact), None);
+        assert!(RuntimeStrategy::load(&settings).unwrap().paper_only);
+        let refused = Pipeline::new(settings, Mode::Live).await.err().unwrap().to_string();
+        assert!(refused.contains("discovery twin"), "{refused}");
     }
 
     #[test]

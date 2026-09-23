@@ -1,0 +1,11 @@
+{
+  "family": "signal_favorite_band_official_v1",
+  "decision_seconds": 210.0,
+  "entry_window_seconds": 15.0,
+  "ask_floor": 0.8,
+  "ask_cap": 0.99,
+  "stake_usd": 25.0,
+  "position_pct": 0.25,
+  "min_decision_margin_usd": 100.0,
+  "kelly_q_lo": 0.0
+}

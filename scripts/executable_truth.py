@@ -2,7 +2,7 @@
 """The ONE evaluator: executable truth for the band family (roadmap section C).
 
 Table logs/strategy-research/executable_truth/windows.sqlite3: one row per
-(window_start, decision_s in {150, 180, 210, 240}), append-only, each row
+(window_start, decision_s in {150, 180, 195, 210, 225, 240}), append-only, each row
 stamped with its build time (the accrual cut) and git sha.  Per row: the
 Binance basis at the open and the decision (margin, direction), the official
 Gamma label, the final margin close(ws + 300) - open with its oracle-noise
@@ -12,8 +12,10 @@ when a session recorded them, and the host that recorded them.
 
 Grammar (band_lane.BAND_GRID_V2): decision_s x floor_usd in {50 control, 75,
 100, 150} x cap in {0.92 .. 0.99} x patience in {0, 15, 30} s; ask floor
-0.80, direction both (up/down is a tripwire, never a rule); 336 cells, the
-189 with floor >= 75 and decision >= 180 registrable.  Three models per
+0.80, direction both (up/down is a tripwire, never a rule); 504 cells, the
+315 with floor >= 75 and decision >= 180 registrable.  The 150, 195 and 225
+s cells have no print column (`ladder_only`: the ladder is their only
+instrument, and the print screen of --register never admits them).  Three models per
 cell: signal-only (a ceiling, never gated against break-even), print
 one-look (the first public BUY print after the decision within the patience
 look: an upper bound) and ladder truth (trade iff the first ladder sample
@@ -38,7 +40,13 @@ accrues every registered cell with an e-process on ladder rows at $25,
 decides the family by e-BH at alpha 0.05 with family_size = N, and fails
 closed to manual_audit on any tripwire until --clear-audit records the
 operator's audit of that defect; --gate-json emits the evidence artifact
-the engine's band-promotion-artifact command consumes.
+the engine's band-promotion-artifact command consumes.  A registered cell
+is killed when its capacity (the share of its covered signal windows whose
+$25 ladder clears at the cap, per UTC day) over the trailing week falls
+below half its registration week's, given 14 days of data; three weekly
+declines running are a warning.  --cell-gate-json emits the same artifact
+for an unregistered cell (verdict INSUFFICIENT, discovery_twin) so the
+paper observer can run the candidate as its twin; live mode refuses it.
 """
 
 from __future__ import annotations
@@ -67,7 +75,12 @@ import factory_generator  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 # v2: ladder gating on the record's own basis, conditional oracle ceiling,
 # Wilson-separated adverse selection, FOK-limit latency look.
-EVALUATOR_VERSION = "executable_truth_v2"
+# v3: the kill is the cell's own capacity trend (capacity_trend_verdict),
+# not the 7-day median first second above 0.99, which killed every cell at
+# decision >= 210 s by construction (2026-09-23: median 193-213 s while
+# the edge lives exactly in the windows that have not crossed); the
+# first-crossing series stays informational.  Grammar C gains 195/225 s.
+EVALUATOR_VERSION = "executable_truth_v3"
 GRAMMAR_VERSION = band_lane.BAND_GRID_V2_VERSION
 LANE = "band_ladder"
 TRUTH_DIR = ROOT / "logs/strategy-research/executable_truth"
@@ -127,6 +140,32 @@ COVERAGE_MIN = 0.9
 REGISTER_MIN_LADDER_DAYS = 7
 EDGE_MIGRATION_ASK = 0.99
 EDGE_MIGRATION_DAYS = 7
+# Capacity trend (the kill): the share of a cell's covered signal windows
+# whose $25 ladder is fillable at the cap within the patience, per UTC day;
+# the trailing week against the first week of data (the registration week
+# under accrual), once 14 days of data exist; a warning, not a hold, when
+# the weekly capacity has fallen three complete weeks running.  The kill
+# is permanent, so it needs support: no verdict unless each pooled week
+# holds CAPACITY_POOL_MIN_DAYS data days and CAPACITY_POOL_MIN_N covered
+# windows and the baseline CAPACITY_BASELINE_MIN_FILLS fillable ones (at
+# today's support many registrable cells see 4-8 covered windows a day
+# and one or two fills a week: a ratio of two such counts is noise, and
+# a single sparse day on either side of an outage is not a week), and
+# the kill fires only when the trailing week's Wilson upper bound is
+# below CAPACITY_KILL_RATIO x the baseline's Wilson lower bound, never on
+# the point ratio (which is reported).  A weekly decline counts only past
+# CAPACITY_DECLINE_MIN_DROP (one window's worth of noise is not a
+# decline) and an empty week breaks the run.
+CAPACITY_BASELINE_DAYS = 7
+CAPACITY_TRAILING_DAYS = 7
+CAPACITY_MIN_DAYS = 14
+CAPACITY_POOL_MIN_DAYS = 4
+CAPACITY_POOL_MIN_N = 20
+CAPACITY_BASELINE_MIN_FILLS = 10
+CAPACITY_KILL_RATIO = 0.5
+CAPACITY_WARN_WEEKS = 3
+CAPACITY_DECLINE_MIN_DROP = 0.05
+GIT_DIRTY_SUFFIX = "-dirty"
 # A settled window's row is built once its ladder record is in a session
 # file or this long after the window end, whichever comes first, so a row
 # is written exactly once with everything it will ever hold.
@@ -145,7 +184,9 @@ DEFECT_TRIPWIRES = (
     "tick_fragile",
 )
 READINESS_REQUIREMENTS = ("insufficient_support", "coverage_low")
-KILL_TRIPWIRES = ("edge_migration",)
+KILL_TRIPWIRES = ("capacity_collapse",)
+# Reported next to the tripwires, never a hold or a kill.
+WARNINGS = ("capacity_declining",)
 CELL_ID_RE = re.compile(r"^d(\d+)_f(\d+)_c(\d\.\d+)_p(\d+)$")
 
 
@@ -162,12 +203,23 @@ def _mean(values: Sequence[float]) -> Optional[float]:
 
 
 def git_sha() -> str:
+    """The short HEAD sha, suffixed -dirty when a tracked file differs from
+    it (git's own `describe --dirty` rule: untracked files do not count),
+    so a row built from an uncommitted tree names a tree its sha cannot
+    reproduce instead of the commit it happens to sit on (the 195/225 s
+    rows of 2026-09-23T12:06-12:38Z carry a bare b2bae3f whose grammar has
+    no such anchors: they were built by the tree that became the next
+    commit)."""
     try:
-        return subprocess.run(
+        sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT), capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=str(ROOT), capture_output=True, text=True, check=True
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+    return sha + GIT_DIRTY_SUFFIX if dirty else sha
 
 
 # --- fee ---------------------------------------------------------------------
@@ -752,6 +804,9 @@ def build(
     summary = {
         "built_at": built_at,
         "git_sha": sha,
+        # Rows stamped with a -dirty sha were built by an uncommitted tree:
+        # the commit they name cannot reproduce them.
+        "git_dirty": sha.endswith(GIT_DIRTY_SUFFIX),
         "rows_inserted": len(rows),
         "ladder_rows_attached": attached,
         "print_rows_refreshed": refreshed,
@@ -1018,6 +1073,7 @@ def select_cell(
     excluded: Dict[str, List[Mapping[str, Any]]] = {}
     covered = 0
     capacity = {"%d" % budget: [0, 0] for budget in CAPACITY_BUDGETS}
+    capacity_points: List[Tuple[int, bool]] = []
     basis = {"compared": 0, "sign_flips": 0, "floor_changes": 0}
     for row in rows:
         direction, margin = row.get("direction"), row.get("margin")
@@ -1071,8 +1127,11 @@ def select_cell(
         covered += 1
         for budget in CAPACITY_BUDGETS:
             cleared = ladder_trade(rule, ladder, direction, budget)
+            fillable = cleared is not None and not cleared["depth_limited"]
             capacity["%d" % budget][1] += 1
-            capacity["%d" % budget][0] += int(cleared is not None and not cleared["depth_limited"])
+            capacity["%d" % budget][0] += int(fillable)
+            if budget == LADDER_BUDGET_USD:
+                capacity_points.append((base["window_start"], fillable))
         trade = ladder_trade(rule, ladder, direction, LADDER_BUDGET_USD)
         if trade is None:
             excluded.setdefault("never_cleared", []).append(row)
@@ -1093,6 +1152,7 @@ def select_cell(
         "capacity": {key: (value[0] / value[1] if value[1] else None) for key, value in capacity.items()}
         if model == "ladder"
         else None,
+        "capacity_points": capacity_points if model == "ladder" else None,
         "basis_disagreement": basis if model == "ladder" else None,
     }
 
@@ -1137,7 +1197,8 @@ def score_selection(
     """Everything section C asks of a cell: n, W, Wilson lower, mean
     break-even, net/USD, halves, directions, excluded populations and the
     adverse-selection flag, the oracle ceiling on the final-margin mix,
-    tick fragility, latency sensitivity, capacity, and the tripwires.
+    tick fragility, latency sensitivity, capacity and its trend (the
+    kill), the first-crossing summary (informational) and the tripwires.
     `noise` is the table-wide marginal oracle noise, reported as a
     diagnostic; the ceiling is built on the noise among the cell's own
     signal windows.  `cleared` names the defect tripwires an operator has
@@ -1206,12 +1267,14 @@ def score_selection(
     first = trades[0]["window_start"] if trades else None
     last = trades[-1]["window_start"] if trades else None
     span_days = ((last - first) / 86400.0) if trades else 0.0
-    # The edge-migration series of the cell's own signal windows (a series
-    # pooled over weak windows is censored wherever they are the majority).
+    # The first-crossing series of the cell's own signal windows (a series
+    # pooled over weak windows is censored wherever they are the majority):
+    # informational since v3.  The kill is the cell's capacity trend.
     migration = None
     if edge_series:
         windows = {int(row["window_start"]) for row in population}
         migration = edge_migration_verdict([point for point in edge_series if point[0] in windows], int(rule["decision_second"]))
+    trend = capacity_trend_verdict(selection.get("capacity_points") or ()) if model == "ladder" else None
     lower = overall["wilson_lower"]
     cleared = tuple(name for name in cleared if name in DEFECT_TRIPWIRES)
     tripwires = {
@@ -1235,8 +1298,9 @@ def score_selection(
         "tick_fragile": bool(fragile),
         "insufficient_support": overall["n"] < PROMOTION_MIN_N or span_days < PROMOTION_MIN_DAYS,
         "coverage_low": bool(priced and (selection["coverage"] is None or selection["coverage"] < COVERAGE_MIN)),
-        "edge_migration": bool(migration and migration["kill"]),
+        "capacity_collapse": bool(trend and trend["kill"]),
     }
+    warnings = {"capacity_declining": bool(trend and trend["warn"])}
     clears = bool(priced and lower is not None and even is not None and lower >= even)
     defects = [name for name in DEFECT_TRIPWIRES if tripwires[name] and name not in cleared]
     ready = not any(tripwires[name] for name in READINESS_REQUIREMENTS)
@@ -1254,6 +1318,7 @@ def score_selection(
         "signal_windows": selection["signal_windows"],
         "coverage": selection["coverage"],
         "capacity": selection.get("capacity"),
+        "capacity_trend": trend,
         "basis_disagreement": selection.get("basis_disagreement"),
         "oracle_ceiling": oracle_ceiling,
         "oracle_ceiling_marginal": oracle_ceiling_marginal,
@@ -1266,6 +1331,7 @@ def score_selection(
         "edge_migration": migration,
         "clears_break_even": clears,
         "tripwires": tripwires,
+        "warnings": warnings,
         "defects": defects,
         "audit_cleared": [name for name in cleared if tripwires[name]],
         "ready": ready,
@@ -1283,11 +1349,13 @@ def edge_migration_verdict(
     series: Sequence[Tuple[int, Optional[float]]], decision_s: int, days: int = EDGE_MIGRATION_DAYS
 ) -> Dict[str, Any]:
     """The 7-day median of the first second the favourite ask exceeded 0.99;
-    a window that never did counts as later than every observed second.  A
-    registered cell dies when the median drifts below its decision second:
-    the edge has migrated earlier than the rule looks."""
+    a window that never did counts as later than every observed second.
+    Informational since v3 (`median_before_decision`): a median earlier
+    than the decision second says the market's most confident windows
+    have crossed, not that the cell's own windows (those that have not)
+    are gone; the kill is capacity_trend_verdict."""
     if not series:
-        return {"n": 0, "median": None, "kill": False}
+        return {"n": 0, "median": None, "median_before_decision": False}
     newest = max(window_start for window_start, _ in series)
     recent = [value for window_start, value in series if window_start > newest - days * 86400]
     values = sorted(math.inf if value is None else float(value) for value in recent)
@@ -1296,8 +1364,114 @@ def edge_migration_verdict(
         "n": len(values),
         "censored": sum(1 for value in values if value == math.inf),
         "median": None if median is None or median == math.inf else median,
-        "kill": bool(median is not None and median < float(decision_s)),
+        "median_before_decision": bool(median is not None and median < float(decision_s)),
     }
+
+
+def _day_iso(day: int) -> str:
+    return dt.datetime.fromtimestamp(int(day) * 86400, dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def capacity_trend_verdict(
+    points: Sequence[Tuple[int, bool]],
+    baseline_days: int = CAPACITY_BASELINE_DAYS,
+    trailing_days: int = CAPACITY_TRAILING_DAYS,
+    min_days: int = CAPACITY_MIN_DAYS,
+    kill_ratio: float = CAPACITY_KILL_RATIO,
+    warn_weeks: int = CAPACITY_WARN_WEEKS,
+    pool_min_days: int = CAPACITY_POOL_MIN_DAYS,
+    pool_min_n: int = CAPACITY_POOL_MIN_N,
+    baseline_min_fills: int = CAPACITY_BASELINE_MIN_FILLS,
+    min_drop: float = CAPACITY_DECLINE_MIN_DROP,
+) -> Dict[str, Any]:
+    """The cell's capacity per UTC day: of its covered signal windows
+    (`points`: window start, fillable at $25 within the patience), the
+    share fillable at the cap.  Kill when the trailing `trailing_days`
+    capacity is below `kill_ratio` x the first `baseline_days` of data
+    (the registration week under accrual, where the points start after
+    the cut) with at least `min_days` UTC days of data: on the Wilson
+    bounds (`ratio_upper` = trailing upper / baseline lower), never on
+    the point `ratio`, which is reported; warn (reported, never a hold)
+    when the weekly capacity has fallen `warn_weeks` complete weeks
+    running, each by at least `min_drop` of the week before.  Both
+    windows pool windows, not daily rates; a day without a covered window
+    carries no capacity and an empty complete week breaks the decline run
+    (an observer outage is not the edge leaving).  Too short, or a pool
+    below `pool_min_days` data days, `pool_min_n` windows or (baseline)
+    `baseline_min_fills` fills: no verdict (`support` says which)."""
+    by_day: Dict[int, List[int]] = {}
+    for window_start, fillable in points:
+        counts = by_day.setdefault(int(window_start) // 86400, [0, 0])
+        counts[0] += int(bool(fillable))
+        counts[1] += 1
+    days = sorted(by_day)
+    daily = [{"day": _day_iso(day), "capacity": by_day[day][0] / by_day[day][1], "n": by_day[day][1]} for day in days]
+    verdict: Dict[str, Any] = {
+        "n_days": len(days),
+        "span_days": (days[-1] - days[0] + 1) if days else 0,
+        "daily": daily,
+        "baseline": None,
+        "trailing": None,
+        "ratio": None,
+        "ratio_upper": None,
+        "support": None,
+        "weekly": [],
+        "consecutive_declines": 0,
+        "verdict": None,
+        "kill": False,
+        "warn": False,
+    }
+    if not days:
+        return verdict
+    first, last = days[0], days[-1]
+
+    def pooled(selected: Sequence[int]) -> Dict[str, Any]:
+        cleared = sum(by_day[day][0] for day in selected)
+        total = sum(by_day[day][1] for day in selected)
+        return {
+            "capacity": (cleared / total) if total else None,
+            "n": total,
+            "fills": cleared,
+            "days": len(selected),
+            "wilson_lower": band_lane.wilson_lower(cleared, total),
+            "wilson_upper": _wilson_upper(cleared, total),
+        }
+
+    baseline = pooled([day for day in days if day < first + baseline_days])
+    trailing = pooled([day for day in days if day > last - trailing_days])
+    weekly = []
+    week = 0
+    while first + 7 * (week + 1) - 1 <= last:  # complete weeks only; an empty one stays (capacity None)
+        members = [day for day in days if first + 7 * week <= day < first + 7 * (week + 1)]
+        weekly.append({"week": week, "from": _day_iso(first + 7 * week), **pooled(members)})
+        week += 1
+    declines = 0
+    for previous, current in zip(weekly, weekly[1:]):
+        if previous["capacity"] is None or current["capacity"] is None:
+            declines = 0
+        elif current["capacity"] < previous["capacity"] * (1.0 - min_drop):
+            declines += 1
+        else:
+            declines = 0
+    verdict.update({"baseline": baseline, "trailing": trailing, "weekly": weekly, "consecutive_declines": declines})
+    if len(days) < min_days:
+        return verdict
+    short = [
+        "%s: %d days, %d windows, %d fills" % (name, pool["days"], pool["n"], pool["fills"])
+        for name, pool, min_fills in (("baseline", baseline, baseline_min_fills), ("trailing", trailing, 0))
+        if pool["days"] < pool_min_days or pool["n"] < pool_min_n or pool["fills"] < min_fills
+    ]
+    verdict["support"] = {"ok": not short, "reason": "; ".join(short) if short else None}
+    if short:
+        return verdict
+    if baseline["capacity"]:
+        verdict["ratio"] = trailing["capacity"] / baseline["capacity"]
+    if baseline["wilson_lower"]:
+        verdict["ratio_upper"] = trailing["wilson_upper"] / baseline["wilson_lower"]
+    kill = bool(verdict["ratio_upper"] is not None and verdict["ratio_upper"] < kill_ratio)
+    warn = declines >= warn_weeks
+    verdict.update({"kill": kill, "warn": warn, "verdict": "kill" if kill else ("warn" if warn else "ok")})
+    return verdict
 
 
 def load_edge_series(connection: sqlite3.Connection) -> List[Tuple[int, Optional[float]]]:
@@ -1326,7 +1500,15 @@ def evaluate_cell(
     rule = normalized_rule(rule)
     rows = rows_by_decision.get(int(rule["decision_second"]), [])
     labels = labels_of(rows) if labels is None else labels
-    report: Dict[str, Any] = {"cell_id": cell_id(rule), "fingerprint": fingerprint(rule), "rule": rule, "registrable": registrable(rule)}
+    report: Dict[str, Any] = {
+        "cell_id": cell_id(rule),
+        "fingerprint": fingerprint(rule),
+        "rule": rule,
+        "registrable": registrable(rule),
+        # No print column at this decision second (band_lane's proposer
+        # skips it): the ladder is the only instrument.
+        "ladder_only": int(rule["decision_second"]) not in band_lane.BAND_DECISION_SECONDS,
+    }
     for model in MODELS:
         report[model] = score_selection(select_cell(rows, rule, model, ladder_hosts), labels, fee_rate, noise, edge_series)
     return report
@@ -1413,6 +1595,7 @@ def null_check(selections: Sequence[Mapping[str, Any]], fee_rate: float, replica
 
 def _flags(score: Mapping[str, Any]) -> str:
     names = [name for name, fired in score["tripwires"].items() if fired]
+    names += ["warn:%s" % name for name, fired in (score.get("warnings") or {}).items() if fired]
     return ",".join(names) if names else "-"
 
 
@@ -1493,7 +1676,7 @@ def grid_text(report: Mapping[str, Any], top: int = 10) -> str:
                         _fmt(score["excluded_pooled"]["win_rate"]),
                         score["excluded_pooled"]["n"],
                         _fmt(score["oracle_ceiling"]),
-                        "CLEARS " if score["clears_break_even"] else "",
+                        ("ladder-only " if cell.get("ladder_only") else "") + ("CLEARS " if score["clears_break_even"] else ""),
                         _flags(score),
                     )
                 )
@@ -1561,6 +1744,10 @@ def register(
             "reason": "print cache writer_v2_share is %s, not 1.0: run --rebuild-prints and --build first (or --allow-partial-prints)" % _fmt(v2_share),
         }
     report = report or grid(connection)
+    # Registrable cells without a print column (195/225 s: ladder-only)
+    # cannot pass the print screen; their count is reported so the drop is
+    # never silent (open question G.7 decides their screen).
+    ladder_only_unscreened = sum(1 for cell in report["cells"] if cell["registrable"] and cell.get("ladder_only"))
     rows = load_rows(connection)
     rows_by_decision: Dict[int, List[Dict[str, Any]]] = {}
     for row in rows:
@@ -1592,7 +1779,7 @@ def register(
         by_set[accepted] = entry
         cells.append(entry)
     if not cells:
-        return {"registered": False, "reason": "no registrable cell clears the print screen"}
+        return {"registered": False, "reason": "no registrable cell clears the print screen", "ladder_only_unscreened": ladder_only_unscreened}
     now_ts = int(time.time()) if now_ts is None else int(now_ts)
     newest = connection.execute("SELECT MAX(window_start) FROM windows").fetchone()[0]
     after = max(int(newest) if newest is not None else -1, band_lane.last_eligible_window_start(now_ts))
@@ -1618,10 +1805,17 @@ def register(
         "ladder_rows_by_host": ladder_rows_by_host(connection),
         "writer_v2_share": v2_share,
         "audit_cleared": {},
+        "ladder_only_unscreened": ladder_only_unscreened,
         "cells": cells,
     }
     band_lane._atomic_write(path, json.dumps(campaign, indent=2, sort_keys=True) + "\n")
-    return {"registered": True, "path": str(path), "family_size": len(cells), "cells": [cell["cell_id"] for cell in cells]}
+    return {
+        "registered": True,
+        "path": str(path),
+        "family_size": len(cells),
+        "cells": [cell["cell_id"] for cell in cells],
+        "ladder_only_unscreened": ladder_only_unscreened,
+    }
 
 
 def registration_cut(campaign: Mapping[str, Any]) -> int:
@@ -1722,6 +1916,24 @@ def _fresh_selection(
     return select_cell(rows, rule, "ladder", ladder_hosts)
 
 
+def campaign_version_error(campaign: Mapping[str, Any]) -> Optional[str]:
+    """A campaign registered under another evaluator or grammar version is
+    stale: its fingerprints, cells and tripwires were fixed by code this
+    tree no longer runs, so it accrues nothing and every cell is held
+    (manual_audit, `stale_evaluator`) until it is re-registered: a versioned
+    change resets registered_at (CLAUDE.md section 5)."""
+    registered = (str(campaign.get("evaluator_version")), str(campaign.get("grammar_version")))
+    if registered == (EVALUATOR_VERSION, GRAMMAR_VERSION):
+        return None
+    return "campaign %s was registered under %s/%s; this tree runs %s/%s: re-register (registered_at resets)" % (
+        campaign.get("id"),
+        registered[0],
+        registered[1],
+        EVALUATOR_VERSION,
+        GRAMMAR_VERSION,
+    )
+
+
 def accrued_windows(connection: sqlite3.Connection, campaign_id: str, fp: str) -> set:
     return {
         int(row[0])
@@ -1744,10 +1956,34 @@ def accrue_campaign(
     registered cell's e-process (break-even at the FOK worst price of the
     $25 quote), then decide the family: e-BH at alpha over the cells that
     are ready and hold no uncleared defect; a defect fails closed to
-    manual_audit, futility and edge migration kill, everything else keeps
-    accruing.  Evidence-host ladder rows only.  One trial-ledger row per
-    (fingerprint, look_id)."""
+    manual_audit, futility and a capacity collapse kill, everything else
+    keeps accruing.  Evidence-host ladder rows only.  One trial-ledger row per
+    (fingerprint, look_id).  A campaign registered under another evaluator
+    or grammar version (campaign_version_error) touches nothing: every cell
+    is reported manual_audit with reason stale_evaluator."""
     campaign_id = str(campaign["id"])
+    stale = campaign_version_error(campaign)
+    if stale:
+        cells = []
+        for cell in campaign["cells"]:
+            state = connection.execute(
+                "SELECT * FROM campaign_accrual WHERE campaign_id = ? AND fingerprint = ?", (campaign_id, str(cell["fingerprint"]))
+            ).fetchone()
+            cells.append(
+                {
+                    "cell_id": cell["cell_id"],
+                    "fingerprint": str(cell["fingerprint"]),
+                    "n": int(state["n"]) if state else 0,
+                    "wins": int(state["wins"]) if state else 0,
+                    "e_value": float(state["e_value"]) if state else None,
+                    "verdict": str(state["verdict"]) if state else None,
+                    "status": "manual_audit",
+                    "reason": "stale_evaluator",
+                    "applied": 0,
+                    "ledger_row": False,
+                }
+            )
+        return {"campaign": campaign_id, "stale_evaluator": stale, "ladder_hosts": [], "cells": cells, "e_bh": None}
     after = registration_cut(campaign)
     hosts = campaign_ladder_hosts(connection, campaign)
     rows = load_rows(connection)
@@ -1828,7 +2064,7 @@ def accrue_campaign(
         if result["previous_status"].startswith("killed"):
             status = result["previous_status"]
         elif score["killed"]:
-            status = "killed_edge_migration"
+            status = "killed_%s" % next(name for name in KILL_TRIPWIRES if score["tripwires"][name])
         elif result["verdict"] == "kill":
             status = "killed_futility"
         elif score["held"]:
@@ -1879,6 +2115,8 @@ def accrue_campaign(
                 "audit_cleared": score["audit_cleared"],
                 "ready": score["ready"],
                 "tripwires": score["tripwires"],
+                "warnings": score["warnings"],
+                "capacity_trend": score["capacity_trend"],
                 "excluded": {reason: value["n"] for reason, value in score["excluded"].items()},
             }
         )
@@ -1894,12 +2132,69 @@ def gate_artifact(
     signal_entry and won, fresh_range, registration.  Rows are the cell's
     ladder trades after registration at the FOK worst price, evidence hosts
     only; PASS only on an e-BH discovery with every uncleared tripwire
-    quiet."""
+    quiet, and never for a campaign registered under another evaluator or
+    grammar version (IMPLAUSIBLE_MANUAL_AUDIT, `stale_evaluator`)."""
     cell = next((item for item in campaign["cells"] if item["cell_id"] == cell_id_text), None)
     if cell is None:
         raise ValueError("cell %s is not registered in campaign %s" % (cell_id_text, campaign["id"]))
-    rule = normalized_rule(cell["rule"])
     hosts = campaign_ladder_hosts(connection, campaign)
+    state = connection.execute(
+        "SELECT * FROM campaign_accrual WHERE campaign_id = ? AND fingerprint = ?", (str(campaign["id"]), cell["fingerprint"])
+    ).fetchone()
+    status = str(state["status"]) if state else "unaccrued"
+    stale = campaign_version_error(campaign)
+    payload = _gate_payload(connection, normalized_rule(cell["rule"]), hosts, registration_cut(campaign), cleared_tripwires(campaign, str(cell["fingerprint"])), fee_rate)
+    score = payload.pop("score")
+    if stale:
+        verdict = "IMPLAUSIBLE_MANUAL_AUDIT"
+    elif status == "promote_candidate" and score["promotable"]:
+        verdict = "PASS"
+    elif score["held"] or status == "manual_audit":
+        verdict = "IMPLAUSIBLE_MANUAL_AUDIT"
+    elif status.startswith("killed"):
+        verdict = "FAIL_TOMBSTONE"
+    else:
+        verdict = "INSUFFICIENT"
+    return {
+        **payload,
+        **({"stale_evaluator": stale} if stale else {}),
+        "registration": str(campaign["id"]),
+        "cell_id": cell["cell_id"],
+        "fingerprint": cell["fingerprint"],
+        "accrual": None if state is None else {key: state[key] for key in ("n", "wins", "e_value", "verdict", "status", "updated_at")},
+        "verdict": verdict,
+    }
+
+
+def discovery_gate_artifact(connection: sqlite3.Connection, cell_id_text: str, fee_rate: Optional[float] = None) -> Dict[str, Any]:
+    """The same artifact for an UNREGISTERED cell, for a paper twin only:
+    every evidence-host ladder trade in the table (no registration cut, no
+    e-process), verdict INSUFFICIENT by construction and `discovery_twin`
+    set, which cmd_band_promotion_artifact turns into a paper-only
+    promotion artifact (the live preflight refuses it).  It is not
+    promotion evidence and never becomes one: registration comes first."""
+    rule = rule_from_cell_id(cell_id_text)
+    payload = _gate_payload(connection, rule, evidence_hosts(connection), -1, (), fee_rate)
+    payload.pop("score")
+    return {
+        **payload,
+        "registration": "discovery",
+        "discovery_twin": True,
+        "cell_id": cell_id(rule),
+        "fingerprint": fingerprint(rule),
+        "accrual": None,
+        "verdict": "INSUFFICIENT",
+    }
+
+
+def _gate_payload(
+    connection: sqlite3.Connection,
+    rule: Mapping[str, Any],
+    hosts: Sequence[str],
+    after_window_start: int,
+    cleared: Sequence[str],
+    fee_rate: Optional[float],
+) -> Dict[str, Any]:
     rows = load_rows(connection)
     rows_by_decision: Dict[int, List[Dict[str, Any]]] = {}
     for row in rows:
@@ -1907,13 +2202,8 @@ def gate_artifact(
     labels = labels_of(rows)
     fee = get_meta(connection, "fee") or {"rate": DEFAULT_FEE_RATE}
     fee_rate = float(fee["rate"]) if fee_rate is None else float(fee_rate)
-    selection = _fresh_selection(rows_by_decision, rule, registration_cut(campaign), hosts)
-    cleared = cleared_tripwires(campaign, str(cell["fingerprint"]))
+    selection = _fresh_selection(rows_by_decision, rule, after_window_start, hosts)
     score = score_selection(selection, labels, fee_rate, oracle_noise(rows), load_edge_series(connection), cleared)
-    state = connection.execute(
-        "SELECT * FROM campaign_accrual WHERE campaign_id = ? AND fingerprint = ?", (str(campaign["id"]), cell["fingerprint"])
-    ).fetchone()
-    status = str(state["status"]) if state else "unaccrued"
     trades = [trade for trade in selection["trades"] if labels.get(trade["window_start"]) in ("up", "down")]
     gate_rows = [
         {
@@ -1927,30 +2217,19 @@ def gate_artifact(
         }
         for trade in trades
     ]
-    if status == "promote_candidate" and score["promotable"]:
-        verdict = "PASS"
-    elif score["held"] or status == "manual_audit":
-        verdict = "IMPLAUSIBLE_MANUAL_AUDIT"
-    elif status.startswith("killed"):
-        verdict = "FAIL_TOMBSTONE"
-    else:
-        verdict = "INSUFFICIENT"
     return {
         "schema_version": 1,
-        "registration": str(campaign["id"]),
         "candidate": BAND_FAMILY,
         "evaluator_version": EVALUATOR_VERSION,
         "grammar_version": GRAMMAR_VERSION,
-        "cell_id": cell["cell_id"],
-        "fingerprint": cell["fingerprint"],
-        "rule": rule,
+        "rule": dict(rule),
         "model": "ladder",
         "budget_usd": LADDER_BUDGET_USD,
         "ladder_hosts": list(hosts),
         "fee_rate": fee_rate,
         "fee": fee,
         "fresh_range": [score["first_window_start"], score["last_window_start"]],
-        "registration_cut": registration_cut(campaign),
+        "registration_cut": None if after_window_start < 0 else int(after_window_start),
         "support": score["n"],
         "wins": score["wins"],
         "win_rate": score["win_rate"],
@@ -1959,10 +2238,11 @@ def gate_artifact(
         "point_edge": None if score["win_rate"] is None else score["win_rate"] - score["mean_break_even"],
         "wilson_edge": None if score["wilson_lower"] is None else score["wilson_lower"] - score["mean_break_even"],
         "net_per_usd": score["mean_net_per_usd"],
-        "accrual": None if state is None else {key: state[key] for key in ("n", "wins", "e_value", "verdict", "status", "updated_at")},
         "tripwires": score["tripwires"],
+        "warnings": score["warnings"],
+        "capacity": score["capacity"],
+        "capacity_trend": score["capacity_trend"],
         "audit_cleared": score["audit_cleared"],
-        "verdict": verdict,
         "policy_params": {
             "family": BAND_FAMILY,
             "decision_seconds": float(rule["decision_second"]),
@@ -1974,6 +2254,7 @@ def gate_artifact(
             "min_decision_margin_usd": float(rule["margin_floor_usd"]),
         },
         "rows": gate_rows,
+        "score": score,
     }
 
 
@@ -2012,6 +2293,17 @@ def _load_loop_config(explicit: Optional[str]) -> Dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def _warn_build(report: Mapping[str, Any]) -> None:
+    if report["fee"].get("warning"):
+        print("WARNING: %s" % report["fee"]["warning"], file=sys.stderr)
+    if report.get("git_dirty") and report.get("rows_inserted"):
+        print(
+            "WARNING: %d rows stamped %s: built by an uncommitted tree (commit first, or expect an audit at that sha to fail)"
+            % (report["rows_inserted"], report["git_sha"]),
+            file=sys.stderr,
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     action = parser.add_mutually_exclusive_group(required=True)
@@ -2020,6 +2312,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     action.add_argument("--cell", help="full report for one cell, e.g. d240_f75_c0.97_p15")
     action.add_argument("--register", metavar="ID", help="write deploy/campaigns/<ID>.json with the registrable cells")
     action.add_argument("--gate-json", action="store_true", help="emit the promotion evidence artifact for --campaign/--cell-id")
+    action.add_argument("--cell-gate-json", metavar="CELL_ID", help="discovery mode: the same artifact for an unregistered cell (verdict INSUFFICIENT, discovery_twin) for a PAPER twin only")
     action.add_argument("--tick", action="store_true", help="incremental build plus accrual of every registered campaign")
     action.add_argument("--clear-audit", metavar="CELL_ID", help="record a completed audit of a registered cell's defect tripwires (--campaign, --tripwire, --note)")
     action.add_argument("--accept-mac-ladders", action="store_true", help="run the Mac/VPS overlap check and, when it passes, accept Mac ladder rows as evidence")
@@ -2048,8 +2341,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.build:
             report = build(connection, band_lane.BandCache(), start_ts, now_ts, session_dirs)
-            if report["fee"].get("warning"):
-                print("WARNING: %s" % report["fee"]["warning"], file=sys.stderr)
+            _warn_build(report)
             print(json.dumps(report, indent=2, sort_keys=True))
         elif args.grid:
             report = grid(connection, null_replicates=args.null_replicates, seed=args.seed)
@@ -2093,8 +2385,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             band_lane._atomic_write(output, json.dumps(artifact, indent=1, sort_keys=True) + "\n")
             print(json.dumps({key: artifact[key] for key in ("verdict", "support", "wins", "wilson_lo", "avg_break_even", "tripwires")}, indent=2, sort_keys=True))
             print("written %s" % output)
+        elif args.cell_gate_json:
+            artifact = discovery_gate_artifact(connection, args.cell_gate_json)
+            output = args.output or (TRUTH_DIR / "gates" / ("discovery_%s.json" % artifact["cell_id"]))
+            band_lane._atomic_write(output, json.dumps(artifact, indent=1, sort_keys=True) + "\n")
+            print(json.dumps({key: artifact[key] for key in ("verdict", "discovery_twin", "support", "wins", "wilson_lo", "avg_break_even", "tripwires", "warnings")}, indent=2, sort_keys=True))
+            print("written %s" % output)
         elif args.tick:
             report = tick(connection, band_lane.BandCache(), start_ts, now_ts, loop_config, session_dirs, args.campaigns_dir)
+            _warn_build(report["build"])
+            for campaign in report["campaigns"]:
+                if campaign.get("stale_evaluator"):
+                    print("WARNING: %s" % campaign["stale_evaluator"], file=sys.stderr)
             print(json.dumps(report, indent=2, sort_keys=True))
     finally:
         connection.close()

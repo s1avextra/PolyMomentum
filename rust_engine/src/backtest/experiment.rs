@@ -271,6 +271,13 @@ pub struct PromotionArtifact {
     pub promotion_gate: PromotionGate,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robust_diagnostics: Option<RobustPromotionDiagnostics>,
+    /// A discovery twin (`band-promotion-artifact` from a gate whose
+    /// verdict is INSUFFICIENT with `discovery_twin`): the paper observer
+    /// runs it so its paper trades twin the candidate; the live preflight
+    /// and `Pipeline::new` refuse it. Absent (false) on every promotion,
+    /// so existing artifacts serialize byte-identically.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paper_only: bool,
 }
 
 fn default_inventory_model_version() -> u32 {
@@ -612,6 +619,7 @@ impl PromotionArtifact {
             risk_notes,
             promotion_gate: gate,
             robust_diagnostics: None,
+            paper_only: false,
         })
     }
 

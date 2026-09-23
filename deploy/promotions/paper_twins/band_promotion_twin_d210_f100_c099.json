@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "inventory_model_version": 3,
+  "created_at": "2026-09-23T13:20:24.421705+00:00",
+  "source_report_hash": "0ecff4e2f5e8f9ea2d6d88a2df167058d442e9e7007afcfcdb818f90f4430f69",
+  "source_label": "discovery",
+  "source_window": "2026-09-20T02:55:00+00:00..2026-09-23T04:35:00+00:00",
+  "selected_strategy": {
+    "name": "signal_favorite_band_official_v1",
+    "version": "1",
+    "params_hash": "0395e5e06137d3c8bc3bca05b3fe22a36090e88407f57b95ee1c4d6d37e39cc3",
+    "risk_profile": "stake_usd=25.00;taker_only;hold_to_expiry"
+  },
+  "strategy_params": {
+    "ask_cap": 0.99,
+    "ask_floor": 0.8,
+    "decision_seconds": 210.0,
+    "entry_window_seconds": 15.0,
+    "family": "signal_favorite_band_official_v1",
+    "min_decision_margin_usd": 100.0,
+    "position_pct": 0.25,
+    "stake_usd": 25.0
+  },
+  "data_manifest_hash": "4b2a8090a97d6238c6098ddc51800d9737d1da1af3962a8600dbea25eb7f9160",
+  "market_count": 63,
+  "trades": 63,
+  "win_rate": 1.0,
+  "total_pnl": 54.88515115836717,
+  "avg_pnl": 0.8711928755296376,
+  "total_fees": 3.851750000000005,
+  "sharpe_like": 0.0,
+  "dominant_zone": "band",
+  "dominant_zone_trade_share": 1.0,
+  "risk_notes": [
+    "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.",
+    "Signal source is Binance's own tick series at the window open and the decision instant (the basis the margin studies sampled; the composite exchange mid is recorded but never traded); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.",
+    "Capacity (the gate's own figures; no fill replay backs a discovery twin): the $25 ladder clears the cap in 30.3% of the cell's covered signal windows ($100: 29.8%) over 5 UTC days; gate tripwires firing: coverage_low, directions_below_break_even, halves_below_break_even, insufficient_support.",
+    "Evidence rows are the gate rows with signal_entry in (0.8, 0.99], the policy's ask band: 63 of 63.",
+    "DISCOVERY TWIN, PAPER ONLY: built from an unregistered cell's gate (verdict INSUFFICIENT); nothing is registered, no e-process ran, the rows are every evidence-host ladder trade of the cell. The paper observer runs it so its paper trades twin the candidate; the live preflight and Pipeline::new refuse a paper_only artifact, and its promotion schema 2 is refused in every mode by an engine built before the flag existed.",
+    "Paper sizing: the observer's target_stake = clamp(equity x position_pct 0.25, $5, stake_usd 25.00), bounded by MAX_TOTAL_EXPOSURE_USD, so its paper fills twin the $25 ladder budget the gate scored only on a paper base with BANKROLL_USD >= 100.00 and MAX_TOTAL_EXPOSURE_USD >= 25.00; below that base they are smaller fills (the $5 venue-minimum clamp on the observers' former $19 base)."
+  ],
+  "promotion_gate": {
+    "min_trades": 30,
+    "min_losses": 1,
+    "min_zone_count": 2,
+    "min_win_rate": 0.0,
+    "min_wilson_win_rate_lower": 0.0,
+    "min_total_pnl": 0.0,
+    "min_sharpe_like": 0.0,
+    "max_unresolved_fills": 0,
+    "max_failed_fills": 0,
+    "max_passive_failed_fills": 0,
+    "min_fill_rate": 0.0,
+    "max_zone_trade_share": 0.7,
+    "require_complete_data": true
+  },
+  "paper_only": true
+}

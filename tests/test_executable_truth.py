@@ -5,8 +5,10 @@ import importlib.util
 import io
 import json
 import math
+import os
 from pathlib import Path
 import random
+import subprocess
 import tempfile
 import unittest
 
@@ -296,10 +298,10 @@ class ExecutableTruthTest(unittest.TestCase):
         cache = cache_for(self.directory)
         summary = truth.build(self.db, cache, BASE_WS, now_ts, [self.sessions], sha="test-sha")
         # Five labelled windows; the fifth has no ladder and is inside the
-        # grace period, so its four rows wait; the unresolved sixth is skipped.
-        self.assertEqual((summary["rows_inserted"], summary["pending_ladder_grace"]), (16, 4))
-        self.assertEqual((summary["windows_total"], summary["ladder_rows"], summary["anchor_rows"]), (4, 16, 4))
-        self.assertEqual(summary["ladder_rows_by_host"], {"mac": 4, "vps": 12})
+        # grace period, so its six rows wait; the unresolved sixth is skipped.
+        self.assertEqual((summary["rows_inserted"], summary["pending_ladder_grace"]), (24, 6))
+        self.assertEqual((summary["windows_total"], summary["ladder_rows"], summary["anchor_rows"]), (4, 24, 4))
+        self.assertEqual(summary["ladder_rows_by_host"], {"mac": 6, "vps": 18})
         self.assertEqual(summary["session_records"]["ladders_unplaced"], 0)
         self.assertEqual(summary["fee"]["n"], 3)  # o1's reconciled duplicate is the same order
         self.assertAlmostEqual(summary["fee"]["rate"], FEE, places=9)
@@ -309,7 +311,7 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertAlmostEqual(summary["writer_v2_share"], 11 / 12)
         self.assertEqual(summary["rows_without_signal_prints"], 1)
         rows = truth.load_rows(self.db)
-        self.assertEqual(len(rows), 16)
+        self.assertEqual(len(rows), 24)
         first = [row for row in rows if row["window_start"] == BASE_WS and row["decision_s"] == 240][0]
         self.assertEqual((first["git_sha"], first["host"], first["ladder_host"], first["ladder_basis"]), ("test-sha", "mac", "mac", "binance"))
         self.assertEqual((first["margin"], first["direction"], first["official"]), (80.0, "up", "up"))
@@ -322,6 +324,8 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertEqual((v1["print_status"], v1["print_writer_version"], v1["prints"]), ("writer_v1", 1, None))
         at_150 = [row for row in rows if row["decision_s"] == 150][0]
         self.assertEqual((at_150["print_status"], at_150["ladder"]["anchor_s"]), ("no_print_row", 150))
+        # The finer anchors have no print column either: ladder-only rows.
+        self.assertEqual({(row["decision_s"], row["print_status"], row["ladder"]["anchor_s"]) for row in rows if row["decision_s"] in (195, 225)}, {(195, "no_print_row", 195), (225, "no_print_row", 225)})
         self.assertEqual([row["final_bucket"] for row in rows if row["window_start"] == BASE_WS + 3 * 300][0], "0-5")
         # Edge-migration series: the first window's favourite crossed 0.99 at 187 s.
         series = truth.load_edge_series(self.db)
@@ -330,7 +334,7 @@ class ExecutableTruthTest(unittest.TestCase):
         # Append-only: a later build adds the fifth window once the grace
         # period passed, and never rewrites what is there.
         later = truth.build(self.db, cache, BASE_WS, now_ts + truth.LADDER_GRACE_S, [self.sessions], sha="later")
-        self.assertEqual((later["rows_inserted"], later["rows_total"], later["pending_ladder_grace"]), (4, 20, 0))
+        self.assertEqual((later["rows_inserted"], later["rows_total"], later["pending_ladder_grace"]), (6, 30, 0))
         rows = truth.load_rows(self.db)
         self.assertEqual({row["git_sha"] for row in rows if row["window_start"] < BASE_WS + 4 * 300}, {"test-sha"})
         fifth = [row for row in rows if row["window_start"] == BASE_WS + 4 * 300]
@@ -342,7 +346,7 @@ class ExecutableTruthTest(unittest.TestCase):
         late = [ladder(BASE_WS + 4 * 300, d, "up", 80.0, [sample(t, 0.95) for t in range(3)]) for d in DECISIONS]
         write_sessions(self.sessions, late + [anchor(BASE_WS + 4 * 300, 240, 80.0, 0.95)], name="session_20260901_040000.jsonl")
         attached = truth.build(self.db, cache, BASE_WS, now_ts + 2 * truth.LADDER_GRACE_S, [self.sessions], sha="x", refresh_prints=False)
-        self.assertEqual((attached["rows_inserted"], attached["ladder_rows_attached"], attached["ladder_rows"]), (0, 4, 20))
+        self.assertEqual((attached["rows_inserted"], attached["ladder_rows_attached"], attached["ladder_rows"]), (0, 6, 30))
         fifth = [row for row in truth.load_rows(self.db) if row["window_start"] == BASE_WS + 4 * 300]
         self.assertEqual({(row["git_sha"], row["host"], row["ladder_host"], len(row["ladder"]["samples"])) for row in fifth}, {("later", "vps", "vps", 3)})
         self.assertTrue(all(row["ladder_attached_at"] and row["built_at"] <= row["ladder_attached_at"] for row in fifth))
@@ -502,21 +506,137 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertFalse(large["tripwires"]["oracle_ceiling_below_break_even"] or large["tripwires"]["wr_above_oracle_ceiling"])
         self.assertTrue(large["tripwires"]["tick_fragile"] is False)
         self.assertTrue(large["tripwires"]["insufficient_support"])  # 30 trades over 2.4 h
-        # Edge migration: the 7-day median of the first second above 0.99
-        # below the decision second kills; censored windows count as later.
+        # First-crossing summary (informational since v3): the 7-day median
+        # of the first second above 0.99 against the decision second;
+        # censored windows count as later.  Never a tripwire.
         series = [(BASE_WS + index * 300, 200.0 if index % 2 else None) for index in range(20)]
-        self.assertFalse(truth.edge_migration_verdict(series, 240)["kill"])
+        self.assertFalse(truth.edge_migration_verdict(series, 240)["median_before_decision"])
         self.assertEqual(truth.edge_migration_verdict(series, 240)["censored"], 10)
-        self.assertTrue(truth.edge_migration_verdict([(ws, 200.0) for ws, _ in series], 240)["kill"])
-        self.assertFalse(truth.edge_migration_verdict([(ws, 200.0) for ws, _ in series], 180)["kill"])
+        self.assertTrue(truth.edge_migration_verdict([(ws, 200.0) for ws, _ in series], 240)["median_before_decision"])
+        self.assertFalse(truth.edge_migration_verdict([(ws, 200.0) for ws, _ in series], 180)["median_before_decision"])
+        self.assertNotIn("kill", truth.edge_migration_verdict(series, 240))
+        self.assertNotIn("edge_migration", large["tripwires"])
         # A cell reads the series of its own signal windows only: points
         # from windows it never selects (here every odd index) are not its
         # edge, so the median over its 30 windows is censored.
         own = truth.score_selection(self.selection([self.trade(index, 0.95) for index in range(30)], {}), labels, FEE, noise, [(ws, 200.0) for ws, _ in series])
-        self.assertEqual((own["edge_migration"]["n"], own["edge_migration"]["kill"]), (20, True))
+        self.assertEqual((own["edge_migration"]["n"], own["edge_migration"]["median_before_decision"]), (20, True))
+        self.assertEqual((own["tripwires"]["capacity_collapse"], own["killed"], own["capacity_trend"]["verdict"]), (False, False, None))
         odd = [(BASE_WS + index * 300, 200.0) for index in range(1, 80, 2)]
         outside = truth.score_selection(self.selection([self.trade(index, 0.95) for index in range(0, 60, 2)], {}), labels, FEE, noise, odd)
-        self.assertEqual((outside["edge_migration"]["n"], outside["edge_migration"]["kill"]), (0, False))
+        self.assertEqual((outside["edge_migration"]["n"], outside["edge_migration"]["median_before_decision"]), (0, False))
+
+    def test_capacity_trend_kills_a_collapse_not_a_flat_or_short_series(self):
+        def points(daily, per_day=20):
+            # `daily` capacities per UTC day from BASE_WS: per_day covered windows, the
+            # fillable share as given (a None day has no covered window at all).
+            out = []
+            for day, capacity in enumerate(daily):
+                if capacity is None:
+                    continue
+                fillable = round(capacity * per_day)
+                out += [(BASE_WS + day * DAY_S + index * 300, index < fillable) for index in range(per_day)]
+            return out
+
+        def counts(daily):
+            # (fills, n) per UTC day from BASE_WS; a None day has no covered window.
+            out = []
+            for day, entry in enumerate(daily):
+                if entry is None:
+                    continue
+                fills, n = entry
+                out += [(BASE_WS + day * DAY_S + index * 300, index < fills) for index in range(n)]
+            return out
+
+        flat = truth.capacity_trend_verdict(points([0.3] * 21))
+        self.assertEqual((flat["n_days"], flat["verdict"], flat["kill"], flat["warn"]), (21, "ok", False, False))
+        self.assertAlmostEqual(flat["baseline"]["capacity"], 0.3)
+        self.assertAlmostEqual(flat["trailing"]["capacity"], 0.3)
+        self.assertAlmostEqual(flat["ratio"], 1.0)
+        self.assertGreater(flat["ratio_upper"], 1.0)  # trailing upper / baseline lower
+        self.assertEqual((flat["baseline"]["days"], flat["trailing"]["days"], len(flat["weekly"]), flat["consecutive_declines"]), (7, 7, 3, 0))
+        self.assertEqual((flat["baseline"]["n"], flat["baseline"]["fills"], flat["support"]), (140, 42, {"ok": True, "reason": None}))
+        self.assertEqual([entry["n"] for entry in flat["daily"]][:2], [20, 20])
+        # Decay: a registration week at 0.30 and a trailing week at 0.05 (a
+        # sixth) kills on the bounds: the trailing Wilson upper bound sits
+        # below half the baseline's lower bound.
+        decay = truth.capacity_trend_verdict(points([0.3] * 7 + [0.2] * 7 + [0.05] * 7))
+        self.assertEqual((decay["verdict"], decay["kill"], decay["warn"]), ("kill", True, False))
+        self.assertAlmostEqual(decay["ratio"], 1 / 6)
+        self.assertLess(decay["ratio_upper"], truth.CAPACITY_KILL_RATIO)
+        # The kill needs support: a third at 20 windows a day (140 a pool) is
+        # not separated on the bounds (point ratio 1/3 reported, no kill);
+        # the same third at 100 a day is.
+        third = truth.capacity_trend_verdict(points([0.3] * 7 + [0.1] * 7))
+        self.assertEqual((third["verdict"], third["kill"]), ("ok", False))
+        self.assertAlmostEqual(third["ratio"], 1 / 3)
+        self.assertGreater(third["ratio_upper"], truth.CAPACITY_KILL_RATIO)
+        self.assertEqual(truth.capacity_trend_verdict(points([0.3] * 7 + [0.1] * 7, per_day=100))["verdict"], "kill")
+        # A dip that stays above half the registration week is not a kill.
+        self.assertEqual(truth.capacity_trend_verdict(points([0.3] * 7 + [0.2] * 14))["verdict"], "ok")
+        # Too short: 13 days of data give no verdict, however steep.
+        short = truth.capacity_trend_verdict(points([0.3] * 6 + [0.0] * 7))
+        self.assertEqual((short["n_days"], short["verdict"], short["kill"], short["warn"], short["ratio"]), (13, None, False, False, None))
+        self.assertEqual(truth.capacity_trend_verdict([])["verdict"], None)
+        # Days without a covered window carry no capacity: an outage in the
+        # trailing week neither kills nor rescues (13 distinct days: no verdict;
+        # 14 with the outage day skipped: the pooled trailing week still reads 0.3).
+        outage = points([0.3] * 7 + [None] * 7 + [0.3] * 7)
+        self.assertEqual(truth.capacity_trend_verdict(outage)["verdict"], "ok")
+        self.assertEqual(truth.capacity_trend_verdict(outage)["span_days"], 21)
+        # Sparse pools give no verdict, and say why.  A flat 2% cell at 8
+        # covered windows a day has one or two fills a week: the old point
+        # ratio killed it on a fill-less trailing week (0.988^56 = 0.51 per
+        # look) in a perfectly flat regime.
+        sparse = truth.capacity_trend_verdict(counts([(0, 8)] * 3 + [(1, 8)] + [(0, 8)] * 10 + [(1, 8)] + [(0, 8)] * 6))
+        self.assertEqual((sparse["n_days"], sparse["verdict"], sparse["kill"], sparse["ratio"], sparse["ratio_upper"]), (21, None, False, None, None))
+        self.assertEqual(sparse["support"], {"ok": False, "reason": "baseline: 7 days, 56 windows, 1 fills"})
+        # Ten baseline fills support a verdict, but 3/56 against 10/56 (point
+        # ratio 0.3) is not separated: no kill.
+        thin = truth.capacity_trend_verdict(counts([(2, 8)] * 5 + [(0, 8)] * 2 + [(0, 8)] * 7 + [(1, 8)] * 3 + [(0, 8)] * 4))
+        self.assertEqual((thin["verdict"], thin["support"]["ok"]), ("ok", True))
+        self.assertAlmostEqual(thin["ratio"], 0.3)
+        # A registration week that is one sparse day (2 windows, both
+        # fillable) ahead of a six-day outage, then 13 days flat at 0.45: 14
+        # distinct days, but the baseline pool is one day (the old rule read
+        # 0.45 / 1.0 and killed).  The mirror case, a trailing week that is
+        # one hour of two depth-limited windows after an outage, likewise.
+        outage_first = truth.capacity_trend_verdict(counts([(2, 2)] + [None] * 6 + [(9, 20)] * 13))
+        self.assertEqual((outage_first["n_days"], outage_first["verdict"], outage_first["kill"]), (14, None, False))
+        self.assertEqual(outage_first["support"]["reason"], "baseline: 1 days, 2 windows, 2 fills")
+        outage_last = truth.capacity_trend_verdict(counts([(6, 20)] * 14 + [None] * 6 + [(0, 2)]))
+        self.assertEqual((outage_last["n_days"], outage_last["verdict"], outage_last["kill"]), (15, None, False))
+        self.assertEqual(outage_last["support"]["reason"], "trailing: 1 days, 2 windows, 0 fills")
+        # Warn, never a kill: three complete weeks of decline running (four
+        # weeks of data), the last still above half the first.
+        declining = truth.capacity_trend_verdict(points([0.40] * 7 + [0.35] * 7 + [0.30] * 7 + [0.25] * 7))
+        self.assertEqual((declining["verdict"], declining["kill"], declining["warn"], declining["consecutive_declines"]), ("warn", False, True, 3))
+        self.assertEqual([round(week["capacity"], 2) for week in declining["weekly"]], [0.4, 0.35, 0.3, 0.25])
+        recovered = truth.capacity_trend_verdict(points([0.40] * 7 + [0.35] * 7 + [0.30] * 7 + [0.40] * 7))
+        self.assertEqual((recovered["verdict"], recovered["consecutive_declines"]), ("ok", 0))
+        # A partial fifth week is not a complete week: no fourth decline yet.
+        partial = truth.capacity_trend_verdict(points([0.40] * 7 + [0.35] * 7 + [0.30] * 7 + [0.25] * 7 + [0.0] * 3))
+        self.assertEqual((len(partial["weekly"]), partial["consecutive_declines"]), (4, 3))
+        # An empty complete week stays in the series without a capacity and
+        # breaks the run (weeks 1 and 3 are not adjacent); a dip under 5% of
+        # the week before (one window's worth) is not a decline.
+        gapped = truth.capacity_trend_verdict(points([0.8] * 7 + [0.7] * 7 + [None] * 7 + [0.6] * 7 + [0.5] * 7))
+        self.assertEqual([None if week["capacity"] is None else round(week["capacity"], 2) for week in gapped["weekly"]], [0.8, 0.7, None, 0.6, 0.5])
+        self.assertEqual((gapped["weekly"][2]["n"], gapped["consecutive_declines"], gapped["warn"], gapped["verdict"]), (0, 1, False, "ok"))
+        dips = truth.capacity_trend_verdict(counts([(31, 100)] * 7 + [(30, 100)] * 7 + [(29, 100)] * 7 + [(28, 100)] * 7))
+        self.assertEqual(([round(week["capacity"], 2) for week in dips["weekly"]], dips["consecutive_declines"], dips["verdict"]), ([0.31, 0.3, 0.29, 0.28], 0, "ok"))
+        # Through the score: the ladder selection carries the points, a kill
+        # trips capacity_collapse (a kill tripwire, never cleared), a warning
+        # is reported beside the tripwires and blocks nothing.
+        labels = {BASE_WS + index * 300: "up" for index in range(200)}
+        trades = [self.trade(index, 0.95) for index in range(200)]
+        killed = truth.score_selection({**self.selection(trades, {}), "capacity_points": points([0.3] * 7 + [0.1] * 7, per_day=100)}, labels, FEE, {})
+        self.assertEqual((killed["tripwires"]["capacity_collapse"], killed["killed"], killed["promotable"], killed["warnings"]), (True, True, False, {"capacity_declining": False}))
+        warned = truth.score_selection({**self.selection(trades, {}), "capacity_points": points([0.40] * 7 + [0.35] * 7 + [0.30] * 7 + [0.25] * 7)}, labels, FEE, {})
+        self.assertEqual((warned["tripwires"]["capacity_collapse"], warned["killed"], warned["warnings"]), (False, False, {"capacity_declining": True}))
+        self.assertFalse(warned["held"])
+        self.assertIn("warn:capacity_declining", truth._flags(warned))
+        self.assertEqual(truth.KILL_TRIPWIRES, ("capacity_collapse",))
 
     def test_edge_migration_reads_a_pinned_favourite_as_above_threshold(self):
         # The collector writes a null quote when the favourite has no
@@ -634,7 +754,7 @@ class ExecutableTruthTest(unittest.TestCase):
         write_sessions(self.sessions, [{**record, "host": "mac"} for record in population_records(specs)])
         now_ts = specs[-1]["ws"] + 300 + band.RESOLUTION_LAG_S + 1
         summary = truth.build(self.db, cache_for(self.directory), BASE_WS, now_ts, [self.sessions], sha="mac")
-        self.assertEqual((summary["ladder_rows"], summary["ladder_rows_by_host"]), (1200, {"mac": 1200}))
+        self.assertEqual((summary["ladder_rows"], summary["ladder_rows_by_host"]), (1800, {"mac": 1800}))
         self.assertEqual(truth.ladder_days(self.db), {"days": 0, "span_days": 0, "hosts": ["vps"]})
         campaigns = Path(self.directory) / "campaigns"
         refused = truth.register(self.db, "2026-09_mac", campaigns, now_ts)
@@ -642,7 +762,7 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertIn("ladder rows from vps cover 0 days", refused["reason"])
         # Discovery still reads them; the grid says which hosts are evidence.
         report = truth.grid(self.db, fee_rate=FEE)
-        self.assertEqual((report["evidence_hosts"], report["ladder_rows_by_host"]), (["vps"], {"mac": 1200}))
+        self.assertEqual((report["evidence_hosts"], report["ladder_rows_by_host"]), (["vps"], {"mac": 1800}))
         self.assertEqual({cell["cell_id"]: cell for cell in report["cells"]}["d210_f100_c0.96_p15"]["ladder"]["n"], 120)
         # The overlap check needs both hosts over three days agreeing within a tick.
         self.assertFalse(truth.accept_mac_ladders(self.db, [self.sessions], now_ts)["accepted"])
@@ -693,17 +813,27 @@ class ExecutableTruthTest(unittest.TestCase):
         write_sessions(self.sessions, population_records(specs))
         now_ts = specs[-1]["ws"] + 300 + band.RESOLUTION_LAG_S + 1
         summary = truth.build(self.db, cache_for(self.directory), BASE_WS, now_ts, [self.sessions], sha="planted")
-        self.assertEqual(summary["rows_inserted"], 4 * count)
+        self.assertEqual(summary["rows_inserted"], len(DECISIONS) * count)
         return specs, now_ts
 
     def test_grid_finds_the_planted_edge(self):
         specs, now_ts = self.planted_fixture()
         report = truth.grid(self.db, fee_rate=FEE)
-        self.assertEqual(len(report["cells"]), 336)
-        self.assertEqual((report["evidence_hosts"], report["ladder_rows_by_host"], report["null_check"]), (["vps"], {"vps": 1200}, None))
-        self.assertEqual(sum(1 for cell in report["cells"] if cell["registrable"]), 189)
+        self.assertEqual(len(report["cells"]), 504)
+        self.assertEqual((report["evidence_hosts"], report["ladder_rows_by_host"], report["null_check"]), (["vps"], {"vps": 1800}, None))
+        self.assertEqual(sum(1 for cell in report["cells"] if cell["registrable"]), 315)
         by_id = {cell["cell_id"]: cell for cell in report["cells"]}
+        # The finer anchors are ladder-only cells: no print column, scored
+        # by the ladder (and the signal ceiling) alone, marked as such.
+        self.assertEqual({cell["rule"]["decision_second"] for cell in report["cells"] if cell["ladder_only"]}, {150, 195, 225})
+        finer = by_id["d195_f75_c0.99_p15"]
+        self.assertEqual((finer["ladder_only"], finer["registrable"], finer["print"]["n"], finer["print"]["excluded"]["no_print_row"]["n"]), (True, True, 0, 60))
+        self.assertEqual((finer["ladder"]["n"], finer["signal"]["n"]), (60, 60))
+        self.assertIn("ladder-only", truth.grid_text(report, top=504))
         planted = by_id["d210_f100_c0.96_p15"]
+        self.assertFalse(planted["ladder_only"])
+        self.assertEqual((planted["ladder"]["capacity_trend"]["verdict"], planted["ladder"]["capacity_trend"]["n_days"]), ("ok", 16))
+        self.assertEqual(planted["ladder"]["warnings"], {"capacity_declining": False})
         expected_n = sum(1 for spec in specs if spec["kind"] == "planted")
         for model in ("ladder", "print"):
             score = planted[model]
@@ -729,6 +859,7 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertTrue(registered["registered"], registered)
         campaign = json.loads((campaigns / "2026-09_planted.json").read_text())
         self.assertEqual(campaign["family_size"], len(campaign["cells"]))
+        self.assertEqual((registered["ladder_only_unscreened"], campaign["ladder_only_unscreened"]), (126, 126))
         # d210_f75 (planted plus the |margin| 90 windows, diluted) and
         # d210_f100 clear; each keeps its first cell in grid order and the 20
         # cap/patience variants with the same window set as aliases (one
@@ -779,7 +910,8 @@ class ExecutableTruthTest(unittest.TestCase):
         truth.build(self.db, cache_for(self.directory), BASE_WS, now_ts, [self.sessions], sha="null")
         campaigns = Path(self.directory) / "campaigns"
         refused = truth.register(self.db, "2026-09_null", campaigns, now_ts)
-        self.assertEqual((refused["registered"], refused["reason"]), (False, "no registrable cell clears the print screen"))
+        # The 126 registrable ladder-only cells (195/225 s) have no print column: never admitted, never silent.
+        self.assertEqual((refused["registered"], refused["reason"], refused["ladder_only_unscreened"]), (False, "no registrable cell clears the print screen", 126))
         self.assertFalse((campaigns / "2026-09_null.json").exists())
         # A print cache below writer_v2_share 1.0 is the margin-selected
         # slice (B.6): refused unless the operator says otherwise, and then
@@ -819,10 +951,10 @@ class ExecutableTruthTest(unittest.TestCase):
         noise = truth.oracle_noise(rows)
         clears = [truth.score_selection(selection, labels, FEE, noise)["clears_break_even"] for selection in selections]
         self.assertLessEqual(sum(clears) / len(clears), 0.05)
-        # --grid carries the same check in its JSON (every decision: 4 x 42 populated cells).
+        # --grid carries the same check in its JSON (every decision: 6 x 42 populated cells).
         report = truth.grid(self.db, fee_rate=FEE, null_replicates=5, seed=3)
-        self.assertEqual((report["null_check"]["replicates"], report["null_check"]["cells"]), (5, 168))
-        self.assertIn("break-even null (5 replicates, 168 ladder cells with trades)", truth.grid_text(report))
+        self.assertEqual((report["null_check"]["replicates"], report["null_check"]["cells"]), (5, 252))
+        self.assertIn("break-even null (5 replicates, 252 ladder cells with trades)", truth.grid_text(report))
 
     # --- accrual, ledger, gate artifact ----------------------------------------
 
@@ -842,7 +974,7 @@ class ExecutableTruthTest(unittest.TestCase):
         write_sessions(self.sessions, population_records(fresh), name="session_20260902_000000.jsonl")
         later = fresh[-1]["ws"] + 300 + band.RESOLUTION_LAG_S + 1
         ticked = truth.tick(self.db, cache_for(self.directory), BASE_WS, later, config, [self.sessions], campaigns)
-        self.assertEqual(ticked["build"]["rows_inserted"], 240)
+        self.assertEqual(ticked["build"]["rows_inserted"], 360)
         summary = ticked["campaigns"][0]
         family = json.loads((campaigns / "2026-09_planted.json").read_text())
         self.assertEqual(summary["e_bh"]["campaign_n"], family["family_size"])
@@ -878,8 +1010,27 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertEqual(artifact["policy_params"]["ask_cap"], registered_cell["rule"]["favorite_price_cap"])
         self.assertEqual(artifact["policy_params"]["min_decision_margin_usd"], 100.0)
         self.assertEqual(artifact["policy_params"]["entry_window_seconds"], 1.0)
+        self.assertEqual((artifact["warnings"], artifact["capacity_trend"]["verdict"]), ({"capacity_declining": False}, None))  # 60 fresh windows: 3 days
+        self.assertNotIn("discovery_twin", artifact)
         with self.assertRaises(ValueError):
             truth.gate_artifact(self.db, family, "d240_f150_c0.99_p30")
+        # Discovery mode: the same schema for an unregistered cell over the
+        # whole table (no cut, no accrual), INSUFFICIENT by construction and
+        # marked discovery_twin, for the paper observer's twin only.
+        twin = truth.discovery_gate_artifact(self.db, "d210_f100_c0.96_p15")
+        self.assertEqual((twin["verdict"], twin["discovery_twin"], twin["registration"], twin["registration_cut"], twin["accrual"]), ("INSUFFICIENT", True, "discovery", None, None))
+        self.assertEqual((twin["candidate"], twin["cell_id"], twin["fingerprint"], twin["ladder_hosts"]), (truth.BAND_FAMILY, "d210_f100_c0.96_p15", truth.fingerprint(twin["rule"]), ["vps"]))
+        self.assertEqual((twin["support"], len(twin["rows"])), (144, 144))  # 300 + 60 windows, 40% planted
+        self.assertEqual(set(twin["rows"][0]), set(artifact["rows"][0]))
+        self.assertEqual(twin["policy_params"]["ask_cap"], 0.96)
+        self.assertEqual(set(twin) - {"discovery_twin"}, set(artifact))
+        config_path = Path(self.directory) / "loop.json"
+        config_path.write_text(json.dumps(config))
+        output = Path(self.directory) / "twin.json"
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(truth.main(["--cell-gate-json", "d210_f100_c0.96_p15", "--db", str(Path(self.directory) / "windows.sqlite3"), "--loop-config", str(config_path), "--output", str(output)]), 0)
+        self.assertEqual(json.loads(output.read_text())["verdict"], "INSUFFICIENT")
+        self.assertIn('"discovery_twin": true', printed.getvalue())
 
     def _planted_cell(self, ticked):
         return [cell for cell in ticked["campaigns"][0]["cells"] if cell["cell_id"].startswith("d210_f100_")][0]
@@ -899,14 +1050,14 @@ class ExecutableTruthTest(unittest.TestCase):
         # The withheld window is past the grace: its rows land without a
         # ladder while every later window is accrued.
         ticked = truth.tick(self.db, cache_for(self.directory), BASE_WS, later, config, [self.sessions], campaigns)
-        self.assertEqual(ticked["build"]["rows_inserted"], 240)
+        self.assertEqual(ticked["build"]["rows_inserted"], 360)
         planted = self._planted_cell(ticked)
         self.assertEqual((planted["n"], planted["applied"], planted["excluded"].get("no_ladder")), (23, 23, 1))
         # Its ladder arrives (a late pull): attached and folded, not skipped
         # behind the newest accrued window; score, accrual and gate agree.
         write_sessions(self.sessions, withheld, name="session_20260903_000000.jsonl")
         ticked = truth.tick(self.db, cache_for(self.directory), BASE_WS, later, config, [self.sessions], campaigns)
-        self.assertEqual(ticked["build"]["ladder_rows_attached"], 4)
+        self.assertEqual(ticked["build"]["ladder_rows_attached"], 6)
         planted = self._planted_cell(ticked)
         self.assertEqual((planted["n"], planted["applied"], planted["excluded"].get("no_ladder")), (24, 1, None))
         state = self.db.execute("SELECT n, first_window_start FROM campaign_accrual WHERE fingerprint = ?", (planted["fingerprint"],)).fetchone()
@@ -950,7 +1101,7 @@ class ExecutableTruthTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             truth.clear_audit(campaigns, "2026-09_planted", "d240_f150_c0.99_p30", ["wr_too_good"], "note")
         with self.assertRaises(ValueError):
-            truth.clear_audit(campaigns, "2026-09_planted", planted["cell_id"], ["edge_migration"], "note")
+            truth.clear_audit(campaigns, "2026-09_planted", planted["cell_id"], ["capacity_collapse"], "note")
         with self.assertRaises(ValueError):
             truth.clear_audit(campaigns, "2026-09_planted", planted["cell_id"], ["wr_too_good"], " ")
         cleared = truth.clear_audit(campaigns, "2026-09_planted", planted["cell_id"], ["wr_too_good"], "tape and labels re-derived by hand: genuine", later)
@@ -973,6 +1124,72 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertEqual(json.loads((campaigns / "2026-09_planted.json").read_text())["audit_cleared"][planted["fingerprint"]]["note"], "re-audited")
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             truth.main(["--clear-audit", planted["cell_id"], "--tripwire", "wr_too_good"] + argv)
+
+    def test_stale_evaluator_holds_a_campaign_until_re_registration(self):
+        specs, now_ts = self.planted_fixture()
+        campaigns = Path(self.directory) / "campaigns"
+        self.assertTrue(truth.register(self.db, "2026-09_planted", campaigns, now_ts, report=truth.grid(self.db, fee_rate=FEE))["registered"])
+        config = loop_config(self.directory)
+        path = campaigns / "2026-09_planted.json"
+        family = json.loads(path.read_text())
+        self.assertEqual((family["evaluator_version"], family["grammar_version"]), (truth.EVALUATOR_VERSION, truth.GRAMMAR_VERSION))
+        self.assertIsNone(truth.campaign_version_error(family))
+        # Registered by an older evaluator (its fingerprints, cells and kill
+        # rule are that code's): a version bump folds nothing into its
+        # e-processes, holds every cell and never passes its gate.
+        stale = {**family, "evaluator_version": "executable_truth_v2", "grammar_version": "band_grid_v2"}
+        path.write_text(json.dumps(stale, indent=2, sort_keys=True) + "\n")
+        self.assertIn("executable_truth_v2/band_grid_v2", truth.campaign_version_error(stale))
+        fresh = population(300, start_index=300)
+        write_cache(self.directory, fresh)
+        write_sessions(self.sessions, population_records(fresh), name="session_20260902_000000.jsonl")
+        later = fresh[-1]["ws"] + 300 + band.RESOLUTION_LAG_S + 1
+        ticked = truth.tick(self.db, cache_for(self.directory), BASE_WS, later, config, [self.sessions], campaigns)
+        self.assertEqual(ticked["build"]["rows_inserted"], 1800)
+        summary = ticked["campaigns"][0]
+        self.assertIn("re-register", summary["stale_evaluator"])
+        self.assertEqual({(cell["status"], cell["reason"], cell["applied"], cell["n"]) for cell in summary["cells"]}, {("manual_audit", "stale_evaluator", 0, 0)})
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM campaign_accrual").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM campaign_accrual_windows").fetchone()[0], 0)
+        self.assertFalse((Path(self.directory) / "trial_ledger.jsonl").exists())
+        self.assertIn("stale_evaluator", json.loads((campaigns / "status" / "2026-09_planted.json").read_text()))
+        artifact = truth.gate_artifact(self.db, stale, "d210_f100_c0.92_p0")
+        self.assertEqual((artifact["verdict"], artifact["stale_evaluator"], artifact["evaluator_version"]), ("IMPLAUSIBLE_MANUAL_AUDIT", summary["stale_evaluator"], truth.EVALUATOR_VERSION))
+        # Re-registered under this tree: accrual resumes from the cut.
+        path.write_text(json.dumps(family, indent=2, sort_keys=True) + "\n")
+        ticked = truth.tick(self.db, cache_for(self.directory), BASE_WS, later, config, [self.sessions], campaigns)
+        self.assertNotIn("stale_evaluator", ticked["campaigns"][0])
+        planted = self._planted_cell(ticked)
+        self.assertEqual(planted["n"], sum(1 for spec in fresh if spec["kind"] == "planted"))
+        self.assertNotIn("stale_evaluator", truth.gate_artifact(self.db, family, planted["cell_id"]))
+
+    def test_git_sha_marks_a_dirty_tree(self):
+        # A row's git_sha names the tree that built it: an uncommitted tree
+        # carries -dirty (tracked changes only, git's own --dirty rule).
+        repo = Path(self.directory) / "repo"
+        repo.mkdir()
+        env = {"PATH": os.environ["PATH"], "HOME": str(repo), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def git(*args):
+            subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=str(repo), env=env, check=True, capture_output=True)
+
+        git("init", "-q")
+        (repo / "a.txt").write_text("a\n")
+        git("add", "a.txt")
+        git("commit", "-q", "-m", "a")
+        root = truth.ROOT
+        truth.ROOT = repo
+        try:
+            clean = truth.git_sha()
+            self.assertGreaterEqual(len(clean), 7)
+            self.assertFalse(clean.endswith(truth.GIT_DIRTY_SUFFIX))
+            (repo / "a.txt").write_text("b\n")
+            self.assertEqual(truth.git_sha(), clean + truth.GIT_DIRTY_SUFFIX)
+            git("checkout", "--", "a.txt")
+            (repo / "untracked.txt").write_text("c\n")
+            self.assertEqual(truth.git_sha(), clean)
+        finally:
+            truth.ROOT = root
 
     def test_look_id_dedups_trial_ledger_rows(self):
         config = loop_config(self.directory)

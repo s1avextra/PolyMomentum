@@ -6623,6 +6623,9 @@ async fn cmd_derive_api_creds(env_file: &str, base_url: &str) -> anyhow::Result<
 /// Build the band-family promotion artifact from the fresh-gate verdict and
 /// the capture fill-replay evidence. PnL fields are recomputed from the gate
 /// rows at the frozen stake so the artifact carries no hand-entered numbers.
+/// A gate with `discovery_twin` (executable_truth.py --cell-gate-json: an
+/// unregistered cell, verdict INSUFFICIENT by construction) builds a
+/// `paper_only` artifact for the paper observer's twin; live mode refuses it.
 fn cmd_band_promotion_artifact(
     params_path: &str,
     gate_path: &str,
@@ -6632,7 +6635,9 @@ fn cmd_band_promotion_artifact(
     use polymomentum_engine::backtest::experiment::{
         PromotionArtifact, PromotionGate, CURRENT_INVENTORY_MODEL_VERSION,
     };
-    use polymomentum_engine::live::pipeline::{BandPolicyParams, BAND_FAMILY};
+    use polymomentum_engine::live::pipeline::{
+        BandPolicyParams, BAND_FAMILY, PAPER_TWIN_SCHEMA_VERSION,
+    };
     use polymomentum_engine::strategy::spec::{stable_json_hash, StrategySpec};
 
     let params: BandPolicyParams = serde_json::from_slice(
@@ -6644,9 +6649,11 @@ fn cmd_band_promotion_artifact(
         &std::fs::read(gate_path).with_context(|| format!("read {gate_path}"))?,
     )
     .context("parse fresh-gate artifact")?;
+    let verdict = gate.get("verdict").and_then(|v| v.as_str());
+    let discovery_twin = gate.get("discovery_twin").and_then(|v| v.as_bool()) == Some(true);
     anyhow::ensure!(
-        gate.get("verdict").and_then(|v| v.as_str()) == Some("PASS"),
-        "fresh-gate artifact verdict is not PASS"
+        verdict == Some("PASS") || (discovery_twin && verdict == Some("INSUFFICIENT")),
+        "fresh-gate artifact verdict is not PASS (a discovery_twin gate is INSUFFICIENT and builds a paper-only artifact)"
     );
     anyhow::ensure!(
         gate.get("candidate").and_then(|v| v.as_str()) == Some(BAND_FAMILY),
@@ -6722,8 +6729,72 @@ fn cmd_band_promotion_artifact(
             ))
         })
         .context("gate artifact fresh_range missing")?;
+    // The evidence note describes what data_manifest_hash binds, read from
+    // that file (the 2026-08 artifacts copied one capture's "93/93 filled"
+    // into every artifact, whatever file was bound); a discovery twin binds
+    // no fill replay and carries the gate's own capacity figures instead.
+    let fill_note = if discovery_twin {
+        let capacity = |budget: &str| {
+            gate.get("capacity")
+                .and_then(|v| v.get(budget))
+                .and_then(|v| v.as_f64())
+                .map(|share| format!("{:.1}%", share * 100.0))
+                .unwrap_or_else(|| "n/a".to_string())
+        };
+        let n_days = gate
+            .get("capacity_trend")
+            .and_then(|v| v.get("n_days"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let fired: Vec<&str> = gate
+            .get("tripwires")
+            .and_then(|v| v.as_object())
+            .map(|tripwires| {
+                tripwires
+                    .iter()
+                    .filter(|(_, fired)| fired.as_bool() == Some(true))
+                    .map(|(name, _)| name.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        format!(
+            "Capacity (the gate's own figures; no fill replay backs a discovery twin): the $25 ladder clears the cap in {} of the cell's covered signal windows ($100: {}) over {n_days} UTC days; gate tripwires firing: {}.",
+            capacity("25"),
+            capacity("100"),
+            if fired.is_empty() { "none".to_string() } else { fired.join(", ") }
+        )
+    } else {
+        let fill: Option<serde_json::Value> = std::fs::read(fill_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let field = |key: &str| {
+            fill.as_ref()
+                .and_then(|v| v.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string()
+        };
+        format!(
+            "Fill evidence (data_manifest_hash): {} verdict {}: {}; the FOK worst-price cap enforces the band bound at execution.",
+            field("registration"),
+            field("verdict"),
+            field("purpose")
+        )
+    };
+    // The observer sizes its paper fills, not the ladder: which budget they
+    // represent depends on its paper base.
+    let sizing_note = discovery_twin.then(|| {
+        format!(
+            "Paper sizing: the observer's target_stake = clamp(equity x position_pct {:.2}, $5, stake_usd {:.2}), bounded by MAX_TOTAL_EXPOSURE_USD, so its paper fills twin the ${:.0} ladder budget the gate scored only on a paper base with BANKROLL_USD >= {:.2} and MAX_TOTAL_EXPOSURE_USD >= {:.2}; below that base they are smaller fills (the $5 venue-minimum clamp on the observers' former $19 base).",
+            params.position_pct,
+            params.stake_usd,
+            params.stake_usd,
+            params.stake_usd / params.position_pct,
+            params.stake_usd
+        )
+    });
     let artifact = PromotionArtifact {
-        schema_version: 1,
+        schema_version: if discovery_twin { PAPER_TWIN_SCHEMA_VERSION } else { 1 },
         inventory_model_version: CURRENT_INVENTORY_MODEL_VERSION,
         created_at: chrono::Utc::now().to_rfc3339(),
         source_report_hash: sha256_file(std::path::Path::new(gate_path))?,
@@ -6756,11 +6827,19 @@ fn cmd_band_promotion_artifact(
         risk_notes: vec![
             "Wallet-bounded live canary: band runtime sets the stressed-drawdown cap to 1.0 by design; the operative brakes are the session-loss floor and the consecutive-losses breaker.".to_string(),
             "Signal source is Binance's own tick series at the window open and the decision instant (the basis the margin studies sampled; the composite exchange mid is recorded but never traded); outcomes settle on official resolutions, so the candle settlement-alignment attestation is not consulted by the band branch.".to_string(),
-            "Fill realism evidence: 93/93 band-priced captured books filled the stake instantly; the FOK worst-price cap enforces the band bound at execution.".to_string(),
+            fill_note,
             format!("Evidence rows are the gate rows with signal_entry in ({}, {}], the policy's ask band: {trades} of {gate_rows}.", params.ask_floor, params.ask_cap),
-        ],
+        ]
+        .into_iter()
+        .chain(discovery_twin.then(|| format!(
+            "DISCOVERY TWIN, PAPER ONLY: built from an unregistered cell's gate (verdict {}); nothing is registered, no e-process ran, the rows are every evidence-host ladder trade of the cell. The paper observer runs it so its paper trades twin the candidate; the live preflight and Pipeline::new refuse a paper_only artifact, and its promotion schema {PAPER_TWIN_SCHEMA_VERSION} is refused in every mode by an engine built before the flag existed.",
+            verdict.unwrap_or("?")
+        )))
+        .chain(sizing_note)
+        .collect(),
         promotion_gate,
         robust_diagnostics: None,
+        paper_only: discovery_twin,
     };
     polymomentum_engine::backtest::experiment::write_promotion_atomic(output, &artifact)?;
     println!(
@@ -6768,6 +6847,7 @@ fn cmd_band_promotion_artifact(
         serde_json::json!({
             "output": output,
             "params_hash": artifact.selected_strategy.params_hash,
+            "paper_only": artifact.paper_only,
             "gate_rows": gate_rows,
             "trades": trades,
             "win_rate": win_rate,

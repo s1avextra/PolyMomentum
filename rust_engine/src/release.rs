@@ -323,11 +323,8 @@ fn capture_promotion_manifest(settings: &Settings) -> PromotionReleaseManifest {
 }
 
 fn promotion_validation_error(artifact: &PromotionArtifact) -> Option<String> {
-    if artifact.schema_version != 1 {
-        return Some(format!(
-            "unsupported promotion schema {}",
-            artifact.schema_version
-        ));
+    if let Some(error) = crate::live::pipeline::promotion_schema_error(artifact) {
+        return Some(error);
     }
     if artifact.selected_strategy.name == crate::live::pipeline::BAND_FAMILY {
         let params: crate::live::pipeline::BandPolicyParams =
@@ -867,6 +864,11 @@ fn check_promotion_artifact(
                 band_kelly_config_error(&artifact, settings, mode.is_live())
             {
                 push(checks, "promotion_artifact", CheckStatus::Fail, detail);
+            } else if let Some(detail) = crate::live::pipeline::paper_only_mode_error(
+                crate::live::pipeline::artifact_is_paper_only(&artifact),
+                mode.is_live(),
+            ) {
+                push(checks, "promotion_artifact", CheckStatus::Fail, detail);
             } else if let Some(detail) = promotion_inventory_model_error(&artifact) {
                 if !mode.is_live() && settings.allow_stale_research_artifact {
                     push(
@@ -884,8 +886,14 @@ fn check_promotion_artifact(
                     "promotion_artifact",
                     CheckStatus::Ok,
                     format!(
-                        "loaded promoted strategy hash={} trades={}",
-                        artifact.selected_strategy.params_hash, artifact.trades
+                        "loaded promoted strategy hash={} trades={}{}",
+                        artifact.selected_strategy.params_hash,
+                        artifact.trades,
+                        if crate::live::pipeline::artifact_is_paper_only(&artifact) {
+                            " (discovery twin: paper only)"
+                        } else {
+                            ""
+                        }
                     ),
                 );
             }
@@ -1031,6 +1039,7 @@ mod tests {
             risk_notes: Vec::new(),
             promotion_gate: PromotionGate::default(),
             robust_diagnostics: None,
+            paper_only: false,
         }
     }
 
@@ -1090,6 +1099,118 @@ mod tests {
         write(0.0);
         s.risk_book = "v1".to_string();
         assert_eq!(check(&s, RuntimeMode::Live).status, CheckStatus::Ok);
+    }
+
+    /// A discovery-twin artifact (`paper_only`) is the paper observer's:
+    /// the live preflight refuses it whatever the book, paper accepts it
+    /// and says so. Same rule as `Pipeline::new`.
+    #[test]
+    fn preflight_refuses_a_discovery_twin_artifact_in_live_mode() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("band_promotion_twin.json");
+        let mut artifact = band_test_artifact(0.0);
+        artifact.paper_only = true;
+        artifact.schema_version = crate::live::pipeline::PAPER_TWIN_SCHEMA_VERSION;
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let check = |s: &Settings, mode: RuntimeMode| -> PreflightCheck {
+            run_preflight(s, mode, true)
+                .checks
+                .into_iter()
+                .find(|c| c.name == "promotion_artifact")
+                .unwrap()
+        };
+        let mut s = test_settings(&tmp);
+        s.promotion_artifact_path = path.display().to_string();
+        let live = check(&s, RuntimeMode::Live);
+        assert_eq!(live.status, CheckStatus::Fail, "{}", live.detail);
+        assert!(live.detail.contains("discovery twin"), "{}", live.detail);
+        s.risk_book = "v2".to_string();
+        assert_eq!(check(&s, RuntimeMode::Live).status, CheckStatus::Fail);
+        let paper = check(&s, RuntimeMode::Paper);
+        assert_eq!(paper.status, CheckStatus::Ok, "{}", paper.detail);
+        assert!(paper.detail.contains("paper only"), "{}", paper.detail);
+        // A schema-1 twin is refused in every mode: it is the shape an
+        // engine without the flag would run live.
+        artifact.schema_version = 1;
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let stale = check(&s, RuntimeMode::Paper);
+        assert_eq!(stale.status, CheckStatus::Fail, "{}", stale.detail);
+        assert!(stale.detail.contains("must be promotion schema 2"), "{}", stale.detail);
+    }
+
+    /// The checked-in paper twin of d210_f100_c0.99_p15 (2026-09-23): built
+    /// by `band-promotion-artifact` from executable_truth.py
+    /// --cell-gate-json (verdict INSUFFICIENT, `discovery_twin`), so it is
+    /// `paper_only` and promotion schema 2: the observer's artifact,
+    /// refused live here and refused in every mode by an engine that
+    /// predates the flag (which would drop the key and read schema 1 as a
+    /// live promotion). It lives outside the live artifact directory.
+    #[test]
+    fn checked_in_twin_artifact_is_paper_only() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/promotions/paper_twins/band_promotion_twin_d210_f100_c099.json");
+        let text = std::fs::read(&path).unwrap();
+        let artifact: PromotionArtifact = serde_json::from_slice(&text).unwrap();
+        assert_eq!(promotion_validation_error(&artifact), None);
+        assert!(artifact.paper_only);
+        assert_eq!(artifact.source_label, crate::live::pipeline::DISCOVERY_SOURCE_LABEL);
+        // What a pre-flag engine reads: the key dropped, the schema not 1.
+        assert_eq!(artifact.schema_version, crate::live::pipeline::PAPER_TWIN_SCHEMA_VERSION);
+        assert_ne!(artifact.schema_version, 1);
+        let mut unmarked: PromotionArtifact = serde_json::from_slice(&text).unwrap();
+        unmarked.paper_only = false;
+        assert!(crate::live::pipeline::artifact_is_paper_only(&unmarked));
+        assert_eq!(promotion_validation_error(&unmarked), None);
+        unmarked.source_label = "not-a-twin".to_string();
+        let err = promotion_validation_error(&unmarked).unwrap();
+        assert!(err.contains("unsupported promotion schema 2"), "{err}");
+        assert!(artifact
+            .risk_notes
+            .iter()
+            .any(|note| note.starts_with("DISCOVERY TWIN, PAPER ONLY")));
+        assert!(artifact
+            .risk_notes
+            .iter()
+            .any(|note| note.starts_with("Capacity (the gate's own figures")));
+        assert!(artifact
+            .risk_notes
+            .iter()
+            .any(|note| note.starts_with("Paper sizing:")));
+        assert!(!artifact.risk_notes.iter().any(|note| note.contains("93/93")));
+        let params: crate::live::pipeline::BandPolicyParams =
+            serde_json::from_value(artifact.strategy_params.clone()).unwrap();
+        assert_eq!(
+            (
+                params.decision_seconds,
+                params.entry_window_seconds,
+                params.ask_floor,
+                params.ask_cap
+            ),
+            (210.0, 15.0, 0.80, 0.99)
+        );
+        assert_eq!(
+            (
+                params.min_decision_margin_usd,
+                params.stake_usd,
+                params.position_pct,
+                params.kelly_q_lo
+            ),
+            (100.0, 25.0, 0.25, 0.0)
+        );
+        let tmp = TempDir::new().unwrap();
+        let mut s = test_settings(&tmp);
+        s.promotion_artifact_path = path.display().to_string();
+        let check = |mode: RuntimeMode| -> PreflightCheck {
+            run_preflight(&s, mode, true)
+                .checks
+                .into_iter()
+                .find(|c| c.name == "promotion_artifact")
+                .unwrap()
+        };
+        assert_eq!(check(RuntimeMode::Paper).status, CheckStatus::Ok);
+        let live = check(RuntimeMode::Live);
+        assert_eq!(live.status, CheckStatus::Fail, "{}", live.detail);
+        assert!(live.detail.contains("discovery twin"), "{}", live.detail);
     }
 
     /// The checked-in cap-0.91 artifact (direction memo 2026-09-07, gap 3)
@@ -1387,6 +1508,7 @@ mod tests {
             risk_notes: vec![],
             promotion_gate: PromotionGate::default(),
             robust_diagnostics: None,
+            paper_only: false,
         };
         let path = root.join("promotion.json");
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();

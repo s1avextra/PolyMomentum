@@ -1557,6 +1557,7 @@ mod tests {
             risk_notes: Vec::new(),
             promotion_gate: crate::backtest::experiment::PromotionGate::default(),
             robust_diagnostics: None,
+            paper_only: false,
         };
         std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
 

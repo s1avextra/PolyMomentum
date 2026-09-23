@@ -78,8 +78,9 @@ BAND_EVALUATOR_VERSION = "band_public_v2"
 PRINTS_DIR = ROOT / "logs/strategy-research/band_lane_cache/prints"
 
 # The print cache's decision columns: one prints file per (window, second).
-# A change here needs a --rebuild-prints.  Grammar C's 150 s cells have no
-# column and are scored by scripts/executable_truth.py only.
+# A change here needs a --rebuild-prints.  Grammar C's 150, 195 and 225 s
+# cells have no column and are scored by scripts/executable_truth.py only
+# (ladder-only cells).
 BAND_DECISION_SECONDS: Tuple[int, ...] = (180, 210, 240, 270)
 # Legacy grammar (the six-field rules of the LLM-era lane).  Kept so the
 # hypotheses proposed under it stay readable (accrual, rescreen, rescore, the
@@ -103,13 +104,17 @@ _CASTS = {
 # Grammar C (docs/profitability_basement_2026-09-18.md section C), the
 # proposer's grammar, scored here on public prints and by
 # scripts/executable_truth.py on ladder rows.  Ask floor 0.80 and direction
-# both are fixed (up/down is a tripwire, never a rule), no sigma floor; 336
-# cells, the 189 with floor >= 75 and decision >= 180 registrable, floor 50
-# the control.
-BAND_GRID_V2_VERSION = "band_grid_v2"
+# both are fixed (up/down is a tripwire, never a rule), no sigma floor; 504
+# cells, the 315 with floor >= 75 and decision >= 180 registrable, floor 50
+# the control.  v3 (2026-09-23, before any registration): decision seconds
+# 195 and 225 added, the engine's finer anchors between 180 and 240 s where
+# the ladders showed the profitable region (fillability at t = 0 falls from
+# 97% at 150 s to 18% at 240 s); print-cache columns unchanged, so those
+# cells are ladder-only.
+BAND_GRID_V2_VERSION = "band_grid_v3"
 BAND_V2_ASK_FLOOR = 0.80
 BAND_GRID_V2: Dict[str, Tuple[Any, ...]] = {
-    "decision_second": (150, 180, 210, 240),
+    "decision_second": (150, 180, 195, 210, 225, 240),
     "margin_floor_usd": (50, 75, 100, 150),
     "favorite_price_cap": (0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99),
     "patience_s": (0, 15, 30),
@@ -1154,8 +1159,8 @@ def rescreen_support_rejections(
 
 def proposer_cells() -> List[Dict[str, Any]]:
     """Grammar C cells in proposal order: registrable cells first, each group
-    in grid order.  Cells whose decision second has no print column (150 s)
-    are left to scripts/executable_truth.py."""
+    in grid order.  Cells whose decision second has no print column (150,
+    195, 225 s: ladder-only) are left to scripts/executable_truth.py."""
     cells = [rule for rule in grid_v2_rules() if rule["decision_second"] in BAND_DECISION_SECONDS]
     return [rule for rule in cells if registrable_v2(rule)] + [rule for rule in cells if not registrable_v2(rule)]
 

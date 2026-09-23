@@ -78,8 +78,8 @@ class BandLaneTest(unittest.TestCase):
 
     def test_grammar_reads_both_shapes_and_validation_is_strict(self):
         cells = band.grid_v2_rules()
-        self.assertEqual(len(cells), 336)
-        self.assertEqual(sum(1 for rule in cells if band.registrable_v2(rule)), 189)
+        self.assertEqual(len(cells), 504)
+        self.assertEqual(sum(1 for rule in cells if band.registrable_v2(rule)), 315)
         for rule in cells:
             self.assertEqual(band.normalized_band_rule(rule), rule)
             self.assertEqual(band.normalized_band_rule_v2(rule), rule)
@@ -359,11 +359,12 @@ class BandLaneTest(unittest.TestCase):
 
     def test_proposer_enumerates_grammar_c_deterministically_without_duplicates(self):
         cells = band.proposer_cells()
-        # 336 cells minus the 84 at 150 s, which have no print column.
+        # 504 cells minus the 252 at 150, 195 and 225 s, which have no print column (ladder-only).
         self.assertEqual(len(cells), 252)
         self.assertEqual(len({band._canonical(cell) for cell in cells}), 252)
         self.assertTrue(all(cell["decision_second"] in band.BAND_DECISION_SECONDS for cell in cells))
-        self.assertEqual({band._canonical(c) for c in cells}, {band._canonical(c) for c in band.grid_v2_rules() if c["decision_second"] != 150})
+        self.assertEqual({band._canonical(c) for c in cells}, {band._canonical(c) for c in band.grid_v2_rules() if c["decision_second"] in band.BAND_DECISION_SECONDS})
+        self.assertEqual(sorted({c["decision_second"] for c in band.grid_v2_rules()} - {c["decision_second"] for c in cells}), [150, 195, 225])
         # Registrable cells first (floor >= 75), then the $50 control cells, each in grid order.
         self.assertEqual([band.registrable_v2(cell) for cell in cells], [True] * 189 + [False] * 63)
         self.assertEqual(cells[0], FIRST_CELL)

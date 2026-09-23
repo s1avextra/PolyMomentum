@@ -13,8 +13,10 @@ pub const DEFAULT_SIMULATED_BANKROLL_USD: f64 = 100.0;
 pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_GB: f64 = 10.0;
 pub const DEFAULT_PREFLIGHT_MIN_FREE_DISK_PCT: f64 = 15.0;
 /// Seconds into a 5m window at which the live engine records what the venue
-/// offered (`BAND_ANCHOR_SECONDS`); empty disables the capture.
-pub const DEFAULT_BAND_ANCHOR_SECONDS: &str = "150,180,210,240";
+/// offered (`BAND_ANCHOR_SECONDS`); empty disables the capture. 195 and 225
+/// (2026-09-23) are the finer anchors between 180 and 240 s, where the
+/// ladders put the executable edge (grammar C v3, ladder-only cells).
+pub const DEFAULT_BAND_ANCHOR_SECONDS: &str = "150,180,195,210,225,240";
 /// Budgets (USD) the `band_ladder` record quotes the momentum-side book at
 /// (`BAND_LADDER_BUDGETS_USD`); empty disables the ladder.
 pub const DEFAULT_BAND_LADDER_BUDGETS_USD: &str = "5,25,100";
@@ -426,7 +428,7 @@ mod tests {
     fn band_anchor_seconds_default_empty_and_garbage() {
         assert_eq!(
             parse_band_anchor_seconds(DEFAULT_BAND_ANCHOR_SECONDS),
-            Some(vec![150.0, 180.0, 210.0, 240.0])
+            Some(vec![150.0, 180.0, 195.0, 210.0, 225.0, 240.0])
         );
         assert_eq!(
             parse_band_anchor_seconds(DEFAULT_BAND_LADDER_BUDGETS_USD),
@@ -446,7 +448,7 @@ mod tests {
         env::set_var("BAND_ANCHOR_SECONDS", "garbage");
         let parsed = band_anchor_seconds_from_env();
         env::remove_var("BAND_ANCHOR_SECONDS");
-        assert_eq!(parsed, vec![150.0, 180.0, 210.0, 240.0]);
+        assert_eq!(parsed, vec![150.0, 180.0, 195.0, 210.0, 225.0, 240.0]);
         env::set_var("BAND_LADDER_BUDGETS_USD", "garbage");
         let parsed = band_ladder_budgets_from_env();
         env::remove_var("BAND_LADDER_BUDGETS_USD");
