@@ -1444,6 +1444,29 @@ class BandLaneTest(unittest.TestCase):
         self.assertEqual(band.campaign_n({"generator": {"campaign_n": 7}, "lanes": {"band_mechanisms": {"campaign_n": 9}}}), 9)
         self.assertIsNone(band.campaign_n({}))
 
+    def test_network_error_budget_fails_fast_after_consecutive_failures(self):
+        calls = []
+
+        def failing(url, retries=3, timeout=30.0):
+            calls.append((retries, timeout))
+            raise OSError("down")
+
+        band.reset_network_error_budget()
+        with mock.patch.object(band, "http_json", side_effect=failing):
+            for _ in range(band.NETWORK_ERROR_BUDGET):
+                with self.assertRaises(OSError):
+                    band.lane_http_json("https://x")
+            with self.assertRaises(band.NetworkUnavailable):
+                band.lane_http_json("https://x")
+        # Lane fetches use the short timeout and fewer retries, and the budget
+        # blocked the fourth call before it reached the network.
+        self.assertEqual(len(calls), band.NETWORK_ERROR_BUDGET)
+        self.assertEqual(calls[0], (band.LANE_HTTP_RETRIES, band.LANE_HTTP_TIMEOUT_S))
+        band.reset_network_error_budget()
+        with mock.patch.object(band, "http_json", return_value={"ok": 1}):
+            self.assertEqual(band.lane_http_json("https://x"), {"ok": 1})
+        band.reset_network_error_budget()
+
     def test_run_cycle_band_lane_disabled_returns_disabled(self):
         config = loop.load_config(ROOT / "deploy/strategy-research-loop.json")
         self.assertFalse(config["lanes"]["band_mechanisms"]["enabled"])

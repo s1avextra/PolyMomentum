@@ -47,7 +47,7 @@ WINDOW_S = 300
 STUDY_HOURS_UTC = [1, 5, 9, 13, 17, 21]
 
 
-def http_json(url: str, retries: int = 3):
+def http_json(url: str, retries: int = 3, timeout: float = 30.0):
     request = urllib.request.Request(
         url,
         headers={
@@ -57,7 +57,7 @@ def http_json(url: str, retries: int = 3):
     )
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(request, timeout=30) as resp:
+            with urllib.request.urlopen(request, timeout=timeout) as resp:
                 return json.load(resp)
         except Exception:
             if attempt == retries - 1:

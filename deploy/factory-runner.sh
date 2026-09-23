@@ -41,13 +41,13 @@ rotate() {
 loop=0
 while true; do
     rotate "$log"
-    uv run python scripts/strategy_research_loop.py \
+    uv run --offline python scripts/strategy_research_loop.py \
         --config "$config" --once --lane band_mechanisms \
         >> "$log" 2>&1
     if [ $((loop % 3)) -eq 0 ]; then
         rotate "$tick_log"
         echo "$(date -u +%FT%TZ) tick" >> "$tick_log"
-        uv run python scripts/executable_truth.py --tick --loop-config "$config" \
+        bash scripts/pull_vps_sessions.sh >/dev/null 2>&1; uv run --offline python scripts/executable_truth.py --tick --loop-config "$config" \
             >> "$tick_log" 2>&1
     fi
     loop=$((loop + 1))

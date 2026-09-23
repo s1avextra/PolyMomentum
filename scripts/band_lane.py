@@ -320,13 +320,46 @@ def last_eligible_window_start(now_ts: int) -> int:
     return ((int(now_ts) - RESOLUTION_LAG_S - WINDOW_S) // WINDOW_S) * WINDOW_S
 
 
+# Network discipline for the lane (2026-09-23 outage: three days of 45-minute
+# cycles spent in 30 s x 3 retries per request). Lane fetches use short
+# timeouts, and after NETWORK_ERROR_BUDGET consecutive failures in one
+# process every further fetch raises NetworkUnavailable immediately so a
+# cycle fails fast and the next cycle retries.
+LANE_HTTP_TIMEOUT_S = 12.0
+LANE_HTTP_RETRIES = 2
+NETWORK_ERROR_BUDGET = 3
+_consecutive_network_errors = 0
+
+
+class NetworkUnavailable(RuntimeError):
+    pass
+
+
+def lane_http_json(url: str) -> Any:
+    global _consecutive_network_errors
+    if _consecutive_network_errors >= NETWORK_ERROR_BUDGET:
+        raise NetworkUnavailable("network error budget exhausted (%d)" % _consecutive_network_errors)
+    try:
+        value = http_json(url, retries=LANE_HTTP_RETRIES, timeout=LANE_HTTP_TIMEOUT_S)
+    except Exception:
+        _consecutive_network_errors += 1
+        raise
+    _consecutive_network_errors = 0
+    return value
+
+
+def reset_network_error_budget() -> None:
+    global _consecutive_network_errors
+    _consecutive_network_errors = 0
+
+
 def fetch_binance_closes(start_ts: int, end_ts: int) -> Dict[str, float]:
     """1s closes for [start_ts, end_ts) keyed by epoch-second string, the
     scripts/margin_floor_study.py cache format."""
     prices: Dict[str, float] = {}
     cursor = int(start_ts)
     while cursor < end_ts:
-        rows = http_json(
+        rows = lane_http_json(
             "%s?symbol=BTCUSDT&interval=1s&startTime=%d&limit=1000"
             % (margin_floor_study.BINANCE, cursor * 1000)
         )
@@ -342,7 +375,7 @@ def fetch_binance_closes(start_ts: int, end_ts: int) -> Dict[str, float]:
 
 
 def fetch_gamma_market(window_start: int) -> Optional[Dict[str, Any]]:
-    markets = http_json(
+    markets = lane_http_json(
         "%s/markets?slug=btc-updown-5m-%d&closed=true" % (margin_floor_study.GAMMA, window_start)
     )
     time.sleep(API_PAUSE_S)
@@ -362,7 +395,7 @@ def fetch_data_api_trades(condition_id: str, window_start: int) -> Dict[str, Any
         params = urllib.parse.urlencode(
             {"market": condition_id, "limit": TRADES_PAGE_SIZE, "offset": pages * TRADES_PAGE_SIZE}
         )
-        page = list(http_json("%s/trades?%s" % (DATA_API, params)) or [])
+        page = list(lane_http_json("%s/trades?%s" % (DATA_API, params)) or [])
         time.sleep(API_PAUSE_S)
         pages += 1
         trades.extend(page)
