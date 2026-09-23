@@ -919,7 +919,7 @@ class BandLaneTest(unittest.TestCase):
         ]
         requested = []
 
-        def http_json(url):
+        def http_json(url, retries=3, timeout=30.0):
             query = dict(item.split("=") for item in url.split("?", 1)[1].split("&"))
             self.assertEqual(url.split("?")[0], band.DATA_API + "/trades")
             self.assertEqual(query["limit"], "500")
