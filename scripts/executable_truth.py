@@ -138,6 +138,16 @@ PROMOTION_MIN_N = 100
 PROMOTION_MIN_DAYS = 14
 COVERAGE_MIN = 0.9
 REGISTER_MIN_LADDER_DAYS = 7
+# Ladder screen for registration (G.7, 2026-09-23): a registrable cell also
+# qualifies on evidence-host ladder rows alone when its ladder model has
+# support and sits within REGISTER_LADDER_SLACK of break-even without the
+# adverse-selection flag. Prints are an upper bound on a different
+# population (any BUY within the window); the ladder is the executable
+# population, so a cell the print screen rejects can still be the best
+# executable one (d210_f100_c0.99: print lower 0.950 vs BE 0.965, ladder
+# 66/66). Registration only fixes the family; accrual and e-BH decide.
+REGISTER_LADDER_MIN_N = 40
+REGISTER_LADDER_SLACK = 0.03
 EDGE_MIGRATION_ASK = 0.99
 EDGE_MIGRATION_DAYS = 7
 # Capacity trend (the kill): the share of a cell's covered signal windows
@@ -1755,11 +1765,26 @@ def register(
     cells: List[Dict[str, Any]] = []
     by_set: Dict[Tuple[frozenset, frozenset], Dict[str, Any]] = {}
     for cell in report["cells"]:
+        if not cell["registrable"]:
+            continue
         score = cell["print"]
-        if not (cell["registrable"] and score["clears_break_even"] and not score["tripwires"]["adverse_selected"]):
+        ladder = cell.get("ladder") or {}
+        print_ok = bool(
+            score
+            and score.get("clears_break_even")
+            and not score["tripwires"]["adverse_selected"]
+            and (allow_partial_prints or not score["tripwires"]["coverage_low"])
+        )
+        ladder_ok = bool(
+            (ladder.get("n") or 0) >= REGISTER_LADDER_MIN_N
+            and ladder.get("wilson_lower") is not None
+            and ladder.get("mean_break_even") is not None
+            and float(ladder["wilson_lower"]) >= float(ladder["mean_break_even"]) - REGISTER_LADDER_SLACK
+            and not (ladder.get("tripwires") or {}).get("adverse_selected")
+        )
+        if not (print_ok or ladder_ok):
             continue
-        if score["tripwires"]["coverage_low"] and not allow_partial_prints:
-            continue
+        screen = "print" if print_ok else "ladder"
         decision_rows = rows_by_decision.get(int(cell["rule"]["decision_second"]), [])
         accepted = (
             frozenset(trade["window_start"] for trade in select_cell(decision_rows, cell["rule"], "print")["trades"]),
@@ -1773,13 +1798,15 @@ def register(
             "fingerprint": cell["fingerprint"],
             "rule": cell["rule"],
             "aliases": [],
-            "print_model": {key: score[key] for key in ("n", "wins", "wilson_lower", "mean_break_even", "mean_net_per_usd", "coverage")},
+            "screen": screen,
+            "print_model": ({key: score.get(key) for key in ("n", "wins", "wilson_lower", "mean_break_even", "mean_net_per_usd", "coverage")} if score else None),
+            "ladder_model": {key: ladder.get(key) for key in ("n", "wins", "wilson_lower", "mean_break_even", "mean_net_per_usd")},
             "ladder_windows_at_registration": len(accepted[1]),
         }
         by_set[accepted] = entry
         cells.append(entry)
     if not cells:
-        return {"registered": False, "reason": "no registrable cell clears the print screen", "ladder_only_unscreened": ladder_only_unscreened}
+        return {"registered": False, "reason": "no registrable cell clears the print or ladder screen", "ladder_only_unscreened": ladder_only_unscreened}
     now_ts = int(time.time()) if now_ts is None else int(now_ts)
     newest = connection.execute("SELECT MAX(window_start) FROM windows").fetchone()[0]
     after = max(int(newest) if newest is not None else -1, band_lane.last_eligible_window_start(now_ts))

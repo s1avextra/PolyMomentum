@@ -911,7 +911,7 @@ class ExecutableTruthTest(unittest.TestCase):
         campaigns = Path(self.directory) / "campaigns"
         refused = truth.register(self.db, "2026-09_null", campaigns, now_ts)
         # The 126 registrable ladder-only cells (195/225 s) have no print column: never admitted, never silent.
-        self.assertEqual((refused["registered"], refused["reason"], refused["ladder_only_unscreened"]), (False, "no registrable cell clears the print screen", 126))
+        self.assertEqual((refused["registered"], refused["reason"], refused["ladder_only_unscreened"]), (False, "no registrable cell clears the print or ladder screen", 126))
         self.assertFalse((campaigns / "2026-09_null.json").exists())
         # A print cache below writer_v2_share 1.0 is the margin-selected
         # slice (B.6): refused unless the operator says otherwise, and then
@@ -957,6 +957,32 @@ class ExecutableTruthTest(unittest.TestCase):
         self.assertIn("break-even null (5 replicates, 252 ladder cells with trades)", truth.grid_text(report))
 
     # --- accrual, ledger, gate artifact ----------------------------------------
+
+    def test_register_admits_a_cell_on_the_ladder_screen_when_prints_reject_it(self):
+        specs, now_ts = self.planted_fixture()
+        campaigns = Path(self.directory) / "campaigns_ladder_screen"
+        report = truth.grid(self.db, fee_rate=FEE)
+        registrable = [cell for cell in report["cells"] if cell["registrable"]]
+        self.assertTrue(registrable)
+        # Force every registrable cell through the print screen's rejection
+        # and give exactly one of them a passing ladder model.
+        for cell in registrable:
+            cell["print"]["clears_break_even"] = False
+            cell["ladder"] = dict(cell.get("ladder") or {}, n=0)  # ladder screen off for everyone else
+        chosen = registrable[0]
+        chosen["ladder"] = dict(chosen.get("ladder") or {}, n=truth.REGISTER_LADDER_MIN_N, wins=truth.REGISTER_LADDER_MIN_N,
+                                wilson_lower=0.95, mean_break_even=0.96, mean_net_per_usd=0.03,
+                                tripwires=dict((chosen.get("ladder") or {}).get("tripwires") or {}, adverse_selected=False))
+        result = truth.register(self.db, "2026-09_ladder_screen", campaigns, now_ts, report=report)
+        self.assertTrue(result["registered"], result)
+        self.assertEqual(result["cells"], [chosen["cell_id"]])
+        cells = json.loads((campaigns / "2026-09_ladder_screen.json").read_text())["cells"]
+        self.assertEqual([c["cell_id"] for c in cells], [chosen["cell_id"]])
+        self.assertEqual(cells[0]["screen"], "ladder")
+        # Below the slack the ladder screen does not admit.
+        chosen["ladder"]["wilson_lower"] = 0.96 - truth.REGISTER_LADDER_SLACK - 0.001
+        refused = truth.register(self.db, "2026-09_ladder_screen_2", campaigns, now_ts, report=report)
+        self.assertFalse(refused["registered"], refused)
 
     def test_tick_accrues_registered_cells_with_one_ledger_row_per_look(self):
         specs, now_ts = self.planted_fixture()
