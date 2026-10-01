@@ -1938,9 +1938,9 @@ class EventModelTest(unittest.TestCase):
         self.assertEqual(list(falsifiers), ["F1_z_adds_nothing", "F2_calibration_broke", "F3_adaptive_dead"])
         self.assertEqual((falsifiers["F1_z_adds_nothing"]["at_day"], falsifiers["F1_z_adds_nothing"]["cell"]), (30, family[4]))
         crossing = next(row for row in spec["first_crossing"] if (row["z_min"], row["t_low"]) == (2.5, 150))
-        self.assertEqual((falsifiers["F2_calibration_broke"]["at_n"], falsifiers["F2_calibration_broke"]["value"], falsifiers["F2_calibration_broke"]["crossing"]), (2000, crossing["wilson_lower"], [2.5, 150, 270]))
+        self.assertEqual((falsifiers["F2_calibration_broke"]["at_n"], falsifiers["F2_calibration_broke"]["value"], falsifiers["F2_calibration_broke"]["crossing"]), (2000, crossing["rate"], [2.5, 150, 270]))
         # This table has no window before its first VPS ladder, so F2's bar falls back to the frozen fit's own crossing, and says so.
-        self.assertEqual(falsifiers["F2_calibration_broke"]["reference"], {"windows": "fit", "cut_ts": spec["cut_ts"], "n": crossing["n"], "wins": crossing["wins"], "rate": crossing["rate"]})
+        self.assertEqual(falsifiers["F2_calibration_broke"]["reference"], {"windows": "fit", "cut_ts": spec["cut_ts"], "n": crossing["n"], "wins": crossing["wins"], "rate": crossing["rate"], "wilson_lower": crossing["wilson_lower"]})
         self.assertEqual(campaign["falsifier_cleared"], {})
         self.assertEqual({key: falsifiers["F3_adaptive_dead"][key] for key in ("at_day", "cell", "leader", "op", "value")}, {"at_day": 45, "cell": family[0], "leader": family[5], "op": "<", "value": 1.0})
         self.assertEqual({rule["action"] for rule in campaign["falsifiers"]}, {"hold_event_cells"})
@@ -1951,17 +1951,25 @@ class EventModelTest(unittest.TestCase):
         # A subset family carries only the entries its cells are in.
         subset = truth.family_rules([family[1], family[5]], spec)
         self.assertEqual(([rule["id"] for rule in subset["stopping_rules"]], [rule["id"] for rule in subset["falsifiers"]], subset["paired_controls"]["pairs"], subset["paired_controls"]["bar_e"]), (["futility", "day90_no_discovery"], ["F2_calibration_broke"], [], None))
-        # F2's bar is the doc's pre-ladder Wilson lower bound (section 6:
-        # 0.9897 where the whole refit gives 0.9908, a look that fires on
-        # 15% of healthy samples), given enough crossings before the first
-        # evidence ladder.
+        # F2's reference is the frozen rule's pre-ladder accuracy (section
+        # 6; its Wilson lower bound, the doc's 0.9897, stays on record),
+        # given enough crossings before the first evidence ladder.  The
+        # look compares the fresh sample's Wilson upper bound with that
+        # rate: a fresh point rate under 0.9897 fires on about 12% of
+        # healthy samples at n = 2,000.
         pre_ladder = {"n": 6925, "wins": 6870, "rate": 6870 / 6925, "wilson_lower": band.wilson_lower(6870, 6925), "cut_ts": 1789795500}
         f2 = truth.family_rules(family, spec, pre_ladder=pre_ladder)["falsifiers"][1]
-        self.assertEqual((f2["id"], f2["value"], f2["reference"]), ("F2_calibration_broke", pre_ladder["wilson_lower"], {"windows": "pre_ladder", "cut_ts": 1789795500, "n": 6925, "wins": 6870, "rate": 6870 / 6925}))
-        self.assertAlmostEqual(f2["value"], 0.9897, places=4)
+        self.assertEqual((f2["id"], f2["statistic"], f2["value"], f2["reference"]), ("F2_calibration_broke", "wilson_upper", 6870 / 6925, {"windows": "pre_ladder", "cut_ts": 1789795500, "n": 6925, "wins": 6870, "rate": 6870 / 6925, "wilson_lower": pre_ladder["wilson_lower"]}))
+        self.assertAlmostEqual(f2["reference"]["wilson_lower"], 0.9897, places=4)
         self.assertIn("before the first evidence ladder", f2["text"])
+        # 1,984 of 2,000 (0.992) is the frozen rate itself; 1,978 (0.989)
+        # sits under the old bar yet its upper bound 0.9927 still holds
+        # the rate; 1,970 (0.985, upper 0.9895) is a broken calibration.
+        fired = lambda wins: truth._compare(truth.crossing_statistic(f2, {"n": 2000, "wins": wins, "rate": wins / 2000}), f2["op"], f2["value"])
+        self.assertEqual([fired(1984), fired(1978), fired(1970)], [False, False, True])
+        self.assertEqual(truth.crossing_statistic({}, {"n": 2000, "wins": 1970, "rate": 0.985}), 0.985)
         thin = truth.family_rules(family, spec, pre_ladder={**pre_ladder, "n": truth.FALSIFIER_CROSSING_REFERENCE_MIN_N - 1})["falsifiers"][1]
-        self.assertEqual((thin["value"], thin["reference"]["windows"]), (crossing["wilson_lower"], "fit"))
+        self.assertEqual((thin["value"], thin["reference"]["windows"]), (crossing["rate"], "fit"))
         # register measures that reference with the frozen spec on the
         # windows that ended by the first VPS ladder window (here: day 0,
         # its ladders dropped from the table; ten windows are enough for
@@ -1975,7 +1983,7 @@ class EventModelTest(unittest.TestCase):
         measured = settlement.first_crossing(truth.event_series(cache.closes, [ws for ws, _ in labelled], spec), labelled[:10], spec, 2.5, 150, 270)
         self.assertGreaterEqual(measured["n"], 1)
         f2 = {rule["id"]: rule for rule in json.loads((campaigns / "2026-10_pre_ladder.json").read_text())["falsifiers"]}["F2_calibration_broke"]
-        self.assertEqual((f2["value"], f2["reference"]), (measured["wilson_lower"], {"windows": "pre_ladder", "cut_ts": first_ladder, "n": measured["n"], "wins": measured["wins"], "rate": measured["rate"]}))
+        self.assertEqual((f2["value"], f2["reference"]), (measured["rate"], {"windows": "pre_ladder", "cut_ts": first_ladder, "n": measured["n"], "wins": measured["wins"], "rate": measured["rate"], "wilson_lower": measured["wilson_lower"]}))
         # The CLI path freezes the same spec from the cache on disk.
         config_path = Path(self.directory) / "loop.json"
         config_path.write_text(json.dumps(loop_config(self.directory)))

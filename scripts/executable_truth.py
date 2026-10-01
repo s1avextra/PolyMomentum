@@ -2861,12 +2861,17 @@ def family_rules(
                 "at_n": FALSIFIER_CROSSING_MIN_N,
                 "crossing": list(FALSIFIER_CROSSING),
                 "metric": "first_crossing_accuracy",
+                # A fresh point rate under the reference's Wilson lower bound
+                # fires on about 12% of healthy samples at n = 2,000; the
+                # fresh sample's Wilson upper bound under the reference rate
+                # is the same look at about 2.5%.
+                "statistic": "wilson_upper",
                 "op": "<",
-                "value": crossing["wilson_lower"],
-                # The windows the bar was measured on: those that ended by cut_ts.
-                "reference": {"windows": reference, "cut_ts": reference_cut, **{key: crossing[key] for key in ("n", "wins", "rate")}},
+                "value": crossing["rate"],
+                # The windows the rate was measured on: those that ended by cut_ts.
+                "reference": {"windows": reference, "cut_ts": reference_cut, **{key: crossing[key] for key in ("n", "wins", "rate", "wilson_lower")}},
                 "action": "hold_event_cells",
-                "text": "first-crossing accuracy of z >= 2.5 on fresh windows below the Wilson lower bound of the frozen rule's accuracy on the %s at n >= 2,000: the calibration broke"
+                "text": "Wilson upper bound of the first-crossing accuracy of z >= 2.5 on fresh windows below the frozen rule's accuracy on the %s at n >= 2,000: the calibration broke"
                 % ("windows before the first evidence ladder" if reference == "pre_ladder" else "fitted windows (no pre-ladder period in the table)"),
             }
         )
@@ -3221,6 +3226,15 @@ def fresh_first_crossing(windows: Sequence[Mapping[str, Any]], crossing: Sequenc
                 wins += int(("up" if point[0] >= 0 else "down") == window["official"])
                 break
     return {"n": total, "wins": wins, "rate": (wins / total) if total else None, "wilson_lower": band_lane.wilson_lower(wins, total)}
+
+
+def crossing_statistic(entry: Mapping[str, Any], crossing: Mapping[str, Any]) -> Optional[float]:
+    """What F2 compares with its bar: the fresh sample's Wilson upper bound
+    when the campaign says so, else its point rate (a campaign registered
+    before the restatement)."""
+    if entry.get("statistic") == "wilson_upper":
+        return settlement_model.wilson_upper(int(crossing["wins"]), int(crossing["n"]))
+    return crossing["rate"]
 
 
 def _trade_nets(selection: Mapping[str, Any], labels: Mapping[int, Optional[str]], fee_rate: float) -> Dict[int, float]:
@@ -3608,7 +3622,7 @@ def _campaign_checks(
             check["n"] = contrast["n"]
             fired = _compare(check["value"], entry["op"], entry["value"])
         elif metric == "first_crossing_accuracy":
-            check["value"], check["n"] = crossing["rate"], crossing["n"]
+            check["value"], check["n"], check["rate"] = crossing_statistic(entry, crossing), crossing["n"], crossing["rate"]
             fired = _compare(check["value"], entry["op"], entry["value"])
         elif metric == "paired_e_max":
             check["value"] = max((pair["e_value"] for pair in paired if pair["cell_id"] == entry["cell"]), default=None)

@@ -147,7 +147,7 @@ Kill: day 45 with fresh net at +1 s <= 0 on both V1 and V5 stops the family; day
 | 6-14 | runner | accrual through `--tick`; agent: step 4 design note, step 5 print pre-check |
 | 14 | agent | first formal look: support, capacity, coverage, engine z against evaluator z, +1 s and 2 s numbers, matched contrast. Money: none |
 
-## 8. As built (2026-10-01, uncommitted; checked 12:00 UTC)
+## 8. As built (2026-10-01, commit 1868c36 and the registration commit after it)
 
 Steps 1-3 of section 5 are in the tree: `scripts/settlement_model.py`, evaluator `executable_truth_v4` with grammar `band_event_v4`, the engine records and the five anchors. The VPS still runs the 2026-09-20 binary (four anchors, no settlement fields) until day 5. No campaign is registered.
 
@@ -165,9 +165,9 @@ On the live table: net +2.05 / +2.92 / +1.54 / +1.16 / +1.12 %/USD, max-T p = 0.
 
 1. Fill model: an order in flight is not protected by the entry gates, so it fills at a collapsed ask; the scratch replay refused a fill with vwap <= 0.80 and scanned on. One such fill in the sample (09-19 06:25, limit 0.99 filled at 0.47, won, `fills_outside_gates` = 1): it is +0.25%/USD of V3's +1.54% and +0.14% of V5's +1.12% (without it 421/423 at +1.30% and 735/740 at +0.98%). It also moves the 1 s older price row: on the research snapshot a second such fill (09-22 23:45, 0.69, won) gives +0.77 to +3.40% against +0.66 to +3.4%.
 2. `wr_too_good` of an event cell is a 5% binomial test of its wins against the frozen ceiling, not the point comparison: item (b) of day 0 restated, so V2 and V4 are not held by design.
-3. The capacity kill of V1, V3 and V5 gives no verdict before 14 UTC days of data (the 0.10 fill share is unchanged; V1 and V3 pooled 0.086 and 0.093 over 09-27 to 09-30).
+3. The capacity kill of V1, V3 and V5 gives no verdict before 14 UTC days of data, and the fill-share floor is each cell's own: half its share over the last 7 complete days before registration, at most 0.10 (dry run: baselines 0.139 / 0.158 / 0.286, floors 0.069 / 0.079 / 0.10). The flat 0.10 was read off the cap-0.99 cells; V1 and V3 pooled 0.086 and 0.093 over 09-27 to 09-30 and would have been killed on data-day 14. The 10 entries a day floor is unchanged.
 4. The day-90 stop reads the discoveries recorded at any tick so far, a cell held for a defect audit included.
-5. A fired falsifier holds the event cells out of the e-BH candidate set until `--clear-falsifier <id> --note ...` records the audit (a new operator action).
+5. F2 compares the fresh sample's Wilson upper bound with the frozen pre-ladder rate (0.9919) at n >= 2,000, not the fresh point rate with 0.9897: the point comparison fires on about 12% of healthy samples, the bound on about 2.5%. A fired falsifier holds the event cells out of the e-BH candidate set until `--clear-falsifier <id> --note ...` records the audit (a new operator action).
 6. Registration refits c and s_b on every labelled window before `registered_at` (dry run on a copy: c = 1.1786, s_b = 3.6 fitted, not 3.5). That table lifts the `k98` cap of z in [3.5, 4) to 0.99 ("0.99 from z = 4" in section 4 is the pre-ladder table), and F2's bar becomes 0.9895 (6,876/6,932 under the refitted spec) against 0.9897.
 7. sigma2, z and P_cal are not table columns: they depend on the frozen spec and are computed when a cell is scored. The table carries `strike_60s`, `settle_margin`, `final_settle_margin`.
 8. The engine records `strike_60s`, `px`, `px_age`, `m` and the other side's book, not sigma2 or z (the evaluator computes both from its own 1 s closes; the engine's `px`, `m` and strike are there for the day-14 comparison, which no code reads yet). `--gate-json` refuses an event cell: the engine has no event policy.
