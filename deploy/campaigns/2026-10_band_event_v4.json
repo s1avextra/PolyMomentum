@@ -1,0 +1,591 @@
+{
+  "alpha": 0.05,
+  "audit_cleared": {},
+  "budget_usd": 25.0,
+  "cells": [
+    {
+      "at_registration": {
+        "mean_break_even": 0.9752721932102789,
+        "mean_net_per_usd": 0.019991128042862592,
+        "n": 364,
+        "wilson_lower": 0.9801905909050279,
+        "wins": 362
+      },
+      "cell_id": "e150-270_z2.5_k98",
+      "fingerprint": "e52650bc99d10cc972c810b2c4805993de5da3256b1a57c05d63a29d0681b84b",
+      "grammar": "band_event_v4",
+      "name": "V1",
+      "rule": {
+        "cap_rule": "k98",
+        "t0": 150,
+        "t1": 270,
+        "threshold": 2.5,
+        "trigger": "z"
+      }
+    },
+    {
+      "at_registration": {
+        "mean_break_even": 0.9723063480310851,
+        "mean_net_per_usd": 0.029117070973600754,
+        "n": 87,
+        "wilson_lower": 0.9577124924169734,
+        "wins": 87
+      },
+      "cell_id": "e150-270_z3.0_c0.98",
+      "fingerprint": "2cceabc367b6b13fbaae93a7b45ded0118541d6559f675fd06451d8b6b51cec1",
+      "grammar": "band_event_v4",
+      "name": "V2",
+      "rule": {
+        "cap_rule": "c0.98",
+        "t0": 150,
+        "t1": 270,
+        "threshold": 3.0,
+        "trigger": "z"
+      }
+    },
+    {
+      "at_registration": {
+        "mean_break_even": 0.9817927401887776,
+        "mean_net_per_usd": 0.015314631876778971,
+        "n": 426,
+        "wilson_lower": 0.9830457618856446,
+        "wins": 424
+      },
+      "cell_id": "e210-270_z2.5_c0.99",
+      "fingerprint": "88f2a902dd0b47029a35f696ab0487fd3cb0d35ffeaf1411de8ef2a69eedcb77",
+      "grammar": "band_event_v4",
+      "name": "V3",
+      "rule": {
+        "cap_rule": "c0.99",
+        "t0": 210,
+        "t1": 270,
+        "threshold": 2.5,
+        "trigger": "z"
+      }
+    },
+    {
+      "at_registration": {
+        "mean_break_even": 0.9849127267852922,
+        "mean_net_per_usd": 0.011677017935403848,
+        "n": 259,
+        "wilson_lower": 0.9784576199704531,
+        "wins": 258
+      },
+      "cell_id": "e150-270_z3.0_c0.99",
+      "fingerprint": "6cc0f98714086f8e5a921dca7b89180069ade17f83d422d2834d798d94710875",
+      "grammar": "band_event_v4",
+      "name": "V4",
+      "rule": {
+        "cap_rule": "c0.99",
+        "t0": 150,
+        "t1": 270,
+        "threshold": 3.0,
+        "trigger": "z"
+      }
+    },
+    {
+      "at_registration": {
+        "mean_break_even": 0.9831304207497603,
+        "mean_net_per_usd": 0.011252502219599541,
+        "n": 747,
+        "wilson_lower": 0.9844277312609567,
+        "wins": 742
+      },
+      "cell_id": "e150-270_z2.5_c0.99",
+      "fingerprint": "5b57e67f5b3c1eb38bbf59e7502cda033e6d6ea001eda972ad47d383e4b82921",
+      "grammar": "band_event_v4",
+      "name": "V5",
+      "rule": {
+        "cap_rule": "c0.99",
+        "t0": 150,
+        "t1": 270,
+        "threshold": 2.5,
+        "trigger": "z"
+      }
+    },
+    {
+      "at_registration": {
+        "mean_break_even": 0.9534821816178365,
+        "mean_net_per_usd": 0.018144375511286528,
+        "n": 266,
+        "wilson_lower": 0.9417867244778567,
+        "wins": 258
+      },
+      "cell_id": "d150_f100_c0.99_p0",
+      "fingerprint": "045de63edecde1c1dd4839dea480c62c9a0dfe8c2d84e6e57dee7a3ff9c708d0",
+      "grammar": "band_grid_v3",
+      "name": "V6",
+      "rule": {
+        "decision_second": 150,
+        "favorite_price_cap": 0.99,
+        "margin_floor_usd": 100,
+        "patience_s": 0
+      }
+    }
+  ],
+  "evaluator_version": "executable_truth_v4",
+  "event_grammar_version": "band_event_v4",
+  "falsifier_cleared": {},
+  "falsifiers": [
+    {
+      "action": "hold_event_cells",
+      "at_day": 30,
+      "cell": "e150-270_z2.5_c0.99",
+      "id": "F1_z_adds_nothing",
+      "metric": "win_rate_minus_matched",
+      "op": "<=",
+      "text": "day 30: z-selected win rate minus the ask-and-time matched random rate <= 0: z adds nothing beyond the ask",
+      "value": 0.0
+    },
+    {
+      "action": "hold_event_cells",
+      "at_n": 2000,
+      "crossing": [
+        2.5,
+        150,
+        270
+      ],
+      "id": "F2_calibration_broke",
+      "metric": "first_crossing_accuracy",
+      "op": "<",
+      "reference": {
+        "cut_ts": 1789795500,
+        "n": 6932,
+        "rate": 0.9919215233698788,
+        "wilson_lower": 0.9895248285622342,
+        "windows": "pre_ladder",
+        "wins": 6876
+      },
+      "statistic": "wilson_upper",
+      "text": "Wilson upper bound of the first-crossing accuracy of z >= 2.5 on fresh windows below the frozen rule's accuracy on the windows before the first evidence ladder at n >= 2,000: the calibration broke",
+      "value": 0.9919215233698788
+    },
+    {
+      "action": "hold_event_cells",
+      "at_day": 45,
+      "cell": "e150-270_z2.5_k98",
+      "id": "F3_adaptive_dead",
+      "leader": "d150_f100_c0.99_p0",
+      "metric": "paired_e_max",
+      "op": "<",
+      "text": "day 45: every paired e of the cell against its static controls below 1 while the leader's e-value exceeds the cell's: adaptive is dead even if an edge exists",
+      "value": 1.0
+    }
+  ],
+  "family_size": 6,
+  "fee": {
+    "engine_rate": 0.07,
+    "n": 53,
+    "note": "the fee on a filled record is the engine's own rate x shares x price x (1 - price); no venue-reported fee is recorded",
+    "paper_fills_skipped": 89,
+    "rate": 0.07000001170568758,
+    "source": "engine_rate_via_fills"
+  },
+  "futility_e": 0.1,
+  "git_sha": "bc2188c",
+  "grammar_version": "band_grid_v3",
+  "id": "2026-10_band_event_v4",
+  "ladder_days": {
+    "days": 13,
+    "hosts": [
+      "vps"
+    ],
+    "span_days": 13
+  },
+  "ladder_hosts": [
+    "vps"
+  ],
+  "ladder_rows_by_host": {
+    "mac": 313,
+    "vps": 14143
+  },
+  "lane": "band_ladder",
+  "paired_controls": {
+    "bar_e": 60.0,
+    "k": 3,
+    "min_paired_windows": 100,
+    "pairs": [
+      {
+        "cell_id": "e150-270_z2.5_k98",
+        "control_id": "x150-270_m100_c0.99",
+        "control_rule": {
+          "cap_rule": "c0.99",
+          "t0": 150,
+          "t1": 270,
+          "threshold": 100.0,
+          "trigger": "usd"
+        },
+        "fingerprint": "13b2224af3cbee2f363f02bc82b1b4f5c7c34d91ca7b1c21abbd3a12b6187e91"
+      },
+      {
+        "cell_id": "e150-270_z2.5_k98",
+        "control_id": "x150-270_s3.0_c0.99",
+        "control_rule": {
+          "cap_rule": "c0.99",
+          "t0": 150,
+          "t1": 270,
+          "threshold": 3.0,
+          "trigger": "const_sigma"
+        },
+        "fingerprint": "b0a2dd75671435e777a5eb093f519f29011e7793e916469bd303d134cad72b17"
+      },
+      {
+        "cell_id": "e210-270_z2.5_c0.99",
+        "control_id": "x210-270_m100_c0.99",
+        "control_rule": {
+          "cap_rule": "c0.99",
+          "t0": 210,
+          "t1": 270,
+          "threshold": 100.0,
+          "trigger": "usd"
+        },
+        "fingerprint": "847b062e75d927dd55b32275fc1fcf8ec532e9fe633892d7caf4c18098479c44"
+      },
+      {
+        "cell_id": "e150-270_z2.5_c0.99",
+        "control_id": "x150-270_m100_c0.99",
+        "control_rule": {
+          "cap_rule": "c0.99",
+          "t0": 150,
+          "t1": 270,
+          "threshold": 100.0,
+          "trigger": "usd"
+        },
+        "fingerprint": "f24da2a7b33214a8015b6e28a63b3195789b6d8501423a821ec9d27934f8cf15"
+      },
+      {
+        "cell_id": "e150-270_z2.5_c0.99",
+        "control_id": "x150-270_s3.0_c0.99",
+        "control_rule": {
+          "cap_rule": "c0.99",
+          "t0": 150,
+          "t1": 270,
+          "threshold": 3.0,
+          "trigger": "const_sigma"
+        },
+        "fingerprint": "0d06cd4d9c0c31a66cfa0b55b87d4e098fa25a6dd52bf0020eb1a49cde149858"
+      }
+    ],
+    "statistic": "per-window net per USD, cell minus control (0 where one does not trade), through update_signed after a fixed scale"
+  },
+  "promote_e": 20.0,
+  "registered_after_window_start": 1790856300,
+  "registered_at": "2026-10-01T12:28:16+00:00",
+  "registered_at_ts": 1790857696,
+  "schema_version": 2,
+  "spec": {
+    "c": 1.1787293210536418,
+    "cut_ts": 1790856600,
+    "fee_rate": 0.07000001170568758,
+    "first_crossing": [
+      {
+        "n": 9646,
+        "rate": 0.9927431059506531,
+        "t_high": 270,
+        "t_low": 150,
+        "wilson_lower": 0.9908421431129706,
+        "wilson_upper": 0.9942517613315515,
+        "wins": 9576,
+        "z_min": 2.5
+      },
+      {
+        "n": 9625,
+        "rate": 0.9940779220779221,
+        "t_high": 270,
+        "t_low": 210,
+        "wilson_lower": 0.9923356558320995,
+        "wilson_upper": 0.9954259602060791,
+        "wins": 9568,
+        "z_min": 2.5
+      },
+      {
+        "n": 8966,
+        "rate": 0.9964309614097703,
+        "t_high": 270,
+        "t_low": 150,
+        "wilson_lower": 0.9949660659914107,
+        "wilson_upper": 0.9974706499536494,
+        "wins": 8934,
+        "z_min": 3.0
+      }
+    ],
+    "fit": {
+      "c": {
+        "c": 1.1787293210536418,
+        "looks": 162539,
+        "source": "fit",
+        "windows": 12503
+      },
+      "first_window_start": 1787097600,
+      "last_window_start": 1790856000,
+      "looks": 162539,
+      "s_b": {
+        "log_loss": 0.04785309180034795,
+        "s_b": 3.6,
+        "source": "fit",
+        "windows": 12526
+      },
+      "windows": 12527
+    },
+    "params": {
+      "cap_buffer": 0.005,
+      "cap_ticks": [
+        0.8,
+        0.81,
+        0.82,
+        0.83,
+        0.84,
+        0.85,
+        0.86,
+        0.87,
+        0.88,
+        0.89,
+        0.9,
+        0.91,
+        0.92,
+        0.93,
+        0.94,
+        0.95,
+        0.96,
+        0.97,
+        0.98,
+        0.99
+      ],
+      "half_life_s": 300,
+      "looks_s": [
+        150,
+        160,
+        170,
+        180,
+        190,
+        200,
+        210,
+        220,
+        230,
+        240,
+        250,
+        260,
+        270
+      ],
+      "max_fill_s": 5,
+      "s_b_grid": [
+        1.0,
+        8.0,
+        0.1
+      ],
+      "subsample_s": 30,
+      "twap_s": 60,
+      "v_locked": 20.5,
+      "warmup_s": 7200,
+      "window_s": 300,
+      "z_edges": [
+        0.0,
+        1.0,
+        1.5,
+        1.75,
+        2.0,
+        2.25,
+        2.5,
+        2.75,
+        3.0,
+        3.5,
+        4.0,
+        5.0
+      ]
+    },
+    "s_b": 3.6,
+    "sha256": "4a39ff2c9f92b373ecfdf30d94314eb1a375848ea4b9da3bbacae651bd05e8d7",
+    "sigma2_median": 15.80137028577096,
+    "table": [
+      {
+        "cap": null,
+        "n": 61222,
+        "rate": 0.7150044101793472,
+        "wilson_lower": 0.7114152518978796,
+        "wilson_upper": 0.7185665886568198,
+        "wins": 43774,
+        "z_high": 1.0,
+        "z_low": 0.0
+      },
+      {
+        "cap": 0.9,
+        "n": 24139,
+        "rate": 0.9208749326815526,
+        "wilson_lower": 0.9174023530009432,
+        "wilson_upper": 0.9242135783551961,
+        "wins": 22229,
+        "z_high": 1.5,
+        "z_low": 1.0
+      },
+      {
+        "cap": 0.94,
+        "n": 9858,
+        "rate": 0.9575978900385473,
+        "wilson_lower": 0.9534386613936602,
+        "wilson_upper": 0.9614006247190812,
+        "wins": 9440,
+        "z_high": 1.75,
+        "z_low": 1.5
+      },
+      {
+        "cap": 0.95,
+        "n": 8587,
+        "rate": 0.9712355886805636,
+        "wilson_lower": 0.9674841591838574,
+        "wilson_upper": 0.9745655851556073,
+        "wins": 8340,
+        "z_high": 2.0,
+        "z_low": 1.75
+      },
+      {
+        "cap": 0.97,
+        "n": 7234,
+        "rate": 0.9817528338401991,
+        "wilson_lower": 0.9784030736241728,
+        "wilson_upper": 0.9845912168140852,
+        "wins": 7102,
+        "z_high": 2.25,
+        "z_low": 2.0
+      },
+      {
+        "cap": 0.97,
+        "n": 6069,
+        "rate": 0.9869830285055199,
+        "wilson_lower": 0.9838076171144094,
+        "wilson_upper": 0.9895423443530337,
+        "wins": 5990,
+        "z_high": 2.5,
+        "z_low": 2.25
+      },
+      {
+        "cap": 0.98,
+        "n": 5235,
+        "rate": 0.9938872970391595,
+        "wilson_lower": 0.9913836554492259,
+        "wilson_upper": 0.9956666381292739,
+        "wins": 5203,
+        "z_high": 2.75,
+        "z_low": 2.5
+      },
+      {
+        "cap": 0.98,
+        "n": 4387,
+        "rate": 0.9949851834966947,
+        "wilson_lower": 0.9924183795658031,
+        "wilson_upper": 0.9966858822643461,
+        "wins": 4365,
+        "z_high": 3.0,
+        "z_low": 2.75
+      },
+      {
+        "cap": 0.98,
+        "n": 7105,
+        "rate": 0.9964813511611541,
+        "wilson_lower": 0.9948106776041729,
+        "wilson_upper": 0.9976154498889321,
+        "wins": 7080,
+        "z_high": 3.5,
+        "z_low": 3.0
+      },
+      {
+        "cap": 0.99,
+        "n": 5158,
+        "rate": 0.9980612640558356,
+        "wilson_lower": 0.9964346577542659,
+        "wilson_upper": 0.9989465527940986,
+        "wins": 5148,
+        "z_high": 4.0,
+        "z_low": 3.5
+      },
+      {
+        "cap": 0.99,
+        "n": 7086,
+        "rate": 0.999435506632797,
+        "wilson_lower": 0.9985493408524158,
+        "wilson_upper": 0.9997804583469071,
+        "wins": 7082,
+        "z_high": 5.0,
+        "z_low": 4.0
+      },
+      {
+        "cap": 0.99,
+        "n": 16459,
+        "rate": 1.0,
+        "wilson_lower": 0.9997666588182306,
+        "wilson_upper": 1.0,
+        "wins": 16459,
+        "z_high": null,
+        "z_low": 5.0
+      }
+    ],
+    "version": "settlement_z_v1"
+  },
+  "status": "active",
+  "stopping_rules": [
+    {
+      "action": "kill_cell",
+      "cells": [
+        "e150-270_z2.5_k98",
+        "e150-270_z3.0_c0.98",
+        "e210-270_z2.5_c0.99",
+        "e150-270_z3.0_c0.99",
+        "e150-270_z2.5_c0.99",
+        "d150_f100_c0.99_p0"
+      ],
+      "id": "futility",
+      "metric": "e_value",
+      "op": "<=",
+      "scope": "cell",
+      "value": 0.1
+    },
+    {
+      "action": "kill_cell",
+      "baseline_fill_share": {
+        "e150-270_z2.5_c0.99": 0.28523489932885904,
+        "e150-270_z2.5_k98": 0.1389261744966443,
+        "e210-270_z2.5_c0.99": 0.15803631472763954
+      },
+      "cells": [
+        "e150-270_z2.5_k98",
+        "e210-270_z2.5_c0.99",
+        "e150-270_z2.5_c0.99"
+      ],
+      "days": 7,
+      "id": "event_capacity",
+      "min_data_days": 14,
+      "min_entries_per_day": 10,
+      "min_fill_share": 0.1,
+      "min_fill_share_by_cell": {
+        "e150-270_z2.5_c0.99": 0.1,
+        "e150-270_z2.5_k98": 0.06946308724832215,
+        "e210-270_z2.5_c0.99": 0.07901815736381977
+      },
+      "scope": "cell",
+      "text": "a 7-day median under 10 entries a day, or a fill share under the cell's floor (half its share over the last 7 complete days before registration, at most 0.10), kills the cell; no verdict before 14 UTC days of data (the kill is permanent and must not precede readiness)"
+    },
+    {
+      "action": "stop_family",
+      "at_day": 45,
+      "cells": [
+        "e150-270_z2.5_k98",
+        "e150-270_z2.5_c0.99"
+      ],
+      "id": "day45_fresh_net",
+      "metric": "mean_net_per_usd",
+      "op": "<=",
+      "scope": "family",
+      "text": "day 45 with fresh net at +1 s <= 0 on every listed cell stops the family",
+      "value": 0.0
+    },
+    {
+      "action": "stop_family",
+      "at_day": 90,
+      "id": "day90_no_discovery",
+      "metric": "e_bh_discoveries",
+      "op": "<=",
+      "scope": "family",
+      "text": "day 90 without an e-BH discovery at any tick so far (a cell held for a defect audit counts, one held by a falsifier does not) stops the family (and taker work on BTC 5m)",
+      "value": 0
+    }
+  ]
+}
