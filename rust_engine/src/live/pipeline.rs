@@ -3018,6 +3018,14 @@ impl Pipeline {
     /// a capital-bound window (`band_no_capital`, or a smaller live quote)
     /// is not reproducible from the record.
     ///
+    /// `strike_60s` (`band_strike_60s`) and `px`/`px_age`/`m`
+    /// (`band_settle_read` at the anchor second) put the settlement basis
+    /// beside the open basis of `open`/`btc`/`margin`/`direction`; the
+    /// strike and `m` are null without a covered pre-open minute. `px` is
+    /// the newest tick at the capture: the covering tick the capture
+    /// waited for, which on the live ticker's stamps (`BAND_CLOSE_REACH_S`)
+    /// is the tick after `btc`. Recorded only: nothing decides on them.
+    ///
     /// Band engine only: the legacy candle path seeds the shared per-asset
     /// open cache from the chainlink settlement reference, and an anchor
     /// margin of exchange mid minus chainlink open is the cross-basis sign
@@ -3127,6 +3135,8 @@ impl Pipeline {
             (Some(a), Some(b)) => Some(round_to(a + b, 4)),
             _ => None,
         };
+        let cycle_ts = now.timestamp_millis() as f64 / 1_000.0;
+        let strike = band_strike_60s(ps, open_ts, cycle_ts);
         for anchor in due {
             let (basis, open, btc) =
                 band_basis_prices(ps, open_ts, open_ts + f64::from(anchor), composite_open);
@@ -3140,6 +3150,7 @@ impl Pipeline {
                     None
                 }
             });
+            let settle = band_settle_read(ps, open_ts, anchor, strike, cycle_ts);
             self.monitor.record_band_anchor(json!({
                 "cid": short_cid(cid),
                 "anchor_s": anchor,
@@ -3149,6 +3160,10 @@ impl Pipeline {
                 "open": open.map(|o| round_to(o, 4)),
                 "margin": margin.map(|m| round_to(m, 4)),
                 "direction": direction,
+                "strike_60s": strike.map(|k| round_to(k, 4)),
+                "px": settle.px,
+                "px_age": settle.px_age,
+                "m": settle.m,
                 "stake_usd": stake.map(|s| round_to(s, 4)),
                 "quote_budget_usd": quote_budget.map(|b| round_to(b, 4)),
                 "up": up.clone(),
@@ -3169,7 +3184,13 @@ impl Pipeline {
     /// record per (window, anchor) at `a + 31` s, or when the window leaves
     /// the contract list. Direction and margin come from the anchor's own
     /// basis (`band_basis_prices` at `open + a`) after the same
-    /// covering-tick wait the anchor capture applies. Called by the cycle
+    /// covering-tick wait the anchor capture applies. The record carries
+    /// the window's `strike_60s` and every sample its settlement-basis
+    /// read (`band_settle_read` at window second `a + t`: the Binance tick
+    /// covering the sampling cycle, its age and `m`), with the other
+    /// side's book beside the momentum side's on every sample of a
+    /// directional record, whatever `m` reads (`band_ladder_sample`).
+    /// Called by the cycle
     /// loop right after `capture_band_anchors`, ahead of the traded skip.
     async fn sample_band_ladder(
         &self,
@@ -3257,6 +3278,7 @@ impl Pipeline {
                         btc,
                         margin,
                         direction,
+                        strike: band_strike_60s(ps, open_ts, cycle_ts),
                         samples: Vec::new(),
                         next_offset: 0,
                         cycles: 0,
@@ -3281,6 +3303,8 @@ impl Pipeline {
                         books,
                     )
                 });
+                let settle =
+                    band_settle_read(ps, open_ts, acc.anchor_s + offset, acc.strike, cycle_ts);
                 acc.samples.push(band_ladder_sample(
                     c,
                     acc.direction,
@@ -3289,7 +3313,9 @@ impl Pipeline {
                     self.settings.live_min_order_size_shares,
                     tick,
                     now_ts,
+                    cycle_ts,
                     offset,
+                    &settle,
                 ));
                 acc.next_offset = offset + 1;
             }
@@ -3306,6 +3332,7 @@ impl Pipeline {
             "btc": (acc.btc > 0.0).then(|| round_to(acc.btc, 4)),
             "margin": acc.margin.map(|m| round_to(m, 4)),
             "direction": acc.direction,
+            "strike_60s": acc.strike.map(|k| round_to(k, 4)),
             "budgets_usd": self.settings.band_ladder_budgets_usd,
             "samples": acc.samples,
             "cycles": acc.cycles,
@@ -5989,6 +6016,122 @@ fn band_basis_prices(
     }
 }
 
+/// Seconds of a BTC 5m window (`band_anchor_elapsed` admits no other).
+const BAND_SETTLE_WINDOW_S: u32 = 300;
+/// The settlement rule's averaging span (Gamma `btc-5m-twap-60`): the
+/// strike is the 60 s mean before the open, the final price the mean of the
+/// window's last 60 s, which starts to lock at
+/// `BAND_SETTLE_WINDOW_S - BAND_SETTLE_TWAP_S` = 240 s.
+const BAND_SETTLE_TWAP_S: u32 = 60;
+/// How far past a second's end its closing tick may be stamped. Binance's
+/// 1 Hz ticker stamps each tick just after the whole second it closes:
+/// measured 2026-10-01, the tick at or before an instant X (the margin
+/// basis' read) was the 1 s kline close of the second ending at X - 1, not
+/// at X, on 13,391 of 13,674 VPS `band_ladder` records. The 1 s close of
+/// the second ending at X - P[X-1] of the research spec - is therefore the
+/// last tick at or before X + 0.5; with ticks on the whole second the two
+/// reads are the same tick.
+const BAND_CLOSE_REACH_S: f64 = 0.5;
+
+/// Binance's tick for the second ending at `end_s`, read at `at_s`: the
+/// last tick at or before `at_s` as (event time, price), provided it is no
+/// older than `BAND_BASIS_TOLERANCE_S` before the second's end (the margin
+/// basis' staleness bound: one or two missed ticks carry the close before
+/// them forward, a longer gap reads nothing).
+fn band_tick_for_second(ps: &PriceState, end_s: f64, at_s: f64) -> Option<(f64, f64)> {
+    let max_distance_s = (at_s - end_s).max(0.0) + BAND_BASIS_TOLERANCE_S;
+    ps.source_tick_at_or_before("binance", at_s, max_distance_s)
+}
+
+/// Sum of Binance's 1 s closes of the `n` seconds ending at `first_end_s`,
+/// `first_end_s + 1`, ... as known at `now_s`: each second's tick
+/// (`band_tick_for_second`) read `BAND_CLOSE_REACH_S` past its end - never
+/// past `now_s`, so the newest second's close is the newest tick that has
+/// arrived. None when any of those seconds has no tick (a restart, a feed
+/// gap): never a partial sum.
+fn band_close_sum(ps: &PriceState, first_end_s: f64, n: u32, now_s: f64) -> Option<f64> {
+    (0..n).try_fold(0.0, |sum, k| {
+        let end_s = first_end_s + f64::from(k);
+        band_tick_for_second(ps, end_s, (end_s + BAND_CLOSE_REACH_S).min(now_s))
+            .map(|(_, price)| sum + price)
+    })
+}
+
+/// The settlement strike on the Binance proxy
+/// (docs/adaptive_family_research_2026-10-01.md section 2, K =
+/// mean(P[W-60 .. W-1])): the mean of Binance's 60 one-second closes before
+/// the window open, the seconds ending at open - 59 ..= open
+/// (`band_close_sum`). None when the history does not cover all 60 (a
+/// restart less than a minute before the open, a feed gap): never a partial
+/// mean. Recorded only; no decision reads it.
+fn band_strike_60s(ps: &PriceState, open_ts: f64, now_s: f64) -> Option<f64> {
+    let first_end_s = open_ts - f64::from(BAND_SETTLE_TWAP_S - 1);
+    band_close_sum(ps, first_end_s, BAND_SETTLE_TWAP_S, now_s)
+        .map(|sum| sum / f64::from(BAND_SETTLE_TWAP_S))
+}
+
+/// The settlement-basis margin m_t at whole window second `t` (same
+/// section) on the current price `px`, as known at `now_s`: up to 240 s
+/// `px - strike`; past it the final 60 s mean with its elapsed seconds
+/// locked at their own closes (`band_close_sum` over the seconds ending at
+/// open + 241 ..= open + t) and the remaining `300 - t` held at `px`,
+/// minus the strike: (sum(P[W+240 .. W+t-1]) + (300 - t) px) / 60 - K.
+/// None past the window end or when a locked second has no close.
+fn band_settlement_margin(
+    ps: &PriceState,
+    open_ts: f64,
+    t: u32,
+    strike: f64,
+    px: f64,
+    now_s: f64,
+) -> Option<f64> {
+    let lock_s = BAND_SETTLE_WINDOW_S - BAND_SETTLE_TWAP_S;
+    if t <= lock_s {
+        return Some(px - strike);
+    }
+    let remaining = BAND_SETTLE_WINDOW_S.checked_sub(t)?;
+    let locked = band_close_sum(ps, open_ts + f64::from(lock_s + 1), t - lock_s, now_s)?;
+    Some((locked + f64::from(remaining) * px) / f64::from(BAND_SETTLE_TWAP_S) - strike)
+}
+
+/// The settlement-basis fields of a `band_ladder` sample or a `band_anchor`
+/// record, rounded as written.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct SettleRead {
+    /// The Binance tick covering the cycle: the last at or before it
+    /// (`band_tick_for_second` of the cycle's window second) - the price
+    /// the engine holds when it reads the books.
+    px: Option<f64>,
+    /// Seconds from that tick's event time to the cycle.
+    px_age: Option<f64>,
+    /// `band_settlement_margin` on that tick; null without a strike.
+    m: Option<f64>,
+}
+
+/// `SettleRead` of the cycle at `cycle_ts` (sub-second epoch seconds) in
+/// whole window second `t`. While the second's own closing tick has not
+/// arrived, `px` is the close before it (`px_age` over a second) and `m`
+/// is the margin of second `t - 1`. Pure: reads the cycle's price snapshot
+/// only.
+fn band_settle_read(
+    ps: &PriceState,
+    open_ts: f64,
+    t: u32,
+    strike: Option<f64>,
+    cycle_ts: f64,
+) -> SettleRead {
+    let Some((tick_ts, px)) = band_tick_for_second(ps, open_ts + f64::from(t), cycle_ts) else {
+        return SettleRead::default();
+    };
+    SettleRead {
+        px: Some(round_to(px, 4)),
+        px_age: Some(round_to(cycle_ts - tick_ts, 3)),
+        m: strike
+            .and_then(|strike| band_settlement_margin(ps, open_ts, t, strike, px, cycle_ts))
+            .map(|m| round_to(m, 4)),
+    }
+}
+
 /// Anchor gating for one contract: BTC 5-minute windows only, and only once
 /// the window is open (the contract list runs up to an hour ahead, and a
 /// not-yet-open window must not satisfy a `0` anchor). Returns the
@@ -6038,6 +6181,9 @@ struct LadderAcc {
     btc: f64,
     margin: Option<f64>,
     direction: Option<&'static str>,
+    /// `band_strike_60s` of the window, read when the accumulator is
+    /// created (the pre-open minute is final long before any anchor).
+    strike: Option<f64>,
     samples: Vec<serde_json::Value>,
     next_offset: u32,
     cycles: u32,
@@ -6052,9 +6198,21 @@ struct LadderAcc {
 /// FOK limit, the entry the evaluator prices - or null when no executable
 /// quote exists at that budget (no book, no asks, below the venue
 /// minimum). `c`: the complement's best ask (pair coherence), `age`: the
-/// sampled book's age (`live_book_age_seconds`), `fresh`: both books fresh
-/// with positive asks (`pick_book_prices`). Pure: reads the cycle's book
-/// snapshot only.
+/// sampled book's age (`live_book_age_seconds`) on the loop's whole-second
+/// clock `now_ts`, so it understates the true age by the cycle's fractional
+/// second (left as it has always been recorded: the evaluator's book-age
+/// gate reads it), `fresh`: both books fresh with positive asks
+/// (`pick_book_prices`). `px`, `px_age`, `m`: the sample second's
+/// `SettleRead`. A directional record quotes the other side too, on every
+/// sample: `sq` (the opposite token's book at each budget, as `q`), `sc`
+/// (the momentum token's best ask, its complement) and `sage` (that book's
+/// age on the sub-second cycle clock `cycle_ts`, the clock of `px_age`).
+/// Never gated on `m`: the settlement side is the evaluator's to derive
+/// (from its own closes), and a sample where the engine's `m` is null (no
+/// strike after a restart, a feed gap) or has flipped back to the momentum
+/// side is exactly where an entry on the other side loses. A no-direction
+/// record quotes both sides in `q` and carries none of the three keys.
+/// Pure: reads the cycle's book snapshot only.
 #[allow(clippy::too_many_arguments)]
 fn band_ladder_sample(
     c: &CandleContract,
@@ -6064,7 +6222,9 @@ fn band_ladder_sample(
     min_shares: f64,
     tick: f64,
     now_ts: f64,
+    cycle_ts: f64,
     offset: u32,
+    settle: &SettleRead,
 ) -> serde_json::Value {
     let quotes = |token_id: &str| -> serde_json::Value {
         budgets
@@ -6118,13 +6278,30 @@ fn band_ladder_sample(
             },
         ),
     };
-    json!({
+    let mut sample = json!({
         "t": offset,
         "q": q,
         "c": complement_ask,
         "age": book_age,
         "fresh": pick_book_prices(c, books, now_ts).is_some(),
-    })
+        "px": settle.px,
+        "px_age": settle.px_age,
+        "m": settle.m,
+    });
+    let other_side = match direction {
+        Some("up") => Some((&c.down_token_id, &c.up_token_id)),
+        Some("down") => Some((&c.up_token_id, &c.down_token_id)),
+        _ => None,
+    };
+    if let Some((token_id, complement_id)) = other_side {
+        sample["sq"] = quotes(token_id);
+        sample["sc"] = json!(best_ask(complement_id));
+        sample["sage"] = json!(books
+            .get(token_id)
+            .and_then(|b| live_book_age_seconds(cycle_ts, b.last_update_us))
+            .map(|a| round_to(a, 3)));
+    }
+    sample
 }
 
 /// Per-window band decision, made on the first cycle inside the entry
@@ -7829,6 +8006,7 @@ mod tests {
         let now_ts = Utc::now().timestamp() as f64;
         let c = band_anchor_contract("0xdepth", "2026-09-02T10:05:00Z");
         let budgets = [5.0, 25.0, 100.0];
+        let none = SettleRead::default();
         let thin = |size: f64| {
             let mut books = band_test_books(0.95, 0.06, now_ts);
             books.get_mut("up").unwrap().asks =
@@ -7838,14 +8016,36 @@ mod tests {
         // Three shares at 0.95, under the 5-share venue minimum: no
         // executable quote at any budget (null is monotone in the budget:
         // `live_buy_book_quote` sizes down to the visible depth first).
-        let s = band_ladder_sample(&c, Some("up"), &thin(3.0), &budgets, 5.0, 0.01, now_ts, 7);
+        let s = band_ladder_sample(
+            &c,
+            Some("up"),
+            &thin(3.0),
+            &budgets,
+            5.0,
+            0.01,
+            now_ts,
+            now_ts,
+            7,
+            &none,
+        );
         assert_eq!(s["t"], 7);
         assert_eq!(s["q"], json!([null, null, null]));
         assert_eq!(s["c"], 0.06);
         assert_eq!(s["fresh"], true);
         // Six shares: $5 clears (5.26 shares); $25 and $100 are capped at
         // the visible depth and flagged (a smaller FOK, never a bigger one).
-        let s = band_ladder_sample(&c, Some("up"), &thin(6.0), &budgets, 5.0, 0.01, now_ts, 0);
+        let s = band_ladder_sample(
+            &c,
+            Some("up"),
+            &thin(6.0),
+            &budgets,
+            5.0,
+            0.01,
+            now_ts,
+            now_ts,
+            0,
+            &none,
+        );
         assert_eq!(
             s["q"],
             json!([
@@ -7857,12 +8057,34 @@ mod tests {
         // No book on the momentum side: null quotes, no age, not fresh.
         let mut books = thin(6.0);
         books.remove("up");
-        let s = band_ladder_sample(&c, Some("up"), &books, &budgets, 5.0, 0.01, now_ts, 0);
+        let s = band_ladder_sample(
+            &c,
+            Some("up"),
+            &books,
+            &budgets,
+            5.0,
+            0.01,
+            now_ts,
+            now_ts,
+            0,
+            &none,
+        );
         assert_eq!(s["q"], json!([null, null, null]));
         assert_eq!(s["age"], serde_json::Value::Null);
         assert_eq!(s["fresh"], false);
         // No direction (btc == open): both sides, keyed, no complement.
-        let s = band_ladder_sample(&c, None, &thin(6.0), &budgets, 5.0, 0.01, now_ts, 0);
+        let s = band_ladder_sample(
+            &c,
+            None,
+            &thin(6.0),
+            &budgets,
+            5.0,
+            0.01,
+            now_ts,
+            now_ts,
+            0,
+            &none,
+        );
         assert_eq!(s["q"]["up"][0], json!([0.95, 0.95, 5.26, false]));
         assert_eq!(s["q"]["down"][2], json!([0.06, 0.06, 500.0, true]));
         assert_eq!(s["c"], serde_json::Value::Null);
@@ -7940,13 +8162,476 @@ mod tests {
         assert_eq!(samples[30]["t"], 30);
     }
 
-    /// Paper `Pipeline` with all six anchors, the three ladder budgets and
-    /// a pinned $100 paper bankroll (`band_test_settings` turns the anchors
-    /// off; the bankroll and the v1 book are pinned so `stake_usd` in the
-    /// anchor records never depends on the environment).
+    /// A 1 Hz Binance series over the seconds `seconds` of a window (second
+    /// 0 ends at the open), price `open + delta(k)`: the tick of second k
+    /// is that second's close, P[W+k-1] of the research spec, stamped
+    /// `stamp_ms` after the second's end (0: on the whole second; the live
+    /// ticker stamps a few tens of ms after it). The window opened 400 s
+    /// ago, so every tick lies inside the clamp window. Returns the series
+    /// and the open's epoch second.
+    fn settle_series(
+        open: f64,
+        seconds: impl IntoIterator<Item = i64>,
+        stamp_ms: i64,
+        delta: impl Fn(i64) -> f64,
+    ) -> (PriceState, f64) {
+        let open_s = Utc::now().timestamp() - 400;
+        let mut ps = PriceState::new();
+        for k in seconds {
+            ps.update_at("binance", open + delta(k), (open_s + k) * 1_000 + stamp_ms);
+        }
+        (ps, open_s as f64)
+    }
+
+    #[test]
+    fn band_strike_is_the_mean_of_the_sixty_closes_before_the_open() {
+        let open = 110_000.0;
+        // Second k closes at open + k over the strike's 60 seconds (-59 ..=
+        // 0, mean -29.5); the seconds around them are far off, so a strike
+        // that read second -60 or second 1 would show it.
+        let delta = |k: i64| {
+            if (-59..=0).contains(&k) {
+                k as f64
+            } else {
+                10_000.0
+            }
+        };
+        let strike = |ps: &PriceState, open_ts: f64| band_strike_60s(ps, open_ts, open_ts + 120.0);
+        let (ps, open_ts) = settle_series(open, -70..=10, 0, delta);
+        assert_eq!(strike(&ps, open_ts), Some(open - 29.5));
+        // The same 60 seconds wherever the ticker stamps its ticks inside
+        // half a second of the second's end. The live ticker stamps them
+        // just after it (+30 ms here): the last tick at or before a whole
+        // second is then the close of the second BEFORE it, and a strike
+        // read that way would take second -60 for second -59.
+        for stamp_ms in [30, 400, -250] {
+            let (ps, open_ts) = settle_series(open, -70..=10, stamp_ms, delta);
+            assert_eq!(strike(&ps, open_ts), Some(open - 29.5), "stamp {stamp_ms}");
+        }
+        // A history that begins at second -59 still covers it; one that
+        // begins a second later (a restart inside the minute) does not.
+        let (ps, open_ts) = settle_series(open, -59..=10, 0, delta);
+        assert_eq!(strike(&ps, open_ts), Some(open - 29.5));
+        let (ps, open_ts) = settle_series(open, -58..=10, 0, delta);
+        assert_eq!(strike(&ps, open_ts), None);
+        assert_eq!(strike(&PriceState::new(), open_ts), None);
+        // Missed ticks carry the close before them forward while the gap
+        // stays inside the basis tolerance (second -30 missing: -31 for
+        // -30, the sum drops by one; -30 and -29 missing: by three); a
+        // longer gap (-30 ..= -28) leaves the strike uncovered.
+        for (missing, sum) in [(-30..=-30, -1_771.0), (-30..=-29, -1_773.0)] {
+            let (ps, open_ts) =
+                settle_series(open, (-70..=10).filter(|k| !missing.contains(k)), 30, delta);
+            let got = strike(&ps, open_ts).unwrap();
+            assert!(
+                (got - (open + sum / 60.0)).abs() < 1e-9,
+                "{missing:?} {got}"
+            );
+        }
+        let (ps, open_ts) = settle_series(
+            open,
+            (-70..=10).filter(|k| !(-30..=-28).contains(k)),
+            30,
+            delta,
+        );
+        assert_eq!(strike(&ps, open_ts), None);
+    }
+
+    /// m_t against fixtures computed by hand and by the research replay's
+    /// own formula (`state()` of the 2026-10-01 synthesis, numpy on the
+    /// same closes): up to 240 s the close against the strike, past it the
+    /// final minute's locked closes plus the remaining seconds at the
+    /// current close.
+    #[test]
+    fn band_settlement_margin_before_and_after_the_lock() {
+        let open = 110_000.0;
+        // A cycle `after` seconds into window second t.
+        let read_at = |ps: &PriceState, open_ts: f64, t: u32, after: f64| {
+            let cycle_ts = open_ts + f64::from(t) + after;
+            let strike = band_strike_60s(ps, open_ts, cycle_ts);
+            band_settle_read(ps, open_ts, t, strike, cycle_ts)
+        };
+        let read = |ps: &PriceState, open_ts: f64, t: u32| read_at(ps, open_ts, t, 0.35);
+        // Linear: k before the open (strike open - 29.5), 2k inside it.
+        //   t = 270: locked sum(2j, j = 241..=270) = 15,330, 30 s held at
+        //   540: (15,330 + 16,200) / 60 = 525.5, plus 29.5.
+        //   t = 300: sum(2j, j = 241..=300) / 60 = 541, plus 29.5.
+        let linear = |k: i64| if k <= 0 { k as f64 } else { 2.0 * k as f64 };
+        let (ps, open_ts) = settle_series(open, -70..=301, 0, linear);
+        for (t, px, m) in [
+            (120, 240.0, 269.5),
+            (150, 300.0, 329.5),
+            (239, 478.0, 507.5),
+            (240, 480.0, 509.5),
+            (241, 482.0, 511.5),
+            (242, 484.0, 513.4667),
+            (255, 510.0, 536.0),
+            (270, 540.0, 555.0),
+            (299, 598.0, 570.4667),
+            (300, 600.0, 570.5),
+        ] {
+            assert_eq!(
+                read(&ps, open_ts, t),
+                SettleRead {
+                    px: Some(open + px),
+                    px_age: Some(0.35),
+                    m: Some(m),
+                },
+                "linear t={t}"
+            );
+        }
+        // Past the window end the tick is still read, the margin is not.
+        let after = read(&ps, open_ts, 301);
+        assert_eq!((after.px, after.m), (Some(open + 602.0), None));
+        // Sawtooth: (37k mod 101) - 50 on every second, strike open - 0.2.
+        //   t = 242: closes -21 (241) and 16 (242) locked, 58 s held at
+        //   16: (-21 + 59 x 16) / 60 = 15.3833, plus 0.2.
+        let saw = |k: i64| ((k * 37).rem_euclid(101) - 50) as f64;
+        let spec = [
+            (120, 47.0, 47.2),
+            (150, 46.0, 46.2),
+            (239, 6.0, 6.2),
+            (240, 43.0, 43.2),
+            (241, -21.0, -20.8),
+            (242, 16.0, 15.5833),
+            (255, -8.0, -6.9),
+            (270, 42.0, 21.4),
+            (299, 4.0, -0.5167),
+            (300, 41.0, 0.1),
+        ];
+        let (ps, open_ts) = settle_series(open, -70..=301, 0, saw);
+        let strike = band_strike_60s(&ps, open_ts, open_ts + 120.0).unwrap();
+        assert!((strike - (open - 0.2)).abs() < 1e-9, "{strike}");
+        for (t, px, m) in spec {
+            let got = read(&ps, open_ts, t);
+            assert_eq!((got.px, got.m), (Some(open + px), Some(m)), "saw t={t}");
+        }
+        // The live ticker's stamps, 30 ms after each second's end. A cycle
+        // 100 ms into second t holds that second's close (70 ms old): the
+        // spec's m_t. A cycle 20 ms into it does not yet: it holds the
+        // close before (990 ms old), and its margin is the spec's m_(t-1),
+        // locked seconds included - nothing from the future, nothing lost.
+        let (live, open_ts) = settle_series(open, -70..=301, 30, saw);
+        for (t, px, m) in spec {
+            assert_eq!(
+                read_at(&live, open_ts, t, 0.1),
+                SettleRead {
+                    px: Some(open + px),
+                    px_age: Some(0.07),
+                    m: Some(m),
+                },
+                "live t={t}"
+            );
+        }
+        for (before, now) in [(&spec[3], 241), (&spec[4], 242)] {
+            assert_eq!(
+                read_at(&live, open_ts, now, 0.02),
+                SettleRead {
+                    px: Some(open + before.1),
+                    px_age: Some(0.99),
+                    m: Some(before.2),
+                },
+                "live, early cycle of t={now}"
+            );
+        }
+        // No strike (the history starts inside the pre-open minute): the
+        // tick and its age are still recorded, the margin is null.
+        let (restart, open_ts) = settle_series(open, -20..=301, 0, saw);
+        assert_eq!(
+            read(&restart, open_ts, 240),
+            SettleRead {
+                px: Some(open + 43.0),
+                px_age: Some(0.35),
+                m: None,
+            }
+        );
+        // A feed gap inside the locked minute (250 ..= 255 missing): no
+        // margin once a locked second has no close, the margin before the
+        // gap and the tick after it unaffected; inside the gap, past the
+        // basis tolerance, nothing is read.
+        let (gap, open_ts) = settle_series(
+            open,
+            (-70..=301).filter(|k| !(250..=255).contains(k)),
+            0,
+            saw,
+        );
+        assert!(read(&gap, open_ts, 249).m.is_some());
+        let after_gap = read(&gap, open_ts, 270);
+        assert_eq!((after_gap.px, after_gap.m), (Some(open + 42.0), None));
+        assert_eq!(read(&gap, open_ts, 253), SettleRead::default());
+    }
+
+    /// A directional record quotes the other side beside the momentum side
+    /// on every sample, whatever the settlement margin reads; every earlier
+    /// field is untouched.
+    #[test]
+    fn band_ladder_sample_quotes_the_other_side_of_a_directional_record() {
+        let now_ts = Utc::now().timestamp() as f64;
+        // The cycle runs 300 ms into the loop's whole second.
+        let cycle_ts = now_ts + 0.3;
+        let c = band_anchor_contract("0xsettle", "2026-09-02T10:05:00Z");
+        let budgets = [5.0, 25.0, 100.0];
+        let mut books = band_test_books(0.95, 0.06, now_ts);
+        // The DOWN book last changed 900 ms before the second boundary.
+        books.get_mut("down").unwrap().last_update_us -= 900_000;
+        type Books = HashMap<String, crate::polymarket_ws::TokenBookState>;
+        let sample = |books: &Books, direction: Option<&str>, m: Option<f64>| {
+            let settle = SettleRead {
+                px: Some(110_012.34),
+                px_age: Some(0.412),
+                m,
+            };
+            band_ladder_sample(
+                &c, direction, books, &budgets, 5.0, 0.01, now_ts, cycle_ts, 3, &settle,
+            )
+        };
+        let has_other_side =
+            |s: &serde_json::Value| ["sq", "sc", "sage"].map(|key| s.get(key).is_some());
+        let both = sample(&books, None, Some(-12.5));
+        let before = band_ladder_sample(
+            &c,
+            Some("up"),
+            &books,
+            &budgets,
+            5.0,
+            0.01,
+            now_ts,
+            cycle_ts,
+            3,
+            &SettleRead::default(),
+        );
+
+        // Momentum UP: the DOWN book at every budget and the UP best ask
+        // as its complement, on a settlement margin of either sign, on a
+        // tie and without one (no strike, a feed gap). A margin back on
+        // the momentum side one sample after a DOWN signal is where a DOWN
+        // entry loses: its book must be on the record there too.
+        for m in [Some(-12.5), Some(12.5), Some(0.0), None] {
+            let s = sample(&books, Some("up"), m);
+            assert_eq!(has_other_side(&s), [true; 3], "{m:?}");
+            assert_eq!(s["sq"], both["q"]["down"], "{m:?}");
+            assert_eq!(s["sq"][0], json!([0.06, 0.06, 83.33, false]));
+            assert_eq!(s["sc"], 0.95);
+            assert_eq!(
+                (&s["px"], &s["px_age"], &s["m"]),
+                (&json!(110_012.34), &json!(0.412), &json!(m))
+            );
+            // The momentum side's fields are what they were before the
+            // other side was recorded.
+            for key in ["t", "q", "c", "age", "fresh"] {
+                assert_eq!(s[key], before[key], "{key} {m:?}");
+            }
+            assert_eq!(s["q"], both["q"]["up"]);
+            assert_eq!((&s["c"], &s["age"]), (&json!(0.06), &json!(0.0)));
+            // `sage` is on the cycle's own clock: 0.9 s before the second
+            // boundary plus the 0.3 s the cycle runs into the second. The
+            // whole-second clock of `age` would say 0.9 and pass a 1 s
+            // gate; the UP book, updated on the boundary, is 0.3 s old and
+            // its `age` reads 0.
+            assert_eq!(s["sage"], 1.2, "{m:?}");
+        }
+        assert_eq!(
+            (&before["px"], &before["px_age"], &before["m"]),
+            (&json!(null), &json!(null), &json!(null))
+        );
+        assert_eq!(has_other_side(&before), [true; 3]);
+        // Momentum DOWN: the UP book, the DOWN best ask as its complement.
+        for m in [Some(12.5), Some(0.0), Some(-12.5), None] {
+            let s = sample(&books, Some("down"), m);
+            assert_eq!(s["sq"], both["q"]["up"], "{m:?}");
+            assert_eq!((&s["sc"], &s["sage"]), (&json!(0.06), &json!(0.3)), "{m:?}");
+            assert_eq!(s["q"], both["q"]["down"], "{m:?}");
+            assert_eq!((&s["c"], &s["age"]), (&json!(0.95), &json!(0.9)), "{m:?}");
+        }
+        // A no-direction record has both sides in `q` already: the three
+        // keys are absent.
+        for m in [Some(-12.5), None] {
+            assert_eq!(
+                has_other_side(&sample(&books, None, m)),
+                [false; 3],
+                "{m:?}"
+            );
+        }
+        // A venue stamp ahead of the local clock is skew, not age.
+        books.get_mut("down").unwrap().last_update_us += 1_500_000;
+        assert_eq!(sample(&books, Some("up"), None)["sage"], 0.0);
+        // No book on the other side: null quotes and age, never a missing
+        // key.
+        books.remove("down");
+        let s = sample(&books, Some("up"), Some(-1.0));
+        assert_eq!(s["sq"], json!([null, null, null]));
+        assert_eq!(s["sc"], 0.95);
+        assert_eq!(s["sage"], serde_json::Value::Null);
+    }
+
+    /// `band_ladder_window` behind a covered pre-open minute: 1 Hz Binance
+    /// ticks at `open + pre_open` over the 70 s before the open's own tick
+    /// (at `open`, 300 ms before the open), so the 60 s strike is `open +
+    /// 59 x pre_open / 60`.
+    fn band_ladder_window_with_strike(
+        cid: &str,
+        open: f64,
+        pre_open: f64,
+    ) -> (CandleContract, PriceState) {
+        use chrono::Timelike;
+        let end = Utc::now().with_nanosecond(0).unwrap() + chrono::Duration::seconds(30);
+        let c = band_window_ending(cid, end);
+        let open_ms = (end - chrono::Duration::seconds(300)).timestamp_millis();
+        let decision_ms = open_ms + 240_000;
+        let mut ps = PriceState::new();
+        for k in -70..0 {
+            ps.update_at("binance", open + pre_open, open_ms + k * 1_000);
+        }
+        ps.update_at("binance", open, open_ms - 300);
+        ps.update_at("binance", open + 60.0, decision_ms - 300);
+        ps.update_at("binance", open + 61.0, decision_ms + 400);
+        (c, ps)
+    }
+
+    /// The 2026-10-01 finding the fields exist for: the momentum side (the
+    /// 240 s close against the open, UP by 60) and the settlement side
+    /// (the same close against a 60 s strike 88.5 above the open, DOWN by
+    /// 28.5) disagree, and the ladder used to show the UP book only. The
+    /// DOWN book stays on the record when the margin flips back to the
+    /// momentum side between two samples and when it cannot be read.
+    #[tokio::test]
+    async fn band_records_carry_the_strike_and_the_settlement_side() {
+        let tmp = TempDir::new().unwrap();
+        let p = band_ladder_test_pipeline(&tmp).await;
+        let open = 110_000.0;
+        let cid = "0xsettle-side";
+        let (c, mut ps) = band_ladder_window_with_strike(cid, open, 90.0);
+        let contracts = vec![c.clone()];
+        // A jump through the strike at a+2.0: the last Binance tick.
+        ps.update_at(
+            "binance",
+            open + 150.0,
+            past_anchor(&c, 2_000).timestamp_millis(),
+        );
+        // Cycles at a+0.3, a+1.2, a+2.9, a+5.5; second 245 has no tick
+        // inside the basis tolerance.
+        for ms in [300, 1_200, 2_900, 5_500] {
+            let now = past_anchor(&c, ms);
+            let now_ts = now.timestamp() as f64;
+            let books = band_test_books(0.94, 0.07, now_ts);
+            p.capture_band_anchors(&c, &contracts, &books, &ps, now, now_ts)
+                .await;
+            ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+        }
+        let now = past_anchor(&c, 31_000);
+        let books = band_test_books(0.94, 0.07, now.timestamp() as f64);
+        ladder_cycle(&p, &c, &contracts, &ps, now, &books).await;
+
+        let anchors = band_records_of(&p, "band_anchor", cid);
+        assert_eq!(anchors.len(), 1);
+        let a = &anchors[0];
+        // The open basis, as before...
+        assert_eq!(
+            (
+                &a["basis"],
+                &a["open"],
+                &a["btc"],
+                &a["margin"],
+                &a["direction"]
+            ),
+            (
+                &json!("binance"),
+                &json!(open),
+                &json!(open + 60.0),
+                &json!(60.0),
+                &json!("up")
+            )
+        );
+        // ...and the settlement basis beside it.
+        assert_eq!(a["strike_60s"], open + 88.5);
+        assert_eq!((&a["px"], &a["px_age"]), (&json!(open + 60.0), &json!(0.6)));
+        assert_eq!(a["m"], -28.5);
+
+        let ladders = band_records_of(&p, "band_ladder", cid);
+        assert_eq!(ladders.len(), 1);
+        let r = &ladders[0];
+        assert_eq!(
+            (
+                &r["basis"],
+                &r["open"],
+                &r["btc"],
+                &r["margin"],
+                &r["direction"]
+            ),
+            (
+                &json!("binance"),
+                &json!(open),
+                &json!(open + 60.0),
+                &json!(60.0),
+                &json!("up")
+            )
+        );
+        assert_eq!(r["strike_60s"], open + 88.5);
+        let samples = r["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), 4);
+        // t = 0: the tick 300 ms before the decision second, read at a+0.3:
+        // DOWN by 28.5.
+        // t = 1: the tick at a+0.4 closes second 241, locked and held at
+        // the same price: (61 x 60) / 60 - 88.5, still DOWN.
+        // t = 2: the a+2.0 tick closes second 242 and holds the 58 s left:
+        // (61 + 59 x 150) / 60 - 88.5, back UP within one second of a DOWN
+        // margin.
+        // t = 5: no tick within the basis tolerance of second 245.
+        for (s, (t, px, px_age, m, sage)) in samples.iter().zip([
+            (0, json!(open + 60.0), json!(0.6), json!(-28.5), 0.3),
+            (1, json!(open + 61.0), json!(0.8), json!(-27.5), 0.2),
+            (2, json!(open + 150.0), json!(0.9), json!(60.0167), 0.9),
+            (5, json!(null), json!(null), json!(null), 0.5),
+        ]) {
+            assert_eq!(s["t"], t);
+            assert_eq!((&s["px"], &s["px_age"], &s["m"]), (&px, &px_age, &m), "{s}");
+            // The momentum (UP) book, exactly as before.
+            assert_eq!(s["q"][1], json!([0.94, 0.94, 26.59, false]), "{s}");
+            assert_eq!((&s["c"], &s["age"]), (&json!(0.07), &json!(0.0)), "{s}");
+            // The other (DOWN) book on every sample: where the margin says
+            // DOWN, where it has flipped back and where it is unknown. Its
+            // age is the cycle's distance into the second (the books are
+            // stamped on the whole second).
+            assert_eq!(s["sq"][1], json!([0.07, 0.07, 357.14, false]), "{s}");
+            assert_eq!(s["sc"], 0.94);
+            assert_eq!(s["sage"], sage, "{s}");
+        }
+
+        // A restart inside the pre-open minute (`band_ladder_window`: the
+        // history starts 300 ms before the open): null strike and margin,
+        // the tick still recorded, and the other side's book with it (the
+        // evaluator's own closes may still put the settlement side there).
+        let (restart, ps) = band_ladder_window("0xrestart", open);
+        let contracts = vec![restart.clone()];
+        let now = past_anchor(&restart, 300);
+        let now_ts = now.timestamp() as f64;
+        let books = band_test_books(0.94, 0.07, now_ts);
+        p.capture_band_anchors(&restart, &contracts, &books, &ps, now, now_ts)
+            .await;
+        ladder_cycle(&p, &restart, &contracts, &ps, now, &books).await;
+        let anchors = band_records_of(&p, "band_anchor", "0xrestart");
+        assert_eq!(anchors[0]["margin"], 60.0);
+        assert_eq!(anchors[0]["strike_60s"], serde_json::Value::Null);
+        assert_eq!(anchors[0]["m"], serde_json::Value::Null);
+        let ladder = p.band_ladder.lock().await;
+        let acc = ladder.get(&("0xrestart".to_string(), 240)).unwrap();
+        assert_eq!(acc.strike, None);
+        let s = &acc.samples[0];
+        assert_eq!(
+            (&s["px"], &s["px_age"], &s["m"]),
+            (&json!(open + 60.0), &json!(0.6), &json!(null))
+        );
+        assert_eq!(s["sq"][1], json!([0.07, 0.07, 357.14, false]), "{s}");
+        assert_eq!((&s["sc"], &s["sage"]), (&json!(0.94), &json!(0.3)), "{s}");
+    }
+
+    /// Paper `Pipeline` with the five default anchors, the three ladder
+    /// budgets and a pinned $100 paper bankroll (`band_test_settings` turns
+    /// the anchors off; the bankroll and the v1 book are pinned so
+    /// `stake_usd` in the anchor records never depends on the environment).
     async fn band_replay_pipeline(tmp: &TempDir) -> Arc<Pipeline> {
         let mut settings = band_test_settings(tmp, &band_params());
-        settings.band_anchor_seconds = vec![150.0, 180.0, 195.0, 210.0, 225.0, 240.0];
+        settings.band_anchor_seconds = vec![120.0, 150.0, 180.0, 210.0, 240.0];
         settings.band_ladder_budgets_usd = vec![5.0, 25.0, 100.0];
         settings.band_host_label = "replay".to_string();
         settings.bankroll_usd = 100.0;
@@ -7956,10 +8641,14 @@ mod tests {
 
     /// The replay's Binance close at whole second `k` of the window:
     /// `open + delta`, piecewise linear through +80 at 150 s, +55 at 180 s,
-    /// exactly 0 at 210 s (no direction), -70 at 240 s and -40 at 300 s.
+    /// exactly 0 at 210 s (no direction), -70 at 240 s and -40 at 300 s;
+    /// before the open (`k` < 0) a flat +20, so the 60 s strike (59 closes
+    /// at +20 and the open's own at 0) is `open` + 19.6667.
     fn replay_binance_price(open: f64, k: i64) -> f64 {
         let k = k as f64;
-        let delta = if k <= 150.0 {
+        let delta = if k < 0.0 {
+            20.0
+        } else if k <= 150.0 {
             80.0 * k / 150.0
         } else if k <= 180.0 {
             80.0 - 25.0 * (k - 150.0) / 30.0
@@ -8060,7 +8749,19 @@ mod tests {
     /// each an anchor record and a ladder record (12 records, not 8); the
     /// four original anchors' records are byte-identical (dropping the
     /// 195/225 records from the `BAND_LADDER_REPLAY_DUMP` output hashes
-    /// to the previous digest ef89c729...). It pins record shape and
+    /// to the previous digest ef89c729...). Re-pinned 2026-10-01 (from
+    /// 360ebb42...) for two changes, checked on the dumps of both trees.
+    /// The anchors are 120/150/180/210/240 (`DEFAULT_BAND_ANCHOR_SECONDS`:
+    /// 195 and 225 dropped, 120 added; 10 records, not 12). The records
+    /// gained the settlement-basis fields: `strike_60s` on both types;
+    /// `px`, `px_age` and `m` on `band_anchor` and on every ladder sample;
+    /// and `sq`, `sc`, `sage` (the other side's book, `sage` on the
+    /// sub-second cycle clock) on every sample of a directional record
+    /// (the replay now delivers the pre-open minute, so the strike is
+    /// covered). Every earlier field is byte-identical: the
+    /// new dump without the 120 s records and without those keys is the
+    /// old dump without its 195/225 records, and both hash to ef89c729...
+    /// again. It pins record shape and
     /// quote mechanics under the fixed-stake fixture (`band_params`:
     /// kelly_q_lo 0, stake_usd 5, position_pct 1.0, $100 on the v1 book,
     /// where anchor `stake_usd` = `quote_budget_usd` = 5 before and after
@@ -8073,7 +8774,7 @@ mod tests {
     /// deletion step that moves the digest changed the records' shape or
     /// quotes.
     const BAND_LADDER_REPLAY_DIGEST: &str =
-        "360ebb423cba54c398498231250170dcfe9796dad42ee28b9518fdc830c1a69f";
+        "2a85ec40e7b7f0af419e6fd59d345e97438002b64882abf4479a49fbe78209bd";
 
     /// Replay fixture for the basement's engine cut
     /// (docs/profitability_basement_2026-09-18.md, E row 3: byte-identical
@@ -8083,9 +8784,10 @@ mod tests {
     /// (`replay_binance_price`) arrive 600 ms after their event second, so
     /// every anchor waits one cycle for its covering tick; the book is a
     /// pure function of the window second (`replay_books`); the loop
-    /// stalls over (243.0, 246.2) s inside the 240 s and 225 s spans. The
-    /// six anchors read UP (+80), UP (+55), UP (+27.5), no direction (0),
-    /// DOWN (-35) and DOWN (-70).
+    /// stalls over (243.0, 246.2) s inside the 240 s span. The five
+    /// anchors read UP (+64), UP (+80), UP (+55), no direction (0) and
+    /// DOWN (-70) on the open; against the 60 s strike (open + 19.6667)
+    /// the 180 s span turns DOWN from 201 s while its record stays UP.
     /// The records, in log order with `ts`/`ts_iso` stripped, are checked
     /// in shape and then as one digest against
     /// `BAND_LADDER_REPLAY_DIGEST`; `BAND_LADDER_REPLAY_DUMP=<path>` writes
@@ -8107,6 +8809,15 @@ mod tests {
         let open_dt = end - chrono::Duration::seconds(300);
         let open_ms = open_dt.timestamp_millis();
         let mut ps = PriceState::new();
+        // The pre-open minute (and ten seconds more) is history before the
+        // first cycle: the strike is covered.
+        for k in -70..0 {
+            ps.update_at(
+                "binance",
+                replay_binance_price(open, k),
+                open_ms + k * 1_000,
+            );
+        }
         let mut delivered: i64 = -1;
         for i in 0.. {
             let elapsed_ms: i64 = 100 + 250 * i;
@@ -8147,8 +8858,8 @@ mod tests {
             })
             .collect();
         // Log order: each anchor is captured at a + 0.6 s (the covering
-        // tick), each ladder flushed at a + 31 s; ladders 15 s apart
-        // overlap (the accumulator is keyed by anchor).
+        // tick), each ladder flushed at a + 31 s, after the next anchor's
+        // capture (the accumulator is keyed by anchor).
         let shape: Vec<(&str, u64)> = records
             .iter()
             .map(|r| (r["type"].as_str().unwrap(), r["anchor_s"].as_u64().unwrap()))
@@ -8156,17 +8867,15 @@ mod tests {
         assert_eq!(
             shape,
             [
+                ("band_anchor", 120),
                 ("band_anchor", 150),
+                ("band_ladder", 120),
                 ("band_anchor", 180),
                 ("band_ladder", 150),
-                ("band_anchor", 195),
                 ("band_anchor", 210),
                 ("band_ladder", 180),
-                ("band_anchor", 225),
-                ("band_ladder", 195),
                 ("band_anchor", 240),
                 ("band_ladder", 210),
-                ("band_ladder", 225),
                 ("band_ladder", 240),
             ]
         );
@@ -8178,13 +8887,16 @@ mod tests {
             .iter()
             .filter(|r| r["type"] == "band_ladder")
             .collect();
-        for (r, (a, direction, margin)) in anchors.iter().zip([
-            (150.0, json!("up"), json!(80.0)),
-            (180.0, json!("up"), json!(55.0)),
-            (195.0, json!("up"), json!(27.5)),
-            (210.0, json!(null), json!(0.0)),
-            (225.0, json!("down"), json!(-35.0)),
-            (240.0, json!("down"), json!(-70.0)),
+        // `m`: the anchor second's close against the strike (open + 59 x
+        // 20 / 60), on the settlement basis where `margin` is on the open;
+        // `px` is the covering tick the capture waited for, 0.6 s old (on
+        // whole-second stamps the same tick as `btc`).
+        for (r, (a, direction, margin, m)) in anchors.iter().zip([
+            (120.0, json!("up"), json!(64.0), 44.3333),
+            (150.0, json!("up"), json!(80.0), 60.3333),
+            (180.0, json!("up"), json!(55.0), 35.3333),
+            (210.0, json!(null), json!(0.0), -19.6667),
+            (240.0, json!("down"), json!(-70.0), -89.6667),
         ]) {
             assert_eq!(r["cid"], cid);
             assert_eq!(r["elapsed_s"], a + 0.6);
@@ -8192,28 +8904,29 @@ mod tests {
             assert_eq!(r["open"], open);
             assert_eq!(r["direction"], direction, "{r}");
             assert_eq!(r["margin"], margin, "{r}");
+            assert_eq!(r["strike_60s"], 110019.6667, "{r}");
+            assert_eq!(r["px"], r["btc"], "{r}");
+            assert_eq!(r["px_age"], 0.6);
+            assert_eq!(r["m"], m, "{r}");
             assert_eq!(r["stake_usd"], 5.0);
             assert_eq!(r["quote_budget_usd"], 5.0);
             assert_eq!(r["pair_sum"], 1.01);
         }
         // Depth phases at the anchor seconds: 150 % 7 = 3 (quoted), 210 % 7
         // = 0 (three shares: no executable quote, best ask still recorded),
-        // 195 % 7 = 6 (the $5 quote walks a level: 5 + 3 shares), 225 % 7
-        // = 1 (six shares: the $5 quote takes them all at the touch).
-        assert_eq!(anchors[0]["up"]["worst"], 0.9);
+        // 120 % 7 = 1 (six shares: the $5 quote takes them all at the
+        // touch).
+        assert_eq!(anchors[1]["up"]["worst"], 0.9);
         assert_eq!(anchors[3]["up"]["worst"], serde_json::Value::Null);
         assert_eq!(anchors[3]["up"]["best_ask"], 0.5);
         assert_eq!(
-            (anchors[2]["up"]["best_ask"].as_f64(), anchors[2]["up"]["worst"].as_f64()),
-            (Some(0.64), Some(0.65)),
+            (
+                anchors[0]["up"]["worst"].as_f64(),
+                anchors[0]["up"]["shares"].as_f64()
+            ),
+            (Some(0.82), Some(6.0)),
             "{}",
-            anchors[2]
-        );
-        assert_eq!(
-            (anchors[4]["down"]["worst"].as_f64(), anchors[4]["down"]["shares"].as_f64()),
-            (Some(0.68), Some(6.0)),
-            "{}",
-            anchors[4]
+            anchors[0]
         );
         for (r, (direction, samples)) in ladders.iter().zip([
             (json!("up"), 31),
@@ -8221,39 +8934,26 @@ mod tests {
             (json!("up"), 31),
             (json!(null), 31),
             (json!("down"), 28),
-            (json!("down"), 28),
         ]) {
             assert_eq!(r["cid"], cid);
             assert_eq!(r["basis"], "binance");
             assert_eq!(r["direction"], direction, "{r}");
+            assert_eq!(r["strike_60s"], 110019.6667, "{r}");
             assert_eq!(r["budgets_usd"], json!([5.0, 25.0, 100.0]));
             assert_eq!(r["host"], "replay");
             assert_eq!(r["samples"].as_array().unwrap().len(), samples, "{r}");
         }
-        // The stall: offsets 3, 4 and 5 of the 240 s span (18, 19 and 20
-        // of the 225 s span) are absent and the largest cycle gap is
-        // 246.35 - 242.85 in both.
-        let offsets: Vec<u64> = ladders[5]["samples"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s["t"].as_u64().unwrap())
-            .collect();
+        // The stall: offsets 3, 4 and 5 of the 240 s span are absent and
+        // the largest cycle gap is 246.35 - 242.85.
+        let s240 = ladders[4]["samples"].as_array().unwrap();
+        let offsets: Vec<u64> = s240.iter().map(|s| s["t"].as_u64().unwrap()).collect();
         assert_eq!(offsets[..4], [0, 1, 2, 6]);
-        assert_eq!(ladders[5]["max_gap_s"], 3.5);
-        let offsets_225: Vec<u64> = ladders[4]["samples"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s["t"].as_u64().unwrap())
-            .collect();
-        assert_eq!(offsets_225[16..20], [16, 17, 21, 22]);
         assert_eq!(ladders[4]["max_gap_s"], 3.5);
         assert_eq!(ladders[0]["max_gap_s"], 0.25);
         // Depth phases along the 150 s span: t = 1 (151 % 7 = 4) clears
         // every budget, t = 4 (154 % 7 = 0) quotes none, t = 5 (155 % 7 =
         // 1) clears $5 only; the no-direction ladder quotes both sides.
-        let s150 = ladders[0]["samples"].as_array().unwrap();
+        let s150 = ladders[1]["samples"].as_array().unwrap();
         assert_eq!(s150[1]["q"][2][3], false, "{}", s150[1]);
         assert_eq!(s150[4]["q"], json!([null, null, null]));
         assert_eq!(s150[5]["q"][0][3], false, "{}", s150[5]);
@@ -8261,6 +8961,62 @@ mod tests {
         assert_eq!(s150[5]["q"][2][3], true, "{}", s150[5]);
         assert!(ladders[3]["samples"][0]["q"]["up"].is_array());
         assert!(ladders[3]["samples"][0]["q"]["down"].is_array());
+        // The covering tick: t = 0 is sampled on the anchor's own tick
+        // (0.6 s old); every later first-cycle sample at a + k + 0.1 s
+        // precedes its second's tick and reads the one before it (1.1 s).
+        assert_eq!(
+            (&s150[0]["px"], &s150[0]["px_age"]),
+            (&json!(110_080.0), &json!(0.6))
+        );
+        assert_eq!(
+            (&s150[1]["px"], &s150[1]["px_age"]),
+            (&json!(110_080.0), &json!(1.1))
+        );
+        assert_eq!(s150[0]["m"], 60.3333);
+        // The other side of every directional span, on every sample; the
+        // no-direction span has both sides in `q` and none of the keys.
+        for (i, r) in ladders.iter().enumerate() {
+            for s in r["samples"].as_array().unwrap() {
+                let other_keys = ["sq", "sc", "sage"].map(|key| s.get(key).is_some());
+                assert_eq!(other_keys, [i != 3; 3], "{s}");
+            }
+        }
+        // Settlement side against the momentum side, along the 180 s span
+        // (UP at +55, falling to 0 at 210 s): from t = 21 the tick read is
+        // at or below 200 s (+18.3333), under the strike, and the DOWN
+        // book is there beside the UP one, as it is before the crossing:
+        // `sq` at the DOWN touch 0.43 (201 % 7 = 5: three 12-share
+        // levels), `sc` the UP best ask.
+        let s180 = ladders[2]["samples"].as_array().unwrap();
+        assert_eq!(s180[20]["m"], 0.5);
+        assert_eq!(s180[21]["m"], -1.3333);
+        assert_eq!(s180[20]["sq"][0][0], 0.42, "{}", s180[20]);
+        assert_eq!(s180[21]["q"][0][0], 0.58, "{}", s180[21]);
+        assert_eq!(s180[21]["c"], 0.43);
+        assert_eq!(s180[21]["sq"][0], json!([0.43, 0.43, 11.62, false]));
+        assert_eq!(s180[21]["sq"][2][3], true, "{}", s180[21]);
+        assert_eq!(s180[21]["sc"], 0.58);
+        // Two clocks: the sampling cycle runs 100 ms into its second, the
+        // books are stamped 0 / 0.25 / 0.5 s before the whole second (201
+        // % 3 = 0, 202 % 3 = 1). `age` is on the whole-second clock,
+        // `sage` on the cycle's, the clock of `px_age`.
+        assert_eq!(
+            (&s180[21]["age"], &s180[21]["sage"]),
+            (&json!(0.0), &json!(0.1))
+        );
+        assert_eq!(
+            (&s180[22]["age"], &s180[22]["sage"]),
+            (&json!(0.25), &json!(0.35))
+        );
+        // Past 240 s the final minute locks second by second. t = 1 and 2
+        // read the 240 s and 241 s ticks (the staleness above), which lock
+        // the same close they hold: -70 and -69.5 against the strike. t =
+        // 6 (246.35 s, after the stall) reads the 245 s tick 1.35 s old:
+        // closes -69.5, -69, -68.5, -68, -67.5 and -67.5 again locked, 54
+        // seconds held at -67.5: (-410 - 3645) / 60 - 19.6667.
+        let m240: Vec<f64> = s240[..4].iter().map(|s| s["m"].as_f64().unwrap()).collect();
+        assert_eq!(m240, [-89.6667, -89.6667, -89.1667, -87.25]);
+        assert_eq!(s240[3]["px_age"], 1.35);
 
         let canonical = records
             .iter()

@@ -75,12 +75,12 @@ the working tree; read them with `git show 0cd8b0d:docs/<path>`.
 - The factory runner re-imports `scripts/*.py` every 5 min: every Python step lands importable with the
   suite green.
 - Python: `uv run python -m unittest tests.test_strategy_research_loop tests.test_band_lane
-  tests.test_evidence_accrual tests.test_factory_kpi tests.test_band_shadow_race tests.test_executable_truth`
-  (99 OK after the Phase 3 factory cut). The runner runs `executable_truth.py --tick` every 15 min and, having no
+  tests.test_evidence_accrual tests.test_factory_kpi tests.test_band_shadow_race tests.test_executable_truth
+  tests.test_settlement_model` (133 OK with evaluator v4). The runner runs `executable_truth.py --tick` every 15 min and, having no
   `set -e`, logs a failing tick only to `logs/strategy-research/executable_truth.log` while `runner.log` and
   `status.json` look healthy: this command is the pre-merge check, that log the runtime check.
-- Rust: `cd rust_engine && cargo test -p polymomentum-engine` (677 on the WIP tree, 674 at HEAD);
-  `cargo clippy --no-deps` real warnings <= 9 and never increasing.
+- Rust: `cd rust_engine && cargo test -p polymomentum-engine` (693 with the observer settlement records);
+  `cargo clippy --no-deps` real warnings <= 7 and never increasing.
 - Engine deletions only after their replacement runs, one step per change, `git tag pre-basement` first.
 
 ## 7. Where the truth lives

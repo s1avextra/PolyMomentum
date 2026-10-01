@@ -75,7 +75,7 @@ The shrunk edge of every cell is about +0.5%/USD (se 0.4): no stratum differs fr
 |---|---|---|---|---|
 | 1. Fix the basis, register N = 4 (a) | evidence clock on a family with power and one mechanism | 3-4 agent days, tested Python | "no discovery" is likeliest | e-BH: e >= 80 alone (40/26.7/20 for 2/3/4), n >= 100, 14 days, tripwires clear |
 | 2. Ops fixes (d) | no silent label gaps; one evidence host | 30 operator minutes | none | runner under launchd; screens score VPS rows only |
-| 3. Engine logs the strike, recipe H in the same build (c) | settlement margin at source; anchors 195/225 | one VPS build and restart | minutes of gap | `strike_60s` on records; six anchors within 10 min |
+| 3. Engine logs the strike, recipe H in the same build (c) | settlement margin at source; anchors 195/225 | one VPS build and restart | minutes of gap | `strike_60s` on records; the anchors within 10 min (five, 120/150/180/210/240, since the adaptive doc of the same day: recipe H as superseded) |
 | 4. F1, F2 as paired challengers (b) | tests two filters without spending N | none | false hope | paired e >= 40 over >= 100 paired windows |
 | 5. Other assets (c) | up to four times the windows | a Mac day, then engine work | thin books | print model at asks >= 0.92 clears BE on two of ETH/SOL/XRP, else drop |
 
@@ -123,7 +123,7 @@ A LaunchAgent starts at GUI login only: enable auto-login or accept that gap.
 5. The retry-after-1 s model beside p0; the Tier 1 gate "FOK-kill share <= 20%" (realized 30-34%) restated as window fill rate after retries.
 6. Engine, records only, with a test: strike and settlement margin on `band_anchor` and `band_ladder`.
 
-**Day 4-5, operator, VPS.** Recipe H of the basement doc, steps 1-5, from the new tree: one `nice -n 10 cargo build --release --locked -j 1`, the twin and envs installed, both preflights checked, then `sudo systemctl restart polymomentum-band-observer`.
+**Day 4-5, operator, VPS.** Recipe H of the basement doc as superseded 2026-10-01 (five anchors, new checks), from the new tree: one `nice -n 10 cargo build --release --locked -j 1`, the twin and envs installed, both preflights checked, then `sudo systemctl restart polymomentum-band-observer`.
 
 **Day 5, operator, Mac** (`--cells` exists only after step 3), then commit the campaign file and push.
 

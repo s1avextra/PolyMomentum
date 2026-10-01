@@ -25,7 +25,9 @@ pub struct PriceState {
     /// Per-source tick history on the venue's own event clock (binance
     /// only today, via `update_at`): the band's margin basis, which the
     /// composite `price_history` (live-source mean stamped at receipt)
-    /// cannot supply. Bounded by `record_history`'s one-hour window.
+    /// cannot supply. Bounded by `record_history`'s one-hour window, by
+    /// age only (never by count): the 60 s before a 5m window's open stay
+    /// readable through the whole window and its last ladder span.
     source_history: HashMap<String, VecDeque<(f64, f64)>>,
 }
 
@@ -151,6 +153,22 @@ impl PriceState {
             .find(|(ts, _)| *ts <= target_s)
             .filter(|(ts, _)| target_s - *ts <= max_distance_s)
             .map(|(_, price)| *price)
+    }
+
+    /// `source_price_at_or_before` with the tick's event time: (event time,
+    /// price) of the last `source` tick at or before `target_s`, provided
+    /// it is no older than `max_distance_s`. The history is ordered by
+    /// event time (`record_history` drops an out-of-order tick).
+    pub fn source_tick_at_or_before(
+        &self,
+        source: &str,
+        target_s: f64,
+        max_distance_s: f64,
+    ) -> Option<(f64, f64)> {
+        let history = self.source_history.get(source)?;
+        let after = history.partition_point(|(ts, _)| *ts <= target_s);
+        let (ts, price) = *history.get(after.checked_sub(1)?)?;
+        (target_s - ts <= max_distance_s).then_some((ts, price))
     }
 
     /// Event time of the newest `source` tick, if any. The at-or-before
@@ -343,6 +361,90 @@ mod tests {
         // The tick still feeds the composite.
         assert_eq!(ps.mid_price, 103.0);
         assert_eq!(ps.n_live_sources(), 1);
+    }
+
+    /// A 1 Hz `binance` series: one tick per whole second `k` of `seconds`
+    /// at event time `k`, price `price(k)`.
+    fn binance_series(
+        seconds: std::ops::RangeInclusive<i64>,
+        price: impl Fn(i64) -> f64,
+    ) -> PriceState {
+        let mut ps = PriceState::new();
+        let history = ps.source_history.entry("binance".to_string()).or_default();
+        for k in seconds {
+            record_history(history, k as f64, price(k));
+        }
+        ps
+    }
+
+    #[test]
+    fn source_tick_at_or_before_matches_the_price_lookup() {
+        let mut ps = binance_series(100..=103, |k| 10.0 + k as f64);
+        record_history(ps.source_history.get_mut("binance").unwrap(), 103.4, 200.0);
+        for target in [
+            99.0, 99.99, 100.0, 100.5, 102.0, 103.39, 103.4, 105.0, 105.5, 200.0,
+        ] {
+            for tolerance in [0.5, 2.0] {
+                assert_eq!(
+                    ps.source_tick_at_or_before("binance", target, tolerance)
+                        .map(|(_, price)| price),
+                    ps.source_price_at_or_before("binance", target, tolerance),
+                    "target {target} tolerance {tolerance}"
+                );
+            }
+        }
+        // The tick's own event time comes with it.
+        assert_eq!(
+            ps.source_tick_at_or_before("binance", 103.39, 2.0),
+            Some((103.0, 113.0))
+        );
+        assert_eq!(
+            ps.source_tick_at_or_before("binance", 105.0, 2.0),
+            Some((103.4, 200.0))
+        );
+        assert_eq!(ps.source_tick_at_or_before("binance", 99.99, 2.0), None);
+        assert_eq!(ps.source_tick_at_or_before("bybit", 103.0, 2.0), None);
+    }
+
+    /// The settlement strike needs the 60 s before a 5m window's open at
+    /// any second of the window and through the last ladder span (open +
+    /// 240 + 30 s, flushed a second later): the per-source history is
+    /// bounded by age alone, and that age is far longer.
+    #[test]
+    fn source_history_keeps_the_pre_open_minute_for_the_whole_window() {
+        const WINDOW_AND_LADDER_S: f64 = 60.0 + 300.0 + 31.0;
+        const { assert!(PRICE_HISTORY_MAX_AGE_S >= 2.0 * WINDOW_AND_LADDER_S) };
+        // Two hours at 1 Hz, then four ticks a second (a faster stream than
+        // the 1 Hz ticker) for a further ten minutes.
+        let mut ps = binance_series(0..=7_200, |k| 100_000.0 + k as f64);
+        let history = ps.source_history.get_mut("binance").unwrap();
+        for quarter in 1..=2_400 {
+            let ts = 7_200.0 + f64::from(quarter) * 0.25;
+            record_history(history, ts, 100_000.0 + ts);
+        }
+        let newest = 7_800.0;
+        assert_eq!(ps.source_latest_ts("binance"), Some(newest));
+        // A window that opened 331 s ago: every second of its pre-open
+        // minute still has its own tick.
+        let open = newest - 331.0;
+        for second in 0..=60 {
+            let at = open - f64::from(second);
+            assert_eq!(
+                ps.source_tick_at_or_before("binance", at, 0.0),
+                Some((at, 100_000.0 + at))
+            );
+        }
+        // Bounded: one hour of ticks, nothing older.
+        let history = &ps.source_history["binance"];
+        assert_eq!(
+            history.front().map(|(ts, _)| *ts),
+            Some(newest - PRICE_HISTORY_MAX_AGE_S)
+        );
+        assert_eq!(history.len(), 3_000 + 2_400 + 1);
+        assert_eq!(
+            ps.source_tick_at_or_before("binance", newest - PRICE_HISTORY_MAX_AGE_S - 1.0, 2.0),
+            None
+        );
     }
 
     #[test]

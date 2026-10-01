@@ -112,7 +112,7 @@ Power: 3,000 simulated paths of the repo's mixture e-process on each cell's own 
 | # | change | where | size |
 |---|---|---|---|
 | 1 | Evaluator v4: `strike_60s`, per-second settlement margin, sigma2, z and P_cal columns; event-time replay over the tiled ladders; book age <= 1 s plus a stall flag (the `fresh` flag admits 19-29 s old books: 8 false clears on 09-19 [chk]); matched null and max-T | Mac, Python, tested | 3-4 agent days |
-| 2 | Observer records: strike, sigma2, z, covering tick price and time per sample, quotes for the settlement side (120 of 2,637 signal windows show only the opposite side) | engine, records only, with a test | 1-2 agent days, one VPS build, about +10% bytes |
+| 2 | Observer records: strike, sigma2, z, covering tick price and time per sample, quotes for the settlement side (120 of 2,637 signal windows show only the opposite side) | engine, records only, with a test | 1-2 agent days, one VPS build; as built (`px`, `px_age`, `m` per sample and the other side's book on every sample of a directional record) about 11 MB a day at the anchors of row 3 |
 | 3 | Anchors `120,150,180,210,240`: continuous 120-270 s; 195 and 225 only duplicate samples | env line | 1,440 records, 5.1 MB a day; 120-150 s stays diagnostic (first crossings there win 0.9906 [chk]) |
 | 4 | Log the Chainlink TWAP stream (RTDS `prices.crypto.twap`) beside Binance | engine, new feed, records only | 2 agent days; removes most of s_b and the 2 s oracle delay if it holds |
 | 5 | ETH/SOL/XRP 5m and BTC 15m | print pre-check on the Mac, then the engine | 1 day, then several; same rule and fee, $16-145 printed per window against $600-1,250; the "3x trades" claim is unverified [chk] |
@@ -142,7 +142,33 @@ Kill: day 45 with fresh net at +1 s <= 0 on both V1 and V5 stops the family; day
 | 0 | operator | Decide: (a) v4 N = 6 replaces the static N = 4 of the ladder doc (do not run `--register` before day 6); (b) the "WR > 0.995 at n >= 100" tripwire will hold V2 and V4 in `manual_audit` by design (ceiling 0.996): keep it as an audit against the frozen ceiling, or restate it; (c) under the funding rule a cap-0.99 cell needs n >= 1,260 (z 3) to 17,900 (z 2.5) entries, so only V1 (n >= 450-620) and V2 (n >= 330) can be funded within the horizon; (d) a VPS build slot on day 5 |
 | 1-4 | agent, Mac | Step 1, one tested commit per item, suite green each time |
 | 3-5 | agent, Mac | Step 2 with `cargo test`; anchors in `deploy/band-observer.env` |
-| 5 | operator, VPS | `nice -n 10 cargo build --release --locked -j 1`, install the env, `sudo systemctl restart polymomentum-band-observer`; check the new fields on `band_ladder` |
+| 5 | operator, VPS | Recipe H of the basement doc as superseded 2026-10-01 (H never ran; the env also carries the twin pin and the $100 paper base, and without the twin the observer exits 2 and stays down): `nice -n 10 cargo build --release --locked -j 1`, install the twin under `paper_twins/`, install both envs, `preflight --mode paper` on the new binary, then `sudo systemctl restart polymomentum-band-observer`; check `band_ladder` at 120/150/180/210/240 s with `strike_60s`, per-sample `px`/`px_age`/`m` and `sq`/`sc`/`sage`, `quote_budget_usd` 25.00, no `order_placed` |
 | 6 | operator, Mac | `bash scripts/pull_vps_sessions.sh`; `uv run --offline python scripts/executable_truth.py --build`; `--register 2026-10_band_event_v4 --cells V1..V6` (the flag lands in step 1; freezes c, s_b and the table; needs step 1 only, not the VPS build); commit the campaign file, push |
 | 6-14 | runner | accrual through `--tick`; agent: step 4 design note, step 5 print pre-check |
 | 14 | agent | first formal look: support, capacity, coverage, engine z against evaluator z, +1 s and 2 s numbers, matched contrast. Money: none |
+
+## 8. As built (2026-10-01, uncommitted; checked 12:00 UTC)
+
+Steps 1-3 of section 5 are in the tree: `scripts/settlement_model.py`, evaluator `executable_truth_v4` with grammar `band_event_v4`, the engine records and the five anchors. The VPS still runs the 2026-09-20 binary (four anchors, no settlement fields) until day 5. No campaign is registered.
+
+**Reproduction of section 3** (`--event-grid --cells V1..V6 --s-b 3.5`; rows V1, V2, V3, V4, V5):
+
+| table | windows | c | W/n |
+|---|---|---|---|
+| research snapshot, c given at the scratch value | 3,425 | 1.1872 | 334/336, 85/85, 413/415, 254/255, 719/724: exact |
+| research snapshot, c refitted by the evaluator | 3,425 | 1.1878 | 333/335, 85/85, 412/414, 254/255, 718/723 (first crossings at z = 2.4996 instead of 2.5) |
+| live table (291 Mac-held rows upgraded to their VPS records, plus new windows) | 3,529 | 1.1878 | 345/347, 86/86, 422/424, 259/260, 736/741; V6 258/266 |
+
+On the live table: net +2.05 / +2.92 / +1.54 / +1.16 / +1.12 %/USD, max-T p = 0.014, a 1 s older price +0.79 to +3.37%, a 2 s delay +1.07 to +3.09%. With s_b fitted (3.6) instead of given: 343/344, 85/85, 414/415, 251/252, 727/731.
+
+**Where the code differs from sections 3-6** (each needs the operator's yes or a change before `--register`):
+
+1. Fill model: an order in flight is not protected by the entry gates, so it fills at a collapsed ask; the scratch replay refused a fill with vwap <= 0.80 and scanned on. One such fill in the sample (09-19 06:25, limit 0.99 filled at 0.47, won, `fills_outside_gates` = 1): it is +0.25%/USD of V3's +1.54% and +0.14% of V5's +1.12% (without it 421/423 at +1.30% and 735/740 at +0.98%). It also moves the 1 s older price row: on the research snapshot a second such fill (09-22 23:45, 0.69, won) gives +0.77 to +3.40% against +0.66 to +3.4%.
+2. `wr_too_good` of an event cell is a 5% binomial test of its wins against the frozen ceiling, not the point comparison: item (b) of day 0 restated, so V2 and V4 are not held by design.
+3. The capacity kill of V1, V3 and V5 gives no verdict before 14 UTC days of data (the 0.10 fill share is unchanged; V1 and V3 pooled 0.086 and 0.093 over 09-27 to 09-30).
+4. The day-90 stop reads the discoveries recorded at any tick so far, a cell held for a defect audit included.
+5. A fired falsifier holds the event cells out of the e-BH candidate set until `--clear-falsifier <id> --note ...` records the audit (a new operator action).
+6. Registration refits c and s_b on every labelled window before `registered_at` (dry run on a copy: c = 1.1786, s_b = 3.6 fitted, not 3.5). That table lifts the `k98` cap of z in [3.5, 4) to 0.99 ("0.99 from z = 4" in section 4 is the pre-ladder table), and F2's bar becomes 0.9895 (6,876/6,932 under the refitted spec) against 0.9897.
+7. sigma2, z and P_cal are not table columns: they depend on the frozen spec and are computed when a cell is scored. The table carries `strike_60s`, `settle_margin`, `final_settle_margin`.
+8. The engine records `strike_60s`, `px`, `px_age`, `m` and the other side's book, not sigma2 or z (the evaluator computes both from its own 1 s closes; the engine's `px`, `m` and strike are there for the day-14 comparison, which no code reads yet). `--gate-json` refuses an event cell: the engine has no event policy.
+9. Halves in the evaluator split the entries in two by count; section 3 split the windows at the midpoint of the period.
